@@ -246,7 +246,7 @@ import logging
 import requests
 
 NEWS_API_KEY = 'd6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120'
-NEWS_URL = 'https://newsapi.finnhub.io'
+NEWS_URL = 'https://finnhub.io'
 
 @app.route('/advice', methods=['POST'])
 def advice():
