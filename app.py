@@ -245,8 +245,8 @@ ids.forEach(id => {
 import logging    
 import requests
 
-NEWS_API_KEY = 'your_d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120_key'
-NEWS_URL = 'https://newsapi.org/v2/everything'
+NEWS_API_KEY = 'd6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120'
+NEWS_URL = 'https://newsapi.finnhub.io'
 
 @app.route('/advice', methods=['POST'])
 def advice():
@@ -263,16 +263,15 @@ def advice():
         # Fetch latest news for the ticker
         news_params = {
             'q': ticker,
-            'apiKey': NEWS_API_KEY,
+            'apiKey': d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120,
             'language': 'en',
             'sortBy': 'relevance',
             'pageSize': 3  # Just top 3 recent headlines
         }
-        news_response = requests.get(NEWS_URL, params=news_params)
+        news_response = requests.get(finnhub.io, params=news_params)
         news_data = news_response.json()
         articles = news_data.get('articles', [])
         
-        # Simple sentiment scoring - count positive vs negative words (example logic)
         positive_keywords = ['gain', 'rise', 'strong', 'beat', 'growth']
         negative_keywords = ['loss', 'drop', 'fall', 'miss', 'decline']
 
