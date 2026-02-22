@@ -259,7 +259,7 @@ def advice():
         tip = f"Couldn't load '{ticker}'—try TSLA."
     return jsonify({"tip": tip})
     tip = f"Couldn't load '{ticker}'—Yahoo's acting up. Try TSLA."
-@app.route('/watchlist', methods= )
+@app.route('/watchlist', methods=['POST'])
 def watchlist():
     return '''
     <html>
