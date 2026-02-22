@@ -241,6 +241,11 @@ ids.forEach(id => {
     </body>
     </html>
     '''
+import requests
+
+NEWS_API_KEY = 'your_d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120_key'
+NEWS_URL = 'https://newsapi.org/v2/everything'
+
 @app.route('/advice', methods=['POST'])
 def advice():
     ticker = request.json.get('text', '').strip().upper() or 'TSLA'
@@ -249,14 +254,40 @@ def advice():
         info = stock.info
         price = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose')
         change = info.get('regularMarketChangePercent', 0)
+
         if price is None:
             raise ValueError("No price data")
-        if change > 1:
-            tip = f"<span style='color:#27ae60;'>Buy—strong momentum!</span><br>Price: ${price:.2f}. Up {change:.1f}% today."
-        elif change < -3:
-            tip = f"<span style='color:#e74c3c;'>Sell—weakening fast</span><br>Price: ${price:.2f}. Down {abs(change):.1f}% today."
+
+        # Fetch latest news for the ticker
+        news_params = {
+            'q': ticker,
+            'apiKey': NEWS_API_KEY,
+            'language': 'en',
+            'sortBy': 'relevance',
+            'pageSize': 3  # Just top 3 recent headlines
+        }
+        news_response = requests.get(NEWS_URL, params=news_params)
+        news_data = news_response.json()
+        articles = news_data.get('articles', [])
+        
+        # Simple sentiment scoring - count positive vs negative words (example logic)
+        positive_keywords = ['gain', 'rise', 'strong', 'beat', 'growth']
+        negative_keywords = ['loss', 'drop', 'fall', 'miss', 'decline']
+
+        sentiment_score = 0
+        for article in articles:
+            title = article.get('title', '').lower()
+            if any(word in title for word in positive_keywords):
+                sentiment_score += 1
+            elif any(word in title for word in negative_keywords):
+                sentiment_score -= 1
+
+        if change > 1 and sentiment_score > 0:
+            tip = f"<span style='color:#27ae60;'>Buy—strong momentum + positive news!</span><br>Price: ${price:.2f}. Up {change:.1f}% today."
+        elif change < -3 or sentiment_score < 0:
+            tip = f"<span style='color:#e74c3c;'>Sell—negative momentum + bad news</span><br>Price: ${price:.2f}. Down {abs(change):.1f}% today."
         else:
-            tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}. Change {change:+.1f}% today."
+            tip = f"<span style='color:#f39c12;'>Hold—steady or mixed signals</span>
     except Exception as e:
         logging.error(f"Error fetching {ticker}: {e}")
         tip = f"Couldn't load '{ticker}'—try TSLA."
