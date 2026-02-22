@@ -245,8 +245,13 @@ ids.forEach(id => {
 import logging    
 import requests
 
-NEWS_API_KEY = 'd6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120'
-NEWS_URL = 'https://finnhub.io'
+NEWS_API_KEY = "X-Finnhub-Secret":"d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120"
+from datetime import datetime, timedelta
+
+today = datetime.now().strftime('%Y-%m-%d')
+yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+
+news_url = f"https://finnhub.io/api/v1/company-news?symbol={ticker}&from={yesterday}&to={today}"
 
 @app.route('/advice', methods=['POST'])
 def advice():
@@ -260,7 +265,6 @@ def advice():
         if price is None:
             raise ValueError("No price data")
 
-        # Fetch latest news for the ticker
         news_params = {
             'q': ticker,
             'apiKey': d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120,
