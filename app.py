@@ -127,6 +127,7 @@ def home():
         
         <div class="links">
             <a href="/whales">📊 Whales Tracker</a>
+            <a href="/watchlist">🔥 Watchlist</a>
         </div>
     </div>
     
@@ -258,5 +259,45 @@ def advice():
         tip = f"Couldn't load '{ticker}'—try TSLA."
     return jsonify({"tip": tip})
     tip = f"Couldn't load '{ticker}'—Yahoo's acting up. Try TSLA."
+@app.route('/watchlist', methods= )
+def watchlist():
+    return '''
+    <html>
+    <head><style>body{font-family:Arial;padding:30px;background:#f8f9fa} h1{margin:0 0 20px;color:#1a237e} table{border-collapse:collapse;width:100%} th,td{border:1px solid #ddd;padding:12px;text-align:left} th{background:#3498db;color:white} a{color:#1e88e5;text-decoration:none} a:hover{text-decoration:underline}</style></head>
+    <body>
+    <h1>🔥 Hot Stocks Watchlist</h1>
+    <p>Trending US stocks right now (Yahoo Finance) · Click for advice</p>
+    <table>
+        <tr><th>Ticker</th><th>Company</th><th>Price</th><th>Change %</th></tr>
+        <tr><td>TSLA</td><td>Tesla</td><td id="tsla_price"></td><td id="tsla_change"></td></tr>
+        <tr><td>NVDA</td><td>Nvidia</td><td id="nvda_price"></td><td id="nvda_change"></td></tr>
+        <tr><td>AAPL</td><td>Apple</td><td id="aapl_price"></td><td id="aapl_change"></td></tr>
+        <tr><td>AMZN</td><td>Amazon</td><td id="amzn_price"></td><td id="amzn_change"></td></tr>
+        <tr><td>MSFT</td><td>Microsoft</td><td id="msft_price"></td><td id="msft_change"></td></tr>
+        <tr><td>GOOGL</td><td>Alphabet</td><td id="googl_price"></td><td id="googl_change"></td></tr>
+        <tr><td>META</td><td>Meta</td><td id="meta_price"></td><td id="meta_change"></td></tr>
+        <tr><td>AMD</td><td>AMD</td><td id="amd_price"></td><td id="amd_change"></td></tr>
+        <tr><td>PLTR</td><td>Palantir</td><td id="pltr_price"></td><td id="pltr_change"></td></tr>
+        <tr><td>SUP</td><td>Super Micro</td><td id="smci_price"></td><td id="smci_change"></td></tr>
+    </table>
+
+    <script>
+    const stocks = ["TSLA","NVDA","AAPL","AMZN","MSFT","GOOGL","META","AMD","PLTR","SMCI"];
+    stocks.forEach(t => {
+        fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${t}`)
+        .then(r => r.json())
+        .then(d => {
+            const q = d.quoteResponse.result[0];
+            const price = q.regularMarketPrice?.toFixed(2) || "N/A";
+            const ch = q.regularMarketChangePercent?.toFixed(2) || "N/A";
+            document.getElementById(t.toLowerCase() + '_price').innerText = `$${price}`;
+            document.getElementById(t.toLowerCase() + '_change').innerText = ch + '%';
+        });
+    });
+    </script>
+    <p><a href="/">← Back to MoneyBot</a> | Market closed—showing last close. Live Monday!</p>
+    </body>
+    </html>
+    '''
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
