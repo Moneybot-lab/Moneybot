@@ -1,7 +1,9 @@
 from flask import Flask, request, jsonify
 import yfinance as yf
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)
 
 @app.route('/', methods=['GET'])
 def home():
@@ -9,68 +11,233 @@ def home():
 <html>
 <head>
     <style>
-        body { font-family: Arial; text-align: center; padding: 50px; background: #f0f4f8; }
-        h1 { color: #2c3e50; }
-        select, input { width: 300px; padding: 12px; font-size: 16px; border: 2px solid #3498db; border-radius: 8px; margin: 10px 0; }
-        button { padding: 12px 30px; font-size: 16px; background: #3498db; color: white; border: none; border-radius: 8px; cursor: pointer; }
-        button:hover { background: #2980b9; }
-        #response { margin-top: 20px; font-size: 18px; font-weight: bold; }
-        #loading { display: none; color: #e67e22; margin-top: 15px; font-style: italic; }
-        .dropdowns { display: flex; justify-content: center; gap: 30px; align-items: center; }
-        .risk { color: #e74c3c; font-weight: bold; font-size: 14px; background: #fadbd8; padding: 5px 10px; border-radius: 5px; display: none; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #e0f7fa, #f5f5f5); 
+            color: #333;
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            flex: 1;
+        }
+        h1 {
+            text-align: center;
+            color: #1a237e;
+            font-size: 3.5em;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+        }
+        .tagline {
+            text-align: center;
+            color: #455a64;
+            font-size: 1.3em;
+            margin-bottom: 30px;
+        }
+        .input-group {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        input, select {
+            padding: 14px 20px;
+            font-size: 1.1em;
+            border: 2px solid #1e88e5;
+            border-radius: 12px;
+            outline: none;
+            transition: border 0.3s;
+            min-width: 250px;
+        }
+        input:focus, select:focus {
+            border-color: #0d47a1;
+            box-shadow: 0 0 0 3px rgba(29, 68, 125, 0.2);
+        }
+        button {
+            padding: 14px 30px;
+            font-size: 1.1em;
+            background: #1e88e5;
+            color: white;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.3s, transform 0.1s;
+        }
+        button:hover {
+            background: #1565c0;
+            transform: translateY(-2px);
+        }
+        #response {
+            margin-top: 30px;
+            padding: 20px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            font-size: 1.4em;
+            text-align: center;
+            min-height: 100px;
+            transition: opacity 0.5s;
+        }
+        #loading {
+            display: none;
+            color: #1e88e5;
+            font-style: italic;
+            margin: 20px 0;
+        }
+        .links {
+            text-align: center;
+            margin-top: 40px;
+        }
+        .links a {
+            color: #1e88e5;
+            text-decoration: none;
+            margin: 0 15px;
+            font-size: 1.2em;
+        }
+        .links a:hover {
+            text-decoration: underline;
+        }
+        footer {
+            text-align: center;
+            padding: 20px;
+            color: #78909c;
+            font-size: 0.9em;
+        }
     </style>
 </head>
 <body>
-<h1>MoneyBot</h1>
-<p>Type any ticker or pick from below</p>
-<input id="custom" placeholder="Enter ticker: e.g. APLD" autofocus>
-<button onclick="ask()">Get Advice</button>
-<div class="dropdowns">
-    <select id="topTicker" onchange="fillCustom()">
-        <option value="">Top stocks</option>
-        <option value="TSLA">Tesla (TSLA)</option>
-        <option value="NVDA">NVIDIA (NVDA)</option>
-        <option value="AAPL">Apple (AAPL)</option>
-    </select>
-    <select id="lowTicker" onchange="fillCustom()">
-        <option value="">Low-priced gem</option>
-        <option value="DSWL">Deswell (DSWL)</option>
-        <option value="APLD">Applied Digital (APLD)</option>
-        <span id="riskBadge" class="risk">High Risk!</span>
-    </select>
-</div>
-<div id="loading">Thinking...</div>
-<div id="response"></div>
-<script>
-function fillCustom() {
-    const top = document.getElementById('topTicker').value;
-    const low = document.getElementById('lowTicker').value;
-    const custom = document.getElementById('custom');
-    if (top || low) custom.value = top || low;
-    document.getElementById('riskBadge').style.display = low ? 'inline' : 'none';
-}
-async function ask() {
-    const loading = document.getElementById('loading');
-    const response = document.getElementById('response');
-    let ticker = document.getElementById('custom').value.trim().toUpperCase();
-    if (!ticker) { response.innerText = "Enter a ticker!"; return; }
-    response.innerText = '';
-    loading.style.display = 'block';
-    try {
-        const res = await fetch('/advice', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text: ticker})});
-        const data = await res.json();
-        response.innerHTML = data.tip;
-    } catch (e) {
-        response.innerText = "Oops—couldn't fetch data.";
+    <div class="container">
+        <h1>MoneyBot</h1>
+        <p class="tagline">Your AI stock advisor—real-time advice, no fluff.</p>
+        
+        <div class="input-group">
+            <input id="custom" placeholder="TSLA, AAPL, NVDA..." autofocus>
+            <button onclick="ask()">Ask</button>
+        </div>
+        
+        <div id="loading">Thinking...</div>
+        <div id="response"></div>
+        
+        <div class="links">
+            <a href="/whales">📊 Whales Tracker</a>
+        </div>
+    </div>
+    
+    <footer>Powered by yfinance · Built by Troy · 2026</footer>
+    
+    <script>
+    async function ask() {
+        const loading = document.getElementById('loading');
+        const response = document.getElementById('response');
+        let ticker = document.getElementById('custom').value.trim().toUpperCase();
+        if (!ticker) {
+            response.innerText = "Enter a ticker!";
+            return;
+        }
+        response.innerText = '';
+        loading.style.display = 'block';
+        
+        try {
+            const res = await fetch('/advice', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({text: ticker})
+            });
+            const data = await res.json();
+            response.innerHTML = data.tip;
+        } catch (e) {
+            response.innerText = "Couldn't fetch—try again.";
+        }
+        loading.style.display = 'none';
     }
-    loading.style.display = 'none';
-}
-document.getElementById('custom').addEventListener('keypress', e => { if (e.key === 'Enter') ask(); });
-</script>
+    
+    document.getElementById('custom').addEventListener('keypress', e => {
+        if (e.key === 'Enter') ask();
+    });
+    </script>
 </body>
 </html>
 '''
 
+@app.route('/whales', methods=['GET'])
+def whales():
+    return '''
+    <html>
+    <head>
+    <style>
+        body{font-family:Arial;padding:30px;background:#f8f9fa}
+        h1{margin:0 0 20px;color:#2c3e50}
+        h2{margin:40px 0 10px}
+        table{border-collapse:collapse;width:100%;margin-bottom:30px}
+        th,td{border:1px solid #ddd;padding:12px;text-align:left}
+        th{background:#3498db;color:white}
+        .note{background:#fff3cd;padding:15px;border-radius:8px;margin:20px 0}
+    </style>
+    </head>
+    <body>
+    <h1>💰 Wall Street Whales Tracker</h1>
+    <p>Latest 13F filings + live prices (Yahoo Finance)</p>
+
+    <h2>Warren Buffett (Berkshire Hathaway)</h2>
+    <table><tr><th>Ticker</th><th>Company</th><th>Live Price</th></tr>
+    <tr><td>AAPL</td><td>Apple</td><td id="aapl"></td></tr>
+    <tr><td>AXP</td><td>American Express</td><td id="axp"></td></tr>
+    <tr><td>BAC</td><td>Bank of America</td><td id="bac"></td></tr>
+    <tr><td>KO</td><td>Coca-Cola</td><td id="ko"></td></tr>
+    <tr><td>CVX</td><td>Chevron</td><td id="cvx"></td></tr></table>
+
+    <h2>George Soros</h2>
+    <table><tr><th>Ticker</th><th>Company</th><th>Live Price</th></tr>
+    <tr><td>AMZN</td><td>Amazon</td><td id="amzn"></td></tr>
+    <tr><td>DBX</td><td>Dropbox</td><td id="dbx"></td></tr>
+    <tr><td>SPOT</td><td>Spotify</td><td id="spot"></td></tr>
+    <tr><td>GOOGL</td><td>Alphabet</td><td id="googl"></td></tr>
+    <tr><td>TSLA</td><td>Tesla</td><td id="tsla"></td></tr></table>
+
+    <h2>Ken Griffin (Citadel)</h2>
+    <table><tr><th>Ticker</th><th>Company</th><th>Live Price</th></tr>
+    <tr><td>NVDA</td><td>Nvidia</td><td id="nvda"></td></tr>
+    <tr><td>AMZN</td><td>Amazon</td><td id="amzn2"></td></tr>
+    <tr><td>AAPL</td><td>Apple</td><td id="aapl2"></td></tr>
+    <tr><td>MSFT</td><td>Microsoft</td><td id="msft"></td></tr>
+    <tr><td>GOOGL</td><td>Alphabet</td><td id="googl2"></td></tr></table>
+
+    <h2>Jim Simons (Renaissance Technologies)</h2>
+    <table><tr><th>Ticker</th><th>Company</th><th>Live Price</th></tr>
+    <tr><td>PLTR</td><td>Palantir</td><td id="pltr"></td></tr>
+    <tr><td>UTHR</td><td>United Therapeutics</td><td id="uthr"></td></tr>
+    <tr><td>MU</td><td>Micron</td><td id="mu"></td></tr>
+    <tr><td>VRSN</td><td>Verisign</td><td id="vrsn"></td></tr>
+    <tr><td>K.TO</td><td>Kinross Gold</td><td id="kto"></td></tr></table>
+
+    <div class="note">Jim Simons' fund is quant-heavy—no public "favorites," but these are top recent holds.</div>
+
+    <script>
+const ids = ["aapl","axp","bac","ko","cvx","amzn","dbx","spot","googl","tsla","nvda","aapl2","msft","googl2","pltr","uthr","mu","vrsn","kto","amzn2"];
+ids.forEach(id => {
+    const t = id.replace(/[0-9]/g,'').toUpperCase();
+    fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${t}`)
+    .then(r => r.json())
+    .then(data => {
+        const q = data.quoteResponse.result[0] || {};
+        const price = q.regularMarketPrice?.toFixed(2) || q.regularMarketPreviousClose?.toFixed(2) || "N/A";
+        document.getElementById(id).innerText = `$${price}`;
+    })
+    .catch(() => document.getElementById(id).innerText = "N/A");
+});
+</script>
+<p style="font-style:italic; color:#555;">Live prices during market hours—weekends show N/A or last close.</p>
+    <p><a href="/">← Back to MoneyBot</a></p>
+    </body>
+    </html>
+    '''
 @app.route('/advice', methods=['POST'])
 def advice():
     ticker = request.json.get('text', '').strip().upper() or 'TSLA'
