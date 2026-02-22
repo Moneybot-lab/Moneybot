@@ -241,6 +241,7 @@ ids.forEach(id => {
     </body>
     </html>
     '''
+import logging    
 import requests
 
 NEWS_API_KEY = 'your_d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120_key'
@@ -287,7 +288,7 @@ def advice():
         elif change < -3 or sentiment_score < 0:
             tip = f"<span style='color:#e74c3c;'>Sell—negative momentum + bad news</span><br>Price: ${price:.2f}. Down {abs(change):.1f}% today."
         else:
-            tip = f"<span style='color:#f39c12;'>Hold—steady or mixed signals</span>
+            tip = f"<span style='color:#f39c12;'>Hold—steady or mixed signals</span><br>Price: ${price:.2f}.
     except Exception as e:
         logging.error(f"Error fetching {ticker}: {e}")
         tip = f"Couldn't load '{ticker}'—try TSLA."
