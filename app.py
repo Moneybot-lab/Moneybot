@@ -242,16 +242,16 @@ ids.forEach(id => {
     </body>
     </html>
     '''
-import logging    
+import logging
 import requests
-
-NEWS_API_KEY = "X-Finnhub-Secret":"d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120"
+from flask import Flask, request, jsonify
+import yfinance as yf
 from datetime import datetime, timedelta
 
-today = datetime.now().strftime('%Y-%m-%d')
-yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
 
-news_url = f"https://finnhub.io/api/v1/company-news?symbol={ticker}&from={yesterday}&to={today}"
+NEWS_API_KEY = "d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120"
 
 @app.route('/advice', methods=['POST'])
 def advice():
@@ -265,17 +265,17 @@ def advice():
         if price is None:
             raise ValueError("No price data")
 
-        news_params = {
-            'q': ticker,
-            'apiKey': d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120,
-            'language': 'en',
-            'sortBy': 'relevance',
-            'pageSize': 3  # Just top 3 recent headlines
+        today = datetime.now().strftime('%Y-%m-%d')
+        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+
+        news_url = f"https://finnhub.io/api/v1/company-news?symbol={ticker}&from={yesterday}&to={today}"
+        headers = {
+            'X-FinHub-Secret': NEWS_API_KEY
         }
-        news_response = requests.get(finnhub.io, params=news_params)
+        news_response = requests.get(news_url, headers=headers)
         news_data = news_response.json()
         articles = news_data.get('articles', [])
-        
+
         positive_keywords = ['gain', 'rise', 'strong', 'beat', 'growth']
         negative_keywords = ['loss', 'drop', 'fall', 'miss', 'decline']
 
@@ -293,6 +293,7 @@ def advice():
             tip = f"<span style='color:#e74c3c;'>Sell—negative momentum + bad news</span><br>Price: ${price:.2f}. Down {abs(change):.1f}% today."
         else:
             tip = f"<span style='color:#f39c12;'>Hold—steady or mixed signals</span><br>Price: ${price:.2f}."
+
     except Exception as e:
         logging.error(f"Error fetching {ticker}: {e}")
         tip = f"Couldn't load '{ticker}'—try TSLA."
