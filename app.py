@@ -292,7 +292,7 @@ def advice():
     except Exception as e:
         logging.error(f"Error fetching {ticker}: {e}")
         tip = f"Couldn't load '{ticker}'—try TSLA."
-    return jsonify({"tip": tip}) OK now where do I add the logging line inside the except block where's the except block
+    return jsonify({"tip": tip})
 @app.route('/watchlist', methods=['GET', 'POST'])
 def watchlist():
     return '''
