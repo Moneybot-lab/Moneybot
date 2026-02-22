@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 import yfinance as yf
 from flask_cors import CORS
+import logging
 
 app = Flask(__name__)
 
