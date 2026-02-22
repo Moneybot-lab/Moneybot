@@ -5,7 +5,7 @@ from flask_cors import CORS
 app = Flask(__name__)
 
 CORS(app)
-All right I'm new at this so I can't find the tip line you want me to remove
+
 logging.basicConfig(level=logging.INFO)
 @app.route('/', methods=['GET'])
 def home():
