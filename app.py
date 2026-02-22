@@ -3,8 +3,10 @@ import yfinance as yf
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app)
 
+CORS(app)
+All right I'm new at this so I can't find the tip line you want me to remove
+logging.basicConfig(level=logging.INFO)
 @app.route('/', methods=['GET'])
 def home():
     return '''
@@ -256,9 +258,9 @@ def advice():
         else:
             tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}. Change {change:+.1f}% today."
     except Exception as e:
+        logging.error(f"Error fetching {ticker}: {e}")
         tip = f"Couldn't load '{ticker}'—try TSLA."
-    return jsonify({"tip": tip})
-    tip = f"Couldn't load '{ticker}'—Yahoo's acting up. Try TSLA."
+    return jsonify({"tip": tip}) OK now where do I add the logging line inside the except block where's the except block
 @app.route('/watchlist', methods=['GET', 'POST'])
 def watchlist():
     return '''
