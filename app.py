@@ -272,7 +272,7 @@ def advice():
             news_response = requests.get(news_url, timeout=5)
             news_data = news_response.json()
             articles = news_data if isinstance(news_data, list) else [ 'gain', 'rise', 'strong', 'beat', 'growth']
-            negative_keywords = 
+            negative_keywords = ['loss', 'drop', 'fall', 'miss', 'decline'] 
             
             for article in articles[:5]:  # Limit to 5
                 title = article.get('headline', '').lower()
