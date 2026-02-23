@@ -255,39 +255,38 @@ NEWS_API_KEY = "d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120"
 @app.route('/advice', methods=['POST'])
 def advice():
     ticker = request.json.get('text', '').strip().upper() or 'TSLA'
-    try:
+        try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        price = info.get('currentPrice') or info.get('regularMarketPreviousClose') or info.get('regularMarketPrice')
+        price = info.get('regularMarketPreviousClose') or info.get('regularMarketPrice') or info.get('previousClose') or "N/A"
         change = info.get('regularMarketChangePercent', 0)
-
-        if price is None:
-            price = "N/A"
-            change = 0
-
+        
+        if price == "N/A":
+            raise ValueError("No data")
+        
         sentiment_score = 0
         try:
             today = datetime.now().strftime('%Y-%m-%d')
             yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
             news_url = f"https://finnhub.io/api/v1/company-news?symbol={ticker}&from={yesterday}&to={today}&token=d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120"
-            news = requests.get(news_url, timeout=10).json()  # Longer timeout
+            news = requests.get(news_url, timeout=10).json()
             if isinstance(news, list):
                 for a in news[:5]:
                     title = a.get('headline', '').lower()
-                    sentiment_score += sum(1 for w in ['gain','rise','strong','beat','growth' 'loss','drop','fall','miss','decline'] if w in title)
+                    sentiment_score += sum(1 for w in if w in title)
+                    sentiment_score -= sum(1 for w in if w in title)
         except:
             sentiment_score = 0
-
+        
         if change > 1 and sentiment_score > 0:
-            tip = f"<span style='color:#27ae60;'>Buy—strong momentum + good news!</span><br>Price: ${price:.2f}. Up {change:.1f}%.<br>News sentiment: +{sentiment_score}"
+            tip = f"<span style='color:#27ae60;'>Buy—strong + good news!</span><br>Price: ${price:.2f}. Up {change:.1f}%. News: +{sentiment_score}"
         elif change < -3 or sentiment_score < 0:
-            tip = f"<span style='color:#e74c3c;'>Sell—weak + bad news</span><br>Price: ${price:.2f}. Down {abs(change):.1f}%.<br>News sentiment: {sentiment_score}"
+            tip = f"<span style='color:#e74c3c;'>Sell—weak + bad news</span><br>Price: ${price:.2f}. Down {abs(change):.1f}%. News: {sentiment_score}"
         else:
-            tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}. Change {change:+.1f}%.<br>News: neutral ({sentiment_score})"
+            tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}. Change {change:+.1f}%. News: neutral ({sentiment_score})"
     except Exception as e:
-        logging.error(f"Error fetching {ticker}: {e}")
-        tip = f"❌ Couldn't load {ticker}. Check the symbol."
-    return jsonify({"tip": tip})
+        logging.error(f"Error for {ticker}: {e}")
+        tip = f"Couldn't load '{ticker}'—market closed, try again Monday."
 @app.route('/watchlist', methods=['GET', 'POST'])
 def watchlist():
     return '''
