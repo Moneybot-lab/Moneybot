@@ -285,10 +285,10 @@ def advice():
         sentiment_score = 0
         for article in articles:
            title = article.get('headline', '').lower()
-            if any(word in title for word in positive_keywords):
-                sentiment_score += sum(word in title for word in positive_keywords)
-            elif any(word in title for word in negative_keywords):
-                sentiment_score -= sum(word in title for word in negative_keywords)
+           if any(word in title for word in positive_keywords):
+               sentiment_score += sum(word in title for word in positive_keywords)
+           elif any(word in title for word in negative_keywords):
+               sentiment_score -= sum(word in title for word in negative_keywords)
 
         if change > 1 and sentiment_score > 0:
             tip = f"<span style='color:#27ae60;'>Buy—strong momentum + positive news!</span><br>Price: ${price:.2f}. Up {change:.1f}% today."
