@@ -277,6 +277,12 @@ def advice():
                     sentiment_score -= sum(1 for w in negative_keywords if w in title)
         except:
             sentiment_score = 0
+                    # Comment out news till Monday
+                    # try:
+                    #     today = ...
+                    #     ... (the whole news block)
+                    # except:
+                    #     sentiment_score = 0
         
         if change > 1 and sentiment_score > 0:
             tip = f"<span style='color:#27ae60;'>Buy—strong + good news!</span><br>Price: ${price:.2f}. Up {change:.1f}%. News: +{sentiment_score}"
