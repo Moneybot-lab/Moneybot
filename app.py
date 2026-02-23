@@ -259,10 +259,12 @@ def advice():
         from functools import lru_cache
 
         @lru_cache(maxsize=128)
-        def get_price(ticker):
-            stock = yf.Ticker(ticker)
-            hist = stock.history(period="1d")
-            return hist
+        def hist = get_price(ticker)
+            if hist.empty:
+               raise ValueError("No price data")
+
+            price = float(hist['Close'].iloc[-1])
+            change = float(hist['Close'].pct_change().iloc[-1] * 100)
 
         if price is None:
             raise ValueError("No price data")
@@ -270,10 +272,9 @@ def advice():
         today = datetime.now().strftime('%Y-%m-%d')
         yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
 
-        news_url = f"https://finnhub.io/api/v1/company-news?symbol={ticker}&from={yesterday}&to={today}"
         news_url = (
             f"https://finnhub.io/api/v1/company-news"
-            f"?symbol={ticker}&from={yesterday}&to={today}&token={NEWS_API_KEY}"
+            f"?symbol={ticker}&from={yesterday}&to={today}&token={"d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120"}"
         )
         news_response = requests.get(news_url, timeout=5)
         news_data = news_response.json()
