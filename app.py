@@ -275,7 +275,7 @@ def advice():
             f"https://finnhub.io/api/v1/company-news"
             f"?symbol={ticker}&from={yesterday}&to={today}&token={NEWS_API_KEY}"
 )
-news_response = requests.get(news_url)
+news_response = requests.get(news_url, timeout=5)
         news_data = news_response.json()
         articles = news_data if isinstance(news_data, list) else []
 
