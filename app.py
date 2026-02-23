@@ -273,8 +273,8 @@ def advice():
             if isinstance(news, list):
                 for a in news[:5]:
                     title = a.get('headline', '').lower()
-                    sentiment_score += sum(1 for w in if w in title)
-                    sentiment_score -= sum(1 for w in if w in title)
+                    sentiment_score += sum(1 for w in positive_keywords if w in title)
+                    sentiment_score -= sum(1 for w in negative_keywords if w in title)
         except:
             sentiment_score = 0
         
