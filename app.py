@@ -260,36 +260,16 @@ def advice():
         info = stock.info
         price = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose')
         change = info.get('regularMarketChangePercent', 0)
-
+        
         if price is None:
             raise ValueError("No price data")
-
-        # Finnhub news with your key
-        today = datetime.now().strftime('%Y-%m-%d')
-        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-        news_url = f"https://finnhub.io/api/v1/company-news?symbol={ticker}&from={yesterday}&to={today}&token=d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120"
-        news_response = requests.get(news_url, timeout=5)
-        news_data = news_response.json()
-        articles = news_data if isinstance(news_data, list) else []
-
-        positive_keywords = ['gain', 'rise', 'strong', 'beat', 'growth']
-        negative_keywords = ['loss', 'drop', 'fall', 'miss', 'decline']
-
-        sentiment_score = 0
-        for article in articles:
-            title = article.get('headline', '').lower()
-            if any(word in title for word in positive_keywords):
-                sentiment_score += 1
-            elif any(word in title for word in negative_keywords):
-                sentiment_score -= 1
-
-        if change > 1 and sentiment_score > 0:
-            tip = f"<span style='color:#27ae60;'>Buy—strong momentum + positive news!</span><br>Price: ${price:.2f}. Up {change:.1f}% today."
-        elif change < -3 or sentiment_score < 0:
-            tip = f"<span style='color:#e74c3c;'>Sell—negative momentum + bad news</span><br>Price: ${price:.2f}. Down {abs(change):.1f}% today."
+        
+        if change > 1:
+            tip = f"<span style='color:#27ae60;'>Buy—strong momentum!</span><br>Price: ${price:.2f}. Up {change:.1f}% today."
+        elif change < -3:
+            tip = f"<span style='color:#e74c3c;'>Sell—weakening fast</span><br>Price: ${price:.2f}. Down {abs(change):.1f}% today."
         else:
-            tip = f"<span style='color:#f39c12;'>Hold—steady or mixed signals</span><br>Price: ${price:.2f}."
-
+            tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}. Change {change:+.1f}% today."
     except Exception as e:
         logging.error(f"Error fetching {ticker}: {e}")
         tip = f"❌ Couldn't load {ticker}. Check the symbol."
