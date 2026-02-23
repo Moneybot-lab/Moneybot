@@ -248,7 +248,6 @@ from flask import Flask, request, jsonify
 import yfinance as yf
 from datetime import datetime, timedelta
 
-app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 NEWS_API_KEY = "d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120"
@@ -269,12 +268,13 @@ def advice():
         yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
 
         news_url = f"https://finnhub.io/api/v1/company-news?symbol={ticker}&from={yesterday}&to={today}"
-        headers = {
-            'X-FinHub-Secret': NEWS_API_KEY
-        }
-        news_response = requests.get(news_url, headers=headers)
+        news_url = (
+            f"https://finnhub.io/api/v1/company-news"
+            f"?symbol={ticker}&from={yesterday}&to={today}&token={NEWS_API_KEY}"
+)
+news_response = requests.get(news_url)
         news_data = news_response.json()
-        articles = news_data.get('articles', [])
+        articles = news_data if isinstance(news_data, list) else []
 
         positive_keywords = ['gain', 'rise', 'strong', 'beat', 'growth']
         negative_keywords = ['loss', 'drop', 'fall', 'miss', 'decline']
