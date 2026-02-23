@@ -256,13 +256,13 @@ NEWS_API_KEY = "d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120"
 def advice():
     ticker = request.json.get('text', '').strip().upper() or 'TSLA'
     try:
-        stock = yf.Ticker(ticker)
-        hist = stock.history(period="1d")
-        price = hist["Close"].iloc[-1]
-        change = (
-            (hist["Close"].iloc[-1] - hist["Open"].iloc[-1])
-            / hist["Open"].iloc[-1] * 100
-        )
+        from functools import lru_cache
+
+        @lru_cache(maxsize=128)
+        def get_price(ticker):
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="1d")
+            return hist
 
         if price is None:
             raise ValueError("No price data")
@@ -299,7 +299,7 @@ news_response = requests.get(news_url, timeout=5)
 
     except Exception as e:
         logging.error(f"Error fetching {ticker}: {e}")
-        tip = f"Couldn't load '{ticker}'—try TSLA."
+        tip = f"❌ Couldn't load {ticker}. Check the symbol."
     return jsonify({"tip": tip})
 @app.route('/watchlist', methods=['GET', 'POST'])
 def watchlist():
