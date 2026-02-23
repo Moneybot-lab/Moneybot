@@ -252,7 +252,7 @@ logging.basicConfig(level=logging.INFO)
 
 NEWS_API_KEY = "d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120"
 
-@app.route('/advice', methods=['GET'])
+@app.route('/advice', methods=['POST'])
 def advice():
     ticker = request.json.get('text', '').strip().upper() or 'TSLA'
     try:
