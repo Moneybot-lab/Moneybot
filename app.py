@@ -136,44 +136,34 @@ def home():
     
     <footer>Powered by yfinance · Built by Troy · 2026</footer>
     
-    <script>
-    async function ask() {
+<script>
+async function ask() {
     const loading = document.getElementById('loading');
     const response = document.getElementById('response');
     let ticker = document.getElementById('custom').value.trim().toUpperCase();
-    if (!ticker) { response.innerText = "Enter a ticker!"; return; }
+    if (!ticker) {
+        response.innerText = "Enter a ticker!";
+        return;
+    }
     response.innerText = '';
     loading.style.display = 'block';
+
     try {
-        const res = await fetch('/advice?text=' + encodeURIComponent(ticker), {method: 'GET'});
+        const res = await fetch('/advice?text=' + encodeURIComponent(ticker));
+        if (!res.ok) throw new Error('Bad response');
         const data = await res.json();
         response.innerHTML = data.tip;
     } catch (e) {
+        console.log('Fetch error:', e);
         response.innerText = "Couldn't fetch—try again.";
     }
     loading.style.display = 'none';
 }
-        response.innerText = '';
-        loading.style.display = 'block';
-        
-        try {
-            const res = await fetch('/advice', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({text: ticker})
-            });
-            const data = await res.json();
-            response.innerHTML = data.tip;
-        } catch (e) {
-            response.innerText = "Couldn't fetch—try again.";
-        }
-        loading.style.display = 'none';
-    }
-    
-    document.getElementById('custom').addEventListener('keypress', e => {
-        if (e.key === 'Enter') ask();
-    });
-    </script>
+
+document.getElementById('custom').addEventListener('keypress', e => {
+    if (e.key === 'Enter') ask();
+});
+</script>
 </body>
 </html>
 '''
