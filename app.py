@@ -257,9 +257,12 @@ def advice():
     ticker = request.json.get('text', '').strip().upper() or 'TSLA'
     try:
         stock = yf.Ticker(ticker)
-        info = stock.info
-        price = info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose')
-        change = info.get('regularMarketChangePercent', 0)
+        hist = stock.history(period="1d")
+        price = hist["Close"].iloc[-1]
+        change = (
+            (hist["Close"].iloc[-1] - hist["Open"].iloc[-1])
+            / hist["Open"].iloc[-1] * 100
+        )
 
         if price is None:
             raise ValueError("No price data")
