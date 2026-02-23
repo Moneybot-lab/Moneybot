@@ -266,8 +266,8 @@ def advice():
 
         hist = get_price(ticker)
         
-            if hist.empty:
-               raise ValueError("No price data")
+        if hist.empty:
+            raise ValueError("No price data")
 
             price = float(hist['Close'].iloc[-1])
             change = float(hist['Close'].pct_change().iloc[-1] * 100)
