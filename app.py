@@ -264,7 +264,6 @@ def advice():
         if price is None:
             raise ValueError("No price data")
 
-        # Safe Finnhub news
         sentiment_score = 0
         try:
             today = datetime.now().strftime('%Y-%m-%d')
@@ -283,7 +282,6 @@ def advice():
             logging.warning(f"News fetch failed: {news_err}")
             sentiment_score = 0  # No crash
 
-        # Combine
         if change > 1 and sentiment_score > 0:
             tip = f"<span style='color:#27ae60;'>Buy—strong momentum + good news!</span><br>Price: ${price:.2f}. Up {change:.1f}%.<br>News sentiment: +{sentiment_score}"
         elif change < -3 or sentiment_score < 0:
