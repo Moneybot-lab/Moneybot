@@ -320,7 +320,7 @@ def watchlist():
         <tr><td>META</td><td>Meta</td><td id="meta_price"></td><td id="meta_change"></td></tr>
         <tr><td>AMD</td><td>AMD</td><td id="amd_price"></td><td id="amd_change"></td></tr>
         <tr><td>PLTR</td><td>Palantir</td><td id="pltr_price"></td><td id="pltr_change"></td></tr>
-        <tr><td>SUP</td><td>Super Micro</td><td id="smci_price"></td><td id="smci_change"></td></tr>
+        <tr><td>SMCI</td><td>Super Micro</td><td id="smci_price"></td><td id="smci_change"></td></tr>
     </table>
 
     <script>
