@@ -138,13 +138,21 @@ def home():
     
     <script>
     async function ask() {
-        const loading = document.getElementById('loading');
-        const response = document.getElementById('response');
-        let ticker = document.getElementById('custom').value.trim().toUpperCase();
-        if (!ticker) {
-            response.innerText = "Enter a ticker!";
-            return;
-        }
+    const loading = document.getElementById('loading');
+    const response = document.getElementById('response');
+    let ticker = document.getElementById('custom').value.trim().toUpperCase();
+    if (!ticker) { response.innerText = "Enter a ticker!"; return; }
+    response.innerText = '';
+    loading.style.display = 'block';
+    try {
+        const res = await fetch('/advice?text=' + encodeURIComponent(ticker), {method: 'GET'});
+        const data = await res.json();
+        response.innerHTML = data.tip;
+    } catch (e) {
+        response.innerText = "Couldn't fetch—try again.";
+    }
+    loading.style.display = 'none';
+}
         response.innerText = '';
         loading.style.display = 'block';
         
@@ -252,9 +260,9 @@ logging.basicConfig(level=logging.INFO)
 
 NEWS_API_KEY = "d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120"
 
-@app.route('/advice', methods=['GET', 'POST'])
+@app.route('/advice', methods=['GET'])
 def advice():
-    ticker = request.json.get('text', '').strip().upper() or 'TSLA'
+    ticker = request.args.get('text', '').strip().upper() or 'TSLA'
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
