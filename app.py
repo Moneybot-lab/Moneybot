@@ -259,7 +259,13 @@ def advice():
         from functools import lru_cache
 
         @lru_cache(maxsize=128)
-        def hist = get_price(ticker)
+        def get_price(ticker):
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="1d")
+            return hist
+
+        hist = get_price(ticker)
+        
             if hist.empty:
                raise ValueError("No price data")
 
