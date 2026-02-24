@@ -1,7 +1,8 @@
-from flask import Flask, request, jsonify
-import yfinance as yf
-from flask_cors import CORS
 import logging
+
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import yfinance as yf
 
 app = Flask(__name__)
 
@@ -222,15 +223,35 @@ def whales():
     <div class="note">Jim Simons' fund is quant-heavy—no public "favorites," but these are top recent holds.</div>
 
     <script>
-const ids = ["aapl","axp","bac","ko","cvx","amzn","dbx","spot","googl","tsla","nvda","aapl2","msft","googl2","pltr","uthr","mu","vrsn","kto","amzn2"];
-ids.forEach(id => {
-    const t = id.replace(/[0-9]/g,'').toUpperCase();
-    fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${t}`)
+const symbolsById = {
+    aapl: "AAPL",
+    axp: "AXP",
+    bac: "BAC",
+    ko: "KO",
+    cvx: "CVX",
+    amzn: "AMZN",
+    dbx: "DBX",
+    spot: "SPOT",
+    googl: "GOOGL",
+    tsla: "TSLA",
+    nvda: "NVDA",
+    amzn2: "AMZN",
+    aapl2: "AAPL",
+    msft: "MSFT",
+    googl2: "GOOGL",
+    pltr: "PLTR",
+    uthr: "UTHR",
+    mu: "MU",
+    vrsn: "VRSN",
+    kto: "K.TO"
+};
+
+Object.entries(symbolsById).forEach(([id, symbol]) => {
+    fetch(`/quote?symbol=${encodeURIComponent(symbol)}`)
     .then(r => r.json())
     .then(data => {
-        const q = data.quoteResponse.result[0] || {};
-        const price = q.regularMarketPrice?.toFixed(2) || q.regularMarketPreviousClose?.toFixed(2) || "N/A";
-        document.getElementById(id).innerText = `$${price}`;
+        const price = data.price ?? "N/A";
+        document.getElementById(id).innerText = price === "N/A" ? "N/A" : `$${Number(price).toFixed(2)}`;
     })
     .catch(() => document.getElementById(id).innerText = "N/A");
 });
@@ -240,15 +261,29 @@ ids.forEach(id => {
     </body>
     </html>
     '''
-import logging
-import requests
-from flask import Flask, request, jsonify
-import yfinance as yf
-from datetime import datetime, timedelta
 
-logging.basicConfig(level=logging.INFO)
+@app.route('/quote', methods=['GET'])
+def quote():
+    symbol = request.args.get('symbol', '').strip().upper()
+    if not symbol:
+        return jsonify({"price": "N/A", "change_percent": "N/A"}), 400
 
-NEWS_API_KEY = "d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120"
+    try:
+        info = yf.Ticker(symbol).info
+        price = info.get('regularMarketPrice') or info.get('regularMarketPreviousClose') or info.get('previousClose')
+        change_percent = info.get('regularMarketChangePercent')
+        if change_percent is None:
+            previous_close = info.get('regularMarketPreviousClose') or info.get('previousClose')
+            if price is not None and previous_close not in (None, 0):
+                change_percent = ((price - previous_close) / previous_close) * 100
+
+        return jsonify({
+            "price": price if price is not None else "N/A",
+            "change_percent": change_percent if change_percent is not None else "N/A"
+        })
+    except Exception as e:
+        logging.error(f"Quote error for {symbol}: {e}")
+        return jsonify({"price": "N/A", "change_percent": "N/A"}), 500
 
 @app.route('/advice', methods=['GET'])
 def advice():
@@ -297,14 +332,17 @@ def watchlist():
     <script>
     const stocks = ["TSLA","NVDA","AAPL","AMZN","MSFT","GOOGL","META","AMD","PLTR","SMCI"];
     stocks.forEach(t => {
-        fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${t}`)
+        fetch(`/quote?symbol=${encodeURIComponent(t)}`)
         .then(r => r.json())
         .then(d => {
-            const q = d.quoteResponse.result[0];
-            const price = q.regularMarketPrice?.toFixed(2) || "N/A";
-            const ch = q.regularMarketChangePercent?.toFixed(2) || "N/A";
-            document.getElementById(t.toLowerCase() + '_price').innerText = `$${price}`;
-            document.getElementById(t.toLowerCase() + '_change').innerText = ch + '%';
+            const price = d.price === "N/A" ? "N/A" : `$${Number(d.price).toFixed(2)}`;
+            const ch = d.change_percent === "N/A" ? "N/A" : `${Number(d.change_percent).toFixed(2)}%`;
+            document.getElementById(t.toLowerCase() + '_price').innerText = price;
+            document.getElementById(t.toLowerCase() + '_change').innerText = ch;
+        })
+        .catch(() => {
+            document.getElementById(t.toLowerCase() + '_price').innerText = "N/A";
+            document.getElementById(t.toLowerCase() + '_change').innerText = "N/A";
         });
     });
     </script>
