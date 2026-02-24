@@ -1,20 +1,58 @@
 import logging
 import os
 import secrets
-from functools import wraps
 
-from flask import Flask, jsonify, redirect, render_template_string, request, session, url_for
-
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 import yfinance as yf
-from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('MONEYBOT_SECRET_KEY', secrets.token_hex(32))
-
 CORS(app)
 
 logging.basicConfig(level=logging.INFO)
+
+QUOTE_FALLBACK = {"price": "DATA_MISSING", "change_percent": "DATA_MISSING"}
+
+LONG_TERM_WATCHLIST = [
+    ("AAPL", "Apple"),
+    ("MSFT", "Microsoft"),
+    ("GOOGL", "Alphabet"),
+    ("AMZN", "Amazon"),
+    ("JNJ", "Johnson & Johnson"),
+    ("PG", "Procter & Gamble"),
+    ("KO", "Coca-Cola"),
+    ("V", "Visa"),
+]
+
+HOT_WATCHLIST_CANDIDATES = [
+    ("SOFI", "SoFi Technologies"),
+    ("RKLB", "Rocket Lab"),
+    ("PLTR", "Palantir"),
+    ("SNAP", "Snap"),
+    ("F", "Ford"),
+    ("PFE", "Pfizer"),
+    ("NIO", "NIO"),
+    ("LCID", "Lucid Group"),
+    ("HOOD", "Robinhood"),
+    ("RIVN", "Rivian"),
+    ("ACHR", "Archer Aviation"),
+    ("JOBY", "Joby Aviation"),
+]
+
+DEFAULT_HOT_WATCHLIST = HOT_WATCHLIST_CANDIDATES[:8]
+
+POSITIVE_WORDS = {
+    "beat", "beats", "surge", "surges", "growth", "upgrade", "upgrades", "strong",
+    "bullish", "record", "profit", "profits", "outperform", "expands", "expansion",
+    "partnership", "launch", "wins", "demand", "momentum", "innovation",
+}
+
+NEGATIVE_WORDS = {
+    "miss", "misses", "downgrade", "downgrades", "weak", "weakness", "lawsuit",
+    "probe", "decline", "falls", "drop", "drops", "bearish", "loss", "losses",
+    "cuts", "cut", "slowdown", "risk", "warning", "volatile", "regulatory",
+}
 
 
 def _to_float(value):
@@ -24,51 +62,8 @@ def _to_float(value):
         return None
 
 
-def _to_percent(value):
-    numeric_value = _to_float(value)
-    if numeric_value is None:
-        return None
-    return numeric_value * 100
-
-
 def _is_valid_symbol(symbol):
     return bool(symbol) and all(ch.isalnum() or ch in {'.', '-', '^'} for ch in symbol)
-
-
-def _get_auth_config():
-    username = os.environ.get('MONEYBOT_ADMIN_USERNAME', 'parent')
-    password_hash = os.environ.get('MONEYBOT_ADMIN_PASSWORD_HASH')
-    if not password_hash:
-        password_hash = generate_password_hash(os.environ.get('MONEYBOT_ADMIN_PASSWORD', 'MoneybotDemo!2026'))
-    return username, password_hash
-
-
-def _is_authenticated():
-    return bool(session.get('authenticated'))
-
-
-def _require_login(view_func):
-    @wraps(view_func)
-    def wrapped(*args, **kwargs):
-        if not _is_authenticated():
-            return redirect(url_for('signin', next=request.path))
-        return view_func(*args, **kwargs)
-
-    return wrapped
-
-
-def _new_csrf_token():
-    token = secrets.token_urlsafe(32)
-    session['csrf_token'] = token
-    return token
-
-
-def _safe_next_path(next_page):
-    if not next_page:
-        return url_for('parent_dashboard')
-    if next_page.startswith('/') and not next_page.startswith('//'):
-        return next_page
-    return url_for('parent_dashboard')
 
 
 def get_quote_data(symbol):
@@ -77,8 +72,8 @@ def get_quote_data(symbol):
 
     try:
         info = ticker.info or {}
-    except Exception as e:
-        logging.warning(f"Ticker info unavailable for {symbol}: {e}")
+    except Exception as error:
+        logging.warning("Ticker info unavailable for %s: %s", symbol, error)
 
     price = (
         info.get('regularMarketPrice')
@@ -91,619 +86,307 @@ def get_quote_data(symbol):
 
     if price is None or previous_close is None or change_percent is None:
         try:
-            history = ticker.history(period='2d', interval='1d')
+            history = ticker.history(period='5d', interval='1d')
             if not history.empty:
                 latest_close = history['Close'].iloc[-1]
                 prev_close = history['Close'].iloc[-2] if len(history.index) > 1 else None
-
                 if price is None:
                     price = latest_close
                 if previous_close is None and prev_close is not None:
                     previous_close = prev_close
                 if change_percent is None and prev_close not in (None, 0):
                     change_percent = ((latest_close - prev_close) / prev_close) * 100
-        except Exception as e:
-            logging.warning(f"Price history unavailable for {symbol}: {e}")
+        except Exception as error:
+            logging.warning("Price history unavailable for %s: %s", symbol, error)
 
     if change_percent is None and price is not None and previous_close not in (None, 0):
         change_percent = ((price - previous_close) / previous_close) * 100
 
-
-    ticker = yf.Ticker(symbol)
-
-    try:
-        info = ticker.info or {}
-    except Exception as e:
-        logging.warning(f"Long-term info unavailable for {symbol}: {e}")
-        info = {}
-
-    try:
-        history = ticker.history(period='5y', interval='1mo')
-    except Exception as e:
-        logging.warning(f"Long-term history unavailable for {symbol}: {e}")
-        history = None
-
-    growth_1y = None
-    growth_3y = None
-    growth_5y = None
-
-    if history is not None and not history.empty and 'Close' in history.columns:
-        closes = history['Close'].dropna()
-        if not closes.empty:
-            latest = closes.iloc[-1]
-
-            def pct_change(months_back):
-                if len(closes.index) <= months_back:
-                    return None
-                start_price = closes.iloc[-(months_back + 1)]
-                if start_price in (None, 0):
-                    return None
-                return ((latest - start_price) / start_price) * 100
-
-            growth_1y = pct_change(12)
-            growth_3y = pct_change(36)
-            growth_5y = pct_change(60)
-
-    roe = _to_percent(info.get('returnOnEquity'))
-    profit_margin = _to_percent(info.get('profitMargins'))
-    operating_margin = _to_percent(info.get('operatingMargins'))
-    debt_to_equity = _to_float(info.get('debtToEquity'))
-    current_ratio = _to_float(info.get('currentRatio'))
-    free_cashflow = _to_float(info.get('freeCashflow'))
-    operating_cashflow = _to_float(info.get('operatingCashflow'))
-    revenue_growth = _to_percent(info.get('revenueGrowth'))
-    earnings_growth = _to_percent(info.get('earningsGrowth'))
-    beta = _to_float(info.get('beta'))
-
-    risk_points = 0
-
-    if debt_to_equity is not None and debt_to_equity > 150:
-        risk_points += 2
-    elif debt_to_equity is not None and debt_to_equity > 80:
-        risk_points += 1
-
-    if current_ratio is not None and current_ratio < 1:
-        risk_points += 1
-
-    if free_cashflow is not None and free_cashflow < 0:
-        risk_points += 2
-
-    if operating_margin is not None and operating_margin < 0:
-        risk_points += 2
-    elif operating_margin is not None and operating_margin < 8:
-        risk_points += 1
-
-    if beta is not None and beta > 1.5:
-        risk_points += 1
-
-    if growth_3y is not None and growth_3y < 0:
-        risk_points += 1
-
-    risk_level = 'low' if risk_points <= 1 else 'moderate' if risk_points <= 3 else 'high'
-
-
     return {
-        "price": _to_float(price) if price is not None else "N/A",
-        "change_percent": _to_float(change_percent) if change_percent is not None else "N/A"
+        "price": _to_float(price) if price is not None else "DATA_MISSING",
+        "change_percent": _to_float(change_percent) if change_percent is not None else "DATA_MISSING",
     }
 
 
+def _compute_technical_indicators(symbol):
     ticker = yf.Ticker(symbol)
-
     try:
-        info = ticker.info or {}
-    except Exception as e:
-        logging.warning(f"Long-term info unavailable for {symbol}: {e}")
-        info = {}
-
-    try:
-        history = ticker.history(period='5y', interval='1mo')
-    except Exception as e:
-        logging.warning(f"Long-term history unavailable for {symbol}: {e}")
+        history = ticker.history(period='6mo', interval='1d')
+    except Exception as error:
+        logging.warning("Technical history unavailable for %s: %s", symbol, error)
         history = None
 
-    growth_1y = None
-    growth_3y = None
-    growth_5y = None
+    if history is None or history.empty or 'Close' not in history.columns:
+        return {
+            "rsi": None,
+            "macd": None,
+            "macd_signal": None,
+            "macd_histogram": None,
+            "trend": "unknown",
+        }
 
-    if history is not None and not history.empty and 'Close' in history.columns:
-        closes = history['Close'].dropna()
-        if not closes.empty:
-            latest = closes.iloc[-1]
+    close = history['Close'].dropna()
+    if len(close) < 35:
+        return {
+            "rsi": None,
+            "macd": None,
+            "macd_signal": None,
+            "macd_histogram": None,
+            "trend": "insufficient_data",
+        }
 
-            def pct_change(months_back):
-                if len(closes.index) <= months_back:
-                    return None
-                start_price = closes.iloc[-(months_back + 1)]
-                if start_price in (None, 0):
-                    return None
-                return ((latest - start_price) / start_price) * 100
+    delta = close.diff()
+    gains = delta.clip(lower=0)
+    losses = (-delta).clip(lower=0)
+    avg_gain = gains.rolling(14).mean()
+    avg_loss = losses.rolling(14).mean()
+    rs = avg_gain / avg_loss.replace(0, 1e-9)
+    rsi = 100 - (100 / (1 + rs))
 
-            growth_1y = pct_change(12)
-            growth_3y = pct_change(36)
-            growth_5y = pct_change(60)
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    macd_line = ema12 - ema26
+    macd_signal = macd_line.ewm(span=9, adjust=False).mean()
+    macd_hist = macd_line - macd_signal
 
-    roe = _to_percent(info.get('returnOnEquity'))
-    profit_margin = _to_percent(info.get('profitMargins'))
-    operating_margin = _to_percent(info.get('operatingMargins'))
-    debt_to_equity = _to_float(info.get('debtToEquity'))
-    current_ratio = _to_float(info.get('currentRatio'))
-    free_cashflow = _to_float(info.get('freeCashflow'))
-    operating_cashflow = _to_float(info.get('operatingCashflow'))
-    revenue_growth = _to_percent(info.get('revenueGrowth'))
-    earnings_growth = _to_percent(info.get('earningsGrowth'))
-    beta = _to_float(info.get('beta'))
-
-    risk_points = 0
-
-    if debt_to_equity is not None and debt_to_equity > 150:
-        risk_points += 2
-    elif debt_to_equity is not None and debt_to_equity > 80:
-        risk_points += 1
-
-    if current_ratio is not None and current_ratio < 1:
-        risk_points += 1
-
-    if free_cashflow is not None and free_cashflow < 0:
-        risk_points += 2
-
-    if operating_margin is not None and operating_margin < 0:
-        risk_points += 2
-    elif operating_margin is not None and operating_margin < 8:
-        risk_points += 1
-
-    if beta is not None and beta > 1.5:
-        risk_points += 1
-
-
-
-    ticker = yf.Ticker(symbol)
-
-    try:
-        info = ticker.info or {}
-    except Exception as e:
-        logging.warning(f"Long-term info unavailable for {symbol}: {e}")
-        info = {}
-
-    try:
-        history = ticker.history(period='5y', interval='1mo')
-    except Exception as e:
-        logging.warning(f"Long-term history unavailable for {symbol}: {e}")
-        history = None
-
-    growth_1y = None
-    growth_3y = None
-    growth_5y = None
-
-    if history is not None and not history.empty and 'Close' in history.columns:
-        closes = history['Close'].dropna()
-        if not closes.empty:
-            latest = closes.iloc[-1]
-
-            def pct_change(months_back):
-                if len(closes.index) <= months_back:
-                    return None
-                start_price = closes.iloc[-(months_back + 1)]
-                if start_price in (None, 0):
-                    return None
-                return ((latest - start_price) / start_price) * 100
-
-            growth_1y = pct_change(12)
-            growth_3y = pct_change(36)
-            growth_5y = pct_change(60)
-
-    roe = _to_percent(info.get('returnOnEquity'))
-    profit_margin = _to_percent(info.get('profitMargins'))
-    operating_margin = _to_percent(info.get('operatingMargins'))
-    debt_to_equity = _to_float(info.get('debtToEquity'))
-    current_ratio = _to_float(info.get('currentRatio'))
-    free_cashflow = _to_float(info.get('freeCashflow'))
-    operating_cashflow = _to_float(info.get('operatingCashflow'))
-    revenue_growth = _to_percent(info.get('revenueGrowth'))
-    earnings_growth = _to_percent(info.get('earningsGrowth'))
-    beta = _to_float(info.get('beta'))
-
-    risk_points = 0
-
-    if debt_to_equity is not None and debt_to_equity > 150:
-        risk_points += 2
-    elif debt_to_equity is not None and debt_to_equity > 80:
-        risk_points += 1
-
-    if current_ratio is not None and current_ratio < 1:
-        risk_points += 1
-
-    if free_cashflow is not None and free_cashflow < 0:
-        risk_points += 2
-
-    if operating_margin is not None and operating_margin < 0:
-        risk_points += 2
-    elif operating_margin is not None and operating_margin < 8:
-        risk_points += 1
-
-    if beta is not None and beta > 1.5:
-        risk_points += 1
-
-    if growth_3y is not None and growth_3y < 0:
-        risk_points += 1
-
-    risk_level = 'low' if risk_points <= 1 else 'moderate' if risk_points <= 3 else 'high'
+    latest_hist = _to_float(macd_hist.iloc[-1])
+    trend = "bullish" if latest_hist is not None and latest_hist > 0 else "bearish"
 
     return {
-    'ticker': symbol,
-    'long_term_growth': {
-        'revenue_growth_pct': revenue_growth,
-        'earnings_growth_pct': earnings_growth,
-    },
-    "price": _to_float(price)
-}
-
-def _to_float(value):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def get_long_term_investor_analysis(symbol):
-    ticker = yf.Ticker(symbol)
-
-    try:
-        info = ticker.info or {}
-    except Exception as e:
-        logging.warning(f"Long-term info unavailable for {symbol}: {e}")
-        info = {}
-
-    try:
-        history = ticker.history(period='5y', interval='1mo')
-    except Exception as e:
-        logging.warning(f"Long-term history unavailable for {symbol}: {e}")
-        history = None
-
-    growth_1y = None
-    growth_3y = None
-    growth_5y = None
-
-    if history is not None and not history.empty and 'Close' in history.columns:
-        closes = history['Close'].dropna()
-        if not closes.empty:
-            latest = closes.iloc[-1]
-
-            def pct_change(months_back):
-                if len(closes.index) <= months_back:
-                    return None
-                start_price = closes.iloc[-(months_back + 1)]
-                if start_price in (None, 0):
-                    return None
-                return ((latest - start_price) / start_price) * 100
-
-            growth_1y = pct_change(12)
-            growth_3y = pct_change(36)
-            growth_5y = pct_change(60)
-
-    roe = _to_float(info.get('returnOnEquity'))
-    profit_margin = _to_float(info.get('profitMargins'))
-    operating_margin = _to_float(info.get('operatingMargins'))
-    debt_to_equity = _to_float(info.get('debtToEquity'))
-    current_ratio = _to_float(info.get('currentRatio'))
-    free_cashflow = _to_float(info.get('freeCashflow'))
-    operating_cashflow = _to_float(info.get('operatingCashflow'))
-    revenue_growth = _to_float(info.get('revenueGrowth'))
-    earnings_growth = _to_float(info.get('earningsGrowth'))
-    beta = _to_float(info.get('beta'))
-
-    risk_points = 0
-
-    if debt_to_equity is not None and debt_to_equity > 150:
-        risk_points += 2
-    elif debt_to_equity is not None and debt_to_equity > 80:
-        risk_points += 1
-
-    if current_ratio is not None and current_ratio < 1:
-        risk_points += 1
-
-    if free_cashflow is not None and free_cashflow < 0:
-        risk_points += 2
-
-    if operating_margin is not None and operating_margin < 0:
-        risk_points += 2
-    elif operating_margin is not None and operating_margin < 0.08:
-        risk_points += 1
-
-    if beta is not None and beta > 1.5:
-        risk_points += 1
-
-    if growth_3y is not None and growth_3y < 0:
-        risk_points += 1
-
-    risk_level = 'low' if risk_points <= 1 else 'moderate' if risk_points <= 3 else 'high'
-
-    return {
-        'ticker': symbol,
-        'long_term_growth': {
-            'revenue_growth': revenue_growth,
-            'earnings_growth': earnings_growth,
-            'price_growth_1y_pct': growth_1y,
-            'price_growth_3y_pct': growth_3y,
-            'price_growth_5y_pct': growth_5y,
-        },
-        'financial_health': {
-            'return_on_equity_pct': roe,
-            'profit_margin_pct': profit_margin,
-            'operating_margin_pct': operating_margin,
-            'return_on_equity': roe,
-            'profit_margin': profit_margin,
-            'operating_margin': operating_margin,
-            'debt_to_equity': debt_to_equity,
-            'current_ratio': current_ratio,
-            'free_cash_flow': free_cashflow,
-            'operating_cash_flow': operating_cashflow,
-        },
-        'risk_assessment': {
-            'risk_level': risk_level,
-            'risk_score': risk_points,
-            'summary': (
-                f"{symbol} is assessed as {risk_level} risk for long-term investors "
-                f"based on leverage, profitability, cash flow, and volatility metrics."
-            ),
-        },
+        "rsi": _to_float(rsi.iloc[-1]),
+        "macd": _to_float(macd_line.iloc[-1]),
+        "macd_signal": _to_float(macd_signal.iloc[-1]),
+        "macd_histogram": latest_hist,
+        "trend": trend,
     }
+
+
+def _compute_news_sentiment(symbol):
+    ticker = yf.Ticker(symbol)
+    try:
+        items = ticker.news or []
+    except Exception as error:
+        logging.warning("News unavailable for %s: %s", symbol, error)
+        items = []
+
+    if not items:
+        return {
+            "score": 0.5,
+            "label": "neutral",
+            "headlines": [],
+            "explanation": "No recent headlines were available, so sentiment defaults to neutral.",
+        }
+
+    pos_hits = 0
+    neg_hits = 0
+    headlines = []
+
+    for item in items[:8]:
+        title = (item.get('title') or '').strip()
+        summary = (item.get('summary') or '').strip()
+        text = f"{title} {summary}".lower()
+        words = {word.strip(".,:;!?()[]'\"") for word in text.split()}
+
+        pos = len(words & POSITIVE_WORDS)
+        neg = len(words & NEGATIVE_WORDS)
+        pos_hits += pos
+        neg_hits += neg
+
+        if title:
+            headlines.append(title)
+
+    denominator = max(pos_hits + neg_hits, 1)
+    raw_score = (pos_hits - neg_hits) / denominator
+    score = (raw_score + 1) / 2
+
+    if score >= 0.67:
+        label = "positive"
+    elif score <= 0.33:
+        label = "negative"
+    else:
+        label = "neutral"
+
+    return {
+        "score": round(score, 3),
+        "label": label,
+        "headlines": headlines[:3],
+        "explanation": (
+            f"Sentiment derived from {min(len(items), 8)} recent headlines using a financial"
+            " keyword lexicon for positive vs. negative signals."
+        ),
+    }
+
+
+
+
+def _build_hot_watchlist(max_price=50.0, limit=8):
+    selected = []
+    for ticker, company in HOT_WATCHLIST_CANDIDATES:
+        quote = get_quote_data(ticker)
+        price = quote.get("price")
+        if isinstance(price, (int, float)) and price <= max_price:
+            selected.append((ticker, company))
+        elif price == "DATA_MISSING":
+            # Keep unknown-priced trending candidates available when the data provider is unavailable.
+            selected.append((ticker, company))
+
+        if len(selected) >= limit:
+            break
+
+    return selected or DEFAULT_HOT_WATCHLIST[:limit]
+
+def _hybrid_signal_engine(symbol):
+    technical = _compute_technical_indicators(symbol)
+    sentiment = _compute_news_sentiment(symbol)
+
+    rsi = technical.get("rsi")
+    macd_hist = technical.get("macd_histogram")
+    sentiment_score = sentiment.get("score", 0.5)
+
+    technical_score = 0.0
+    reasons = []
+
+    if rsi is not None:
+        if rsi <= 35:
+            technical_score += 0.45
+            reasons.append(f"RSI {rsi:.1f} is low, indicating oversold conditions.")
+        elif rsi >= 70:
+            technical_score -= 0.45
+            reasons.append(f"RSI {rsi:.1f} is high, indicating overbought risk.")
+        else:
+            reasons.append(f"RSI {rsi:.1f} is neutral.")
+    else:
+        reasons.append("RSI unavailable due to limited price history.")
+
+    if macd_hist is not None:
+        if macd_hist > 0:
+            technical_score += 0.25
+            reasons.append("MACD is above signal (bullish momentum).")
+        else:
+            technical_score -= 0.25
+            reasons.append("MACD is below signal (bearish momentum).")
+    else:
+        reasons.append("MACD unavailable due to limited price history.")
+
+    sentiment_score_centered = sentiment_score - 0.5
+    technical_weight = 0.6
+    sentiment_weight = 0.4
+    hybrid_score = (technical_score * technical_weight) + ((sentiment_score_centered * 2) * sentiment_weight)
+
+    if sentiment_score >= 0.7 and (rsi is not None and rsi <= 40) and (macd_hist is not None and macd_hist > 0):
+        action = "BUY"
+        reasons.append("Rule trigger: strong positive sentiment + supportive RSI/MACD.")
+    elif sentiment_score <= 0.35 and (rsi is not None and rsi >= 60) and (macd_hist is not None and macd_hist < 0):
+        action = "SELL"
+        reasons.append("Rule trigger: negative sentiment + overbought/weak momentum.")
+    elif hybrid_score >= 0.18:
+        action = "BUY"
+        reasons.append("Hybrid score is sufficiently positive.")
+    elif hybrid_score <= -0.18:
+        action = "SELL"
+        reasons.append("Hybrid score is sufficiently negative.")
+    else:
+        action = "HOLD"
+        reasons.append("Signals are mixed; hold until clearer direction appears.")
+
+    confidence = min(0.95, max(0.5, abs(hybrid_score) + 0.5))
+
+    rule_engine = {
+        "name": "rule_based_strategy_engine",
+        "buy_threshold": {
+            "sentiment_min": 0.7,
+            "rsi_max": 40,
+            "macd_histogram_min": 0,
+        },
+        "sell_threshold": {
+            "sentiment_max": 0.35,
+            "rsi_min": 60,
+            "macd_histogram_max": 0,
+        },
+        "hybrid_score_buy_min": 0.18,
+        "hybrid_score_sell_max": -0.18,
+        "hybrid_weights": {"technical": technical_weight, "sentiment": sentiment_weight},
+    }
+
+    return {
+        "symbol": symbol,
+        "action": action,
+        "confidence": round(confidence, 3),
+        "hybrid_score": round(hybrid_score, 3),
+        "model": "hybrid_model",
+        "signal_engine": "technical_plus_sentiment",
+        "technical": technical,
+        "sentiment": sentiment,
+        "rule_engine": rule_engine,
+        "rationale": reasons,
+    }
+
 
 @app.route('/', methods=['GET'])
 def home():
     return '''
 <html>
 <head>
-    <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #e0f7fa, #f5f5f5); 
-            color: #333;
-            margin: 0;
-            padding: 0;
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 40px 20px;
-            flex: 1;
-        }
-        h1 {
-            text-align: center;
-            color: #1a237e;
-            font-size: 3.5em;
-            margin-bottom: 20px;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
-        }
-        .tagline {
-            text-align: center;
-            color: #455a64;
-            font-size: 1.3em;
-            margin-bottom: 30px;
-        }
-        .input-group {
-            display: flex;
-            justify-content: center;
-            gap: 15px;
-            margin-bottom: 30px;
-            flex-wrap: wrap;
-        }
-        input, select {
-            padding: 14px 20px;
-            font-size: 1.1em;
-            border: 2px solid #1e88e5;
-            border-radius: 12px;
-            outline: none;
-            transition: border 0.3s;
-            min-width: 250px;
-        }
-        input:focus, select:focus {
-            border-color: #0d47a1;
-            box-shadow: 0 0 0 3px rgba(29, 68, 125, 0.2);
-        }
-        button {
-            padding: 14px 30px;
-            font-size: 1.1em;
-            background: #1e88e5;
-            color: white;
-            border: none;
-            border-radius: 12px;
-            cursor: pointer;
-            transition: background 0.3s, transform 0.1s;
-        }
-        button:hover {
-            background: #1565c0;
-            transform: translateY(-2px);
-        }
-        #response {
-            margin-top: 30px;
-            padding: 20px;
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-            font-size: 1.4em;
-            text-align: center;
-            min-height: 100px;
-            transition: opacity 0.5s;
-        }
-        #loading {
-            display: none;
-            color: #1e88e5;
-            font-style: italic;
-            margin: 20px 0;
-        }
-        .links {
-            text-align: center;
-            margin-top: 40px;
-        }
-        .links a {
-            color: #1e88e5;
-            text-decoration: none;
-            margin: 0 15px;
-            font-size: 1.2em;
-        }
-        .links a:hover {
-            text-decoration: underline;
-        }
-        footer {
-            text-align: center;
-            padding: 20px;
-            color: #78909c;
-            font-size: 0.9em;
-        }
-    </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body{font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;background:#eef3ff;color:#1f2937}
+    .wrap{max-width:1000px;margin:0 auto;padding:32px}
+    h1{font-size:3rem;margin:0;color:#1a237e}
+    .sub{font-size:1.1rem;color:#455a64;margin:8px 0 24px}
+    .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+    .card{background:#fff;border-radius:16px;padding:20px;box-shadow:0 10px 24px rgba(0,0,0,.08)}
+    a.btn{display:inline-block;background:#1e40af;color:#fff;padding:10px 14px;border-radius:10px;text-decoration:none;margin-top:8px}
+    .ask{margin-top:26px;background:#fff;border-radius:16px;padding:20px;box-shadow:0 10px 24px rgba(0,0,0,.08)}
+    input{padding:12px;border-radius:10px;border:1px solid #cbd5e1;width:220px}
+    button{padding:12px 14px;border:none;border-radius:10px;background:#1e40af;color:#fff;cursor:pointer}
+    #out{margin-top:10px;line-height:1.6}
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>MoneyBot</h1>
-        <p class="tagline">Your AI stock advisor—real-time advice, no fluff.</p>
-        
-        <div class="input-group">
-            <input id="custom" placeholder="TSLA, AAPL, NVDA..." autofocus>
-            <button onclick="ask()">Ask</button>
-        </div>
-        
-        <div id="loading">Thinking...</div>
-        <div id="response"></div>
-        
-        <div class="links">
-            <a href="/whales">📊 Whales Tracker</a>
-            <a href="/watchlist">🔥 Watchlist</a>
-            <a href="/signin">🔐 Parent Sign In</a>
-        </div>
+  <div class="wrap">
+    <h1>MoneyBot Pro</h1>
+    <p class="sub">Hybrid stock advisor using technical indicators + headline sentiment with transparent rule-based recommendations.</p>
+
+    <div class="cards">
+      <div class="card">
+        <h3>🏛️ Stable Long-Term Watchlist</h3>
+        <p>Quality names for longer horizons and steadier fundamentals.</p>
+        <a class="btn" href="/watchlist">Open long-term watchlist</a>
+      </div>
+      <div class="card">
+        <h3>⚡ Hot Momentum Watchlist</h3>
+        <p>Short-term opportunities with dynamic Buy/Hold/Sell actions.</p>
+        <a class="btn" href="/hot-watchlist">Open hot watchlist</a>
+      </div>
     </div>
-    
-    <footer>Powered by yfinance · Built by Troy · 2026</footer>
-    
+
+    <div class="ask">
+      <h3>Quick Signal Lookup</h3>
+      <input id="sym" placeholder="AAPL, NVDA, TSLA" />
+      <button onclick="lookup()">Analyze</button>
+      <div id="out"></div>
+    </div>
+  </div>
+
 <script>
-async function ask() {
-    const loading = document.getElementById('loading');
-    const response = document.getElementById('response');
-    let ticker = document.getElementById('custom').value.trim().toUpperCase();
-    if (!ticker) {
-        response.innerText = "Enter a ticker!";
-        return;
-    }
-    response.innerText = '';
-    loading.style.display = 'block';
-
-    try {
-        const res = await fetch('/advice?text=' + encodeURIComponent(ticker));
-        if (!res.ok) throw new Error('Bad response');
-        const data = await res.json();
-        response.innerHTML = data.tip;
-    } catch (e) {
-        console.log('Fetch error:', e);
-        response.innerText = "Couldn't fetch—try again.";
-    }
-    loading.style.display = 'none';
+async function lookup(){
+  const el = document.getElementById('out');
+  const sym = (document.getElementById('sym').value || '').trim().toUpperCase();
+  if(!sym){ el.textContent = 'Enter a symbol.'; return; }
+  el.textContent = 'Analyzing...';
+  try {{
+    const res = await fetch('/signal?symbol=' + encodeURIComponent(sym));
+    const data = await res.json();
+    if(!res.ok){ el.textContent = data.error || 'Error'; return; }
+    el.innerHTML = `<b>${data.symbol}</b> → <b>${data.action}</b> (confidence ${(data.confidence*100).toFixed(0)}%)<br>${data.rationale.join('<br>')}`;
+  } catch(err){
+    el.textContent = 'Could not fetch signal.';
+  }
 }
-
-document.getElementById('custom').addEventListener('keypress', e => {
-    if (e.key === 'Enter') ask();
-});
 </script>
 </body>
 </html>
 '''
-
-@app.route('/whales', methods=['GET'])
-def whales():
-    return '''
-    <html>
-    <head>
-    <style>
-        body{font-family:Arial;padding:30px;background:#f8f9fa}
-        h1{margin:0 0 20px;color:#2c3e50}
-        h2{margin:40px 0 10px}
-        table{border-collapse:collapse;width:100%;margin-bottom:30px}
-        th,td{border:1px solid #ddd;padding:12px;text-align:left}
-        th{background:#3498db;color:white}
-        .note{background:#fff3cd;padding:15px;border-radius:8px;margin:20px 0}
-    </style>
-    </head>
-    <body>
-    <h1>💰 Wall Street Whales Tracker</h1>
-    <p>Latest 13F filings + live prices (Yahoo Finance)</p>
-
-    <h2>Warren Buffett (Berkshire Hathaway)</h2>
-    <table><tr><th>Ticker</th><th>Company</th><th>Live Price</th></tr>
-    <tr><td>AAPL</td><td>Apple</td><td id="aapl"></td></tr>
-    <tr><td>AXP</td><td>American Express</td><td id="axp"></td></tr>
-    <tr><td>BAC</td><td>Bank of America</td><td id="bac"></td></tr>
-    <tr><td>KO</td><td>Coca-Cola</td><td id="ko"></td></tr>
-    <tr><td>CVX</td><td>Chevron</td><td id="cvx"></td></tr></table>
-
-    <h2>George Soros</h2>
-    <table><tr><th>Ticker</th><th>Company</th><th>Live Price</th></tr>
-    <tr><td>AMZN</td><td>Amazon</td><td id="amzn"></td></tr>
-    <tr><td>DBX</td><td>Dropbox</td><td id="dbx"></td></tr>
-    <tr><td>SPOT</td><td>Spotify</td><td id="spot"></td></tr>
-    <tr><td>GOOGL</td><td>Alphabet</td><td id="googl"></td></tr>
-    <tr><td>TSLA</td><td>Tesla</td><td id="tsla"></td></tr></table>
-
-    <h2>Ken Griffin (Citadel)</h2>
-    <table><tr><th>Ticker</th><th>Company</th><th>Live Price</th></tr>
-    <tr><td>NVDA</td><td>Nvidia</td><td id="nvda"></td></tr>
-    <tr><td>AMZN</td><td>Amazon</td><td id="amzn2"></td></tr>
-    <tr><td>AAPL</td><td>Apple</td><td id="aapl2"></td></tr>
-    <tr><td>MSFT</td><td>Microsoft</td><td id="msft"></td></tr>
-    <tr><td>GOOGL</td><td>Alphabet</td><td id="googl2"></td></tr></table>
-
-    <h2>Jim Simons (Renaissance Technologies)</h2>
-    <table><tr><th>Ticker</th><th>Company</th><th>Live Price</th></tr>
-    <tr><td>PLTR</td><td>Palantir</td><td id="pltr"></td></tr>
-    <tr><td>UTHR</td><td>United Therapeutics</td><td id="uthr"></td></tr>
-    <tr><td>MU</td><td>Micron</td><td id="mu"></td></tr>
-    <tr><td>VRSN</td><td>Verisign</td><td id="vrsn"></td></tr>
-    <tr><td>K.TO</td><td>Kinross Gold</td><td id="kto"></td></tr></table>
-
-    <div class="note">Jim Simons' fund is quant-heavy—no public "favorites," but these are top recent holds.</div>
-
-    <script>
-const symbolsById = {
-    aapl: "AAPL",
-    axp: "AXP",
-    bac: "BAC",
-    ko: "KO",
-    cvx: "CVX",
-    amzn: "AMZN",
-    dbx: "DBX",
-    spot: "SPOT",
-    googl: "GOOGL",
-    tsla: "TSLA",
-    nvda: "NVDA",
-    amzn2: "AMZN",
-    aapl2: "AAPL",
-    msft: "MSFT",
-    googl2: "GOOGL",
-    pltr: "PLTR",
-    uthr: "UTHR",
-    mu: "MU",
-    vrsn: "VRSN",
-    kto: "K.TO"
-};
-
-Object.entries(symbolsById).forEach(([id, symbol]) => {
-    fetch(`/quote?symbol=${encodeURIComponent(symbol)}`)
-    .then(r => r.json())
-    .then(data => {
-        const price = data.price ?? "N/A";
-        document.getElementById(id).innerText = price === "N/A" ? "N/A" : `$${Number(price).toFixed(2)}`;
-    })
-    .catch(() => document.getElementById(id).innerText = "N/A");
-});
-</script>
-<p style="font-style:italic; color:#555;">Live prices during market hours—weekends show N/A or last close.</p>
-    <p><a href="/">← Back to MoneyBot</a></p>
-    </body>
-    </html>
-    '''
-
-QUOTE_FALLBACK = {"price": "N/A", "change_percent": "N/A"}
 
 
 @app.route('/quote', methods=['GET'])
@@ -713,234 +396,158 @@ def quote():
         return jsonify(QUOTE_FALLBACK), 400
 
     try:
-        quote_data = get_quote_data(symbol)
-        return jsonify(quote_data)
-    except Exception as e:
-        logging.error(f"Quote error for {symbol}: {e}")
+        return jsonify(get_quote_data(symbol))
+    except Exception as error:
+        logging.error("Quote error for %s: %s", symbol, error)
         return jsonify(QUOTE_FALLBACK), 500
 
 
-@app.route('/advice', methods=['GET'])
-def advice():
-    ticker = request.args.get('text', '').strip().upper() or 'TSLA'
-    if not _is_valid_symbol(ticker):
-        return jsonify({"tip": "Invalid ticker symbol."})
-
-    tip = "Data unavailable right now—try another ticker."
-
-    try:
-        quote_data = get_quote_data(ticker)
-        price = quote_data.get("price", "N/A")
-        change = quote_data.get("change_percent", "N/A")
-
-        if price != "N/A" and change != "N/A":
-            if change > 1:
-                tip = f"<span style='color:#27ae60;'>Buy—strong!</span><br>Price: ${price:.2f}. Up {change:.1f}%."
-            elif change < -3:
-                tip = f"<span style='color:#e74c3c;'>Sell—weak!</span><br>Price: ${price:.2f}. Down {abs(change):.1f}%."
-            else:
-                tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}. Change {change:+.1f}%."
-        elif price != "N/A":
-            tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}."
-        else:
-            tip = f"No quote data available for {ticker}."
-    except Exception as e:
-        logging.error(f"Error: {e}")
-
-    return jsonify({"tip": tip})
-
-
-@app.route('/long-term-analysis', methods=['GET'])
-def long_term_analysis():
+@app.route('/signal', methods=['GET'])
+def signal():
     symbol = request.args.get('symbol', '').strip().upper()
-    if not symbol:
-        return jsonify({'error': 'symbol is required'}), 400
     if not _is_valid_symbol(symbol):
         return jsonify({'error': 'invalid symbol format'}), 400
 
     try:
-        return jsonify(get_long_term_investor_analysis(symbol))
-    except Exception as e:
-        logging.error(f"Long-term analysis error for {symbol}: {e}")
-        return jsonify({'error': 'analysis unavailable'}), 500
+        quote_data = get_quote_data(symbol)
+        signal_data = _hybrid_signal_engine(symbol)
+        signal_data['quote'] = quote_data
+        signal_data['quote_data_available'] = quote_data.get('price') != 'DATA_MISSING' and quote_data.get('change_percent') != 'DATA_MISSING'
+        return jsonify(signal_data)
+    except Exception as error:
+        logging.error("Signal engine error for %s: %s", symbol, error)
+        return jsonify({'error': 'signal unavailable'}), 500
 
 
-@app.route('/signin', methods=['GET', 'POST'])
-def signin():
-    auth_error = None
-    next_page = _safe_next_path(request.args.get('next') or request.form.get('next'))
-    next_page = request.args.get('next') or request.form.get('next') or url_for('parent_dashboard')
-
-    if request.method == 'POST':
-        form_token = request.form.get('csrf_token')
-        if not form_token or form_token != session.get('csrf_token'):
-            auth_error = 'Your session expired. Please try signing in again.'
-        else:
-            username, password_hash = _get_auth_config()
-            input_username = request.form.get('username', '').strip()
-            input_password = request.form.get('password', '')
-
-            if input_username == username and check_password_hash(password_hash, input_password):
-                session['authenticated'] = True
-                session.pop('csrf_token', None)
-                return redirect(next_page)
-
-            auth_error = 'We could not verify your credentials. Please check and try again.'
-
-    csrf_token = _new_csrf_token()
-    return render_template_string(
-        '''
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>MoneyBot Parent Portal</title>
-  <style>
-    :root { color-scheme: light; }
-    body { margin:0; font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: linear-gradient(140deg,#f8fbff,#eef4ff 45%,#f7f7ff); color:#1f2937; }
-    .shell { min-height:100vh; display:grid; place-items:center; padding:24px; }
-    .card { width:min(920px,100%); background:#fff; border-radius:20px; box-shadow:0 18px 55px rgba(44,62,130,.12); overflow:hidden; display:grid; grid-template-columns: 1.1fr 1fr; }
-    .panel { padding:40px; }
-    .hero { background: radial-gradient(circle at top left,#2440b7,#152760 55%,#0c173f); color:#e9edff; }
-    h1 { margin:0 0 10px; font-size:2rem; }
-    h2 { margin:0 0 8px; font-size:1.4rem; }
-    p { line-height:1.55; }
-    .tips { margin-top:18px; padding-left:20px; }
-    .tips li { margin-bottom:10px; }
-    .field { margin:14px 0; }
-    label { display:block; font-weight:600; margin-bottom:8px; }
-    input { width:100%; padding:12px 14px; border:1px solid #d3ddf0; border-radius:12px; font-size:1rem; }
-    input:focus { border-color:#2440b7; box-shadow:0 0 0 4px rgba(36,64,183,.14); outline:none; }
-    button { width:100%; padding:13px; border:none; border-radius:12px; font-weight:700; color:#fff; background:#2440b7; cursor:pointer; }
-    button:hover { background:#1f369c; }
-    .error { background:#fff0f0; color:#991b1b; border:1px solid #fecaca; padding:10px 12px; border-radius:10px; margin-bottom:10px; }
-    .meta { margin-top:12px; color:#5b6477; font-size:.93rem; }
-    .nav { margin-top:18px; display:flex; gap:10px; flex-wrap:wrap; }
-    .nav a { color:#2440b7; text-decoration:none; font-weight:600; }
-    @media (max-width: 860px) { .card { grid-template-columns:1fr; } .panel { padding:28px; } }
-  </style>
-</head>
-<body>
-  <main class="shell">
-    <section class="card" aria-label="Parent sign-in portal">
-      <div class="panel hero">
-        <h1>MoneyBot Parent Portal</h1>
-        <p>Securely sign in to access family-focused market insights and safer guidance settings for long-term investing conversations.</p>
-        <ul class="tips">
-          <li><strong>Keep credentials private:</strong> share access only with trusted guardians.</li>
-          <li><strong>Use this as guidance:</strong> discuss decisions with a licensed advisor when needed.</li>
-          <li><strong>Review together:</strong> use dashboard notes to explain risk levels to students.</li>
-        </ul>
-      </div>
-      <div class="panel">
-        <h2>Sign in</h2>
-        <p class="meta">Use your parent account to continue.</p>
-        {% if auth_error %}<div class="error" role="alert">{{ auth_error }}</div>{% endif %}
-        <form method="post" novalidate>
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-          <input type="hidden" name="next" value="{{ next_page }}" />
-          <div class="field">
-            <label for="username">Username</label>
-            <input id="username" name="username" autocomplete="username" required />
-          </div>
-          <div class="field">
-            <label for="password">Password</label>
-            <input id="password" type="password" name="password" autocomplete="current-password" required />
-          </div>
-          <button type="submit">Continue securely</button>
-        </form>
-        <div class="nav"><a href="/">← Back to MoneyBot</a></div>
-      </div>
-    </section>
-  </main>
-</body>
-</html>
-''',
-        auth_error=auth_error,
-        csrf_token=csrf_token,
-        next_page=next_page,
+@app.route('/watchlist', methods=['GET'])
+def watchlist():
+    rows = ''.join(
+        f"<tr><td>{ticker}</td><td>{company}</td><td id='{ticker.lower()}_price'>...</td><td id='{ticker.lower()}_chg'>...</td></tr>"
+        for ticker, company in LONG_TERM_WATCHLIST
     )
 
+    symbols = [ticker for ticker, _ in LONG_TERM_WATCHLIST]
+    symbol_array = ','.join([f'"{s}"' for s in symbols])
 
-@app.route('/parent-dashboard', methods=['GET'])
-@_require_login
-def parent_dashboard():
-    return '''
-<html>
-<head>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    body{font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:0;background:#f3f6fc;color:#1f2937}
-    .wrap{max-width:980px;margin:0 auto;padding:32px}
-    .top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px}
-    .card{background:#fff;border-radius:16px;box-shadow:0 12px 30px rgba(31,41,55,.08);padding:22px;margin-top:18px}
-    a.btn{display:inline-block;background:#1f369c;color:#fff;padding:10px 14px;border-radius:10px;text-decoration:none}
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <div class="top"><h1>Parent Dashboard</h1><a class="btn" href="/logout">Sign out</a></div>
-    <div class="card"><h3>Guidance for families</h3><p>Use the Ask flow to explore symbols together, then compare with the long-term analysis endpoint for growth, financial health, and risk context.</p></div>
-    <div class="card"><h3>Quick links</h3><p><a href="/">Home</a> · <a href="/watchlist">Watchlist</a> · <a href="/whales">Whales Tracker</a></p></div>
-  </div>
-</body>
-</html>
+    return f'''
+<html><head>
+<style>
+body{{font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:28px;background:#f8fafc}}
+.table{{border-collapse:collapse;width:100%;background:#fff}}
+th,td{{border:1px solid #e5e7eb;padding:12px;text-align:left}}
+th{{background:#1e3a8a;color:#fff}} a{{color:#1d4ed8;text-decoration:none}}
+</style>
+</head><body>
+<h1>🏛️ Long-Term Stable Watchlist</h1>
+<p>Designed for durable businesses and compounding potential.</p>
+<table class="table">
+<tr><th>Ticker</th><th>Company</th><th>Price</th><th>Daily Change %</th></tr>
+{rows}
+</table>
+<p><a href="/">← Back</a></p>
+<script>
+const symbols=[{symbol_array}];
+function renderQuote(idPrefix, quote) {{
+  const priceEl = document.getElementById(idPrefix + '_price');
+  const chgEl = document.getElementById(idPrefix + '_chg');
+  const price = quote?.price;
+  const change = quote?.change_percent;
+  priceEl.innerText = (price === 'DATA_MISSING' || price === undefined) ? 'DATA MISSING' : '$' + Number(price).toFixed(2);
+  chgEl.innerText = (change === 'DATA_MISSING' || change === undefined) ? 'DATA MISSING' : Number(change).toFixed(2) + '%';
+}}
+
+async function refreshLongTerm(symbol){{
+  try {{
+    const res = await fetch('/quote?symbol=' + encodeURIComponent(symbol));
+    const data = await res.json();
+    renderQuote(symbol.toLowerCase(), data);
+  }} catch(err) {{
+    renderQuote(symbol.toLowerCase(), {{price: 'DATA_MISSING', change_percent: 'DATA_MISSING'}});
+  }}
+}}
+
+symbols.forEach(refreshLongTerm);
+setInterval(()=>symbols.forEach(refreshLongTerm), 60000);
+</script>
+</body></html>
 '''
 
 
-@app.route('/logout', methods=['GET'])
-def logout():
-    session.clear()
-    return redirect(url_for('signin'))
+@app.route('/hot-watchlist', methods=['GET'])
+def hot_watchlist():
+    hot_watchlist_items = _build_hot_watchlist(max_price=50.0, limit=8)
+
+    rows = ''.join(
+        f"<tr><td>{ticker}</td><td>{company}</td><td id='{ticker.lower()}_price'>...</td><td id='{ticker.lower()}_chg'>...</td><td id='{ticker.lower()}_act'>...</td><td id='{ticker.lower()}_why'>...</td></tr>"
+        for ticker, company in hot_watchlist_items
+    )
+
+    symbols = [ticker for ticker, _ in hot_watchlist_items]
+    symbol_array = ','.join([f'"{s}"' for s in symbols])
+
+    return f'''
+<html><head>
+<style>
+body{{font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:28px;background:#f8fafc}}
+.table{{border-collapse:collapse;width:100%;background:#fff}}
+th,td{{border:1px solid #e5e7eb;padding:12px;text-align:left;vertical-align:top}}
+th{{background:#7c2d12;color:#fff}}
+.buy{{color:#166534;font-weight:700}} .hold{{color:#92400e;font-weight:700}} .sell{{color:#991b1b;font-weight:700}}
+a{{color:#1d4ed8;text-decoration:none}}
+</style>
+</head><body>
+<h1>⚡ Hot Momentum Watchlist</h1>
+<p>Short-term signal engine focused on lower-priced (under $50) trending stocks with technical indicators + sentiment analysis.</p>
+<table class="table">
+<tr><th>Ticker</th><th>Company</th><th>Price</th><th>Daily Change %</th><th>Signal Engine Action</th><th>Why (Transparency)</th></tr>
+{rows}
+</table>
+<p><a href="/">← Back</a></p>
+<script>
+const symbols=[{symbol_array}];
+function klass(action){{
+  if(action==='BUY') return 'buy';
+  if(action==='SELL') return 'sell';
+  return 'hold';
+}}
+async function refresh(s){{
+  try {{
+    const signalRes = await fetch('/signal?symbol='+encodeURIComponent(s));
+    const data = await signalRes.json();
+    const price = data.quote?.price;
+    const chg = data.quote?.change_percent;
+    const priceText = (price === 'DATA_MISSING' || price === undefined) ? 'DATA MISSING' : '$' + Number(price).toFixed(2);
+    const changeText = (chg === 'DATA_MISSING' || chg === undefined) ? 'DATA MISSING' : Number(chg).toFixed(2) + '%';
+    document.getElementById(s.toLowerCase()+'_price').innerText = priceText;
+    document.getElementById(s.toLowerCase()+'_chg').innerText = changeText;
+
+    const actionEl = document.getElementById(s.toLowerCase()+'_act');
+    actionEl.innerText = data.action || 'HOLD';
+    actionEl.className = klass(data.action || 'HOLD');
+
+    const topHeadline = data.sentiment?.headlines?.[0] || 'No major headline available.';
+    const firstReason = data.rationale?.[0] || 'Signals mixed.';
+    const modelName = data.model || 'hybrid_model';
+    const weights = 'Weights(technical=0.60, sentiment=0.40)';
+    const dataFlag = (data.quote_data_available === false) ? ' Quote/change data missing from live API.' : '';
+    document.getElementById(s.toLowerCase()+'_why').innerText = '[' + modelName + '] ' + firstReason + ' ' + weights + '. Headline: ' + topHeadline + dataFlag;
+  }} catch(err) {{
+    document.getElementById(s.toLowerCase()+'_price').innerText = 'DATA MISSING';
+    document.getElementById(s.toLowerCase()+'_chg').innerText = 'DATA MISSING';
+    document.getElementById(s.toLowerCase()+'_act').innerText = 'HOLD';
+    document.getElementById(s.toLowerCase()+'_why').innerText = 'Live signal or quote data missing.';
+  }}
+}}
+symbols.forEach(refresh);
+setInterval(()=>symbols.forEach(refresh), 60000);
+</script>
+</body></html>
+'''
 
 
-@app.route('/watchlist', methods=['GET', 'POST'])
-def watchlist():
-    return '''
-    <html>
-    <head><style>body{font-family:Arial;padding:30px;background:#f8f9fa} h1{margin:0 0 20px;color:#1a237e} table{border-collapse:collapse;width:100%} th,td{border:1px solid #ddd;padding:12px;text-align:left} th{background:#3498db;color:white} a{color:#1e88e5;text-decoration:none} a:hover{text-decoration:underline}</style></head>
-    <body>
-    <h1>🔥 Hot Stocks Watchlist</h1>
-    <p>Trending US stocks right now (Yahoo Finance) · Click for advice</p>
-    <table>
-        <tr><th>Ticker</th><th>Company</th><th>Price</th><th>Change %</th></tr>
-        <tr><td>TSLA</td><td>Tesla</td><td id="tsla_price"></td><td id="tsla_change"></td></tr>
-        <tr><td>NVDA</td><td>Nvidia</td><td id="nvda_price"></td><td id="nvda_change"></td></tr>
-        <tr><td>AAPL</td><td>Apple</td><td id="aapl_price"></td><td id="aapl_change"></td></tr>
-        <tr><td>AMZN</td><td>Amazon</td><td id="amzn_price"></td><td id="amzn_change"></td></tr>
-        <tr><td>MSFT</td><td>Microsoft</td><td id="msft_price"></td><td id="msft_change"></td></tr>
-        <tr><td>GOOGL</td><td>Alphabet</td><td id="googl_price"></td><td id="googl_change"></td></tr>
-        <tr><td>META</td><td>Meta</td><td id="meta_price"></td><td id="meta_change"></td></tr>
-        <tr><td>AMD</td><td>AMD</td><td id="amd_price"></td><td id="amd_change"></td></tr>
-        <tr><td>PLTR</td><td>Palantir</td><td id="pltr_price"></td><td id="pltr_change"></td></tr>
-        <tr><td>SMCI</td><td>Super Micro</td><td id="smci_price"></td><td id="smci_change"></td></tr>
-    </table>
-
-    <script>
-    const stocks = ["TSLA","NVDA","AAPL","AMZN","MSFT","GOOGL","META","AMD","PLTR","SMCI"];
-    stocks.forEach(t => {
-        fetch(`/quote?symbol=${encodeURIComponent(t)}`)
-        .then(r => r.json())
-        .then(d => {
-            const price = d.price === "N/A" ? "N/A" : `$${Number(d.price).toFixed(2)}`;
-            const ch = d.change_percent === "N/A" ? "N/A" : `${Number(d.change_percent).toFixed(2)}%`;
-            document.getElementById(t.toLowerCase() + '_price').innerText = price;
-            document.getElementById(t.toLowerCase() + '_change').innerText = ch;
-        })
-        .catch(() => {
-            document.getElementById(t.toLowerCase() + '_price').innerText = "N/A";
-            document.getElementById(t.toLowerCase() + '_change').innerText = "N/A";
-        });
-    });
-    </script>
-    <p><a href="/">← Back to MoneyBot</a> | Market closed—showing last close. Live Monday!</p>
-    </body>
-    </html>
-    '''
 if __name__ == '__main__':
     try:
         app.run(host='0.0.0.0', port=5000, debug=True)
-    except Exception as e:
-        logging.error(f"App failed to start: {e}")
+    except Exception as error:
+        logging.error("App failed to start: %s", error)
         raise
