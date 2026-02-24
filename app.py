@@ -278,17 +278,22 @@ Object.entries(symbolsById).forEach(([id, symbol]) => {
     </html>
     '''
 
+QUOTE_FALLBACK = {"price": "N/A", "change_percent": "N/A"}
+
+
 @app.route('/quote', methods=['GET'])
 def quote():
     symbol = request.args.get('symbol', '').strip().upper()
     if not symbol:
-        return jsonify({"price": "N/A", "change_percent": "N/A"}), 400
+        return jsonify(QUOTE_FALLBACK), 400
 
     try:
-        return jsonify(get_quote_data(symbol))
+        quote_data = get_quote_data(symbol)
+        return jsonify(quote_data)
     except Exception as e:
         logging.error(f"Quote error for {symbol}: {e}")
-        return jsonify({"price": "N/A", "change_percent": "N/A"}), 500
+        return jsonify(QUOTE_FALLBACK), 500
+
 
 @app.route('/advice', methods=['GET'])
 def advice():
