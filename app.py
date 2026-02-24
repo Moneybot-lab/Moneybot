@@ -5,7 +5,6 @@ from functools import wraps
 
 from flask import Flask, jsonify, redirect, render_template_string, request, session, url_for
 
-from flask import Flask, jsonify, request
 from flask_cors import CORS
 import yfinance as yf
 from werkzeug.security import check_password_hash, generate_password_hash
