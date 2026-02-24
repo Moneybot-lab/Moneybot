@@ -257,8 +257,6 @@ def get_long_term_investor_analysis(symbol):
     if beta is not None and beta > 1.5:
         risk_points += 1
 
-    'risk_level': risk_level,
-}
 
 
 def get_long_term_investor_analysis(symbol):
