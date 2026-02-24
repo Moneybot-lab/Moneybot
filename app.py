@@ -108,11 +108,6 @@ def get_quote_data(symbol):
     if change_percent is None and price is not None and previous_close not in (None, 0):
         change_percent = ((price - previous_close) / previous_close) * 100
 
-    return {
-        "price": _to_float(price) if price is not None else "N/A",
-        "change_percent": _to_float(change_percent) if change_percent is not None else "N/A"
-    }
-
 
 def get_long_term_investor_analysis(symbol):
     ticker = yf.Ticker(symbol)
