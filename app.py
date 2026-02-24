@@ -4,6 +4,8 @@ import secrets
 from functools import wraps
 
 from flask import Flask, jsonify, redirect, render_template_string, request, session, url_for
+
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 import yfinance as yf
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -182,6 +184,180 @@ def get_long_term_investor_analysis(symbol):
         'long_term_growth': {
             'revenue_growth_pct': revenue_growth,
             'earnings_growth_pct': earnings_growth,
+
+    return {
+        "price": _to_float(price) if price is not None else "N/A",
+        "change_percent": _to_float(change_percent) if change_percent is not None else "N/A"
+    }
+
+
+def get_long_term_investor_analysis(symbol):
+    ticker = yf.Ticker(symbol)
+
+    try:
+        info = ticker.info or {}
+    except Exception as e:
+        logging.warning(f"Long-term info unavailable for {symbol}: {e}")
+        info = {}
+
+    try:
+        history = ticker.history(period='5y', interval='1mo')
+    except Exception as e:
+        logging.warning(f"Long-term history unavailable for {symbol}: {e}")
+        history = None
+
+    growth_1y = None
+    growth_3y = None
+    growth_5y = None
+
+    if history is not None and not history.empty and 'Close' in history.columns:
+        closes = history['Close'].dropna()
+        if not closes.empty:
+            latest = closes.iloc[-1]
+
+            def pct_change(months_back):
+                if len(closes.index) <= months_back:
+                    return None
+                start_price = closes.iloc[-(months_back + 1)]
+                if start_price in (None, 0):
+                    return None
+                return ((latest - start_price) / start_price) * 100
+
+            growth_1y = pct_change(12)
+            growth_3y = pct_change(36)
+            growth_5y = pct_change(60)
+
+    roe = _to_percent(info.get('returnOnEquity'))
+    profit_margin = _to_percent(info.get('profitMargins'))
+    operating_margin = _to_percent(info.get('operatingMargins'))
+    debt_to_equity = _to_float(info.get('debtToEquity'))
+    current_ratio = _to_float(info.get('currentRatio'))
+    free_cashflow = _to_float(info.get('freeCashflow'))
+    operating_cashflow = _to_float(info.get('operatingCashflow'))
+    revenue_growth = _to_percent(info.get('revenueGrowth'))
+    earnings_growth = _to_percent(info.get('earningsGrowth'))
+    beta = _to_float(info.get('beta'))
+
+    risk_points = 0
+
+    if debt_to_equity is not None and debt_to_equity > 150:
+        risk_points += 2
+    elif debt_to_equity is not None and debt_to_equity > 80:
+        risk_points += 1
+
+    if current_ratio is not None and current_ratio < 1:
+        risk_points += 1
+
+    if free_cashflow is not None and free_cashflow < 0:
+        risk_points += 2
+
+    if operating_margin is not None and operating_margin < 0:
+        risk_points += 2
+    elif operating_margin is not None and operating_margin < 8:
+        risk_points += 1
+
+    if beta is not None and beta > 1.5:
+        risk_points += 1
+
+    if growth_3y is not None and growth_3y < 0:
+        risk_points += 1
+
+    risk_level = 'low' if risk_points <= 1 else 'moderate' if risk_points <= 3 else 'high'
+
+    return {
+        'ticker': symbol,
+        'long_term_growth': {
+            'revenue_growth_pct': revenue_growth,
+            'earnings_growth_pct': earnings_growth,
+
+    return {
+        "price": float(price) if price is not None else "N/A",
+        "change_percent": float(change_percent) if change_percent is not None else "N/A"
+    }
+
+def _to_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_long_term_investor_analysis(symbol):
+    ticker = yf.Ticker(symbol)
+
+    try:
+        info = ticker.info or {}
+    except Exception as e:
+        logging.warning(f"Long-term info unavailable for {symbol}: {e}")
+        info = {}
+
+    try:
+        history = ticker.history(period='5y', interval='1mo')
+    except Exception as e:
+        logging.warning(f"Long-term history unavailable for {symbol}: {e}")
+        history = None
+
+    growth_1y = None
+    growth_3y = None
+    growth_5y = None
+
+    if history is not None and not history.empty and 'Close' in history.columns:
+        closes = history['Close'].dropna()
+        if not closes.empty:
+            latest = closes.iloc[-1]
+
+            def pct_change(months_back):
+                if len(closes.index) <= months_back:
+                    return None
+                start_price = closes.iloc[-(months_back + 1)]
+                if start_price in (None, 0):
+                    return None
+                return ((latest - start_price) / start_price) * 100
+
+            growth_1y = pct_change(12)
+            growth_3y = pct_change(36)
+            growth_5y = pct_change(60)
+
+    roe = _to_float(info.get('returnOnEquity'))
+    profit_margin = _to_float(info.get('profitMargins'))
+    operating_margin = _to_float(info.get('operatingMargins'))
+    debt_to_equity = _to_float(info.get('debtToEquity'))
+    current_ratio = _to_float(info.get('currentRatio'))
+    free_cashflow = _to_float(info.get('freeCashflow'))
+    operating_cashflow = _to_float(info.get('operatingCashflow'))
+    revenue_growth = _to_float(info.get('revenueGrowth'))
+    earnings_growth = _to_float(info.get('earningsGrowth'))
+    beta = _to_float(info.get('beta'))
+
+    risk_points = 0
+
+    if debt_to_equity is not None and debt_to_equity > 150:
+        risk_points += 2
+    elif debt_to_equity is not None and debt_to_equity > 80:
+        risk_points += 1
+
+    if current_ratio is not None and current_ratio < 1:
+        risk_points += 1
+
+    if free_cashflow is not None and free_cashflow < 0:
+        risk_points += 2
+
+    if operating_margin is not None and operating_margin < 0:
+        risk_points += 2
+    elif operating_margin is not None and operating_margin < 0.08:
+        risk_points += 1
+
+    if beta is not None and beta > 1.5:
+        risk_points += 1
+
+    if growth_3y is not None and growth_3y < 0:
+        risk_points += 1
+
+    risk_level = 'low' if risk_points <= 1 else 'moderate' if risk_points <= 3 else 'high'
+
+    return {
+        'ticker': symbol,
+        'long_term_growth': {
             'revenue_growth': revenue_growth,
             'earnings_growth': earnings_growth,
             'price_growth_1y_pct': growth_1y,
