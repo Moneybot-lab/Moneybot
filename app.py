@@ -9,6 +9,22 @@ app = Flask(__name__)
 CORS(app)
 
 logging.basicConfig(level=logging.INFO)
+
+def get_quote_data(symbol):
+    info = yf.Ticker(symbol).info
+    price = info.get('regularMarketPrice') or info.get('regularMarketPreviousClose') or info.get('previousClose')
+    change_percent = info.get('regularMarketChangePercent')
+
+    if change_percent is None:
+        previous_close = info.get('regularMarketPreviousClose') or info.get('previousClose')
+        if price is not None and previous_close not in (None, 0):
+            change_percent = ((price - previous_close) / previous_close) * 100
+
+    return {
+        "price": price if price is not None else "N/A",
+        "change_percent": change_percent if change_percent is not None else "N/A"
+    }
+
 @app.route('/', methods=['GET'])
 def home():
     return '''
@@ -223,15 +239,35 @@ def whales():
     <div class="note">Jim Simons' fund is quant-heavy—no public "favorites," but these are top recent holds.</div>
 
     <script>
-const ids = ["aapl","axp","bac","ko","cvx","amzn","dbx","spot","googl","tsla","nvda","aapl2","msft","googl2","pltr","uthr","mu","vrsn","kto","amzn2"];
-ids.forEach(id => {
-    const t = id.replace(/[0-9]/g,'').toUpperCase();
-    fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${t}`)
+const symbolsById = {
+    aapl: "AAPL",
+    axp: "AXP",
+    bac: "BAC",
+    ko: "KO",
+    cvx: "CVX",
+    amzn: "AMZN",
+    dbx: "DBX",
+    spot: "SPOT",
+    googl: "GOOGL",
+    tsla: "TSLA",
+    nvda: "NVDA",
+    amzn2: "AMZN",
+    aapl2: "AAPL",
+    msft: "MSFT",
+    googl2: "GOOGL",
+    pltr: "PLTR",
+    uthr: "UTHR",
+    mu: "MU",
+    vrsn: "VRSN",
+    kto: "K.TO"
+};
+
+Object.entries(symbolsById).forEach(([id, symbol]) => {
+    fetch(`/quote?symbol=${encodeURIComponent(symbol)}`)
     .then(r => r.json())
     .then(data => {
-        const q = data.quoteResponse.result[0] || {};
-        const price = q.regularMarketPrice?.toFixed(2) || q.regularMarketPreviousClose?.toFixed(2) || "N/A";
-        document.getElementById(id).innerText = `$${price}`;
+        const price = data.price ?? "N/A";
+        document.getElementById(id).innerText = price === "N/A" ? "N/A" : `$${Number(price).toFixed(2)}`;
     })
     .catch(() => document.getElementById(id).innerText = "N/A");
 });
@@ -242,24 +278,42 @@ ids.forEach(id => {
     </html>
     '''
 
+QUOTE_FALLBACK = {"price": "N/A", "change_percent": "N/A"}
+
+
+@app.route('/quote', methods=['GET'])
+def quote():
+    symbol = request.args.get('symbol', '').strip().upper()
+    if not symbol:
+        return jsonify(QUOTE_FALLBACK), 400
+
+    try:
+        quote_data = get_quote_data(symbol)
+        return jsonify(quote_data)
+    except Exception as e:
+        logging.error(f"Quote error for {symbol}: {e}")
+        return jsonify(QUOTE_FALLBACK), 500
+
+
 @app.route('/advice', methods=['GET'])
 def advice():
     ticker = request.args.get('text', '').strip().upper() or 'TSLA'
     tip = "Couldn't load—try again."  # Default fallback
 
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        price = info.get('regularMarketPreviousClose') or info.get('previousClose') or "N/A"
-        change = info.get('regularMarketChangePercent', 0)
+        quote_data = get_quote_data(ticker)
+        price = quote_data.get("price", "N/A")
+        change = quote_data.get("change_percent", "N/A")
 
-        if price != "N/A":
+        if price != "N/A" and change != "N/A":
             if change > 1:
                 tip = f"<span style='color:#27ae60;'>Buy—strong!</span><br>Price: ${price:.2f}. Up {change:.1f}%."
             elif change < -3:
                 tip = f"<span style='color:#e74c3c;'>Sell—weak!</span><br>Price: ${price:.2f}. Down {abs(change):.1f}%."
             else:
                 tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}. Change {change:+.1f}%."
+        elif price != "N/A":
+            tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}."
     except Exception as e:
         logging.error(f"Error: {e}")
 
@@ -289,14 +343,17 @@ def watchlist():
     <script>
     const stocks = ["TSLA","NVDA","AAPL","AMZN","MSFT","GOOGL","META","AMD","PLTR","SMCI"];
     stocks.forEach(t => {
-        fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${t}`)
+        fetch(`/quote?symbol=${encodeURIComponent(t)}`)
         .then(r => r.json())
         .then(d => {
-            const q = d.quoteResponse.result[0];
-            const price = q.regularMarketPrice?.toFixed(2) || "N/A";
-            const ch = q.regularMarketChangePercent?.toFixed(2) || "N/A";
-            document.getElementById(t.toLowerCase() + '_price').innerText = `$${price}`;
-            document.getElementById(t.toLowerCase() + '_change').innerText = ch + '%';
+            const price = d.price === "N/A" ? "N/A" : `$${Number(d.price).toFixed(2)}`;
+            const ch = d.change_percent === "N/A" ? "N/A" : `${Number(d.change_percent).toFixed(2)}%`;
+            document.getElementById(t.toLowerCase() + '_price').innerText = price;
+            document.getElementById(t.toLowerCase() + '_change').innerText = ch;
+        })
+        .catch(() => {
+            document.getElementById(t.toLowerCase() + '_price').innerText = "N/A";
+            document.getElementById(t.toLowerCase() + '_change').innerText = "N/A";
         });
     });
     </script>
