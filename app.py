@@ -10,6 +10,24 @@ CORS(app)
 
 logging.basicConfig(level=logging.INFO)
 
+
+def _to_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_percent(value):
+    numeric_value = _to_float(value)
+    if numeric_value is None:
+        return None
+    return numeric_value * 100
+
+
+def _is_valid_symbol(symbol):
+    return bool(symbol) and all(ch.isalnum() or ch in {'.', '-', '^'} for ch in symbol)
+
 def get_quote_data(symbol):
     ticker = yf.Ticker(symbol)
     info = {}
@@ -46,6 +64,91 @@ def get_quote_data(symbol):
 
     if change_percent is None and price is not None and previous_close not in (None, 0):
         change_percent = ((price - previous_close) / previous_close) * 100
+
+    return {
+        "price": _to_float(price) if price is not None else "N/A",
+        "change_percent": _to_float(change_percent) if change_percent is not None else "N/A"
+    }
+
+
+def get_long_term_investor_analysis(symbol):
+    ticker = yf.Ticker(symbol)
+
+    try:
+        info = ticker.info or {}
+    except Exception as e:
+        logging.warning(f"Long-term info unavailable for {symbol}: {e}")
+        info = {}
+
+    try:
+        history = ticker.history(period='5y', interval='1mo')
+    except Exception as e:
+        logging.warning(f"Long-term history unavailable for {symbol}: {e}")
+        history = None
+
+    growth_1y = None
+    growth_3y = None
+    growth_5y = None
+
+    if history is not None and not history.empty and 'Close' in history.columns:
+        closes = history['Close'].dropna()
+        if not closes.empty:
+            latest = closes.iloc[-1]
+
+            def pct_change(months_back):
+                if len(closes.index) <= months_back:
+                    return None
+                start_price = closes.iloc[-(months_back + 1)]
+                if start_price in (None, 0):
+                    return None
+                return ((latest - start_price) / start_price) * 100
+
+            growth_1y = pct_change(12)
+            growth_3y = pct_change(36)
+            growth_5y = pct_change(60)
+
+    roe = _to_percent(info.get('returnOnEquity'))
+    profit_margin = _to_percent(info.get('profitMargins'))
+    operating_margin = _to_percent(info.get('operatingMargins'))
+    debt_to_equity = _to_float(info.get('debtToEquity'))
+    current_ratio = _to_float(info.get('currentRatio'))
+    free_cashflow = _to_float(info.get('freeCashflow'))
+    operating_cashflow = _to_float(info.get('operatingCashflow'))
+    revenue_growth = _to_percent(info.get('revenueGrowth'))
+    earnings_growth = _to_percent(info.get('earningsGrowth'))
+    beta = _to_float(info.get('beta'))
+
+    risk_points = 0
+
+    if debt_to_equity is not None and debt_to_equity > 150:
+        risk_points += 2
+    elif debt_to_equity is not None and debt_to_equity > 80:
+        risk_points += 1
+
+    if current_ratio is not None and current_ratio < 1:
+        risk_points += 1
+
+    if free_cashflow is not None and free_cashflow < 0:
+        risk_points += 2
+
+    if operating_margin is not None and operating_margin < 0:
+        risk_points += 2
+    elif operating_margin is not None and operating_margin < 8:
+        risk_points += 1
+
+    if beta is not None and beta > 1.5:
+        risk_points += 1
+
+    if growth_3y is not None and growth_3y < 0:
+        risk_points += 1
+
+    risk_level = 'low' if risk_points <= 1 else 'moderate' if risk_points <= 3 else 'high'
+
+    return {
+        'ticker': symbol,
+        'long_term_growth': {
+            'revenue_growth_pct': revenue_growth,
+            'earnings_growth_pct': earnings_growth,
 
     return {
         "price": float(price) if price is not None else "N/A",
@@ -142,6 +245,9 @@ def get_long_term_investor_analysis(symbol):
             'price_growth_5y_pct': growth_5y,
         },
         'financial_health': {
+            'return_on_equity_pct': roe,
+            'profit_margin_pct': profit_margin,
+            'operating_margin_pct': operating_margin,
             'return_on_equity': roe,
             'profit_margin': profit_margin,
             'operating_margin': operating_margin,
@@ -419,7 +525,7 @@ QUOTE_FALLBACK = {"price": "N/A", "change_percent": "N/A"}
 @app.route('/quote', methods=['GET'])
 def quote():
     symbol = request.args.get('symbol', '').strip().upper()
-    if not symbol:
+    if not _is_valid_symbol(symbol):
         return jsonify(QUOTE_FALLBACK), 400
 
     try:
@@ -433,6 +539,9 @@ def quote():
 @app.route('/advice', methods=['GET'])
 def advice():
     ticker = request.args.get('text', '').strip().upper() or 'TSLA'
+    if not _is_valid_symbol(ticker):
+        return jsonify({"tip": "Invalid ticker symbol."})
+
     tip = "Data unavailable right now—try another ticker."
 
     try:
@@ -462,6 +571,8 @@ def long_term_analysis():
     symbol = request.args.get('symbol', '').strip().upper()
     if not symbol:
         return jsonify({'error': 'symbol is required'}), 400
+    if not _is_valid_symbol(symbol):
+        return jsonify({'error': 'invalid symbol format'}), 400
 
     try:
         return jsonify(get_long_term_investor_analysis(symbol))
