@@ -11,18 +11,45 @@ CORS(app)
 logging.basicConfig(level=logging.INFO)
 
 def get_quote_data(symbol):
-    info = yf.Ticker(symbol).info
-    price = info.get('regularMarketPrice') or info.get('regularMarketPreviousClose') or info.get('previousClose')
+    ticker = yf.Ticker(symbol)
+    info = {}
+
+    try:
+        info = ticker.info or {}
+    except Exception as e:
+        logging.warning(f"Ticker info unavailable for {symbol}: {e}")
+
+    price = (
+        info.get('regularMarketPrice')
+        or info.get('currentPrice')
+        or info.get('regularMarketPreviousClose')
+        or info.get('previousClose')
+    )
+    previous_close = info.get('regularMarketPreviousClose') or info.get('previousClose')
     change_percent = info.get('regularMarketChangePercent')
 
-    if change_percent is None:
-        previous_close = info.get('regularMarketPreviousClose') or info.get('previousClose')
-        if price is not None and previous_close not in (None, 0):
-            change_percent = ((price - previous_close) / previous_close) * 100
+    if price is None or previous_close is None or change_percent is None:
+        try:
+            history = ticker.history(period='2d', interval='1d')
+            if not history.empty:
+                latest_close = history['Close'].iloc[-1]
+                prev_close = history['Close'].iloc[-2] if len(history.index) > 1 else None
+
+                if price is None:
+                    price = latest_close
+                if previous_close is None and prev_close is not None:
+                    previous_close = prev_close
+                if change_percent is None and prev_close not in (None, 0):
+                    change_percent = ((latest_close - prev_close) / prev_close) * 100
+        except Exception as e:
+            logging.warning(f"Price history unavailable for {symbol}: {e}")
+
+    if change_percent is None and price is not None and previous_close not in (None, 0):
+        change_percent = ((price - previous_close) / previous_close) * 100
 
     return {
-        "price": price if price is not None else "N/A",
-        "change_percent": change_percent if change_percent is not None else "N/A"
+        "price": float(price) if price is not None else "N/A",
+        "change_percent": float(change_percent) if change_percent is not None else "N/A"
     }
 
 @app.route('/', methods=['GET'])
@@ -298,7 +325,7 @@ def quote():
 @app.route('/advice', methods=['GET'])
 def advice():
     ticker = request.args.get('text', '').strip().upper() or 'TSLA'
-    tip = "Couldn't load—try again."  # Default fallback
+    tip = "Data unavailable right now—try another ticker."
 
     try:
         quote_data = get_quote_data(ticker)
@@ -314,6 +341,8 @@ def advice():
                 tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}. Change {change:+.1f}%."
         elif price != "N/A":
             tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}."
+        else:
+            tip = f"No quote data available for {ticker}."
     except Exception as e:
         logging.error(f"Error: {e}")
 
