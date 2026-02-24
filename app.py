@@ -26,7 +26,7 @@ def _to_percent(value):
 
 
 def _is_valid_symbol(symbol):
-    return bool(symbol) and all(ch.isalnum() or ch in {'.', '-'} for ch in symbol)
+    return bool(symbol) and all(ch.isalnum() or ch in {'.', '-', '^'} for ch in symbol)
 
 def get_quote_data(symbol):
     ticker = yf.Ticker(symbol)
@@ -149,6 +149,8 @@ def get_long_term_investor_analysis(symbol):
         'long_term_growth': {
             'revenue_growth_pct': revenue_growth,
             'earnings_growth_pct': earnings_growth,
+            'revenue_growth': revenue_growth,
+            'earnings_growth': earnings_growth,
             'price_growth_1y_pct': growth_1y,
             'price_growth_3y_pct': growth_3y,
             'price_growth_5y_pct': growth_5y,
@@ -157,6 +159,9 @@ def get_long_term_investor_analysis(symbol):
             'return_on_equity_pct': roe,
             'profit_margin_pct': profit_margin,
             'operating_margin_pct': operating_margin,
+            'return_on_equity': roe,
+            'profit_margin': profit_margin,
+            'operating_margin': operating_margin,
             'debt_to_equity': debt_to_equity,
             'current_ratio': current_ratio,
             'free_cash_flow': free_cashflow,
@@ -446,7 +451,7 @@ def quote():
 def advice():
     ticker = request.args.get('text', '').strip().upper() or 'TSLA'
     if not _is_valid_symbol(ticker):
-        return jsonify({"tip": "Invalid ticker symbol."}), 400
+        return jsonify({"tip": "Invalid ticker symbol."})
 
     tip = "Data unavailable right now—try another ticker."
 
@@ -475,8 +480,10 @@ def advice():
 @app.route('/long-term-analysis', methods=['GET'])
 def long_term_analysis():
     symbol = request.args.get('symbol', '').strip().upper()
+    if not symbol:
+        return jsonify({'error': 'symbol is required'}), 400
     if not _is_valid_symbol(symbol):
-        return jsonify({'error': 'valid symbol is required'}), 400
+        return jsonify({'error': 'invalid symbol format'}), 400
 
     try:
         return jsonify(get_long_term_investor_analysis(symbol))
