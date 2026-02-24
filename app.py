@@ -1,7 +1,10 @@
-import json
 import logging
 from urllib.error import URLError
 from urllib.request import urlopen
+
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import yfinance as yf
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -13,80 +16,20 @@ CORS(app)
 
 logging.basicConfig(level=logging.INFO)
 
-
-def get_quote_data_from_yahoo(symbol):
-    url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={symbol}"
-    with urlopen(url, timeout=8) as response:
-        payload = json.load(response)
-
-    result = payload.get('quoteResponse', {}).get('result', [])
-    if not result:
-        return None
-
-    quote = result[0]
-    price = quote.get('regularMarketPrice') or quote.get('regularMarketPreviousClose') or quote.get('previousClose')
-    previous_close = quote.get('regularMarketPreviousClose') or quote.get('previousClose')
-    change_percent = quote.get('regularMarketChangePercent')
-
-    if change_percent is None and price is not None and previous_close not in (None, 0):
-        change_percent = ((price - previous_close) / previous_close) * 100
-
-    return {
-        "price": price if price is not None else "N/A",
-        "change_percent": change_percent if change_percent is not None else "N/A"
-    }
-
-
 def get_quote_data(symbol):
-    try:
-        yahoo_data = get_quote_data_from_yahoo(symbol)
-        if yahoo_data is not None and yahoo_data.get("price") != "N/A":
-            return yahoo_data
-    except (URLError, TimeoutError, ValueError) as e:
-        logging.warning(f"Yahoo quote lookup failed for {symbol}: {e}")
-    except Exception as e:
-        logging.warning(f"Unexpected Yahoo quote failure for {symbol}: {e}")
-
-    ticker = yf.Ticker(symbol)
-    info = {}
-
-    try:
-        info = ticker.info or {}
-    except Exception as e:
-        logging.warning(f"Info lookup failed for {symbol}: {e}")
-
-    price = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('regularMarketPreviousClose') or info.get('previousClose')
-    previous_close = info.get('regularMarketPreviousClose') or info.get('previousClose')
+    info = yf.Ticker(symbol).info
+    price = info.get('regularMarketPrice') or info.get('regularMarketPreviousClose') or info.get('previousClose')
     change_percent = info.get('regularMarketChangePercent')
 
-    if price is None or previous_close is None:
-        try:
-            fast_info = ticker.fast_info
-            price = price or fast_info.get('last_price') or fast_info.get('regular_market_last_price')
-            previous_close = previous_close or fast_info.get('previous_close')
-        except Exception as e:
-            logging.warning(f"fast_info lookup failed for {symbol}: {e}")
-
-    if price is None or previous_close is None:
-        try:
-            history = ticker.history(period='5d')
-            if not history.empty:
-                close_prices = history['Close'].dropna()
-                if not close_prices.empty:
-                    price = price or float(close_prices.iloc[-1])
-                    if len(close_prices) > 1:
-                        previous_close = previous_close or float(close_prices.iloc[-2])
-        except Exception as e:
-            logging.warning(f"History lookup failed for {symbol}: {e}")
-
-    if change_percent is None and price is not None and previous_close not in (None, 0):
-        change_percent = ((price - previous_close) / previous_close) * 100
+    if change_percent is None:
+        previous_close = info.get('regularMarketPreviousClose') or info.get('previousClose')
+        if price is not None and previous_close not in (None, 0):
+            change_percent = ((price - previous_close) / previous_close) * 100
 
     return {
         "price": price if price is not None else "N/A",
         "change_percent": change_percent if change_percent is not None else "N/A"
     }
-
 
 @app.route('/', methods=['GET'])
 def home():
@@ -377,8 +320,6 @@ def advice():
                 tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}. Change {change:+.1f}%."
         elif price != "N/A":
             tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}."
-        else:
-            tip = "<span style='color:#e74c3c;'>No market data found.</span><br>Try another ticker."
     except Exception as e:
         logging.error(f"Error: {e}")
 
