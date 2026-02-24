@@ -257,11 +257,6 @@ def get_long_term_investor_analysis(symbol):
     if beta is not None and beta > 1.5:
         risk_points += 1
 
-    'ticker': symbol,
-    'long_term_growth': {
-        'revenue_growth_pct': revenue_growth,
-        'earnings_growth_pct': earnings_growth,
-    },
     'risk_level': risk_level,
 }
 
