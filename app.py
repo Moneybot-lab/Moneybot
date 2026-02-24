@@ -356,6 +356,7 @@ def get_long_term_investor_analysis(symbol):
         'long_term_growth': {
             'revenue_growth_pct': revenue_growth,
             'earnings_growth_pct': earnings_growth,
+    }
 
     return {
         "price": float(price) if price is not None else "N/A",
