@@ -9,6 +9,22 @@ app = Flask(__name__)
 CORS(app)
 
 logging.basicConfig(level=logging.INFO)
+
+def get_quote_data(symbol):
+    info = yf.Ticker(symbol).info
+    price = info.get('regularMarketPrice') or info.get('regularMarketPreviousClose') or info.get('previousClose')
+    change_percent = info.get('regularMarketChangePercent')
+
+    if change_percent is None:
+        previous_close = info.get('regularMarketPreviousClose') or info.get('previousClose')
+        if price is not None and previous_close not in (None, 0):
+            change_percent = ((price - previous_close) / previous_close) * 100
+
+    return {
+        "price": price if price is not None else "N/A",
+        "change_percent": change_percent if change_percent is not None else "N/A"
+    }
+
 @app.route('/', methods=['GET'])
 def home():
     return '''
@@ -269,18 +285,7 @@ def quote():
         return jsonify({"price": "N/A", "change_percent": "N/A"}), 400
 
     try:
-        info = yf.Ticker(symbol).info
-        price = info.get('regularMarketPrice') or info.get('regularMarketPreviousClose') or info.get('previousClose')
-        change_percent = info.get('regularMarketChangePercent')
-        if change_percent is None:
-            previous_close = info.get('regularMarketPreviousClose') or info.get('previousClose')
-            if price is not None and previous_close not in (None, 0):
-                change_percent = ((price - previous_close) / previous_close) * 100
-
-        return jsonify({
-            "price": price if price is not None else "N/A",
-            "change_percent": change_percent if change_percent is not None else "N/A"
-        })
+        return jsonify(get_quote_data(symbol))
     except Exception as e:
         logging.error(f"Quote error for {symbol}: {e}")
         return jsonify({"price": "N/A", "change_percent": "N/A"}), 500
@@ -291,18 +296,19 @@ def advice():
     tip = "Couldn't load—try again."  # Default fallback
 
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        price = info.get('regularMarketPreviousClose') or info.get('previousClose') or "N/A"
-        change = info.get('regularMarketChangePercent', 0)
+        quote_data = get_quote_data(ticker)
+        price = quote_data.get("price", "N/A")
+        change = quote_data.get("change_percent", "N/A")
 
-        if price != "N/A":
+        if price != "N/A" and change != "N/A":
             if change > 1:
                 tip = f"<span style='color:#27ae60;'>Buy—strong!</span><br>Price: ${price:.2f}. Up {change:.1f}%."
             elif change < -3:
                 tip = f"<span style='color:#e74c3c;'>Sell—weak!</span><br>Price: ${price:.2f}. Down {abs(change):.1f}%."
             else:
                 tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}. Change {change:+.1f}%."
+        elif price != "N/A":
+            tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}."
     except Exception as e:
         logging.error(f"Error: {e}")
 
