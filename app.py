@@ -1,7 +1,8 @@
-from flask import Flask, request, jsonify
-import yfinance as yf
-from flask_cors import CORS
 import logging
+
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import yfinance as yf
 
 app = Flask(__name__)
 
@@ -240,15 +241,6 @@ ids.forEach(id => {
     </body>
     </html>
     '''
-import logging
-import requests
-from flask import Flask, request, jsonify
-import yfinance as yf
-from datetime import datetime, timedelta
-
-logging.basicConfig(level=logging.INFO)
-
-NEWS_API_KEY = "d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120"
 
 @app.route('/advice', methods=['GET'])
 def advice():
