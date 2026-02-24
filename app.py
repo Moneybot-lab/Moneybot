@@ -63,6 +63,15 @@ def _new_csrf_token():
     session['csrf_token'] = token
     return token
 
+
+def _safe_next_path(next_page):
+    if not next_page:
+        return url_for('parent_dashboard')
+    if next_page.startswith('/') and not next_page.startswith('//'):
+        return next_page
+    return url_for('parent_dashboard')
+
+
 def get_quote_data(symbol):
     ticker = yf.Ticker(symbol)
     info = {}
@@ -99,6 +108,87 @@ def get_quote_data(symbol):
 
     if change_percent is None and price is not None and previous_close not in (None, 0):
         change_percent = ((price - previous_close) / previous_close) * 100
+
+    return {
+        "price": _to_float(price) if price is not None else "N/A",
+        "change_percent": _to_float(change_percent) if change_percent is not None else "N/A"
+    }
+
+
+def get_long_term_investor_analysis(symbol):
+    ticker = yf.Ticker(symbol)
+
+    try:
+        info = ticker.info or {}
+    except Exception as e:
+        logging.warning(f"Long-term info unavailable for {symbol}: {e}")
+        info = {}
+
+    try:
+        history = ticker.history(period='5y', interval='1mo')
+    except Exception as e:
+        logging.warning(f"Long-term history unavailable for {symbol}: {e}")
+        history = None
+
+    growth_1y = None
+    growth_3y = None
+    growth_5y = None
+
+    if history is not None and not history.empty and 'Close' in history.columns:
+        closes = history['Close'].dropna()
+        if not closes.empty:
+            latest = closes.iloc[-1]
+
+            def pct_change(months_back):
+                if len(closes.index) <= months_back:
+                    return None
+                start_price = closes.iloc[-(months_back + 1)]
+                if start_price in (None, 0):
+                    return None
+                return ((latest - start_price) / start_price) * 100
+
+            growth_1y = pct_change(12)
+            growth_3y = pct_change(36)
+            growth_5y = pct_change(60)
+
+    roe = _to_percent(info.get('returnOnEquity'))
+    profit_margin = _to_percent(info.get('profitMargins'))
+    operating_margin = _to_percent(info.get('operatingMargins'))
+    debt_to_equity = _to_float(info.get('debtToEquity'))
+    current_ratio = _to_float(info.get('currentRatio'))
+    free_cashflow = _to_float(info.get('freeCashflow'))
+    operating_cashflow = _to_float(info.get('operatingCashflow'))
+    revenue_growth = _to_percent(info.get('revenueGrowth'))
+    earnings_growth = _to_percent(info.get('earningsGrowth'))
+    beta = _to_float(info.get('beta'))
+
+    risk_points = 0
+
+    if debt_to_equity is not None and debt_to_equity > 150:
+        risk_points += 2
+    elif debt_to_equity is not None and debt_to_equity > 80:
+        risk_points += 1
+
+    if current_ratio is not None and current_ratio < 1:
+        risk_points += 1
+
+    if free_cashflow is not None and free_cashflow < 0:
+        risk_points += 2
+
+    if operating_margin is not None and operating_margin < 0:
+        risk_points += 2
+    elif operating_margin is not None and operating_margin < 8:
+        risk_points += 1
+
+    if beta is not None and beta > 1.5:
+        risk_points += 1
+
+    if growth_3y is not None and growth_3y < 0:
+        risk_points += 1
+
+    risk_level = 'low' if risk_points <= 1 else 'moderate' if risk_points <= 3 else 'high'
+
+    return {
 
     return {
         "price": _to_float(price) if price is not None else "N/A",
@@ -705,6 +795,7 @@ def long_term_analysis():
 @app.route('/signin', methods=['GET', 'POST'])
 def signin():
     auth_error = None
+    next_page = _safe_next_path(request.args.get('next') or request.form.get('next'))
     next_page = request.args.get('next') or request.form.get('next') or url_for('parent_dashboard')
 
     if request.method == 'POST':
