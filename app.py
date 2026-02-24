@@ -257,12 +257,6 @@ def get_long_term_investor_analysis(symbol):
     if beta is not None and beta > 1.5:
         risk_points += 1
 
-if growth_3y is not None and growth_3y < 0:
-    risk_points += 1
-
-risk_level = 'low' if risk_points <= 1 else 'moderate' if risk_points <= 3 else 'high'
-
-return {
     'ticker': symbol,
     'long_term_growth': {
         'revenue_growth_pct': revenue_growth,
