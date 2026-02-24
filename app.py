@@ -188,7 +188,6 @@ def get_long_term_investor_analysis(symbol):
 
     risk_level = 'low' if risk_points <= 1 else 'moderate' if risk_points <= 3 else 'high'
 
-    return {
 
     return {
         "price": _to_float(price) if price is not None else "N/A",
