@@ -1,13 +1,93 @@
-from flask import Flask, request, jsonify
-import yfinance as yf
-from flask_cors import CORS
+import json
 import logging
+from urllib.error import URLError
+from urllib.request import urlopen
+
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import yfinance as yf
 
 app = Flask(__name__)
 
 CORS(app)
 
 logging.basicConfig(level=logging.INFO)
+
+
+def get_quote_data_from_yahoo(symbol):
+    url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={symbol}"
+    with urlopen(url, timeout=8) as response:
+        payload = json.load(response)
+
+    result = payload.get('quoteResponse', {}).get('result', [])
+    if not result:
+        return None
+
+    quote = result[0]
+    price = quote.get('regularMarketPrice') or quote.get('regularMarketPreviousClose') or quote.get('previousClose')
+    previous_close = quote.get('regularMarketPreviousClose') or quote.get('previousClose')
+    change_percent = quote.get('regularMarketChangePercent')
+
+    if change_percent is None and price is not None and previous_close not in (None, 0):
+        change_percent = ((price - previous_close) / previous_close) * 100
+
+    return {
+        "price": price if price is not None else "N/A",
+        "change_percent": change_percent if change_percent is not None else "N/A"
+    }
+
+
+def get_quote_data(symbol):
+    try:
+        yahoo_data = get_quote_data_from_yahoo(symbol)
+        if yahoo_data is not None and yahoo_data.get("price") != "N/A":
+            return yahoo_data
+    except (URLError, TimeoutError, ValueError) as e:
+        logging.warning(f"Yahoo quote lookup failed for {symbol}: {e}")
+    except Exception as e:
+        logging.warning(f"Unexpected Yahoo quote failure for {symbol}: {e}")
+
+    ticker = yf.Ticker(symbol)
+    info = {}
+
+    try:
+        info = ticker.info or {}
+    except Exception as e:
+        logging.warning(f"Info lookup failed for {symbol}: {e}")
+
+    price = info.get('regularMarketPrice') or info.get('currentPrice') or info.get('regularMarketPreviousClose') or info.get('previousClose')
+    previous_close = info.get('regularMarketPreviousClose') or info.get('previousClose')
+    change_percent = info.get('regularMarketChangePercent')
+
+    if price is None or previous_close is None:
+        try:
+            fast_info = ticker.fast_info
+            price = price or fast_info.get('last_price') or fast_info.get('regular_market_last_price')
+            previous_close = previous_close or fast_info.get('previous_close')
+        except Exception as e:
+            logging.warning(f"fast_info lookup failed for {symbol}: {e}")
+
+    if price is None or previous_close is None:
+        try:
+            history = ticker.history(period='5d')
+            if not history.empty:
+                close_prices = history['Close'].dropna()
+                if not close_prices.empty:
+                    price = price or float(close_prices.iloc[-1])
+                    if len(close_prices) > 1:
+                        previous_close = previous_close or float(close_prices.iloc[-2])
+        except Exception as e:
+            logging.warning(f"History lookup failed for {symbol}: {e}")
+
+    if change_percent is None and price is not None and previous_close not in (None, 0):
+        change_percent = ((price - previous_close) / previous_close) * 100
+
+    return {
+        "price": price if price is not None else "N/A",
+        "change_percent": change_percent if change_percent is not None else "N/A"
+    }
+
+
 @app.route('/', methods=['GET'])
 def home():
     return '''
@@ -222,15 +302,35 @@ def whales():
     <div class="note">Jim Simons' fund is quant-heavy—no public "favorites," but these are top recent holds.</div>
 
     <script>
-const ids = ["aapl","axp","bac","ko","cvx","amzn","dbx","spot","googl","tsla","nvda","aapl2","msft","googl2","pltr","uthr","mu","vrsn","kto","amzn2"];
-ids.forEach(id => {
-    const t = id.replace(/[0-9]/g,'').toUpperCase();
-    fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${t}`)
+const symbolsById = {
+    aapl: "AAPL",
+    axp: "AXP",
+    bac: "BAC",
+    ko: "KO",
+    cvx: "CVX",
+    amzn: "AMZN",
+    dbx: "DBX",
+    spot: "SPOT",
+    googl: "GOOGL",
+    tsla: "TSLA",
+    nvda: "NVDA",
+    amzn2: "AMZN",
+    aapl2: "AAPL",
+    msft: "MSFT",
+    googl2: "GOOGL",
+    pltr: "PLTR",
+    uthr: "UTHR",
+    mu: "MU",
+    vrsn: "VRSN",
+    kto: "K.TO"
+};
+
+Object.entries(symbolsById).forEach(([id, symbol]) => {
+    fetch(`/quote?symbol=${encodeURIComponent(symbol)}`)
     .then(r => r.json())
     .then(data => {
-        const q = data.quoteResponse.result[0] || {};
-        const price = q.regularMarketPrice?.toFixed(2) || q.regularMarketPreviousClose?.toFixed(2) || "N/A";
-        document.getElementById(id).innerText = `$${price}`;
+        const price = data.price ?? "N/A";
+        document.getElementById(id).innerText = price === "N/A" ? "N/A" : `$${Number(price).toFixed(2)}`;
     })
     .catch(() => document.getElementById(id).innerText = "N/A");
 });
@@ -240,15 +340,23 @@ ids.forEach(id => {
     </body>
     </html>
     '''
-import logging
-import requests
-from flask import Flask, request, jsonify
-import yfinance as yf
-from datetime import datetime, timedelta
 
-logging.basicConfig(level=logging.INFO)
+QUOTE_FALLBACK = {"price": "N/A", "change_percent": "N/A"}
 
-NEWS_API_KEY = "d6dnp5pr01qm89pka11gd6dnp5pr01qm89pka120"
+
+@app.route('/quote', methods=['GET'])
+def quote():
+    symbol = request.args.get('symbol', '').strip().upper()
+    if not symbol:
+        return jsonify(QUOTE_FALLBACK), 400
+
+    try:
+        quote_data = get_quote_data(symbol)
+        return jsonify(quote_data)
+    except Exception as e:
+        logging.error(f"Quote error for {symbol}: {e}")
+        return jsonify(QUOTE_FALLBACK), 500
+
 
 @app.route('/advice', methods=['GET'])
 def advice():
@@ -256,18 +364,21 @@ def advice():
     tip = "Couldn't load—try again."  # Default fallback
 
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        price = info.get('regularMarketPreviousClose') or info.get('previousClose') or "N/A"
-        change = info.get('regularMarketChangePercent', 0)
+        quote_data = get_quote_data(ticker)
+        price = quote_data.get("price", "N/A")
+        change = quote_data.get("change_percent", "N/A")
 
-        if price != "N/A":
+        if price != "N/A" and change != "N/A":
             if change > 1:
                 tip = f"<span style='color:#27ae60;'>Buy—strong!</span><br>Price: ${price:.2f}. Up {change:.1f}%."
             elif change < -3:
                 tip = f"<span style='color:#e74c3c;'>Sell—weak!</span><br>Price: ${price:.2f}. Down {abs(change):.1f}%."
             else:
                 tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}. Change {change:+.1f}%."
+        elif price != "N/A":
+            tip = f"<span style='color:#f39c12;'>Hold—steady</span><br>Price: ${price:.2f}."
+        else:
+            tip = "<span style='color:#e74c3c;'>No market data found.</span><br>Try another ticker."
     except Exception as e:
         logging.error(f"Error: {e}")
 
@@ -297,14 +408,17 @@ def watchlist():
     <script>
     const stocks = ["TSLA","NVDA","AAPL","AMZN","MSFT","GOOGL","META","AMD","PLTR","SMCI"];
     stocks.forEach(t => {
-        fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${t}`)
+        fetch(`/quote?symbol=${encodeURIComponent(t)}`)
         .then(r => r.json())
         .then(d => {
-            const q = d.quoteResponse.result[0];
-            const price = q.regularMarketPrice?.toFixed(2) || "N/A";
-            const ch = q.regularMarketChangePercent?.toFixed(2) || "N/A";
-            document.getElementById(t.toLowerCase() + '_price').innerText = `$${price}`;
-            document.getElementById(t.toLowerCase() + '_change').innerText = ch + '%';
+            const price = d.price === "N/A" ? "N/A" : `$${Number(d.price).toFixed(2)}`;
+            const ch = d.change_percent === "N/A" ? "N/A" : `${Number(d.change_percent).toFixed(2)}%`;
+            document.getElementById(t.toLowerCase() + '_price').innerText = price;
+            document.getElementById(t.toLowerCase() + '_change').innerText = ch;
+        })
+        .catch(() => {
+            document.getElementById(t.toLowerCase() + '_price').innerText = "N/A";
+            document.getElementById(t.toLowerCase() + '_change').innerText = "N/A";
         });
     });
     </script>
