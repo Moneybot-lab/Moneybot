@@ -263,22 +263,19 @@ def get_long_term_investor_analysis(symbol):
     if beta is not None and beta > 1.5:
         risk_points += 1
 
-    if growth_3y is not None and growth_3y < 0:
-        risk_points += 1
+if growth_3y is not None and growth_3y < 0:
+    risk_points += 1
 
-    risk_level = 'low' if risk_points <= 1 else 'moderate' if risk_points <= 3 else 'high'
+risk_level = 'low' if risk_points <= 1 else 'moderate' if risk_points <= 3 else 'high'
 
-    return {
-        'ticker': symbol,
-        'long_term_growth': {
-            'revenue_growth_pct': revenue_growth,
-            'earnings_growth_pct': earnings_growth,
-    }
-
-    return {
-        "price": _to_float(price) if price is not None else "N/A",
-        "change_percent": _to_float(change_percent) if change_percent is not None else "N/A"
-    }
+return {
+    'ticker': symbol,
+    'long_term_growth': {
+        'revenue_growth_pct': revenue_growth,
+        'earnings_growth_pct': earnings_growth,
+    },
+    'risk_level': risk_level,
+}
 
 
 def get_long_term_investor_analysis(symbol):
