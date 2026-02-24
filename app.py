@@ -109,7 +109,6 @@ def get_quote_data(symbol):
         change_percent = ((price - previous_close) / previous_close) * 100
 
 
-def get_long_term_investor_analysis(symbol):
     ticker = yf.Ticker(symbol)
 
     try:
@@ -189,7 +188,6 @@ def get_long_term_investor_analysis(symbol):
     }
 
 
-def get_long_term_investor_analysis(symbol):
     ticker = yf.Ticker(symbol)
 
     try:
@@ -259,7 +257,6 @@ def get_long_term_investor_analysis(symbol):
 
 
 
-def get_long_term_investor_analysis(symbol):
     ticker = yf.Ticker(symbol)
 
     try:
