@@ -14,7 +14,13 @@ app.config['SECRET_KEY'] = os.environ.get('MONEYBOT_SECRET_KEY', secrets.token_h
 CORS(app)
 logging.basicConfig(level=logging.INFO)
 
-DB_PATH = os.path.join(os.path.dirname(__file__), 'moneybot.db')
+DB_PATH = os.environ.get('MONEYBOT_DB_PATH', '/tmp/moneybot.db')
+
+
+def _ensure_db_parent_dir():
+    parent = os.path.dirname(DB_PATH)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
 QUOTE_FALLBACK = {
     'price': 'DATA_MISSING',
     'change_percent': 'DATA_MISSING',
@@ -82,6 +88,7 @@ def _is_valid_symbol(symbol):
 
 
 def _db_conn():
+    _ensure_db_parent_dir()
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
@@ -424,13 +431,6 @@ def _top_tabs(active_tab):
     return '<nav class="toolbar">' + ''.join(links) + auth_link + '</nav>'
 
 
-    return {
-        "rsi": _to_float(rsi.iloc[-1]),
-        "macd": _to_float(macd_line.iloc[-1]),
-        "macd_signal": _to_float(macd_signal.iloc[-1]),
-        "macd_histogram": latest_hist,
-        "trend": trend,
-    }
 
 
 def _get_market_snapshot(symbol, label):
@@ -1006,7 +1006,11 @@ def remove_user_watchlist_ticker():
     return redirect(url_for('user_watchlist'))
 
 
-_init_db()
+try:
+    _init_db()
+except Exception as error:
+    logging.error('Database initialization failed at %s: %s', DB_PATH, error)
+    raise
 
 if __name__ == '__main__':
     try:
