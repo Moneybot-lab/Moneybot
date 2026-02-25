@@ -143,39 +143,25 @@ def _login_required(view_func):
 
 
 def _add_user(email, password):
-    email = email.lower().strip()
-    password_hash = generate_password_hash(password)
+    password_hash = wz_security.generate_password_hash(password)
     try:
         with _db_conn() as conn:
-            conn.execute(
-                'INSERT INTO users (email, password_hash) VALUES (?, ?)',
-                (email, password_hash)
-            )
-            conn.commit()
+            conn.execute('INSERT INTO users(email, password_hash) VALUES(?, ?)', (email.lower().strip(), password_hash))
         return True, None
     except sqlite3.IntegrityError:
         return False, 'An account with that email already exists.'
-    except Exception as e:
-        logging.error(f"Signup error for {email}: {e}")
-        return False, 'Something went wrong—try again.'
+
 
 def _verify_user(email, password):
-    email = email.lower().strip()
     with _db_conn() as conn:
-        row = conn.execute(
-            'SELECT id, email, password_hash FROM users WHERE email = ?',
-            (email,)
-        ).fetchone()
-    
+        row = conn.execute('SELECT id, email, password_hash FROM users WHERE email = ?', (email.lower().strip(),)).fetchone()
+
     if not row:
-        logging.info(f"No user found for {email}")
         return None
-    
-    if not check_password_hash(row['password_hash'], password):
-        logging.info(f"Password mismatch for {email}")
+    if not wz_security.check_password_hash(row['password_hash'], password):
         return None
-    
-    return {'id': row , 'email': row }
+    return {'id': row['id'], 'email': row['email']}
+
 
 
 def _get_user_tickers(user_id):
