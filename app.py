@@ -374,7 +374,7 @@ async function lookup(){
   const sym = (document.getElementById('sym').value || '').trim().toUpperCase();
   if(!sym){ el.textContent = 'Enter a symbol.'; return; }
   el.textContent = 'Analyzing...';
-  try {{
+  try {
     const res = await fetch('/signal?symbol=' + encodeURIComponent(sym));
     const data = await res.json();
     if(!res.ok){ el.textContent = data.error || 'Error'; return; }
