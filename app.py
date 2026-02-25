@@ -622,7 +622,6 @@ def home():
   <div class="wrap">
     {{ toolbar|safe }}
     <div style="margin-bottom:8px">{% if not user_id %}<a href="/signup">Sign up</a>{% endif %} {% if user_id %}<span style="color:#475569">Logged in as {{ user_email }}</span>{% endif %}</div>
-    <img src="/static/moneybot-logo.png" alt="MoneyBot Pro" style="max-width:180px; height:auto; display:block; margin:0 auto 15px;">
     <h1>MoneyBot Pro</h1>
     <p class="sub">Hybrid stock advisor with technical indicators, sentiment analysis, and transparent rule-based buy/hold/sell signals.</p>
 
