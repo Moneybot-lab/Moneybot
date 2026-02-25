@@ -8,6 +8,8 @@ from functools import wraps
 from flask import Flask, jsonify, redirect, render_template_string, request, session, url_for
 from flask_cors import CORS
 import yfinance as yf
+import werkzeug.security as wz_security
+from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('MONEYBOT_SECRET_KEY', secrets.token_hex(32))
@@ -141,7 +143,7 @@ def _login_required(view_func):
 
 
 def _add_user(email, password):
-    password_hash = generate_password_hash(password)
+    password_hash = wz_security.generate_password_hash(password)
     try:
         with _db_conn() as conn:
             conn.execute('INSERT INTO users(email, password_hash) VALUES(?, ?)', (email.lower().strip(), password_hash))
@@ -156,7 +158,7 @@ def _verify_user(email, password):
 
     if not row:
         return None
-    if not check_password_hash(row['password_hash'], password):
+    if not wz_security.check_password_hash(row['password_hash'], password):
         return None
     return {'id': row['id'], 'email': row['email']}
 
