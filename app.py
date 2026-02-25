@@ -8,7 +8,6 @@ from functools import wraps
 from flask import Flask, jsonify, redirect, render_template_string, request, session, url_for
 from flask_cors import CORS
 import yfinance as yf
-from werkzeug.security import check_password_hash, generate_password_hash
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('MONEYBOT_SECRET_KEY', secrets.token_hex(32))
@@ -425,6 +424,13 @@ def _top_tabs(active_tab):
     return '<nav class="toolbar">' + ''.join(links) + auth_link + '</nav>'
 
 
+    return {
+        "rsi": _to_float(rsi.iloc[-1]),
+        "macd": _to_float(macd_line.iloc[-1]),
+        "macd_signal": _to_float(macd_signal.iloc[-1]),
+        "macd_histogram": latest_hist,
+        "trend": trend,
+    }
 
 
 def _get_market_snapshot(symbol, label):
