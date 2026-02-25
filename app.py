@@ -340,6 +340,7 @@ def home():
     input{padding:12px;border-radius:10px;border:1px solid #cbd5e1;width:220px}
     button{padding:12px 14px;border:none;border-radius:10px;background:#1e40af;color:#fff;cursor:pointer}
     #out{margin-top:10px;line-height:1.6}
+    document.getElementById('custom').addEventListener('keypress', function(e) { if (e.key === 'Enter') { ask(); } });
   </style>
 </head>
 <body>
