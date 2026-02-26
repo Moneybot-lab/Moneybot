@@ -274,9 +274,9 @@ def analyze_ticker(ticker: str) -> SignalResult:
 
     if score >= 9:
         verdict = "Strong BUY"
-    elif 6 <= score <= 8:
+    elif score >= 6:
         verdict = "Buy"
-    elif 4 <= score <= 5:
+    elif score >= 4:
         verdict = "Hold"
     else:
         verdict = "Sell"
