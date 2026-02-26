@@ -145,7 +145,7 @@ def fetch_price_data(ticker: str) -> Tuple :
 def fetch_fundamentals(ticker: str) -> Dict :
     tk = get_ticker(ticker)
     
-    now = time.time()
+        now = time.time()
     if ticker in INFO_CACHE and now - INFO_CACHE.get('ts', 0) < CACHE_TTL:
         info = INFO_CACHE else:
         try:
