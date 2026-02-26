@@ -10,6 +10,7 @@ from flask_cors import CORS
 import yfinance as yf
 import werkzeug.security as wz_security
 from werkzeug.security import check_password_hash, generate_password_hash
+from trade_signal import analyze_ticker, SignalResult
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('MONEYBOT_SECRET_KEY', secrets.token_hex(32))
