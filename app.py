@@ -13,7 +13,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from trade_signal import analyze_ticker, SignalResult
 import time
 
-QUOTE_CACHE =          # {symbol: {'data': dict, 'timestamp': float}}
+QUOTE_CACHE =          
 CACHE_TTL = 300           # 5 minutes in seconds
 
 def get_cached_quote(symbol):
