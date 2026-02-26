@@ -523,11 +523,23 @@ async function refreshRow(symbol, includeAction){
 }
 
 let index = 0;
-function loadNext() {
-  if (index >= symbols.length) return;
-  refreshRow(symbols[index], includeAction);
-  index++;
-  setTimeout(loadNext, 3000);  // one every 3 sec
+let inflight = 0;
+const MAX_INFLIGHT = 2;
+const REQUEST_GAP_MS = 350;
+
+function pumpRows() {
+  while (inflight < MAX_INFLIGHT && index < symbols.length) {
+    const symbol = symbols[index++];
+    inflight++;
+    refreshRow(symbol, includeAction)
+      .catch(() => {})
+      .finally(() => {
+        inflight--;
+        if (index < symbols.length || inflight > 0) {
+          setTimeout(pumpRows, REQUEST_GAP_MS);
+        }
+      });
+  }
 }
 
 function closeCompanyModal(){
@@ -570,7 +582,7 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') closeCompanyModal();
 });
 
-loadNext();  // kick it off
+pumpRows();  // kick it off
 </script>
 '''.replace('__SYMBOLS__', symbols_json).replace('__INCLUDE_ACTION__', 'true' if include_action else 'false')
 
