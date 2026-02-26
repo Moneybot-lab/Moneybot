@@ -14,7 +14,6 @@ from trade_signal import analyze_ticker, SignalResult
 import time
 
 QUOTE_CACHE =          
-CACHE_TTL = 300           # 5 minutes in seconds
 
 def get_cached_quote(symbol):
     now = time.time()
