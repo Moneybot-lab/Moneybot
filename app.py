@@ -34,7 +34,8 @@ app.config['SECRET_KEY'] = os.environ.get('MONEYBOT_SECRET_KEY', secrets.token_h
 CORS(app)
 logging.basicConfig(level=logging.INFO)
 
-DB_PATH = os.environ.get('MONEYBOT_DB_PATH', '/tmp/moneybot.db')
+DEFAULT_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'moneybot.db')
+DB_PATH = os.environ.get('MONEYBOT_DB_PATH', DEFAULT_DB_PATH)
 
 
 def _ensure_db_parent_dir():
@@ -442,14 +443,19 @@ def _render_watchlist_page(title, subtitle, symbols, include_action=False, user_
                 "<button style='border:none;background:#fee2e2;color:#991b1b;padding:6px 9px;border-radius:6px;cursor:pointer'>Remove</button>"
                 "</form></td>"
             )
+        ticker_cell = (
+            f"<a href='#' class='ticker-link' data-symbol='{symbol}' "
+            "style='font-weight:700;color:#1d4ed8;text-decoration:none'>"
+            f"{symbol}</a>"
+        )
         if include_action:
             rows.append(
-                f"<tr><td>{symbol}</td><td id='{symbol.lower()}_price'>...</td><td id='{symbol.lower()}_chg'>...</td>"
+                f"<tr><td>{ticker_cell}</td><td id='{symbol.lower()}_price'>...</td><td id='{symbol.lower()}_chg'>...</td>"
                 f"<td id='{symbol.lower()}_act'>...</td><td id='{symbol.lower()}_why'>...</td>{remove_col}</tr>"
             )
         else:
             rows.append(
-                f"<tr><td>{symbol}</td><td id='{symbol.lower()}_price'>...</td><td id='{symbol.lower()}_chg'>...</td>{remove_col}</tr>"
+                f"<tr><td>{ticker_cell}</td><td id='{symbol.lower()}_price'>...</td><td id='{symbol.lower()}_chg'>...</td>{remove_col}</tr>"
             )
 
     headers = '<tr><th>Ticker</th><th>Price</th><th>Daily Change %</th>'
@@ -459,7 +465,9 @@ def _render_watchlist_page(title, subtitle, symbols, include_action=False, user_
 
     script = '''
 <script>
-const symbols = __SYMBOLS__;
+const rawSymbols = __SYMBOLS__;
+const symbols = (rawSymbols || []).map(item => Array.isArray(item) ? item[0] : item).filter(Boolean);
+const includeAction = __INCLUDE_ACTION__;
 function klass(action){
   if(action === 'BUY') return 'buy';
   if(action === 'SELL') return 'sell';
@@ -490,15 +498,13 @@ async function refreshRow(symbol, includeAction){
       actionEl.innerText = action;
       actionEl.className = klass(action);
 
-      const reasons = (data.rationale || []).slice(0, 2).join(' | ') || 'Signals mixed.';
-      const topHeadline = data.sentiment?.headlines?.[0] || 'No major headline available.';
+      const reasons = (data.rationale || []).slice(0, 2);
+      const reasonsText = reasons.length ? reasons.join(' | ') : 'Signals mixed.';
       const rsi = data.technical?.rsi ?? 'n/a';
       const macd = data.technical?.macd_histogram ?? 'n/a';
-      const ss = data.sentiment?.score ?? 'n/a';
-      const sl = data.sentiment?.label || 'neutral';
       const source = data.data_provider || 'yfinance';
-      const dataFlag = data.quote_data_available ? ` Live price/change from ${source}.` : ` Quote/change data missing from live API (${source}).`;
-      document.getElementById(key + '_why').innerText = ` ${reasons.join(' | ')}. RSI=${rsi ?? 'n/a'}, MACD_hist=${macd ?? 'n/a'}, Score=${data.hybrid_score ?? 'n/a'}. ${dataFlag}`;
+      const dataFlag = data.quote_data_available ? `Live price/change from ${source}.` : `Quote/change data missing from live API (${source}).`;
+      document.getElementById(key + '_why').innerText = `${reasonsText}. RSI=${rsi}, MACD_hist=${macd}, Score=${data.hybrid_score ?? 'n/a'}. ${dataFlag}`;
     } else {
       const res = await fetch('/quote?symbol=' + encodeURIComponent(symbol));
       const data = await res.json();
@@ -517,13 +523,66 @@ async function refreshRow(symbol, includeAction){
 }
 
 let index = 0;
-function loadNext() {
-  if (index >= symbols.length) return;
-  refreshRow(symbols , true);
-  index++;
-  setTimeout(loadNext, 3000);  // one every 3 sec
+let inflight = 0;
+const MAX_INFLIGHT = 2;
+const REQUEST_GAP_MS = 350;
+
+function pumpRows() {
+  while (inflight < MAX_INFLIGHT && index < symbols.length) {
+    const symbol = symbols[index++];
+    inflight++;
+    refreshRow(symbol, includeAction)
+      .catch(() => {})
+      .finally(() => {
+        inflight--;
+        if (index < symbols.length || inflight > 0) {
+          setTimeout(pumpRows, REQUEST_GAP_MS);
+        }
+      });
+  }
 }
-loadNext();  // kick it off
+
+function closeCompanyModal(){
+  const modal = document.getElementById('companyModal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function openCompanyModal(symbol){
+  const modal = document.getElementById('companyModal');
+  const title = document.getElementById('companyModalTitle');
+  const body = document.getElementById('companyModalBody');
+  if (!modal || !title || !body) return;
+
+  modal.style.display = 'flex';
+  title.innerText = symbol;
+  body.innerText = 'Loading company profile...';
+
+  try {
+    const res = await fetch('/company-profile?symbol=' + encodeURIComponent(symbol));
+    const data = await res.json();
+    if (!res.ok) {
+      body.innerText = data.error || 'Unable to load company info.';
+      return;
+    }
+    title.innerText = `${data.symbol} — ${data.name || 'Company Name Unavailable'}`;
+    body.innerText = data.description || 'No description available for this company.';
+  } catch (err) {
+    body.innerText = 'Unable to load company info right now.';
+  }
+}
+
+document.addEventListener('click', (event) => {
+  const link = event.target.closest('.ticker-link');
+  if (!link) return;
+  event.preventDefault();
+  openCompanyModal(link.dataset.symbol || '');
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeCompanyModal();
+});
+
+pumpRows();  // kick it off
 </script>
 '''.replace('__SYMBOLS__', symbols_json).replace('__INCLUDE_ACTION__', 'true' if include_action else 'false')
 
@@ -539,6 +598,10 @@ loadNext();  // kick it off
     .buy{{color:#166534;font-weight:700}} .hold{{color:#92400e;font-weight:700}} .sell{{color:#991b1b;font-weight:700}}
     a{{color:#1d4ed8;text-decoration:none}}
     .toolbar{{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;padding:8px;background:#dbeafe;border-radius:12px}} .tab{{display:inline-block;padding:8px 12px;border-radius:8px;text-decoration:none;color:#1e3a8a;font-weight:600}} .tab:hover{{background:#bfdbfe}} .tab.active{{background:#1e40af;color:#fff}}
+    .modal{{position:fixed;inset:0;background:rgba(15,23,42,.5);display:none;align-items:center;justify-content:center;padding:20px;z-index:1000}}
+    .modal-card{{background:#fff;max-width:560px;width:100%;border-radius:12px;padding:16px 18px;box-shadow:0 18px 40px rgba(2,6,23,.25)}}
+    .modal-title{{margin:0 0 8px;color:#1e3a8a;font-size:1.05rem}}
+    .modal-close{{border:none;background:#e2e8f0;color:#0f172a;padding:8px 10px;border-radius:8px;cursor:pointer;font-weight:700}}
   </style>
 </head>
 <body>
@@ -551,6 +614,15 @@ loadNext();  // kick it off
     {''.join(rows)}
   </table>
   <p><a href="/">← Back</a></p>
+  <div id="companyModal" class="modal" onclick="if(event.target.id==='companyModal') closeCompanyModal()">
+    <div class="modal-card">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+        <h3 id="companyModalTitle" class="modal-title">Company</h3>
+        <button class="modal-close" onclick="closeCompanyModal()">Close</button>
+      </div>
+      <p id="companyModalBody" style="margin:0;color:#334155;line-height:1.5">Select a ticker to view details.</p>
+    </div>
+  </div>
   {script}
 </body>
 </html>
@@ -614,7 +686,7 @@ def home():
 
     <div class="ask">
       <h3>Quick Signal Lookup</h3>
-      <input id="sym" placeholder="AAPL, SOFI, PLTR" />
+      <input id="sym" placeholder="AAPL, SOFI, PLTR" onkeydown="if(event.key==='Enter'){lookup();}" />
       <button onclick="lookup()">Analyze</button>
       <div id="out"></div>
     </div>
@@ -897,6 +969,28 @@ def quote():
     except Exception as error:
         logging.error('Quote error for %s: %s', symbol, error)
         return jsonify(QUOTE_FALLBACK), 500
+
+
+@app.route('/company-profile', methods=['GET'])
+def company_profile():
+    symbol = request.args.get('symbol', '').strip().upper()
+    if not _is_valid_symbol(symbol):
+        return jsonify({'error': 'invalid symbol format'}), 400
+
+    try:
+        info = yf.Ticker(symbol).info or {}
+        return jsonify({
+            'symbol': symbol,
+            'name': info.get('longName') or info.get('shortName') or symbol,
+            'description': info.get('longBusinessSummary') or 'No company description available.',
+        })
+    except Exception as error:
+        logging.warning('Company profile unavailable for %s: %s', symbol, error)
+        return jsonify({
+            'symbol': symbol,
+            'name': symbol,
+            'description': 'No company description available right now.',
+        })
 
 
 @app.route('/signal', methods=['GET'])
