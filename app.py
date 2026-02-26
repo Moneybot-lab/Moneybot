@@ -13,7 +13,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from trade_signal import analyze_ticker, SignalResult
 import time
 
-QUOTE_CACHE =          
+QUOTE_CACHE = dict()          
 
 def get_cached_quote(symbol):
     now = time.time()
