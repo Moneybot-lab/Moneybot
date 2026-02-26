@@ -499,8 +499,14 @@ async function refreshRow(symbol, includeAction){
   }
 }
 
-symbols.forEach(sym => refreshRow(sym, __INCLUDE_ACTION__));
-setInterval(() => symbols.forEach(sym => refreshRow(sym, __INCLUDE_ACTION__)), 60000);
+let index = 0;
+function loadNext() {
+  if (index >= symbols.length) return;
+  refreshRow(symbols , true);
+  index++;
+  setTimeout(loadNext, 3000);  // one every 3 sec
+}
+loadNext();  // kick it off
 </script>
 '''.replace('__SYMBOLS__', symbols_json).replace('__INCLUDE_ACTION__', 'true' if include_action else 'false')
 
