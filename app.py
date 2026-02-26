@@ -1163,7 +1163,7 @@ def watchlist():
     symbols = [ticker for ticker, _ in picks]
     return _render_watchlist_page(
         title='🏛️ Long-Term Stable Watchlist',
-        subtitle='Stable names with BUY/STRONG BUY signals only (hold/sell filtered out).',
+        subtitle='Top 10 long-term buy stocks based on model score and fundamentals.',
         symbols=symbols,
         include_action=True,
         active_tab='stable',
@@ -1176,7 +1176,7 @@ def hot_watchlist():
     symbols = [ticker for ticker, _ in picks]
     return _render_watchlist_page(
         title='⚡ Hot Momentum Buys',
-        subtitle='Trending stocks under $50 with BUY/STRONG BUY signals only (hold/sell filtered out).',
+        subtitle='Top 10 momentum buys under $50, ranked by model score.',
         symbols=symbols,
         include_action=True,
         active_tab='hot',
