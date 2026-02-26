@@ -481,7 +481,7 @@ async function refreshRow(symbol, includeAction){
       const sl = data.sentiment?.label || 'neutral';
       const source = data.data_provider || 'yfinance';
       const dataFlag = data.quote_data_available ? ` Live price/change from ${source}.` : ` Quote/change data missing from live API (${source}).`;
-      document.getElementById(key + '_why').innerText = `[${data.model || 'hybrid_model'}] ${reasons}. RSI=${rsi}, MACD_hist=${macd}, Sentiment=${ss} (${sl}). Weights(technical=0.60, sentiment=0.40). Headline: ${topHeadline}.${dataFlag}`;
+      document.getElementById(key + '_why').innerText = ` ${reasons.join(' | ')}. RSI=${rsi ?? 'n/a'}, MACD_hist=${macd ?? 'n/a'}, Score=${data.hybrid_score ?? 'n/a'}. ${dataFlag}`;
     } else {
       const res = await fetch('/quote?symbol=' + encodeURIComponent(symbol));
       const data = await res.json();
