@@ -459,7 +459,9 @@ def _render_watchlist_page(title, subtitle, symbols, include_action=False, user_
 
     script = '''
 <script>
-const symbols = __SYMBOLS__;
+const rawSymbols = __SYMBOLS__;
+const symbols = (rawSymbols || []).map(item => Array.isArray(item) ? item[0] : item).filter(Boolean);
+const includeAction = __INCLUDE_ACTION__;
 function klass(action){
   if(action === 'BUY') return 'buy';
   if(action === 'SELL') return 'sell';
@@ -490,15 +492,13 @@ async function refreshRow(symbol, includeAction){
       actionEl.innerText = action;
       actionEl.className = klass(action);
 
-      const reasons = (data.rationale || []).slice(0, 2).join(' | ') || 'Signals mixed.';
-      const topHeadline = data.sentiment?.headlines?.[0] || 'No major headline available.';
+      const reasons = (data.rationale || []).slice(0, 2);
+      const reasonsText = reasons.length ? reasons.join(' | ') : 'Signals mixed.';
       const rsi = data.technical?.rsi ?? 'n/a';
       const macd = data.technical?.macd_histogram ?? 'n/a';
-      const ss = data.sentiment?.score ?? 'n/a';
-      const sl = data.sentiment?.label || 'neutral';
       const source = data.data_provider || 'yfinance';
-      const dataFlag = data.quote_data_available ? ` Live price/change from ${source}.` : ` Quote/change data missing from live API (${source}).`;
-      document.getElementById(key + '_why').innerText = ` ${reasons.join(' | ')}. RSI=${rsi ?? 'n/a'}, MACD_hist=${macd ?? 'n/a'}, Score=${data.hybrid_score ?? 'n/a'}. ${dataFlag}`;
+      const dataFlag = data.quote_data_available ? `Live price/change from ${source}.` : `Quote/change data missing from live API (${source}).`;
+      document.getElementById(key + '_why').innerText = `${reasonsText}. RSI=${rsi}, MACD_hist=${macd}, Score=${data.hybrid_score ?? 'n/a'}. ${dataFlag}`;
     } else {
       const res = await fetch('/quote?symbol=' + encodeURIComponent(symbol));
       const data = await res.json();
@@ -519,7 +519,7 @@ async function refreshRow(symbol, includeAction){
 let index = 0;
 function loadNext() {
   if (index >= symbols.length) return;
-  refreshRow(symbols , true);
+  refreshRow(symbols[index], includeAction);
   index++;
   setTimeout(loadNext, 3000);  // one every 3 sec
 }
