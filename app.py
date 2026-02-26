@@ -34,7 +34,8 @@ app.config['SECRET_KEY'] = os.environ.get('MONEYBOT_SECRET_KEY', secrets.token_h
 CORS(app)
 logging.basicConfig(level=logging.INFO)
 
-DB_PATH = os.environ.get('MONEYBOT_DB_PATH', '/tmp/moneybot.db')
+DEFAULT_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'moneybot.db')
+DB_PATH = os.environ.get('MONEYBOT_DB_PATH', DEFAULT_DB_PATH)
 
 
 def _ensure_db_parent_dir():
@@ -48,15 +49,12 @@ QUOTE_FALLBACK = {
     'quote_source': 'yfinance',
 }
 
-LONG_TERM_WATCHLIST = [
-    ('AAPL', 'Apple'),
-    ('MSFT', 'Microsoft'),
-    ('GOOGL', 'Alphabet'),
-    ('AMZN', 'Amazon'),
-    ('JNJ', 'Johnson & Johnson'),
-    ('PG', 'Procter & Gamble'),
-    ('KO', 'Coca-Cola'),
-    ('V', 'Visa'),
+LONG_TERM_CANDIDATES = [
+    ('MSFT', 'Microsoft'), ('AAPL', 'Apple'), ('GOOGL', 'Alphabet'), ('AMZN', 'Amazon'),
+    ('META', 'Meta Platforms'), ('BRK-B', 'Berkshire Hathaway'), ('JNJ', 'Johnson & Johnson'),
+    ('PG', 'Procter & Gamble'), ('KO', 'Coca-Cola'), ('V', 'Visa'),
+    ('MA', 'Mastercard'), ('COST', 'Costco'), ('PEP', 'PepsiCo'), ('HD', 'Home Depot'),
+    ('ABBV', 'AbbVie'), ('ADBE', 'Adobe'), ('CRM', 'Salesforce'), ('UNH', 'UnitedHealth Group'),
 ]
 
 HOT_WATCHLIST_CANDIDATES = [
@@ -131,12 +129,20 @@ def _init_db():
             CREATE TABLE IF NOT EXISTS user_watchlist (
                 user_id INTEGER NOT NULL,
                 ticker TEXT NOT NULL,
+                buy_price REAL,
+                shares REAL,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, ticker),
                 FOREIGN KEY(user_id) REFERENCES users(id)
             )
             '''
         )
+
+        columns = {row['name'] for row in conn.execute('PRAGMA table_info(user_watchlist)').fetchall()}
+        if 'buy_price' not in columns:
+            conn.execute('ALTER TABLE user_watchlist ADD COLUMN buy_price REAL')
+        if 'shares' not in columns:
+            conn.execute('ALTER TABLE user_watchlist ADD COLUMN shares REAL')
 
 
 def _current_user_id():
@@ -191,10 +197,22 @@ def _get_user_tickers(user_id):
     return [row['ticker'] for row in rows]
 
 
-def _add_user_ticker(user_id, ticker):
+def _get_user_positions(user_id):
+    with _db_conn() as conn:
+        rows = conn.execute(
+            'SELECT ticker, buy_price, shares FROM user_watchlist WHERE user_id = ? ORDER BY created_at DESC, ticker ASC',
+            (user_id,),
+        ).fetchall()
+    return {row['ticker']: {'buy_price': row['buy_price'], 'shares': row['shares']} for row in rows}
+
+
+def _add_user_ticker(user_id, ticker, buy_price=None, shares=None):
     try:
         with _db_conn() as conn:
-            conn.execute('INSERT INTO user_watchlist(user_id, ticker) VALUES(?, ?)', (user_id, ticker.upper()))
+            conn.execute(
+                'INSERT INTO user_watchlist(user_id, ticker, buy_price, shares) VALUES(?, ?, ?, ?)',
+                (user_id, ticker.upper(), buy_price, shares),
+            )
         return True, None
     except sqlite3.IntegrityError:
         return False, f'{ticker.upper()} is already in your watchlist.'
@@ -203,6 +221,14 @@ def _add_user_ticker(user_id, ticker):
 def _remove_user_ticker(user_id, ticker):
     with _db_conn() as conn:
         conn.execute('DELETE FROM user_watchlist WHERE user_id = ? AND ticker = ?', (user_id, ticker.upper()))
+
+
+def _update_position(user_id, ticker, buy_price, shares):
+    with _db_conn() as conn:
+        conn.execute(
+            'UPDATE user_watchlist SET buy_price = ?, shares = ? WHERE user_id = ? AND ticker = ?',
+            (buy_price, shares, user_id, ticker.upper()),
+        )
 
 
 def get_quote_data(symbol):
@@ -359,13 +385,52 @@ def _build_hot_watchlist(max_price=50.0, limit=8):
     return selected or DEFAULT_HOT_WATCHLIST[:limit]
 
 
+def _filter_buy_candidates(candidates, limit=10, max_price=None):
+    picks = []
+    for ticker, company in candidates:
+        quote = get_quote_data(ticker)
+        price = quote.get('price')
+        if max_price is not None and not (isinstance(price, (int, float)) and price <= max_price):
+            continue
+
+        try:
+            signal = _hybrid_signal_engine(ticker)
+            action = (signal.get('action') or '').upper()
+            score = _to_float(signal.get('hybrid_score')) or 0.0
+        except Exception as error:
+            logging.warning('Signal filter failed for %s: %s', ticker, error)
+            continue
+
+        if _is_buy_recommendation(action):
+            picks.append((ticker, company, score))
+
+    picks.sort(key=lambda row: row[2], reverse=True)
+    return [(ticker, company) for ticker, company, _ in picks[:limit]]
+
+
+WHALE_INVESTOR_PICKS = {
+    'Warren Buffett': [('AAPL', 'Apple'), ('BAC', 'Bank of America'), ('KO', 'Coca-Cola'), ('AXP', 'American Express'), ('OXY', 'Occidental Petroleum')],
+    'Bill Ackman': [('GOOGL', 'Alphabet'), ('CMG', 'Chipotle'), ('HLT', 'Hilton'), ('QSR', 'Restaurant Brands'), ('LOW', "Lowe's")],
+    'Ray Dalio': [('SPY', 'SPDR S&P 500 ETF'), ('IVV', 'iShares Core S&P 500 ETF'), ('GLD', 'SPDR Gold Shares'), ('VWO', 'Vanguard FTSE Emerging Markets'), ('FXI', 'iShares China Large-Cap ETF')],
+}
+
+
+def _is_buy_recommendation(action):
+    action_text = (action or '').upper()
+    return 'BUY' in action_text
+
+
 def _hybrid_signal_engine(symbol):
     result: SignalResult = analyze_ticker(symbol)  # Pulls from trade_signal.py
 
     action = result.verdict.upper()  # 'BUY' → 'BUY', 'HOLD' → 'HOLD', etc.
     confidence = min(1.0, result.score / 12.0)  # normalize score 0-12 to 0-1
 
-    reasons = result.reasons or ['No reasons available.']
+    reasons = list(result.reasons or ['No reasons available.'])
+    if _is_buy_recommendation(action):
+        reasons.append('Buy signal targets promising dips with recovery potential when momentum/fundamentals align.')
+    elif 'SELL' in action:
+        reasons.append('Sell signal prioritizes exiting before potential drops when downside risk signals rise.')
 
     return {
         'symbol': symbol,
@@ -386,7 +451,8 @@ def _top_tabs(active_tab):
     tabs = [
         ('home', 'Home', '/'),
         ('stable', 'Stable Watchlist', '/watchlist'),
-        ('hot', 'Hot Watchlist', '/hot-watchlist'),
+        ('hot', 'Hot Momentum Buys', '/hot-watchlist'),
+        ('whales', 'Whales of Wall Street', '/whales'),
         ('user', 'User Watchlist', '/user-watchlist'),
     ]
 
@@ -417,23 +483,33 @@ def get_market_overview():
     return [_get_market_snapshot(symbol, label) for symbol, label in MARKET_OVERVIEW_SYMBOLS]
 
 
-def _render_watchlist_page(title, subtitle, symbols, include_action=False, user_page=False, active_tab='home'):
+def _render_watchlist_page(title, subtitle, symbols, include_action=False, user_page=False, active_tab='home', user_positions=None):
     symbols_json = json.dumps(symbols)
+    user_positions = user_positions or {}
     management = ''
     if user_page:
         management = '''
-        <form method="post" style="margin: 14px 0 18px; display:flex; gap:10px; flex-wrap:wrap;">
+        <form method="post" style="margin: 14px 0 18px; display:flex; gap:10px; flex-wrap:wrap;align-items:center">
           <input name="ticker" placeholder="Add ticker e.g. AMD" style="padding:10px;border:1px solid #cbd5e1;border-radius:8px" required />
+          <input name="buy_price" type="number" step="0.01" min="0" placeholder="Buy price (optional)" style="padding:10px;border:1px solid #cbd5e1;border-radius:8px" />
+          <input name="shares" type="number" step="0.0001" min="0" placeholder="Shares (optional)" style="padding:10px;border:1px solid #cbd5e1;border-radius:8px" />
           <button type="submit" style="padding:10px 14px;border:none;border-radius:8px;background:#1e40af;color:#fff">Add Ticker</button>
         </form>
         '''
 
     remove_button = ''
+    user_extra_headers = ''
     if user_page:
         remove_button = '<th>Remove</th>'
+        user_extra_headers = '<th>Buy Price</th><th>Shares</th><th>Performance</th><th>Total Gain/Loss</th>'
 
     rows = []
     for symbol in symbols:
+        position = user_positions.get(symbol, {})
+        buy_price = position.get('buy_price')
+        shares = position.get('shares')
+        buy_price_value = '' if buy_price is None else f"{float(buy_price):.2f}"
+        shares_value = '' if shares is None else f"{float(shares):.4f}"
         remove_col = ''
         if user_page:
             remove_col = (
@@ -442,30 +518,48 @@ def _render_watchlist_page(title, subtitle, symbols, include_action=False, user_
                 "<button style='border:none;background:#fee2e2;color:#991b1b;padding:6px 9px;border-radius:6px;cursor:pointer'>Remove</button>"
                 "</form></td>"
             )
+        buy_price_col = ''
+        shares_col = ''
+        perf_col = ''
+        total_col = ''
+        if user_page:
+            buy_price_col = (
+                f"<td><form method='post' action='/user-watchlist/position' style='margin:0;display:flex;gap:6px;align-items:center'>"
+                f"<input type='hidden' name='ticker' value='{symbol}'/>"
+                f"<input id='{symbol.lower()}_buyprice' name='buy_price' data-buy-price='{buy_price_value}' value='{buy_price_value}' type='number' step='0.01' min='0' placeholder='n/a' style='width:90px;padding:6px;border:1px solid #cbd5e1;border-radius:6px'/>"
+                f"<input id='{symbol.lower()}_shares' name='shares' data-shares='{shares_value}' value='{shares_value}' type='number' step='0.0001' min='0' placeholder='n/a' style='width:90px;padding:6px;border:1px solid #cbd5e1;border-radius:6px'/>"
+                "<button style='border:none;background:#dbeafe;color:#1e3a8a;padding:6px 8px;border-radius:6px;cursor:pointer'>Save</button>"
+                "</form></td>"
+            )
+            shares_col = f"<td id='{symbol.lower()}_shares_display'>{shares_value or 'n/a'}</td>"
+            perf_col = f"<td id='{symbol.lower()}_perf'>n/a</td>"
+            total_col = f"<td id='{symbol.lower()}_total'>n/a</td>"
+
+        ticker_cell = (
+            f"<a href='#' class='ticker-link' data-symbol='{symbol}' "
+            "style='font-weight:700;color:#1d4ed8;text-decoration:none'>"
+            f"{symbol}</a>"
+        )
         if include_action:
             rows.append(
-                f"<tr><td>{symbol}</td><td id='{symbol.lower()}_price'>...</td><td id='{symbol.lower()}_chg'>...</td>"
-                f"<td id='{symbol.lower()}_act'>...</td><td id='{symbol.lower()}_why'>...</td>{remove_col}</tr>"
+                f"<tr><td>{ticker_cell}</td><td id='{symbol.lower()}_price'>...</td><td id='{symbol.lower()}_chg'>...</td>{buy_price_col}{shares_col}{perf_col}{total_col}"
+                f"<td id='{symbol.lower()}_score'>...</td><td id='{symbol.lower()}_why'>...</td>{remove_col}</tr>"
             )
         else:
             rows.append(
-                f"<tr><td>{symbol}</td><td id='{symbol.lower()}_price'>...</td><td id='{symbol.lower()}_chg'>...</td>{remove_col}</tr>"
+                f"<tr><td>{ticker_cell}</td><td id='{symbol.lower()}_price'>...</td><td id='{symbol.lower()}_chg'>...</td>{buy_price_col}{shares_col}{perf_col}{total_col}{remove_col}</tr>"
             )
 
-    headers = '<tr><th>Ticker</th><th>Price</th><th>Daily Change %</th>'
+    headers = '<tr><th>Ticker</th><th>Current Price</th><th>Daily Change %</th>' + user_extra_headers
     if include_action:
-        headers += '<th>Signal Engine Action</th><th>Why (Transparency)</th>'
+        headers += '<th>Score</th><th>Why (Transparency)</th>'
     headers += remove_button + '</tr>'
 
     script = '''
 <script>
-const symbols = __SYMBOLS__;
-function klass(action){
-  if(action === 'BUY') return 'buy';
-  if(action === 'SELL') return 'sell';
-  return 'hold';
-}
-
+const rawSymbols = __SYMBOLS__;
+const symbols = (rawSymbols || []).map(item => Array.isArray(item) ? item[0] : item).filter(Boolean);
+const includeAction = __INCLUDE_ACTION__;
 function formatQuote(quote){
   const p = quote?.price;
   const c = quote?.change_percent;
@@ -485,45 +579,155 @@ async function refreshRow(symbol, includeAction){
       document.getElementById(key + '_price').innerText = fq.price;
       document.getElementById(key + '_chg').innerText = fq.change;
 
-      const action = data.action || 'HOLD';
-      const actionEl = document.getElementById(key + '_act');
-      actionEl.innerText = action;
-      actionEl.className = klass(action);
+      const buyInput = document.getElementById(key + '_buyprice');
+      const sharesInput = document.getElementById(key + '_shares');
+      const perfEl = document.getElementById(key + '_perf');
+      const totalEl = document.getElementById(key + '_total');
+      if (buyInput && perfEl) {
+        const buyPrice = Number(buyInput.value || buyInput.dataset.buyPrice || NaN);
+        const livePrice = Number(data?.quote?.price);
+        const shares = Number(sharesInput?.value || sharesInput?.dataset?.shares || NaN);
+        if (!Number.isNaN(buyPrice) && buyPrice > 0 && Number.isFinite(livePrice)) {
+          const diff = livePrice - buyPrice;
+          const pct = (diff / buyPrice) * 100;
+          const sign = diff >= 0 ? '+' : '';
+          perfEl.innerText = `${sign}$${diff.toFixed(2)} (${sign}${pct.toFixed(2)}%)`;
+          perfEl.style.color = diff >= 0 ? '#166534' : '#991b1b';
+          if (totalEl && !Number.isNaN(shares) && shares > 0) {
+            const total = diff * shares;
+            const signTotal = total >= 0 ? '+' : '';
+            totalEl.innerText = `${signTotal}$${total.toFixed(2)}`;
+            totalEl.style.color = total >= 0 ? '#166534' : '#991b1b';
+          } else if (totalEl) {
+            totalEl.innerText = 'n/a';
+            totalEl.style.color = '#334155';
+          }
+        } else {
+          perfEl.innerText = 'n/a';
+          perfEl.style.color = '#334155';
+          if (totalEl) { totalEl.innerText = 'n/a'; totalEl.style.color = '#334155'; }
+        }
+      }
 
-      const reasons = (data.rationale || []).slice(0, 2).join(' | ') || 'Signals mixed.';
-      const topHeadline = data.sentiment?.headlines?.[0] || 'No major headline available.';
+      const scoreEl = document.getElementById(key + '_score');
+      if (scoreEl) scoreEl.innerText = data.hybrid_score ?? 'n/a';
+
+      const reasons = (data.rationale || []).slice(0, 2);
+      const reasonsText = reasons.length ? reasons.join(' | ') : 'Signals mixed.';
       const rsi = data.technical?.rsi ?? 'n/a';
       const macd = data.technical?.macd_histogram ?? 'n/a';
-      const ss = data.sentiment?.score ?? 'n/a';
-      const sl = data.sentiment?.label || 'neutral';
       const source = data.data_provider || 'yfinance';
-      const dataFlag = data.quote_data_available ? ` Live price/change from ${source}.` : ` Quote/change data missing from live API (${source}).`;
-      document.getElementById(key + '_why').innerText = ` ${reasons.join(' | ')}. RSI=${rsi ?? 'n/a'}, MACD_hist=${macd ?? 'n/a'}, Score=${data.hybrid_score ?? 'n/a'}. ${dataFlag}`;
+      const dataFlag = data.quote_data_available ? `Live price/change from ${source}.` : `Quote/change data missing from live API (${source}).`;
+      document.getElementById(key + '_why').innerText = `${reasonsText}. RSI=${rsi}, MACD_hist=${macd}, Score=${data.hybrid_score ?? 'n/a'}. ${dataFlag}`;
     } else {
       const res = await fetch('/quote?symbol=' + encodeURIComponent(symbol));
       const data = await res.json();
       const fq = formatQuote(data);
       document.getElementById(key + '_price').innerText = fq.price;
       document.getElementById(key + '_chg').innerText = fq.change;
+
+      const buyInput = document.getElementById(key + '_buyprice');
+      const sharesInput = document.getElementById(key + '_shares');
+      const perfEl = document.getElementById(key + '_perf');
+      const totalEl = document.getElementById(key + '_total');
+      if (buyInput && perfEl) {
+        const buyPrice = Number(buyInput.value || buyInput.dataset.buyPrice || NaN);
+        const livePrice = Number(data?.price);
+        const shares = Number(sharesInput?.value || sharesInput?.dataset?.shares || NaN);
+        if (!Number.isNaN(buyPrice) && buyPrice > 0 && Number.isFinite(livePrice)) {
+          const diff = livePrice - buyPrice;
+          const pct = (diff / buyPrice) * 100;
+          const sign = diff >= 0 ? '+' : '';
+          perfEl.innerText = `${sign}$${diff.toFixed(2)} (${sign}${pct.toFixed(2)}%)`;
+          perfEl.style.color = diff >= 0 ? '#166534' : '#991b1b';
+          if (totalEl && !Number.isNaN(shares) && shares > 0) {
+            const total = diff * shares;
+            const signTotal = total >= 0 ? '+' : '';
+            totalEl.innerText = `${signTotal}$${total.toFixed(2)}`;
+            totalEl.style.color = total >= 0 ? '#166534' : '#991b1b';
+          } else if (totalEl) {
+            totalEl.innerText = 'n/a';
+            totalEl.style.color = '#334155';
+          }
+        } else {
+          perfEl.innerText = 'n/a';
+          perfEl.style.color = '#334155';
+          if (totalEl) { totalEl.innerText = 'n/a'; totalEl.style.color = '#334155'; }
+        }
+      }
     }
   } catch (err) {
     document.getElementById(key + '_price').innerText = 'DATA MISSING';
     document.getElementById(key + '_chg').innerText = 'DATA MISSING';
     if(includeAction){
-      document.getElementById(key + '_act').innerText = 'HOLD';
+      const scoreEl = document.getElementById(key + '_score');
+      if (scoreEl) scoreEl.innerText = 'n/a';
       document.getElementById(key + '_why').innerText = 'Live signal or quote data missing.';
     }
   }
 }
 
 let index = 0;
-function loadNext() {
-  if (index >= symbols.length) return;
-  refreshRow(symbols , true);
-  index++;
-  setTimeout(loadNext, 3000);  // one every 3 sec
+let inflight = 0;
+const MAX_INFLIGHT = 2;
+const REQUEST_GAP_MS = 350;
+
+function pumpRows() {
+  while (inflight < MAX_INFLIGHT && index < symbols.length) {
+    const symbol = symbols[index++];
+    inflight++;
+    refreshRow(symbol, includeAction)
+      .catch(() => {})
+      .finally(() => {
+        inflight--;
+        if (index < symbols.length || inflight > 0) {
+          setTimeout(pumpRows, REQUEST_GAP_MS);
+        }
+      });
+  }
 }
-loadNext();  // kick it off
+
+function closeCompanyModal(){
+  const modal = document.getElementById('companyModal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function openCompanyModal(symbol){
+  const modal = document.getElementById('companyModal');
+  const title = document.getElementById('companyModalTitle');
+  const body = document.getElementById('companyModalBody');
+  if (!modal || !title || !body) return;
+
+  modal.style.display = 'flex';
+  title.innerText = symbol;
+  body.innerText = 'Loading company profile...';
+
+  try {
+    const res = await fetch('/company-profile?symbol=' + encodeURIComponent(symbol));
+    const data = await res.json();
+    if (!res.ok) {
+      body.innerText = data.error || 'Unable to load company info.';
+      return;
+    }
+    title.innerText = `${data.symbol} — ${data.name || 'Company Name Unavailable'}`;
+    body.innerText = data.description || 'No description available for this company.';
+  } catch (err) {
+    body.innerText = 'Unable to load company info right now.';
+  }
+}
+
+document.addEventListener('click', (event) => {
+  const link = event.target.closest('.ticker-link');
+  if (!link) return;
+  event.preventDefault();
+  openCompanyModal(link.dataset.symbol || '');
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeCompanyModal();
+});
+
+pumpRows();  // kick it off
 </script>
 '''.replace('__SYMBOLS__', symbols_json).replace('__INCLUDE_ACTION__', 'true' if include_action else 'false')
 
@@ -539,18 +743,32 @@ loadNext();  // kick it off
     .buy{{color:#166534;font-weight:700}} .hold{{color:#92400e;font-weight:700}} .sell{{color:#991b1b;font-weight:700}}
     a{{color:#1d4ed8;text-decoration:none}}
     .toolbar{{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;padding:8px;background:#dbeafe;border-radius:12px}} .tab{{display:inline-block;padding:8px 12px;border-radius:8px;text-decoration:none;color:#1e3a8a;font-weight:600}} .tab:hover{{background:#bfdbfe}} .tab.active{{background:#1e40af;color:#fff}}
+    .modal{{position:fixed;inset:0;background:rgba(15,23,42,.5);display:none;align-items:center;justify-content:center;padding:20px;z-index:1000}}
+    .modal-card{{background:#fff;max-width:560px;width:100%;border-radius:12px;padding:16px 18px;box-shadow:0 18px 40px rgba(2,6,23,.25)}}
+    .modal-title{{margin:0 0 8px;color:#1e3a8a;font-size:1.05rem}}
+    .modal-close{{border:none;background:#e2e8f0;color:#0f172a;padding:8px 10px;border-radius:8px;cursor:pointer;font-weight:700}}
   </style>
 </head>
 <body>
   {_top_tabs(active_tab)}
   <h1>{title}</h1>
   <p>{subtitle}</p>
+  <p style='margin-top:0;color:#475569'>Score is the model's composite conviction (0-12): higher scores indicate stronger buy setups.</p>
   {management}
   <table class="table">
     {headers}
     {''.join(rows)}
   </table>
   <p><a href="/">← Back</a></p>
+  <div id="companyModal" class="modal" onclick="if(event.target.id==='companyModal') closeCompanyModal()">
+    <div class="modal-card">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start">
+        <h3 id="companyModalTitle" class="modal-title">Company</h3>
+        <button class="modal-close" onclick="closeCompanyModal()">Close</button>
+      </div>
+      <p id="companyModalBody" style="margin:0;color:#334155;line-height:1.5">Select a ticker to view details.</p>
+    </div>
+  </div>
   {script}
 </body>
 </html>
@@ -614,7 +832,7 @@ def home():
 
     <div class="ask">
       <h3>Quick Signal Lookup</h3>
-      <input id="sym" placeholder="AAPL, SOFI, PLTR" />
+      <input id="sym" placeholder="AAPL, SOFI, PLTR" onkeydown="if(event.key==='Enter'){lookup();}" />
       <button onclick="lookup()">Analyze</button>
       <div id="out"></div>
     </div>
@@ -899,6 +1117,28 @@ def quote():
         return jsonify(QUOTE_FALLBACK), 500
 
 
+@app.route('/company-profile', methods=['GET'])
+def company_profile():
+    symbol = request.args.get('symbol', '').strip().upper()
+    if not _is_valid_symbol(symbol):
+        return jsonify({'error': 'invalid symbol format'}), 400
+
+    try:
+        info = yf.Ticker(symbol).info or {}
+        return jsonify({
+            'symbol': symbol,
+            'name': info.get('longName') or info.get('shortName') or symbol,
+            'description': info.get('longBusinessSummary') or 'No company description available.',
+        })
+    except Exception as error:
+        logging.warning('Company profile unavailable for %s: %s', symbol, error)
+        return jsonify({
+            'symbol': symbol,
+            'name': symbol,
+            'description': 'No company description available right now.',
+        })
+
+
 @app.route('/signal', methods=['GET'])
 def signal():
     symbol = request.args.get('symbol', '').strip().upper()
@@ -919,10 +1159,11 @@ def signal():
 
 @app.route('/watchlist', methods=['GET'])
 def watchlist():
-    symbols = [ticker for ticker, _ in LONG_TERM_WATCHLIST]
+    picks = _filter_buy_candidates(LONG_TERM_CANDIDATES, limit=10, max_price=None)
+    symbols = [ticker for ticker, _ in picks]
     return _render_watchlist_page(
         title='🏛️ Long-Term Stable Watchlist',
-        subtitle='Designed for durable businesses and compounding potential with hybrid signal transparency.',
+        subtitle='Top 10 long-term buy stocks based on model score and fundamentals.',
         symbols=symbols,
         include_action=True,
         active_tab='stable',
@@ -931,14 +1172,29 @@ def watchlist():
 
 @app.route('/hot-watchlist', methods=['GET'])
 def hot_watchlist():
-    symbols = [ticker for ticker, _ in _build_hot_watchlist(max_price=50.0, limit=8)]
+    picks = _filter_buy_candidates(HOT_WATCHLIST_CANDIDATES, limit=10, max_price=50.0)
+    symbols = [ticker for ticker, _ in picks]
     return _render_watchlist_page(
-        title='⚡ Hot Momentum Watchlist',
-        subtitle='Short-term signal engine focused on lower-priced (under $50) trending stocks with technical indicators + sentiment analysis.',
+        title='⚡ Hot Momentum Buys',
+        subtitle='Top 10 momentum buys under $50, ranked by model score.',
         symbols=symbols,
         include_action=True,
         active_tab='hot',
     )
+
+
+@app.route('/whales', methods=['GET'])
+def whales_watchlist():
+    sections = []
+    for investor, picks in WHALE_INVESTOR_PICKS.items():
+        rows = ''.join([f"<li><b>{ticker}</b> — {company}</li>" for ticker, company in picks[:5]])
+        sections.append(f"<div style='background:#fff;border:1px solid #dbeafe;border-radius:12px;padding:14px'><h3 style='margin:0 0 8px'>{investor}</h3><ul style='margin:0;padding-left:18px;line-height:1.7'>{rows}</ul></div>")
+
+    return f'''
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>body{{font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:28px;background:#f8fafc}} .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}} .toolbar{{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;padding:8px;background:#dbeafe;border-radius:12px}} .tab{{display:inline-block;padding:8px 12px;border-radius:8px;text-decoration:none;color:#1e3a8a;font-weight:600}} .tab:hover{{background:#bfdbfe}} .tab.active{{background:#1e40af;color:#fff}} a{{color:#1d4ed8;text-decoration:none}}</style></head>
+<body>{_top_tabs('whales')}<h1>🐋 Whales of Wall Street</h1><p>Top investors and their widely tracked top 5 picks.</p><div class='grid'>{''.join(sections)}</div><p><a href='/'>← Back</a></p></body></html>
+'''
 
 
 @app.route('/user-watchlist', methods=['GET', 'POST'])
@@ -949,26 +1205,50 @@ def user_watchlist():
 
     if request.method == 'POST':
         ticker = request.form.get('ticker', '').strip().upper()
+        buy_price_raw = request.form.get('buy_price', '').strip()
+        shares_raw = request.form.get('shares', '').strip()
+        buy_price = _to_float(buy_price_raw) if buy_price_raw else None
+        shares = _to_float(shares_raw) if shares_raw else None
         if not _is_valid_symbol(ticker):
             error = 'Invalid ticker symbol format.'
+        elif buy_price is not None and buy_price <= 0:
+            error = 'Buy price must be greater than zero.'
+        elif shares is not None and shares <= 0:
+            error = 'Shares must be greater than zero.'
         else:
-            ok, err = _add_user_ticker(user_id, ticker)
+            ok, err = _add_user_ticker(user_id, ticker, buy_price, shares)
             if not ok:
                 error = err
 
     symbols = _get_user_tickers(user_id)
+    positions = _get_user_positions(user_id)
     page = _render_watchlist_page(
         title='👤 User Watchlist',
-        subtitle='Your personalized watchlist with the same hybrid technical + sentiment signal engine and transparent reasoning.',
+        subtitle='Track your buy price, live performance, and keep full buy/hold/sell signal transparency.',
         symbols=symbols,
         include_action=True,
         user_page=True,
         active_tab='user',
+        user_positions=positions,
     )
 
     if error:
         page = page.replace('</p>\n  <table', f'</p><p style="color:#b91c1c">{error}</p>\n  <table')
     return page
+
+
+@app.route('/user-watchlist/position', methods=['POST'])
+@_login_required
+def update_user_position():
+    ticker = request.form.get('ticker', '').strip().upper()
+    buy_price_raw = request.form.get('buy_price', '').strip()
+    shares_raw = request.form.get('shares', '').strip()
+    if _is_valid_symbol(ticker):
+        buy_price = _to_float(buy_price_raw) if buy_price_raw else None
+        shares = _to_float(shares_raw) if shares_raw else None
+        if (buy_price is None or buy_price > 0) and (shares is None or shares > 0):
+            _update_position(_current_user_id(), ticker, buy_price, shares)
+    return redirect(url_for('user_watchlist'))
 
 
 @app.route('/user-watchlist/remove', methods=['POST'])
