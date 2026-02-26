@@ -11,6 +11,24 @@ import yfinance as yf
 import werkzeug.security as wz_security
 from werkzeug.security import check_password_hash, generate_password_hash
 from trade_signal import analyze_ticker, SignalResult
+import time
+
+QUOTE_CACHE =          # {symbol: {'data': dict, 'timestamp': float}}
+CACHE_TTL = 300           # 5 minutes in seconds
+
+def get_cached_quote(symbol):
+    now = time.time()
+    if symbol in QUOTE_CACHE and now - QUOTE_CACHE  < CACHE_TTL:
+        return QUOTE_CACHE ['data']
+    # If stale or missing → fetch fresh
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info
+        QUOTE_CACHE = {'data': info, 'timestamp': now}
+        return info
+    except Exception as e:
+        logging.warning(f"Cache miss for {symbol}: {e}")
+        return None  # or fallback dict
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('MONEYBOT_SECRET_KEY', secrets.token_hex(32))
