@@ -23,13 +23,13 @@ except Exception:  # fallback if pandas-ta is unavailable at runtime
     ta = None
 import time
 
-# Caches: symbol → data + timestamp
-INFO_CACHE =        # for tk.info
-NEWS_CACHE =        # for tk.news
-HISTORY_CACHE =     # for history DF
-TICKER_CACHE =      # reuse Ticker objects
+import time
 
-CACHE_TTL = 300        # 5 min - change if you want fresher/slower    
+INFO_CACHE = {}
+NEWS_CACHE = {}
+HISTORY_CACHE = {}
+TICKER_CACHE = {}
+CACHE_TTL = 300   
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
