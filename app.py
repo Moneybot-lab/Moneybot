@@ -343,80 +343,27 @@ def _build_hot_watchlist(max_price=50.0, limit=8):
 
 
 def _hybrid_signal_engine(symbol):
-    technical = _compute_technical_indicators(symbol)
-    sentiment = _compute_news_sentiment(symbol)
+    result: SignalResult = analyze_ticker(symbol)  # Pulls from trade_signal.py
 
-    rsi = technical.get('rsi')
-    macd_hist = technical.get('macd_histogram')
-    sentiment_score = sentiment.get('score', 0.5)
+    action = result.verdict.upper()  # 'BUY' → 'BUY', 'HOLD' → 'HOLD', etc.
+    confidence = min(1.0, result.score / 12.0)  # normalize score 0-12 to 0-1
 
-    technical_score = 0.0
-    reasons = []
+    reasons = result.reasons or ['No reasons available.']
 
-    if rsi is not None:
-        if rsi <= 35:
-            technical_score += 0.45
-            reasons.append(f'RSI {rsi:.1f} is low (oversold).')
-        elif rsi >= 70:
-            technical_score -= 0.45
-            reasons.append(f'RSI {rsi:.1f} is high (overbought risk).')
-        else:
-            reasons.append(f'RSI {rsi:.1f} is neutral.')
-    else:
-        reasons.append('RSI unavailable due to limited price history.')
-
-    if macd_hist is not None:
-        if macd_hist > 0:
-            technical_score += 0.25
-            reasons.append('MACD histogram is positive (bullish momentum).')
-        else:
-            technical_score -= 0.25
-            reasons.append('MACD histogram is negative (bearish momentum).')
-    else:
-        reasons.append('MACD unavailable due to limited price history.')
-
-    technical_weight = 0.6
-    sentiment_weight = 0.4
-    sentiment_centered = sentiment_score - 0.5
-    hybrid_score = (technical_score * technical_weight) + ((sentiment_centered * 2) * sentiment_weight)
-
-    if sentiment_score >= 0.7 and (rsi is not None and rsi <= 40) and (macd_hist is not None and macd_hist > 0):
-        action = 'BUY'
-        reasons.append('Rule trigger: sentiment > 0.7 with low RSI and positive MACD momentum.')
-    elif sentiment_score <= 0.35 and (rsi is not None and rsi >= 60) and (macd_hist is not None and macd_hist < 0):
-        action = 'SELL'
-        reasons.append('Rule trigger: negative sentiment with elevated RSI and weak MACD momentum.')
-    elif hybrid_score >= 0.18:
-        action = 'BUY'
-        reasons.append('Hybrid model score crossed the buy threshold.')
-    elif hybrid_score <= -0.18:
-        action = 'SELL'
-        reasons.append('Hybrid model score crossed the sell threshold.')
-    else:
-        action = 'HOLD'
-        reasons.append('Signals are mixed, so the strategy engine recommends hold.')
-
-    confidence = min(0.95, max(0.5, abs(hybrid_score) + 0.5))
     return {
         'symbol': symbol,
         'action': action,
         'confidence': round(confidence, 3),
-        'hybrid_score': round(hybrid_score, 3),
-        'model': 'hybrid_model',
-        'signal_engine': 'technical_plus_sentiment',
-        'technical': technical,
-        'sentiment': sentiment,
-        'rule_engine': {
-            'name': 'rule_based_strategy_engine',
-            'buy_threshold': {'sentiment_min': 0.7, 'rsi_max': 40, 'macd_histogram_min': 0},
-            'sell_threshold': {'sentiment_max': 0.35, 'rsi_min': 60, 'macd_histogram_max': 0},
-            'hybrid_score_buy_min': 0.18,
-            'hybrid_score_sell_max': -0.18,
-            'hybrid_weights': {'technical': technical_weight, 'sentiment': sentiment_weight},
+        'hybrid_score': round(result.score, 1),
+        'model': 'quant_trade_signal',
+        'signal_engine': 'macd_rsi_volume_fundamentals_sentiment',
+        'technical': {
+            'rsi': result.rsi,
+            'macd_histogram': result.macd_hist
         },
+        'sentiment': {'score': None, 'label': 'n/a'},  # old news still here if you want
         'rationale': reasons,
     }
-
 
 def _top_tabs(active_tab):
     tabs = [
