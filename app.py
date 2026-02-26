@@ -34,7 +34,8 @@ app.config['SECRET_KEY'] = os.environ.get('MONEYBOT_SECRET_KEY', secrets.token_h
 CORS(app)
 logging.basicConfig(level=logging.INFO)
 
-DB_PATH = os.environ.get('MONEYBOT_DB_PATH', '/tmp/moneybot.db')
+DEFAULT_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'moneybot.db')
+DB_PATH = os.environ.get('MONEYBOT_DB_PATH', DEFAULT_DB_PATH)
 
 
 def _ensure_db_parent_dir():
