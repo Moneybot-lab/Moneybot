@@ -1,3 +1,8 @@
 Flask
 flask-cors
 yfinance
+pandas
+numpy
+requests
+beautifulsoup4
+pandas-ta

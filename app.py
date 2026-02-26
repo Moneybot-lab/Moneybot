@@ -951,9 +951,9 @@ def watchlist():
     symbols = [ticker for ticker, _ in LONG_TERM_WATCHLIST]
     return _render_watchlist_page(
         title='🏛️ Long-Term Stable Watchlist',
-        subtitle='Designed for durable businesses and compounding potential.',
+        subtitle='Designed for durable businesses and compounding potential with hybrid signal transparency.',
         symbols=symbols,
-        include_action=False,
+        include_action=True,
         active_tab='stable',
     )
 
