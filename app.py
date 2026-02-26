@@ -11,6 +11,7 @@ import yfinance as yf
 import werkzeug.security as wz_security
 from werkzeug.security import check_password_hash, generate_password_hash
 from trade_signal import analyze_ticker, SignalResult
+from advice_engine import compute_user_advice
 import time
 
 QUOTE_CACHE = dict()          
@@ -543,7 +544,7 @@ def _render_watchlist_page(title, subtitle, symbols, include_action=False, user_
         if include_action:
             rows.append(
                 f"<tr><td>{ticker_cell}</td><td id='{symbol.lower()}_price'>...</td><td id='{symbol.lower()}_chg'>...</td>{buy_price_col}{shares_col}{perf_col}{total_col}"
-                f"<td id='{symbol.lower()}_score'>...</td><td id='{symbol.lower()}_why'>...</td>{remove_col}</tr>"
+                f"<td id='{symbol.lower()}_{'advice' if user_page else 'score'}'>...</td><td id='{symbol.lower()}_why'>...</td>{remove_col}</tr>"
             )
         else:
             rows.append(
@@ -552,7 +553,7 @@ def _render_watchlist_page(title, subtitle, symbols, include_action=False, user_
 
     headers = '<tr><th>Ticker</th><th>Current Price</th><th>Daily Change %</th>' + user_extra_headers
     if include_action:
-        headers += '<th>Score</th><th>Why (Transparency)</th>'
+        headers += '<th>Advice</th><th>Why (Transparency)</th>' if user_page else '<th>Score</th><th>Why (Transparency)</th>'
     headers += remove_button + '</tr>'
 
     script = '''
@@ -560,6 +561,14 @@ def _render_watchlist_page(title, subtitle, symbols, include_action=False, user_
 const rawSymbols = __SYMBOLS__;
 const symbols = (rawSymbols || []).map(item => Array.isArray(item) ? item[0] : item).filter(Boolean);
 const includeAction = __INCLUDE_ACTION__;
+const userPage = __USER_PAGE__;
+
+function adviceKlass(advice){
+  if(advice === 'BUY') return 'buy';
+  if(advice === 'SELL') return 'sell';
+  return 'hold';
+}
+
 function formatQuote(quote){
   const p = quote?.price;
   const c = quote?.change_percent;
@@ -573,7 +582,12 @@ async function refreshRow(symbol, includeAction){
   const key = symbol.toLowerCase();
   try {
     if(includeAction){
-      const res = await fetch('/signal?symbol=' + encodeURIComponent(symbol));
+      const entryInput = document.getElementById(key + '_buyprice');
+      const entryPrice = Number(entryInput?.value || entryInput?.dataset?.buyPrice || NaN);
+      const endpoint = userPage
+        ? '/user-advice?symbol=' + encodeURIComponent(symbol) + '&entry_price=' + encodeURIComponent(Number.isFinite(entryPrice) ? entryPrice : '')
+        : '/signal?symbol=' + encodeURIComponent(symbol);
+      const res = await fetch(endpoint);
       const data = await res.json();
       const fq = formatQuote(data.quote || {});
       document.getElementById(key + '_price').innerText = fq.price;
@@ -609,9 +623,14 @@ async function refreshRow(symbol, includeAction){
         }
       }
 
+      if (userPage) {
+      const adviceEl = document.getElementById(key + '_advice');
+      const advice = data.advice || 'HOLD';
+      if (adviceEl) { adviceEl.innerText = advice; adviceEl.className = adviceKlass(advice); }
+      document.getElementById(key + '_why').innerText = data.reason_summary || 'Rule-based guidance; not financial advice.';
+      } else {
       const scoreEl = document.getElementById(key + '_score');
       if (scoreEl) scoreEl.innerText = data.hybrid_score ?? 'n/a';
-
       const reasons = (data.rationale || []).slice(0, 2);
       const reasonsText = reasons.length ? reasons.join(' | ') : 'Signals mixed.';
       const rsi = data.technical?.rsi ?? 'n/a';
@@ -619,6 +638,7 @@ async function refreshRow(symbol, includeAction){
       const source = data.data_provider || 'yfinance';
       const dataFlag = data.quote_data_available ? `Live price/change from ${source}.` : `Quote/change data missing from live API (${source}).`;
       document.getElementById(key + '_why').innerText = `${reasonsText}. RSI=${rsi}, MACD_hist=${macd}, Score=${data.hybrid_score ?? 'n/a'}. ${dataFlag}`;
+      }
     } else {
       const res = await fetch('/quote?symbol=' + encodeURIComponent(symbol));
       const data = await res.json();
@@ -660,8 +680,8 @@ async function refreshRow(symbol, includeAction){
     document.getElementById(key + '_price').innerText = 'DATA MISSING';
     document.getElementById(key + '_chg').innerText = 'DATA MISSING';
     if(includeAction){
-      const scoreEl = document.getElementById(key + '_score');
-      if (scoreEl) scoreEl.innerText = 'n/a';
+      const outEl = document.getElementById(key + (userPage ? '_advice' : '_score'));
+      if (outEl) outEl.innerText = userPage ? 'HOLD' : 'n/a';
       document.getElementById(key + '_why').innerText = 'Live signal or quote data missing.';
     }
   }
@@ -725,11 +745,14 @@ document.addEventListener('click', (event) => {
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') closeCompanyModal();
+  if (event.key === 'Enter' && userPage && event.target && event.target.name === 'ticker') {
+    event.target.closest('form')?.requestSubmit();
+  }
 });
 
 pumpRows();  // kick it off
 </script>
-'''.replace('__SYMBOLS__', symbols_json).replace('__INCLUDE_ACTION__', 'true' if include_action else 'false')
+'''.replace('__SYMBOLS__', symbols_json).replace('__INCLUDE_ACTION__', 'true' if include_action else 'false').replace('__USER_PAGE__', 'true' if user_page else 'false')
 
     return f'''
 <html>
@@ -753,7 +776,7 @@ pumpRows();  // kick it off
   {_top_tabs(active_tab)}
   <h1>{title}</h1>
   <p>{subtitle}</p>
-  <p style='margin-top:0;color:#475569'>Score is the model's composite conviction (0-12): higher scores indicate stronger buy setups.</p>
+  <p style='margin-top:0;color:#475569'>Score/advice are rule-based guidance; not financial advice.</p>
   {management}
   <table class="table">
     {headers}
@@ -1137,6 +1160,47 @@ def company_profile():
             'name': symbol,
             'description': 'No company description available right now.',
         })
+
+
+
+def _recent_3_closes(symbol):
+    try:
+        history = yf.Ticker(symbol).history(period='7d', interval='1d')
+        if history is None or history.empty or 'Close' not in history.columns:
+            return []
+        closes = [float(v) for v in history['Close'].dropna().tail(3).tolist()]
+        return closes
+    except Exception:
+        return []
+
+
+@app.route('/user-advice', methods=['GET'])
+def user_advice():
+    symbol = request.args.get('symbol', '').strip().upper()
+    if not _is_valid_symbol(symbol):
+        return jsonify({'error': 'invalid symbol format'}), 400
+
+    entry_price = _to_float(request.args.get('entry_price'))
+
+    try:
+        quote_data = get_quote_data(symbol)
+        signal_data = _hybrid_signal_engine(symbol)
+        technical = _compute_technical_indicators(symbol)
+        sentiment = _compute_news_sentiment(symbol)
+        advice = compute_user_advice(
+            symbol=symbol,
+            entry_price=entry_price,
+            quote=quote_data,
+            technical=technical,
+            sentiment=sentiment,
+            base_action=signal_data.get('action', 'HOLD'),
+            hybrid_score=signal_data.get('hybrid_score'),
+            trend3_closes=_recent_3_closes(symbol),
+        )
+        return jsonify(advice)
+    except Exception as error:
+        logging.error('User advice error for %s: %s', symbol, error)
+        return jsonify({'error': 'user advice unavailable'}), 500
 
 
 @app.route('/signal', methods=['GET'])
