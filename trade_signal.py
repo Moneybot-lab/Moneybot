@@ -117,10 +117,11 @@ def get_ticker(ticker: str):
 def fetch_price_data(ticker: str) -> Tuple :
     tk = get_ticker(ticker)
     
-    # History cache
+        # History cache
     now = time.time()
-    if ticker in HISTORY_CACHE and now - HISTORY_CACHE  < CACHE_TTL:
-        history = HISTORY_CACHE  else:
+    if ticker in HISTORY_CACHE and now - HISTORY_CACHE.get('ts', 0) < CACHE_TTL:
+        history = HISTORY_CACHE['df']
+    else:
         try:
             history = tk.history(period="6mo", interval="1d", auto_adjust=False)
             if history.empty:
@@ -129,7 +130,6 @@ def fetch_price_data(ticker: str) -> Tuple :
         except Exception as exc:
             logging.warning(f"History fetch fail for {ticker}: {exc}")
             history = pd.DataFrame()  # fallback
-
     if history.empty:
         raise RuntimeError(f"No price history for {ticker}")
 
