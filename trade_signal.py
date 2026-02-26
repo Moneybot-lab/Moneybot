@@ -146,8 +146,8 @@ def fetch_fundamentals(ticker: str) -> Dict :
     tk = get_ticker(ticker)
     
     now = time.time()
-    if ticker in INFO_CACHE and now - INFO_CACHE ['ts'] < CACHE_TTL:
-        info = INFO_CACHE  else:
+    if ticker in INFO_CACHE and now - INFO_CACHE.get('ts', 0) < CACHE_TTL:
+        info = INFO_CACHE else:
         try:
             info = tk.info or
             INFO_CACHE = {'data': info, 'ts': now}
@@ -157,6 +157,8 @@ def fetch_fundamentals(ticker: str) -> Dict :
 
     revenue_growth = info.get("revenueGrowth")
     revenue_growth = float(revenue_growth) if revenue_growth is not None else None
+
+    # ... keep your backup logic and scrape here ...
 
     if revenue_growth is None:
         try:
