@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: moneybot
+    env: python
+    buildCommand: |
+      pip install --upgrade pip
+      pip install -r requirements.txt
+      pip install Flask-SQLAlchemy Flask-Migrate SQLAlchemy psycopg2-binary
+    startCommand: |
+      flask --app app:app db upgrade || true
+      python app.py
+    envVars:
+      - key: MONEYBOT_SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: DATA_PROVIDER
+        value: yfinance
