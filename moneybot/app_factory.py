@@ -41,7 +41,6 @@ def create_app() -> Flask:
     app.extensions["market_data_service"] = MarketDataService()
 
     @app.get("/")
-    @app.get("")
     def home():
         return render_template_string(
             """
