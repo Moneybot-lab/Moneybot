@@ -52,12 +52,8 @@ def create_app() -> Flask:
             <html>
               <body style="font-family:Inter,Segoe UI,system-ui,sans-serif;padding:24px;background:linear-gradient(180deg,#f8fafc,#eef2ff);max-width:1120px;margin:0 auto;color:#0f172a">
                 <header style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px">
-                  <div style="display:flex;align-items:center;gap:14px">
-                    <img src="/static/moneybot-pro-logo.svg" alt="MoneyBot Pro logo" style="height:56px;width:auto"/>
-                    <div>
-                      <h1 style="margin:0;font-size:30px;letter-spacing:0.3px">MoneyBot <span style="color:#2563eb;font-weight:900">Pro</span></h1>
-                      <p style="margin:2px 0 0 0;color:#475569">Premium-grade market intelligence with fast tactical signals.</p>
-                    </div>
+                  <div>
+                    <img src="/static/moneybot-pro-logo.svg" alt="MoneyBot Pro logo" style="height:66px;width:auto"/>
                   </div>
                   <div style="display:flex;gap:10px;flex-wrap:wrap">
                     <a href="/login" style="padding:8px 12px;background:#dbeafe;border-radius:999px;text-decoration:none;font-weight:600">Login</a>
@@ -211,16 +207,17 @@ def create_app() -> Flask:
                             borderWidth: 2,
                             pointRadius: 0,
                             tension: 0.32,
-                            fill: false,
+                            fill: true,
+                            backgroundColor: up ? 'rgba(22,163,74,0.14)' : 'rgba(220,38,38,0.12)',
                           }],
                         },
                         options: {
                           responsive: true,
                           maintainAspectRatio: false,
-                          plugins: { legend: { display: false }, tooltip: { enabled: true } },
+                          plugins: { legend: { display: false }, tooltip: { enabled: true, backgroundColor: '#0f172a', titleColor: '#fff', bodyColor: '#e2e8f0' } },
                           scales: {
                             x: { display: false, grid: { display: false } },
-                            y: { display: false, grid: { color: '#f1f5f9' } },
+                            y: { display: false, grid: { color: '#eef2ff' } },
                           },
                         },
                       });
@@ -229,13 +226,13 @@ def create_app() -> Flask:
 
                   function showTickerDetails(item){
                     const modal = document.getElementById('tickerModal');
-                    document.getElementById('modalTitle').textContent = `${item.symbol} · ${item.company || 'Company'}`;
+                    document.getElementById('modalTitle').textContent = `${item.symbol || item.ticker || 'Ticker'} · ${item.company || 'Company'}`;
                     const details = item.details || {};
                     document.getElementById('modalBody').innerHTML = `
                       <div><strong>Company:</strong> ${details.company || item.company || 'n/a'}</div>
                       <div><strong>Sector:</strong> ${details.sector || 'n/a'}</div>
                       <div><strong>Current Price:</strong> ${formatMoney(item.price)}</div>
-                      <div><strong>Score:</strong> ${item.signal_score ?? 'n/a'}</div>
+                      <div><strong>${item.details && item.details.sector === 'Investor pick' ? 'Performance' : 'Score'}:</strong> ${item.signal_score ?? 'n/a'}</div>
                       <div style="margin-top:6px"><strong>Stability note:</strong> ${details.stability_note || item.transparency || 'n/a'}</div>
                     `;
                     modal.style.display = 'flex';
@@ -256,11 +253,41 @@ def create_app() -> Flask:
                   }
 
                   function renderMomentum(items){
-                    document.getElementById('momentum').innerHTML = `<ol style="margin:0;padding-left:18px">${items.slice(0,10).map(item=>`<li style="margin-bottom:10px"><strong>${item.symbol}</strong> · ${formatMoney(item.price)} · score ${item.score}<br/><span style="color:#475569">${item.rationale}</span></li>`).join('')}</ol>`;
+                    document.getElementById('momentum').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Transparency</th></tr></thead><tbody>${items.slice(0,10).map((item, idx)=>`<tr><td style="padding:8px;border-bottom:1px solid #f1f5f9"><button type="button" data-idx="${idx}" class="momentum-ticker-btn" style="border:none;background:none;color:#1d4ed8;font-weight:700;cursor:pointer;padding:0">${item.symbol}</button></td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.score}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.rationale}</td></tr>`).join('')}</tbody></table>`;
+                    document.querySelectorAll('.momentum-ticker-btn').forEach(btn => {
+                      btn.addEventListener('click', () => {
+                        const idx = Number(btn.dataset.idx || 0);
+                        const item = items[idx] || {};
+                        showTickerDetails({
+                          symbol: item.symbol,
+                          company: item.symbol,
+                          price: item.price,
+                          signal_score: item.score,
+                          transparency: item.rationale,
+                          details: item.details || { company: item.symbol, sector: 'Momentum', stability_note: item.rationale },
+                        });
+                      });
+                    });
                   }
 
                   function renderWells(items){
-                    document.getElementById('wells').innerHTML = items.map(item=>`<article style="border:1px solid #e2e8f0;border-radius:10px;padding:10px;margin-bottom:10px"><div style="font-weight:700;margin-bottom:8px">${item.investor}</div><table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0">Ticker</th><th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0">Price</th><th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0">Performance</th></tr></thead><tbody>${(item.stocks || []).map(stock=>`<tr><td style="padding:6px;border-bottom:1px solid #f1f5f9">${stock.ticker}</td><td style="padding:6px;border-bottom:1px solid #f1f5f9">${formatMoney(stock.price)}</td><td style="padding:6px;border-bottom:1px solid #f1f5f9;color:${(stock.performance || 0) >= 0 ? '#166534' : '#b91c1c'}">${Number(stock.performance || 0).toFixed(2)}%</td></tr>`).join('')}</tbody></table></article>`).join('');
+                    document.getElementById('wells').innerHTML = items.map((item, investorIdx)=>`<article style="border:1px solid #e2e8f0;border-radius:10px;padding:10px;margin-bottom:10px"><div style="font-weight:700;margin-bottom:8px">${item.investor}</div><table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0">Ticker</th><th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0">Price</th><th style="text-align:left;padding:6px;border-bottom:1px solid #e2e8f0">Performance</th></tr></thead><tbody>${(item.stocks || []).map((stock, stockIdx)=>`<tr><td style="padding:6px;border-bottom:1px solid #f1f5f9"><button type="button" data-investor="${investorIdx}" data-stock="${stockIdx}" class="wells-ticker-btn" style="border:none;background:none;color:#1d4ed8;font-weight:700;cursor:pointer;padding:0">${stock.ticker}</button></td><td style="padding:6px;border-bottom:1px solid #f1f5f9">${formatMoney(stock.price)}</td><td style="padding:6px;border-bottom:1px solid #f1f5f9;color:${(stock.performance || 0) >= 0 ? '#166534' : '#b91c1c'}">${Number(stock.performance || 0).toFixed(2)}%</td></tr>`).join('')}</tbody></table></article>`).join('');
+                    document.querySelectorAll('.wells-ticker-btn').forEach(btn => {
+                      btn.addEventListener('click', () => {
+                        const investorIdx = Number(btn.dataset.investor || 0);
+                        const stockIdx = Number(btn.dataset.stock || 0);
+                        const investor = items[investorIdx] || {};
+                        const stock = (investor.stocks || [])[stockIdx] || {};
+                        showTickerDetails({
+                          symbol: stock.ticker,
+                          company: stock.ticker,
+                          price: stock.price,
+                          signal_score: stock.performance,
+                          transparency: `Top holding from ${investor.investor || 'investor'} list.`,
+                          details: { company: stock.ticker, sector: 'Investor pick', stability_note: `Selected by ${investor.investor || 'top investor'}` },
+                        });
+                      });
+                    });
                   }
 
                   function switchTab(tab){
@@ -270,6 +297,13 @@ def create_app() -> Flask:
 
                   document.getElementById('tickerModal').addEventListener('click', (event) => {
                     if (event.target.id === 'tickerModal') closeTickerModal();
+                  });
+
+                  document.getElementById('quickSymbol').addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      quickAsk();
+                    }
                   });
 
                   async function init(){
@@ -392,15 +426,17 @@ def create_app() -> Flask:
                   rowsEl.innerHTML = '<pre>'+JSON.stringify(data,null,2)+'</pre>';
                   return;
                 }
+                const formatMoney = (v) => typeof v === 'number' ? `$${v.toLocaleString(undefined,{maximumFractionDigits:2})}` : 'n/a';
                 rowsEl.innerHTML = (data.items||[]).map(i=>{
-                  const perf = typeof i.performance === 'number' ? `${i.performance.toFixed(2)}%` : 'n/a';
+                  const perfPct = typeof i.performance === 'number' ? `${i.performance.toFixed(2)}%` : 'n/a';
+                  const perfAbs = typeof i.performance_amount === 'number' ? `${i.performance_amount >= 0 ? '+' : '-'}${formatMoney(Math.abs(i.performance_amount))}` : 'n/a';
                   const perfColor = typeof i.performance === 'number' ? (i.performance >= 0 ? '#166534' : '#b91c1c') : '#334155';
                   return `<tr>
                     <td style="border:1px solid #e5e7eb;padding:8px">${i.symbol}</td>
-                    <td style="border:1px solid #e5e7eb;padding:8px">${i.entry_price ?? 'n/a'}</td>
+                    <td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td>
                     <td style="border:1px solid #e5e7eb;padding:8px">${i.shares ?? 'n/a'}</td>
-                    <td style="border:1px solid #e5e7eb;padding:8px">${i.current_price ?? 'n/a'}</td>
-                    <td style="border:1px solid #e5e7eb;padding:8px;color:${perfColor}">${perf}</td>
+                    <td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td>
+                    <td style="border:1px solid #e5e7eb;padding:8px;color:${perfColor}">${perfAbs} (${perfPct})</td>
                     <td style="border:1px solid #e5e7eb;padding:8px">${i.advice ?? 'HOLD'}</td>
                     <td style="border:1px solid #e5e7eb;padding:8px;max-width:280px">${i.why ?? 'n/a'}</td>
                     <td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td>

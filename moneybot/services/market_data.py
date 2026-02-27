@@ -179,19 +179,19 @@ class MarketDataService:
 
     def get_hot_momentum_buys(self) -> List[Dict[str, Any]]:
         picks = [
-            ("NVDA", "AI demand and earnings revisions remain strong."),
-            ("AMD", "Chip momentum and improving gross margin profile."),
-            ("SMCI", "Data center infrastructure growth remains elevated."),
-            ("META", "Ad monetization and engagement trends are accelerating."),
-            ("AMZN", "Cloud optimization cycle is turning into expansion."),
-            ("TSLA", "Short-term delivery catalyst and volatility breakout."),
-            ("PLTR", "Commercial adoption pace and contract pipeline expansion."),
-            ("NFLX", "Subscriber retention and ad-tier upside surprise."),
-            ("AVGO", "Networking and AI custom silicon momentum persists."),
-            ("CRM", "Operating leverage and enterprise demand remain resilient."),
+            ("NVDA", "AI demand and earnings revisions remain strong.", "Technology"),
+            ("AMD", "Chip momentum and improving gross margin profile.", "Technology"),
+            ("SMCI", "Data center infrastructure growth remains elevated.", "Technology"),
+            ("META", "Ad monetization and engagement trends are accelerating.", "Communication Services"),
+            ("AMZN", "Cloud optimization cycle is turning into expansion.", "Consumer Cyclical"),
+            ("TSLA", "Short-term delivery catalyst and volatility breakout.", "Consumer Cyclical"),
+            ("PLTR", "Commercial adoption pace and contract pipeline expansion.", "Technology"),
+            ("NFLX", "Subscriber retention and ad-tier upside surprise.", "Communication Services"),
+            ("AVGO", "Networking and AI custom silicon momentum persists.", "Technology"),
+            ("CRM", "Operating leverage and enterprise demand remain resilient.", "Technology"),
         ]
         out = []
-        for idx, (symbol, rationale) in enumerate(picks):
+        for idx, (symbol, rationale, sector) in enumerate(picks):
             quote = self.get_quote(symbol)
             price = quote.get("price")
             if price == "DATA_MISSING":
@@ -202,6 +202,12 @@ class MarketDataService:
                     "price": price,
                     "score": round(9.4 - (idx * 0.28), 2),
                     "rationale": rationale,
+                    "transparency": rationale,
+                    "details": {
+                        "company": symbol,
+                        "sector": sector,
+                        "stability_note": rationale,
+                    },
                 }
             )
         return out

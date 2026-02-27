@@ -86,11 +86,15 @@ def _watchlist_item_payload(item: WatchlistItem) -> Dict[str, Any]:
 def _transparency_message(advice_data: Dict[str, Any]) -> str:
     pnl_percent = advice_data.get("unrealized_pnl_percent")
     advice = advice_data.get("advice", "HOLD")
+    trigger = advice_data.get("trigger")
+
     if pnl_percent is not None and advice == "BUY" and pnl_percent < 0:
-        return f"Triggered by drop from entry: position is down {abs(pnl_percent):.2f}% from your entry."
+        return f"BUY setup: price is {abs(pnl_percent):.2f}% below your entry and dip conditions are active."
     if pnl_percent is not None and advice == "SELL" and pnl_percent > 0:
-        return f"Triggered by rise from entry: position is up {pnl_percent:.2f}% and signaling profit-taking sell."
-    return advice_data.get("trigger") or advice_data.get("reason_summary") or "No additional transparency details."
+        return f"SELL setup: position is up {pnl_percent:.2f}% and momentum/risk signals favor taking profit."
+    if trigger:
+        return trigger
+    return "Signal is based on current momentum, sentiment, and technical trend checks."
 
 
 def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -210,6 +214,7 @@ def user_watchlist():
         )
         payload["current_price"] = advice_data.get("quote", {}).get("price")
         payload["performance"] = advice_data.get("unrealized_pnl_percent")
+        payload["performance_amount"] = advice_data.get("unrealized_pnl_per_share")
         payload["advice"] = advice_data.get("advice")
         payload["why"] = _transparency_message(advice_data)
         enriched_items.append(payload)
