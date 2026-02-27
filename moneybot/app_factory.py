@@ -40,14 +40,37 @@ def create_app() -> Flask:
     app.register_blueprint(api_bp)
     app.extensions["market_data_service"] = MarketDataService()
 
+    with app.app_context():
+        db.create_all()
+
     @app.get("/")
     def home():
         return render_template_string(
             """
-            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc">
-              <h1>MoneyBot</h1>
-              <p>Rule-based guidance; not financial advice.</p>
-              <p><a href="/login">Login</a> · <a href="/signup">Sign up</a> · <a href="/watchlist">My Watchlist</a></p>
+            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc;max-width:960px;margin:0 auto">
+              <h1 style="margin-bottom:6px">MoneyBot</h1>
+              <p style="margin-top:0;color:#475569">Hybrid stock assistant with watchlist tracking, signals, and API-backed auth.</p>
+              <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+                <a href="/login" style="padding:8px 12px;background:#dbeafe;border-radius:8px;text-decoration:none">Login</a>
+                <a href="/signup" style="padding:8px 12px;background:#dbeafe;border-radius:8px;text-decoration:none">Sign up</a>
+                <a href="/watchlist" style="padding:8px 12px;background:#1e40af;color:#fff;border-radius:8px;text-decoration:none">My Watchlist</a>
+              </div>
+              <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px">
+                <h3 style="margin-top:0">Quick Quote</h3>
+                <input id="symbol" placeholder="AAPL" style="padding:8px;border:1px solid #cbd5e1;border-radius:8px"/>
+                <button onclick="lookup()" style="padding:8px 12px;border:none;background:#1e40af;color:#fff;border-radius:8px">Lookup</button>
+                <pre id="out" style="background:#0f172a;color:#e2e8f0;padding:10px;border-radius:8px;min-height:56px"></pre>
+              </div>
+              <p style="color:#64748b">Rule-based guidance; not financial advice.</p>
+              <script>
+              async function lookup(){
+                const symbol = (document.getElementById('symbol').value || '').trim().toUpperCase();
+                if(!symbol) return;
+                const res = await fetch('/api/signal?symbol=' + encodeURIComponent(symbol));
+                const data = await res.json();
+                document.getElementById('out').textContent = JSON.stringify(data,null,2);
+              }
+              </script>
             </body></html>
             """
         )
@@ -57,8 +80,9 @@ def create_app() -> Flask:
     def login_page():
         return render_template_string(
             """
-            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc">
+            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc;max-width:720px;margin:0 auto">
               <h2>Login</h2>
+              <p><a href="/">Home</a> · <a href="/signup">Create account</a></p>
               <form id="loginForm">
                 <input id="email" placeholder="email" required />
                 <input id="password" type="password" placeholder="password" required />
@@ -88,8 +112,9 @@ def create_app() -> Flask:
     def signup_page():
         return render_template_string(
             """
-            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc">
+            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc;max-width:720px;margin:0 auto">
               <h2>Sign Up</h2>
+              <p><a href="/">Home</a> · <a href="/login">Login</a></p>
               <form id="signupForm">
                 <input id="email" placeholder="email" required />
                 <input id="password" type="password" placeholder="password" required />
@@ -119,9 +144,9 @@ def create_app() -> Flask:
     def watchlist_page():
         return render_template_string(
             """
-            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc">
+            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc;max-width:960px;margin:0 auto">
               <h2>User Watchlist</h2>
-              <p><button onclick="logout()">Logout</button></p>
+              <p><a href="/">Home</a> · <button onclick="logout()">Logout</button></p>
               <form id="addForm">
                 <input id="symbol" placeholder="AAPL" required />
                 <input id="buy_price" type="number" step="0.01" placeholder="buy price"/>
@@ -129,7 +154,10 @@ def create_app() -> Flask:
                 <button type="submit">Add</button>
               </form>
               <pre id="out"></pre>
-              <div id="rows"></div>
+              <table style="width:100%;background:#fff;border-collapse:collapse">
+                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
+                <tbody id="rows"></tbody>
+              </table>
               <script>
               const rowsEl = document.getElementById('rows');
               const outEl = document.getElementById('out');
@@ -147,7 +175,7 @@ def create_app() -> Flask:
                   rowsEl.innerHTML = '<pre>'+JSON.stringify(data,null,2)+'</pre>';
                   return;
                 }
-                rowsEl.innerHTML = (data.items||[]).map(i=>`<div>${i.symbol} | entry: ${i.entry_price ?? 'n/a'} | shares: ${i.shares ?? 'n/a'} <button onclick="del(${i.id})">x</button></div>`).join('');
+                rowsEl.innerHTML = (data.items||[]).map(i=>`<tr><td style="border:1px solid #e5e7eb;padding:8px">${i.symbol}</td><td style="border:1px solid #e5e7eb;padding:8px">${i.entry_price ?? 'n/a'}</td><td style="border:1px solid #e5e7eb;padding:8px">${i.shares ?? 'n/a'}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td></tr>`).join('');
               }
               async function addItem(event){
                 if (event) event.preventDefault();
