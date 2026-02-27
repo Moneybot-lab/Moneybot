@@ -44,6 +44,8 @@ def create_app() -> Flask:
         db.create_all()
 
     @app.get("/")
+    @app.get("/index.html")
+    @app.get("/home")
     def home():
         return render_template_string(
             """
