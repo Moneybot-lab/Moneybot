@@ -65,3 +65,31 @@ def test_missing_data_is_hold_with_reason():
     )
     assert out["advice"] == "HOLD"
     assert "Data missing" in out["reason_summary"]
+
+
+def test_drop_from_entry_trigger_is_explained():
+    out = compute_user_advice(
+        symbol="ABC",
+        entry_price=100,
+        quote={"price": 92, "change_percent": -3.1},
+        technical={"rsi": 40, "macd_histogram": 0.2, "trend": "bullish"},
+        sentiment={"score": 0.6, "label": "positive", "headlines": ["dip bought"]},
+        base_action="HOLD",
+        hybrid_score=6.7,
+    )
+    assert out["advice"] == "BUY"
+    assert "down" in out["trigger"]
+
+
+def test_rise_from_entry_sell_trigger_is_explained():
+    out = compute_user_advice(
+        symbol="ABC",
+        entry_price=100,
+        quote={"price": 114, "change_percent": 2.2},
+        technical={"rsi": 75, "macd_histogram": -0.4, "trend": "bearish"},
+        sentiment={"score": 0.25, "label": "negative", "headlines": ["slowdown fears"]},
+        base_action="SELL",
+        hybrid_score=8.0,
+    )
+    assert out["advice"] == "SELL"
+    assert "up" in out["trigger"]
