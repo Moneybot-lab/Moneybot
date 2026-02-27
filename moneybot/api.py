@@ -225,3 +225,27 @@ def api_signal():
 
     svc = current_app.extensions["market_data_service"]
     return jsonify({"data": svc.get_signal(symbol), "request_id": g.request_id})
+
+
+@api_bp.get("/market-overview")
+def market_overview():
+    svc = current_app.extensions["market_data_service"]
+    return jsonify({"items": svc.get_market_indices(), "request_id": g.request_id})
+
+
+@api_bp.get("/stable-watchlist")
+def stable_watchlist():
+    svc = current_app.extensions["market_data_service"]
+    return jsonify({"items": svc.get_stable_watchlist(), "request_id": g.request_id})
+
+
+@api_bp.get("/hot-momentum-buys")
+def hot_momentum_buys():
+    svc = current_app.extensions["market_data_service"]
+    return jsonify({"items": svc.get_hot_momentum_buys(), "request_id": g.request_id})
+
+
+@api_bp.get("/wells-picks")
+def wells_picks():
+    svc = current_app.extensions["market_data_service"]
+    return jsonify({"items": svc.get_wells_picks(), "request_id": g.request_id})
