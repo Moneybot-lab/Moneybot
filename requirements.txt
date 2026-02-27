@@ -1,8 +1,13 @@
 Flask
 flask-cors
+Flask-SQLAlchemy
+Flask-Migrate
+SQLAlchemy
+psycopg2-binary
 yfinance
 pandas
 numpy
 requests
 beautifulsoup4
 pandas-ta
+pytest
