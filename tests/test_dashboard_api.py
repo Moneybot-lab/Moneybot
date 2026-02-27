@@ -14,7 +14,19 @@ class StubMarketService:
         return [{"symbol": "NVDA", "price": 900.33, "score": 9.4, "rationale": "Strong breakout"}]
 
     def get_wells_picks(self):
-        return [{"investor": "Warren Buffett", "top_stocks": ["AAPL", "AXP", "KO", "OXY", "BAC"]}]
+        return [{"investor": "Warren Buffett", "stocks": [{"ticker": "AAPL", "price": 190.0, "performance": 1.2}]}]
+
+    def get_quote(self, symbol):
+        return {"symbol": symbol, "price": 150.25, "change_percent": 1.2}
+
+    def get_signal(self, symbol):
+        return {
+            "symbol": symbol,
+            "action": "HOLD",
+            "technical": {"rsi": 52, "macd_histogram": 0.18},
+            "sentiment": {"label": "positive", "score": 0.62},
+            "quote": self.get_quote(symbol),
+        }
 
 
 def _client():
@@ -47,3 +59,14 @@ def test_tab_data_endpoints_return_items():
     assert stable.get_json()["items"][0]["symbol"] == "MSFT"
     assert momentum.get_json()["items"][0]["symbol"] == "NVDA"
     assert wells.get_json()["items"][0]["investor"] == "Warren Buffett"
+    assert wells.get_json()["items"][0]["stocks"][0]["ticker"] == "AAPL"
+
+
+def test_quick_ask_returns_buy_or_sell_only():
+    client = _client()
+    res = client.get("/api/quick-ask?symbol=AAPL")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["recommendation"] in {"BUY", "SELL"}
+    assert data["recommendation"] == "BUY"
+    assert "Momentum" in data["rationale"] or "signal" in data["rationale"]
