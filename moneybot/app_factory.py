@@ -21,6 +21,7 @@ def create_app() -> Flask:
         database_url = database_url.replace("postgres://", "postgresql://", 1)
 
     app = Flask(__name__)
+    app.url_map.strict_slashes = False
     app.config.update(
         SECRET_KEY=secret,
         SQLALCHEMY_DATABASE_URI=database_url,
@@ -40,6 +41,7 @@ def create_app() -> Flask:
     app.extensions["market_data_service"] = MarketDataService()
 
     @app.get("/")
+    @app.get("")
     def home():
         return render_template_string(
             """
@@ -52,19 +54,29 @@ def create_app() -> Flask:
         )
 
     @app.get("/login")
+    @app.get("/login/")
     def login_page():
         return render_template_string(
             """
             <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc">
               <h2>Login</h2>
-              <input id="email" placeholder="email" /> <input id="password" type="password" placeholder="password" />
-              <button onclick="go()">Login</button>
+              <form id="loginForm">
+                <input id="email" placeholder="email" required />
+                <input id="password" type="password" placeholder="password" required />
+                <button type="submit">Login</button>
+              </form>
               <pre id="out"></pre>
               <script>
-              async function go(){
-                const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email.value,password:password.value})});
+              const emailEl = document.getElementById('email');
+              const passwordEl = document.getElementById('password');
+              const outEl = document.getElementById('out');
+              document.getElementById('loginForm').addEventListener('submit', go);
+
+              async function go(event){
+                if (event) event.preventDefault();
+                const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value})});
                 const data = await res.json();
-                out.textContent = JSON.stringify(data,null,2);
+                outEl.textContent = JSON.stringify(data,null,2);
                 if(res.ok) location.href='/watchlist';
               }
               </script>
@@ -73,19 +85,29 @@ def create_app() -> Flask:
         )
 
     @app.get("/signup")
+    @app.get("/signup/")
     def signup_page():
         return render_template_string(
             """
             <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc">
               <h2>Sign Up</h2>
-              <input id="email" placeholder="email" /> <input id="password" type="password" placeholder="password" />
-              <button onclick="go()">Create</button>
+              <form id="signupForm">
+                <input id="email" placeholder="email" required />
+                <input id="password" type="password" placeholder="password" required />
+                <button type="submit">Create</button>
+              </form>
               <pre id="out"></pre>
               <script>
-              async function go(){
-                const res = await fetch('/api/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:email.value,password:password.value})});
+              const emailEl = document.getElementById('email');
+              const passwordEl = document.getElementById('password');
+              const outEl = document.getElementById('out');
+              document.getElementById('signupForm').addEventListener('submit', go);
+
+              async function go(event){
+                if (event) event.preventDefault();
+                const res = await fetch('/api/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value})});
                 const data = await res.json();
-                out.textContent = JSON.stringify(data,null,2);
+                outEl.textContent = JSON.stringify(data,null,2);
                 if(res.ok) location.href='/watchlist';
               }
               </script>
@@ -94,28 +116,49 @@ def create_app() -> Flask:
         )
 
     @app.get("/watchlist")
+    @app.get("/watchlist/")
     def watchlist_page():
         return render_template_string(
             """
             <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc">
               <h2>User Watchlist</h2>
               <p><button onclick="logout()">Logout</button></p>
-              <input id="symbol" placeholder="AAPL"/>
-              <input id="buy_price" type="number" step="0.01" placeholder="buy price"/>
-              <input id="shares" type="number" step="0.0001" placeholder="shares"/>
-              <button onclick="addItem()">Add</button>
+              <form id="addForm">
+                <input id="symbol" placeholder="AAPL" required />
+                <input id="buy_price" type="number" step="0.01" placeholder="buy price"/>
+                <input id="shares" type="number" step="0.0001" placeholder="shares"/>
+                <button type="submit">Add</button>
+              </form>
+              <pre id="out"></pre>
               <div id="rows"></div>
               <script>
+              const rowsEl = document.getElementById('rows');
+              const outEl = document.getElementById('out');
+              const symbolEl = document.getElementById('symbol');
+              const buyPriceEl = document.getElementById('buy_price');
+              const sharesEl = document.getElementById('shares');
+              document.getElementById('addForm').addEventListener('submit', addItem);
+
               async function logout(){ await fetch('/api/auth/logout',{method:'POST'}); location.href='/'; }
               async function load(){
                 const res = await fetch('/api/user-watchlist');
                 const data = await res.json();
-                if(!res.ok){ rows.innerHTML = '<pre>'+JSON.stringify(data,null,2)+'</pre>'; return; }
-                rows.innerHTML = (data.items||[]).map(i=>`<div>${i.symbol} | entry: ${i.entry_price ?? 'n/a'} | shares: ${i.shares ?? 'n/a'} <button onclick="del(${i.id})">x</button></div>`).join('');
+                if(!res.ok){
+                  if (res.status === 401) { location.href='/login'; return; }
+                  rowsEl.innerHTML = '<pre>'+JSON.stringify(data,null,2)+'</pre>';
+                  return;
+                }
+                rowsEl.innerHTML = (data.items||[]).map(i=>`<div>${i.symbol} | entry: ${i.entry_price ?? 'n/a'} | shares: ${i.shares ?? 'n/a'} <button onclick="del(${i.id})">x</button></div>`).join('');
               }
-              async function addItem(){
-                await fetch('/api/user-watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:symbol.value,buy_price:buy_price.value||null,shares:shares.value||null})});
-                await load();
+              async function addItem(event){
+                if (event) event.preventDefault();
+                const res = await fetch('/api/user-watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:symbolEl.value,buy_price:buyPriceEl.value||null,shares:sharesEl.value||null})});
+                const data = await res.json();
+                outEl.textContent = JSON.stringify(data,null,2);
+                if (res.ok) {
+                  symbolEl.value='';
+                  await load();
+                }
               }
               async function del(id){ await fetch('/api/user-watchlist/'+id,{method:'DELETE'}); await load(); }
               load();
