@@ -47,31 +47,131 @@ def create_app() -> Flask:
     def home():
         return render_template_string(
             """
-            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc;max-width:960px;margin:0 auto">
-              <h1 style="margin-bottom:6px">MoneyBot</h1>
-              <p style="margin-top:0;color:#475569">Hybrid stock assistant with watchlist tracking, signals, and API-backed auth.</p>
-              <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
-                <a href="/login" style="padding:8px 12px;background:#dbeafe;border-radius:8px;text-decoration:none">Login</a>
-                <a href="/signup" style="padding:8px 12px;background:#dbeafe;border-radius:8px;text-decoration:none">Sign up</a>
-                <a href="/watchlist" style="padding:8px 12px;background:#1e40af;color:#fff;border-radius:8px;text-decoration:none">My Watchlist</a>
-              </div>
-              <div style="background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px">
-                <h3 style="margin-top:0">Quick Quote</h3>
-                <input id="symbol" placeholder="AAPL" style="padding:8px;border:1px solid #cbd5e1;border-radius:8px"/>
-                <button onclick="lookup()" style="padding:8px 12px;border:none;background:#1e40af;color:#fff;border-radius:8px">Lookup</button>
-                <pre id="out" style="background:#0f172a;color:#e2e8f0;padding:10px;border-radius:8px;min-height:56px"></pre>
-              </div>
-              <p style="color:#64748b">Rule-based guidance; not financial advice.</p>
-              <script>
-              async function lookup(){
-                const symbol = (document.getElementById('symbol').value || '').trim().toUpperCase();
-                if(!symbol) return;
-                const res = await fetch('/api/signal?symbol=' + encodeURIComponent(symbol));
-                const data = await res.json();
-                document.getElementById('out').textContent = JSON.stringify(data,null,2);
-              }
-              </script>
-            </body></html>
+            <html>
+              <body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc;max-width:1100px;margin:0 auto;color:#0f172a">
+                <h1 style="margin-bottom:6px">MoneyBot Dashboard</h1>
+                <p style="margin-top:0;color:#475569">Market pulse, curated ideas, and investor-inspired picks.</p>
+
+                <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+                  <a href="/login" style="padding:8px 12px;background:#dbeafe;border-radius:8px;text-decoration:none">Login</a>
+                  <a href="/signup" style="padding:8px 12px;background:#dbeafe;border-radius:8px;text-decoration:none">Sign up</a>
+                  <a href="/watchlist" style="padding:8px 12px;background:#1e40af;color:#fff;border-radius:8px;text-decoration:none">My Watchlist</a>
+                </div>
+
+                <section style="margin-bottom:18px">
+                  <h3 style="margin-bottom:8px">Market Indices</h3>
+                  <div id="market-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px"></div>
+                </section>
+
+                <section style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px">
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+                    <button class="tab-btn" data-tab="stable" onclick="switchTab('stable')" style="padding:8px 12px;border:1px solid #cbd5e1;background:#dbeafe;border-radius:8px">Stable Watchlist</button>
+                    <button class="tab-btn" data-tab="momentum" onclick="switchTab('momentum')" style="padding:8px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:8px">Hot Momentum Buys</button>
+                    <button class="tab-btn" data-tab="wells" onclick="switchTab('wells')" style="padding:8px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:8px">Wells of Wall Street</button>
+                  </div>
+
+                  <div id="stable" class="tab-panel"></div>
+                  <div id="momentum" class="tab-panel" style="display:none"></div>
+                  <div id="wells" class="tab-panel" style="display:none"></div>
+                </section>
+
+                <p style="color:#64748b">Rule-based guidance; not financial advice.</p>
+
+                <script>
+                  const fallbackData = {
+                    market: [
+                      { name: 'Dow Jones', symbol: '^DJI', price: 39180.42, change_percent: 0.63, series: [38750,38840,38920,39015,39180] },
+                      { name: 'S&P 500', symbol: '^GSPC', price: 5224.67, change_percent: 0.48, series: [5140,5168,5182,5201,5224] },
+                      { name: 'Bitcoin', symbol: 'BTC-USD', price: 61225.11, change_percent: -1.07, series: [62980,62310,61920,61540,61225] }
+                    ],
+                    stable: [
+                      { symbol: 'MSFT', company: 'Microsoft', price: 418.33, signal_score: 7.9 },
+                      { symbol: 'JNJ', company: 'Johnson & Johnson', price: 154.62, signal_score: 7.55 },
+                      { symbol: 'PG', company: 'Procter & Gamble', price: 168.44, signal_score: 7.2 }
+                    ],
+                    momentum: [
+                      { symbol: 'NVDA', price: 902.11, score: 9.4, rationale: 'AI demand and earnings revisions remain strong.' },
+                      { symbol: 'AMD', price: 182.42, score: 9.12, rationale: 'Chip momentum and improving gross margin profile.' }
+                    ],
+                    wells: [
+                      { investor: 'Warren Buffett', top_stocks: ['AAPL', 'AXP', 'KO', 'OXY', 'BAC'] },
+                      { investor: 'Cathie Wood', top_stocks: ['TSLA', 'ROKU', 'COIN', 'SQ', 'CRSP'] }
+                    ]
+                  };
+
+                  function formatMoney(v){ return typeof v === 'number' ? '$' + v.toLocaleString(undefined,{maximumFractionDigits:2}) : 'n/a'; }
+
+                  function sparkline(points, color){
+                    if(!points || !points.length) return '';
+                    const max = Math.max(...points);
+                    const min = Math.min(...points);
+                    const range = max - min || 1;
+                    const width = 180;
+                    const height = 44;
+                    const step = points.length > 1 ? width / (points.length - 1) : width;
+                    const coords = points.map((p,i)=>`${(i*step).toFixed(1)},${(height-((p-min)/range)*height).toFixed(1)}`).join(' ');
+                    return `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><polyline fill="none" stroke="${color}" stroke-width="2" points="${coords}"/></svg>`;
+                  }
+
+                  async function fetchWithFallback(url, key){
+                    try {
+                      const res = await fetch(url);
+                      if (!res.ok) throw new Error('non-200');
+                      const data = await res.json();
+                      return data.items || fallbackData[key];
+                    } catch (err) {
+                      return fallbackData[key];
+                    }
+                  }
+
+                  function renderMarket(items){
+                    const grid = document.getElementById('market-grid');
+                    grid.innerHTML = items.map(item => {
+                      const up = (item.change_percent || 0) >= 0;
+                      return `<article style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:12px">
+                        <div style="font-weight:600">${item.name}</div>
+                        <div style="font-size:13px;color:#64748b">${item.symbol}</div>
+                        <div style="font-size:22px;margin:8px 0">${formatMoney(item.price)}</div>
+                        <div style="font-size:14px;color:${up ? '#166534' : '#b91c1c'}">${up ? '+' : ''}${Number(item.change_percent || 0).toFixed(2)}%</div>
+                        <div>${sparkline(item.series, up ? '#16a34a' : '#dc2626')}</div>
+                      </article>`;
+                    }).join('');
+                  }
+
+                  function renderStable(items){
+                    document.getElementById('stable').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;border-bottom:1px solid #e2e8f0;padding:8px">Symbol</th><th style="text-align:left;border-bottom:1px solid #e2e8f0;padding:8px">Company</th><th style="text-align:left;border-bottom:1px solid #e2e8f0;padding:8px">Current Price</th><th style="text-align:left;border-bottom:1px solid #e2e8f0;padding:8px">Signal Score</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.symbol}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.company}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.signal_score}</td></tr>`).join('')}</tbody></table>`;
+                  }
+
+                  function renderMomentum(items){
+                    document.getElementById('momentum').innerHTML = `<ol style="margin:0;padding-left:18px">${items.slice(0,10).map(item=>`<li style="margin-bottom:10px"><strong>${item.symbol}</strong> · ${formatMoney(item.price)} · score ${item.score}<br/><span style="color:#475569">${item.rationale}</span></li>`).join('')}</ol>`;
+                  }
+
+                  function renderWells(items){
+                    document.getElementById('wells').innerHTML = items.map(item=>`<article style="border:1px solid #e2e8f0;border-radius:10px;padding:10px;margin-bottom:10px"><div style="font-weight:600">${item.investor}</div><div style="color:#475569">Top 5: ${item.top_stocks.join(', ')}</div></article>`).join('');
+                  }
+
+                  function switchTab(tab){
+                    document.querySelectorAll('.tab-panel').forEach(panel => panel.style.display = panel.id === tab ? 'block' : 'none');
+                    document.querySelectorAll('.tab-btn').forEach(btn => btn.style.background = btn.dataset.tab === tab ? '#dbeafe' : '#fff');
+                  }
+
+                  async function init(){
+                    const [market, stable, momentum, wells] = await Promise.all([
+                      fetchWithFallback('/api/market-overview', 'market'),
+                      fetchWithFallback('/api/stable-watchlist', 'stable'),
+                      fetchWithFallback('/api/hot-momentum-buys', 'momentum'),
+                      fetchWithFallback('/api/wells-picks', 'wells'),
+                    ]);
+                    renderMarket(market);
+                    renderStable(stable);
+                    renderMomentum(momentum);
+                    renderWells(wells);
+                  }
+
+                  init();
+                </script>
+              </body>
+            </html>
             """
         )
 
