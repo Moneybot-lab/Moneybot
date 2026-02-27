@@ -17,11 +17,11 @@ import pandas as pd
 import requests
 import yfinance as yf
 from bs4 import BeautifulSoup
+
 try:
     import pandas_ta as ta
 except Exception:  # fallback if pandas-ta is unavailable at runtime
     ta = None
-import time
 
 import time
 
@@ -107,53 +107,59 @@ def _find_pct_metric(html: str, labels: List[str]) -> Optional[float]:
 def get_ticker(ticker: str):
     """Reuse Ticker object if cached, else make new."""
     now = time.time()
-    if ticker in TICKER_CACHE and now - TICKER_CACHE  < CACHE_TTL:
-        return TICKER_CACHE ['obj']
+    cached = TICKER_CACHE.get(ticker)
+    if cached and now - cached.get("ts", 0) < CACHE_TTL:
+        return cached["obj"]
+
     tk = yf.Ticker(ticker)
-    TICKER_CACHE = {'obj': tk, 'ts': now}
+    TICKER_CACHE[ticker] = {"obj": tk, "ts": now}
     return tk
 
 
-def fetch_price_data(ticker: str) -> Tuple :
+def fetch_price_data(ticker: str) -> Tuple[pd.DataFrame, float]:
     tk = get_ticker(ticker)
-    
-        # History cache
+
+    # History cache
     now = time.time()
-    if ticker in HISTORY_CACHE and now - HISTORY_CACHE.get('ts', 0) < CACHE_TTL:
-        history = HISTORY_CACHE['df']
+    cached = HISTORY_CACHE.get(ticker)
+    if cached and now - cached.get("ts", 0) < CACHE_TTL:
+        history = cached["df"]
     else:
         try:
             history = tk.history(period="6mo", interval="1d", auto_adjust=False)
             if history.empty:
                 raise RuntimeError("Empty history")
-            HISTORY_CACHE = {'df': history, 'ts': now}
+            HISTORY_CACHE[ticker] = {"df": history, "ts": now}
         except Exception as exc:
             logging.warning(f"History fetch fail for {ticker}: {exc}")
             history = pd.DataFrame()  # fallback
+
     if history.empty:
         raise RuntimeError(f"No price history for {ticker}")
 
     # Price from fast_info (cached via Ticker)
     try:
-        price = float(tk.fast_info )
-    except:
-        price = float(history .dropna().iloc[-1])
+        price = float(tk.fast_info.get("lastPrice"))
+    except Exception:
+        price = float(history["Close"].dropna().iloc[-1])
 
     return history, price
 
 
-def fetch_fundamentals(ticker: str) -> Dict :
+def fetch_fundamentals(ticker: str) -> Dict:
     tk = get_ticker(ticker)
-    
-        now = time.time()
-    if ticker in INFO_CACHE and now - INFO_CACHE.get('ts', 0) < CACHE_TTL:
-        info = INFO_CACHE else:
+
+    now = time.time()
+    cached = INFO_CACHE.get(ticker)
+    if cached and now - cached.get("ts", 0) < CACHE_TTL:
+        info = cached["data"]
+    else:
         try:
-            info = tk.info or
-            INFO_CACHE = {'data': info, 'ts': now}
+            info = tk.info or {}
+            INFO_CACHE[ticker] = {"data": info, "ts": now}
         except Exception as exc:
             logging.warning(f"yfinance info unavailable for {ticker}: {exc}")
-            info =
+            info = {}
 
     revenue_growth = info.get("revenueGrowth")
     revenue_growth = float(revenue_growth) if revenue_growth is not None else None
@@ -168,7 +174,7 @@ def fetch_fundamentals(ticker: str) -> Dict :
             else:
                 # fallback skip if no history
                 pass
-        except:
+        except Exception:
             pass
 
     # Scrape still happens once per cache miss—add timeout
@@ -179,7 +185,7 @@ def fetch_fundamentals(ticker: str) -> Dict :
         res.raise_for_status()
         html = res.text
         active_users_qoq = _find_pct_metric(html, ["daily active users", "monthly active users", "active users", "DAU", "MAU"])
-        subs_yoy = _find_pct_metric(html, )
+        subs_yoy = _find_pct_metric(html, ["subscribers", "subscriptions", "paid users"])
     except Exception as exc:
         logging.warning(f"Metric scrape fail for {ticker}: {exc}")
 
@@ -192,18 +198,20 @@ def fetch_fundamentals(ticker: str) -> Dict :
 
 def fetch_sentiment_score(ticker: str) -> float:
     tk = get_ticker(ticker)
-    
+
     now = time.time()
-    if ticker in NEWS_CACHE and now - NEWS_CACHE  < CACHE_TTL:
-        news_items = NEWS_CACHE  else:
+    cached = NEWS_CACHE.get(ticker)
+    if cached and now - cached.get("ts", 0) < CACHE_TTL:
+        news_items = cached["items"]
+    else:
         try:
             news_items = tk.news or []
-            NEWS_CACHE = {'items': news_items, 'ts': now}
+            NEWS_CACHE[ticker] = {"items": news_items, "ts": now}
         except Exception as exc:
             logging.warning(f"News unavailable for {ticker}: {exc}")
             return 0.5
 
-    # ... rest of your sentiment logic stays the same ...
+    headlines = [item.get("title", "") for item in news_items if isinstance(item, dict)]
 
     pos = 0
     neg = 0
