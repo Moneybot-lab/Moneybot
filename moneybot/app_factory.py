@@ -261,7 +261,7 @@ def create_app() -> Flask:
     def watchlist_page():
         return render_template_string(
             """
-            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc;max-width:960px;margin:0 auto">
+            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc;max-width:1100px;margin:0 auto">
               <h2>User Watchlist</h2>
               <p><a href="/">Home</a> · <button onclick="logout()">Logout</button></p>
               <form id="addForm">
@@ -271,10 +271,21 @@ def create_app() -> Flask:
                 <button type="submit">Add</button>
               </form>
               <div id="out" style="margin:10px 0;color:#334155"></div>
-              <div style="overflow-x:auto"><table style="width:100%;background:#fff;border-collapse:collapse;min-width:680px">
-                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Sentiment</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
+              <div style="overflow-x:auto"><table style="width:100%;background:#fff;border-collapse:collapse;min-width:980px">
+                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Sentiment</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
                 <tbody id="rows"></tbody>
               </table></div>
+              <div id="tickerModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:50;align-items:center;justify-content:center;padding:14px">
+                <div style="background:#fff;border-radius:12px;max-width:680px;width:100%;max-height:80vh;overflow:auto;padding:14px">
+                  <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+                    <h3 id="modalTitle" style="margin:0">Company Details</h3>
+                    <button onclick="closeModal()" style="border:none;background:#e2e8f0;border-radius:8px;padding:6px 10px">Close</button>
+                  </div>
+                  <p id="modalSummary" style="color:#334155"></p>
+                  <div id="modalNews" style="display:grid;gap:8px"></div>
+                </div>
+              </div>
+              <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
               <script>
               const rowsEl = document.getElementById('rows');
               const outEl = document.getElementById('out');
@@ -287,24 +298,76 @@ def create_app() -> Flask:
               function displayValue(value){
                 return (value === null || value === undefined || value === '') ? 'n/a' : value;
               }
-
+              function formatMoney(v){
+                return (typeof v === 'number' && isFinite(v)) ? ('$' + v.toLocaleString(undefined,{maximumFractionDigits:2})) : 'n/a';
+              }
               function sentimentBadge(value){
                 const sentiment = String(value || 'Neutral').toLowerCase();
-                if(sentiment === 'bullish' || sentiment === 'positive'){
-                  return '<span style="color:#166534;font-weight:700;white-space:nowrap">▇ Bullish</span>';
-                }
-                if(sentiment === 'bearish' || sentiment === 'negative'){
-                  return '<span style="color:#b91c1c;font-weight:700;white-space:nowrap">▇ Bearish</span>';
-                }
+                if(sentiment === 'bullish' || sentiment === 'positive') return '<span style="color:#166534;font-weight:700;white-space:nowrap">▇ Bullish</span>';
+                if(sentiment === 'bearish' || sentiment === 'negative') return '<span style="color:#b91c1c;font-weight:700;white-space:nowrap">▇ Bearish</span>';
                 return '<span style="color:#475569;font-weight:600;white-space:nowrap">▇ Neutral</span>';
+              }
+              function adviceBadge(value){
+                const advice = String(value || 'HOLD').toUpperCase();
+                const color = advice === 'BUY' ? '#166534' : (advice === 'SELL' ? '#b91c1c' : '#475569');
+                return `<span style="display:inline-block;padding:4px 8px;border-radius:999px;background:${color};color:#fff;font-weight:700;font-size:12px">${advice}</span>`;
+              }
+              function performanceCell(amount, pct){
+                if(typeof amount !== 'number' || typeof pct !== 'number') return '<span style="color:#64748b">n/a</span>';
+                const up = amount >= 0;
+                const color = up ? '#166534' : '#b91c1c';
+                const sign = up ? '+' : '';
+                return `<div style="color:${color};font-weight:700">${sign}${formatMoney(amount)}</div><div style="color:${color};font-size:12px">(${sign}${pct.toFixed(2)}%)</div>`;
+              }
+              function renderTrend(divId, series){
+                if(!window.Plotly) return;
+                if(!Array.isArray(series) || series.length < 2){
+                  const el = document.getElementById(divId); if(el) el.innerHTML='<span style="color:#94a3b8">No trend data</span>'; return;
+                }
+                const up = series[series.length-1] >= series[0];
+                Plotly.newPlot(divId,[{y:series,mode:'lines',type:'scatter',line:{color:up?'#16a34a':'#dc2626',width:2}}],{margin:{l:10,r:10,t:4,b:10},height:70,showlegend:false,xaxis:{visible:false},yaxis:{visible:false},paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)'},{displayModeBar:false,responsive:true});
+              }
+
+
+              function tickerButton(symbol){
+                return `<button onclick="showCompanyDetails('${symbol}')" style="border:none;background:none;color:#1d4ed8;font-weight:700;cursor:pointer;font-size:15px;padding:0">${symbol}</button>`;
+              }
+              function openModal(){ document.getElementById('tickerModal').style.display='flex'; }
+              function closeModal(){ document.getElementById('tickerModal').style.display='none'; }
+              async function showCompanyDetails(symbol){
+                const titleEl = document.getElementById('modalTitle');
+                const summaryEl = document.getElementById('modalSummary');
+                const newsEl = document.getElementById('modalNews');
+                titleEl.textContent = `${symbol} · Loading...`;
+                summaryEl.textContent = 'Fetching company profile...';
+                newsEl.innerHTML = '';
+                openModal();
+                try {
+                  const res = await fetch('/api/company-details?symbol=' + encodeURIComponent(symbol));
+                  const payload = await res.json();
+                  if(!res.ok){
+                    titleEl.textContent = symbol;
+                    summaryEl.textContent = payload.error || 'Unable to load company details.';
+                    return;
+                  }
+                  const data = payload.data || {};
+                  titleEl.textContent = `${data.company_name || symbol} (${symbol})`;
+                  summaryEl.textContent = data.summary || 'No summary available.';
+                  const news = data.latest_news || [];
+                  newsEl.innerHTML = news.length ? news.map(n => `<a href="${n.link || '#'}" target="_blank" rel="noopener" style="display:block;padding:8px;border:1px solid #e2e8f0;border-radius:8px;text-decoration:none;color:#0f172a"><div style="font-weight:600">${n.title || 'Untitled'}</div><div style="font-size:12px;color:#64748b">${n.publisher || ''}</div></a>`).join('') : '<div style="color:#64748b">No recent news available.</div>';
+                } catch (err) {
+                  titleEl.textContent = symbol;
+                  summaryEl.textContent = 'Unable to load company details right now.';
+                }
               }
 
               function renderRows(items){
                 if(!items || !items.length){
-                  rowsEl.innerHTML = '<tr><td colspan="6" style="padding:8px;color:#64748b">No watchlist entries yet.</td></tr>';
+                  rowsEl.innerHTML = '<tr><td colspan="9" style="padding:8px;color:#64748b">No watchlist entries yet.</td></tr>';
                   return;
                 }
-                rowsEl.innerHTML = items.map(i=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${i.symbol}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td></tr>`).join('');
+                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceBadge(i.advice)}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td></tr><tr><td colspan="9" style="border:1px solid #e5e7eb;padding:6px 10px;background:#f8fafc"><div id="trend-${idx}" style="width:100%;height:70px"></div></td></tr>`).join('');
+                items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || []));
               }
 
               async function load(){
@@ -312,7 +375,7 @@ def create_app() -> Flask:
                 const data = await res.json();
                 if(!res.ok){
                   if (res.status === 401) { location.href='/login'; return; }
-                  rowsEl.innerHTML = '<tr><td colspan="6" style="padding:8px;color:#b91c1c">Unable to load watchlist right now.</td></tr>';
+                  rowsEl.innerHTML = '<tr><td colspan="9" style="padding:8px;color:#b91c1c">Unable to load watchlist right now.</td></tr>';
                   outEl.textContent = data.error || 'Please try again in a moment.';
                   return;
                 }
@@ -320,24 +383,19 @@ def create_app() -> Flask:
               }
               async function addItem(event){
                 if (event) event.preventDefault();
-                const payload = {
-                  symbol:(symbolEl.value || '').trim().toUpperCase(),
-                  buy_price:buyPriceEl.value||null,
-                  shares:sharesEl.value||null,
-                };
+                const payload = { symbol:(symbolEl.value || '').trim().toUpperCase(), buy_price:buyPriceEl.value||null, shares:sharesEl.value||null };
                 const res = await fetch('/api/user-watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
                 const data = await res.json();
                 if (res.ok) {
                   outEl.textContent = 'Watchlist item added.';
-                  symbolEl.value='';
-                  buyPriceEl.value='';
-                  sharesEl.value='';
+                  symbolEl.value=''; buyPriceEl.value=''; sharesEl.value='';
                   await load();
                 } else {
                   outEl.textContent = data.error || 'Unable to add item.';
                 }
               }
               async function del(id){ await fetch('/api/user-watchlist/'+id,{method:'DELETE'}); await load(); }
+              document.getElementById('tickerModal').addEventListener('click', (event) => { if(event.target.id==='tickerModal'){ closeModal(); }});
               load();
               </script>
             </body></html>

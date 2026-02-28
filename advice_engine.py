@@ -146,6 +146,15 @@ def compute_user_advice(
     elif sentiment_score is not None and sentiment_score < 0.4:
         confidence_score -= 1.0
 
+    # Confidence score starts from hybrid score when available.
+    confidence_score = float(hybrid_score) if hybrid_score is not None else 5.0
+    sentiment_trigger: Optional[str] = None
+    if sentiment_score is not None and sentiment_score > 0.6:
+        confidence_score += 1.5
+        sentiment_trigger = "Sentiment boost: +1.5"
+    elif sentiment_score is not None and sentiment_score < 0.4:
+        confidence_score -= 1.0
+
     headline = headlines[0] if headlines else "No major headline available."
     trigger_text = f"{sentiment_trigger}. " if sentiment_trigger else ""
     reason_summary = (

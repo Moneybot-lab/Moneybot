@@ -171,11 +171,21 @@ def user_watchlist():
     enriched_items: list[Dict[str, Any]] = []
     for item in base_items:
         signal = {}
+        quote = {}
+        history30: list[float] = []
         if svc is not None:
             try:
                 signal = svc.get_signal(item["symbol"]) or {}
             except Exception:  # noqa: BLE001
                 signal = {}
+            try:
+                quote = svc.get_quote(item["symbol"]) or {}
+            except Exception:  # noqa: BLE001
+                quote = {}
+            try:
+                history30 = svc.get_price_history(item["symbol"], days=30)
+            except Exception:  # noqa: BLE001
+                history30 = []
 
         sentiment_label = str((signal.get("sentiment") or {}).get("label") or "neutral").lower()
         if sentiment_label in {"positive", "bullish"}:
@@ -185,11 +195,41 @@ def user_watchlist():
         else:
             sentiment = "Neutral"
 
+        current_price = quote.get("price")
+        if not isinstance(current_price, (int, float)):
+            current_price = item.get("entry_price")
+
+        entry_price = item.get("entry_price")
+        shares = item.get("shares")
+        shares_value = float(shares) if isinstance(shares, (int, float)) and shares > 0 else 1.0
+        performance_percent = None
+        performance_amount = None
+        if isinstance(current_price, (int, float)) and isinstance(entry_price, (int, float)) and entry_price > 0:
+            performance_percent = ((current_price - entry_price) / entry_price) * 100
+            performance_amount = (current_price - entry_price) * shares_value
+
+        rsi = (signal.get("technical") or {}).get("rsi")
+        sentiment_score = (signal.get("sentiment") or {}).get("score")
+        advice = "HOLD"
+        if isinstance(rsi, (int, float)) and rsi < 30:
+            advice = "BUY"
+        elif isinstance(sentiment_score, (int, float)) and sentiment_score > 0.7:
+            advice = "BUY"
+        elif isinstance(rsi, (int, float)) and rsi > 70:
+            advice = "SELL"
+        elif isinstance(sentiment_score, (int, float)) and sentiment_score < -0.5:
+            advice = "SELL"
+
         enriched_items.append(
             {
                 **item,
-                "score": signal.get("hybrid_score"),
+                "score": signal.get("score") if signal.get("score") is not None else signal.get("hybrid_score"),
                 "sentiment": sentiment,
+                "current_price": current_price,
+                "performance_percent": round(performance_percent, 2) if performance_percent is not None else None,
+                "performance_amount": round(performance_amount, 2) if performance_amount is not None else None,
+                "advice": advice,
+                "history30": history30,
             }
         )
 
@@ -327,6 +367,20 @@ def portfolio_summary():
             "request_id": g.request_id,
         }
     )
+
+
+@api_bp.get("/company-details")
+@login_required
+def company_details():
+    symbol = (request.args.get("symbol") or "").strip().upper()
+    if not symbol:
+        return jsonify({"error": "symbol required", "request_id": g.request_id}), 400
+
+    svc = current_app.extensions.get("market_data_service")
+    if svc is None:
+        return jsonify({"error": "market data unavailable", "request_id": g.request_id}), 503
+
+    return jsonify({"data": svc.get_company_snapshot(symbol), "request_id": g.request_id})
 
 
 @api_bp.get("/quote")
