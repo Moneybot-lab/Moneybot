@@ -10,6 +10,8 @@ from typing import Any, Dict, Tuple
 from flask import Blueprint, current_app, g, jsonify, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from advice_engine import compute_user_advice
+
 from .extensions import db
 from .models import User, WatchlistItem
 
@@ -163,7 +165,31 @@ def user_watchlist():
         .order_by(WatchlistItem.created_at.desc())
         .all()
     )
-    return jsonify({"items": [_watchlist_item_payload(i) for i in items], "request_id": g.request_id})
+    svc = current_app.extensions["market_data_service"]
+    enriched_items = []
+    for item in items:
+        payload = _watchlist_item_payload(item)
+        symbol = payload["symbol"]
+        signal = svc.get_signal(symbol)
+        quote = signal.get("quote") or svc.get_quote(symbol)
+        advice_data = compute_user_advice(
+            symbol=symbol,
+            entry_price=payload.get("entry_price"),
+            quote=quote,
+            technical=signal.get("technical") or {},
+            sentiment=signal.get("sentiment") or {},
+            base_action=signal.get("action", "HOLD"),
+            hybrid_score=signal.get("hybrid_score"),
+        )
+        payload["current_price"] = advice_data.get("quote", {}).get("price")
+        payload["performance"] = advice_data.get("unrealized_pnl_percent")
+        payload["performance_amount"] = advice_data.get("unrealized_pnl_per_share")
+        payload["advice"] = advice_data.get("advice")
+        payload["score"] = advice_data.get("confidence_score")
+        payload["why"] = _transparency_message(advice_data)
+        enriched_items.append(payload)
+
+    return jsonify({"items": enriched_items, "request_id": g.request_id})
 
 
 @api_bp.post("/user-watchlist")
