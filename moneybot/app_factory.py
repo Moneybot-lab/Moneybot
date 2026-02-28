@@ -44,6 +44,8 @@ def create_app() -> Flask:
         db.create_all()
 
     @app.get("/")
+    @app.get("/index.html")
+    @app.get("/home")
     def home():
         return render_template_string(
             """
@@ -160,7 +162,7 @@ def create_app() -> Flask:
               </form>
               <div id="out" style="margin:10px 0;color:#334155"></div>
               <table style="width:100%;background:#fff;border-collapse:collapse">
-                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
+                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Why</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
                 <tbody id="rows"></tbody>
               </table>
               <script>
@@ -181,7 +183,23 @@ def create_app() -> Flask:
                   outEl.textContent = data.error || 'Please try again in a moment.';
                   return;
                 }
-                rowsEl.innerHTML = (data.items||[]).map(i=>`<tr><td style="border:1px solid #e5e7eb;padding:8px">${i.symbol}</td><td style="border:1px solid #e5e7eb;padding:8px">${i.entry_price ?? 'n/a'}</td><td style="border:1px solid #e5e7eb;padding:8px">${i.shares ?? 'n/a'}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td></tr>`).join('');
+                const formatMoney = (v) => typeof v === 'number' ? `$${v.toLocaleString(undefined,{maximumFractionDigits:2})}` : 'n/a';
+                rowsEl.innerHTML = (data.items||[]).map(i=>{
+                  const perfPct = typeof i.performance === 'number' ? `${i.performance.toFixed(2)}%` : 'n/a';
+                  const perfAbs = typeof i.performance_amount === 'number' ? `${i.performance_amount >= 0 ? '+' : '-'}${formatMoney(Math.abs(i.performance_amount))}` : 'n/a';
+                  const perfColor = typeof i.performance === 'number' ? (i.performance >= 0 ? '#166534' : '#b91c1c') : '#334155';
+                  return `<tr>
+                    <td style="border:1px solid #e5e7eb;padding:8px">${i.symbol}</td>
+                    <td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td>
+                    <td style="border:1px solid #e5e7eb;padding:8px">${i.shares ?? 'n/a'}</td>
+                    <td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td>
+                    <td style="border:1px solid #e5e7eb;padding:8px;color:${perfColor}">${perfAbs} (${perfPct})</td>
+                    <td style="border:1px solid #e5e7eb;padding:8px">${i.advice ?? 'HOLD'}</td>
+                    <td style="border:1px solid #e5e7eb;padding:8px">${typeof i.score === 'number' ? i.score.toFixed(2) : 'n/a'}</td>
+                    <td style="border:1px solid #e5e7eb;padding:8px;max-width:280px">${i.why ?? 'n/a'}</td>
+                    <td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td>
+                  </tr>`;
+                }).join('');
               }
               async function addItem(event){
                 if (event) event.preventDefault();
