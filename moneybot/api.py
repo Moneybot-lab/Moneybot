@@ -10,6 +10,8 @@ from typing import Any, Dict, Tuple
 from flask import Blueprint, current_app, g, jsonify, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from advice_engine import compute_user_advice
+
 from .extensions import db
 from .models import User, WatchlistItem
 
