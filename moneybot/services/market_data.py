@@ -41,209 +41,77 @@ class MarketDataService:
         self.quote_cache = TTLCache(ttl_seconds=20)
         self.signal_cache = TTLCache(ttl_seconds=20)
 
-    def _mock_market_indices(self) -> List[Dict[str, Any]]:
+
+
+    def _mock_market_indices(self) -> list[Dict[str, Any]]:
         return [
-            {
-                "name": "Dow Jones",
-                "symbol": "^DJI",
-                "price": 39180.42,
-                "change_percent": 0.63,
-                "series": [38750, 38840, 38920, 39015, 39180],
-                "live_data_available": False,
-            },
-            {
-                "name": "S&P 500",
-                "symbol": "^GSPC",
-                "price": 5224.67,
-                "change_percent": 0.48,
-                "series": [5140, 5168, 5182, 5201, 5224],
-                "live_data_available": False,
-            },
-            {
-                "name": "Nasdaq",
-                "symbol": "^IXIC",
-                "price": 16480.93,
-                "change_percent": 0.74,
-                "series": [16120, 16210, 16300, 16395, 16480],
-                "live_data_available": False,
-            },
-            {
-                "name": "Gold",
-                "symbol": "GC=F",
-                "price": 2334.55,
-                "change_percent": -0.21,
-                "series": [2350.2, 2346.1, 2341.8, 2338.9, 2334.55],
-                "live_data_available": False,
-            },
-            {
-                "name": "Bitcoin",
-                "symbol": "BTC-USD",
-                "price": 61225.11,
-                "change_percent": -1.07,
-                "series": [62980, 62310, 61920, 61540, 61225],
-                "live_data_available": False,
-            },
+            {"name": "Dow", "symbol": "^DJI", "price": 39210.4, "change_percent": 0.52, "series": [38800, 38940, 39020, 39105, 39210]},
+            {"name": "S&P 500", "symbol": "^GSPC", "price": 5245.1, "change_percent": 0.44, "series": [5188, 5204, 5218, 5231, 5245]},
+            {"name": "Nasdaq", "symbol": "^IXIC", "price": 16592.3, "change_percent": 0.71, "series": [16280, 16355, 16430, 16501, 16592]},
+            {"name": "Gold", "symbol": "GC=F", "price": 2340.8, "change_percent": -0.18, "series": [2356, 2351, 2348, 2344, 2340]},
+            {"name": "Bitcoin", "symbol": "BTC-USD", "price": 61110.2, "change_percent": -0.93, "series": [62400, 62020, 61680, 61390, 61110]},
         ]
 
-    def get_market_indices(self) -> List[Dict[str, Any]]:
+    def get_market_indices(self) -> list[Dict[str, Any]]:
         symbols = [
-            {"name": "Dow Jones", "symbol": "^DJI"},
+            {"name": "Dow", "symbol": "^DJI"},
             {"name": "S&P 500", "symbol": "^GSPC"},
             {"name": "Nasdaq", "symbol": "^IXIC"},
             {"name": "Gold", "symbol": "GC=F"},
             {"name": "Bitcoin", "symbol": "BTC-USD"},
         ]
-
-        results: List[Dict[str, Any]] = []
-        for index_info in symbols:
-            symbol = index_info["symbol"]
+        out: list[Dict[str, Any]] = []
+        for item in symbols:
             try:
-                ticker = yf.Ticker(symbol)
+                ticker = yf.Ticker(item["symbol"])
                 hist = ticker.history(period="1mo", interval="1d")
                 if hist is None or hist.empty:
-                    raise ValueError("no history")
-
+                    raise ValueError("history unavailable")
                 closes = [round(float(v), 2) for v in hist["Close"].tail(15)]
                 price = closes[-1]
                 prev = closes[-2] if len(closes) > 1 else closes[-1]
                 change = ((price - prev) / prev) * 100 if prev else 0
-                results.append(
-                    {
-                        "name": index_info["name"],
-                        "symbol": symbol,
-                        "price": price,
-                        "change_percent": round(change, 2),
-                        "series": closes,
-                        "live_data_available": True,
-                    }
-                )
+                out.append({
+                    "name": item["name"],
+                    "symbol": item["symbol"],
+                    "price": price,
+                    "change_percent": round(change, 2),
+                    "series": closes,
+                })
             except Exception as exc:  # noqa: BLE001
-                logging.warning("Failed to fetch index data for %s: %s", symbol, exc)
+                logging.warning("Index fetch failed for %s: %s", item["symbol"], exc)
 
-        return results if len(results) == len(symbols) else self._mock_market_indices()
+        return out if len(out) == len(symbols) else self._mock_market_indices()
 
-    def get_stable_watchlist(self) -> List[Dict[str, Any]]:
-        stable_symbols = [
-            (
-                "MSFT",
-                "Microsoft",
-                "Large-cap software leader with resilient cash flow.",
-                "Technology",
-            ),
-            (
-                "JNJ",
-                "Johnson & Johnson",
-                "Defensive healthcare profile with diversified products.",
-                "Healthcare",
-            ),
-            (
-                "PG",
-                "Procter & Gamble",
-                "Staples demand and pricing power support consistency.",
-                "Consumer Defensive",
-            ),
-            (
-                "KO",
-                "Coca-Cola",
-                "Global brand strength and stable dividend characteristics.",
-                "Consumer Defensive",
-            ),
-            (
-                "PEP",
-                "PepsiCo",
-                "Balanced snacks + beverage mix lowers cyclicality.",
-                "Consumer Defensive",
-            ),
-        ]
-        out = []
-        for idx, (symbol, company, transparency, sector) in enumerate(stable_symbols):
-            quote = self.get_quote(symbol)
-            price = quote.get("price")
-            if price == "DATA_MISSING":
-                price = round(95 + (idx * 18.4), 2)
-            out.append(
-                {
-                    "symbol": symbol,
-                    "company": company,
-                    "price": price,
-                    "signal_score": round(7.9 - (idx * 0.35), 2),
-                    "transparency": transparency,
-                    "details": {
-                        "company": company,
-                        "sector": sector,
-                        "stability_note": transparency,
-                    },
-                }
-            )
-        return out
-
-    def get_hot_momentum_buys(self) -> List[Dict[str, Any]]:
-        picks = [
-            ("SOFI", "Strong member growth and improving profitability trend.", "Financial Services"),
-            ("PLUG", "Hydrogen adoption narrative and high-volume breakout watch.", "Industrials"),
-            ("LCID", "EV momentum setup with volatility-driven upside potential.", "Consumer Cyclical"),
-            ("NIO", "Delivery trend stabilization and speculative rebound interest.", "Consumer Cyclical"),
-            ("RIOT", "Bitcoin-linked momentum with expanding trading volume.", "Financial Services"),
-            ("MARA", "Crypto cycle beta with strong short-term momentum swings.", "Financial Services"),
-            ("AAL", "Travel demand momentum and improving near-term pricing power.", "Industrials"),
-            ("UAL", "Airline demand recovery and trend continuation setup.", "Industrials"),
-            ("F", "Undervalued legacy auto name with renewed momentum interest.", "Consumer Cyclical"),
-            ("PFE", "Low-priced large-cap with defensive upside rotation potential.", "Healthcare"),
-        ]
-        out = []
-        for idx, (symbol, rationale, sector) in enumerate(picks):
-            quote = self.get_quote(symbol)
-            price = quote.get("price")
-            if price == "DATA_MISSING":
-                price = round(18 + (idx * 2.65), 2)
-            out.append(
-                {
-                    "symbol": symbol,
-                    "price": price,
-                    "score": round(9.4 - (idx * 0.28), 2),
-                    "rationale": rationale,
-                    "transparency": rationale,
-                    "details": {
-                        "company": symbol,
-                        "sector": sector,
-                        "stability_note": rationale,
-                    },
-                }
-            )
-        return out
-
-    def get_wells_picks(self) -> List[Dict[str, Any]]:
-        investor_universe = [
-            {"investor": "Warren Buffett", "top_stocks": ["AAPL", "AXP", "KO", "OXY", "BAC"]},
-            {"investor": "Cathie Wood", "top_stocks": ["TSLA", "ROKU", "COIN", "SQ", "CRSP"]},
-            {"investor": "Ray Dalio", "top_stocks": ["JNJ", "PG", "PEP", "XOM", "PFE"]},
-            {"investor": "Stanley Druckenmiller", "top_stocks": ["NVDA", "MSFT", "AMZN", "GOOGL", "META"]},
+    def get_stable_watchlist(self) -> list[Dict[str, Any]]:
+        return [
+            {"symbol": "MSFT", "company": "Microsoft", "price": 418.2, "signal_score": 7.9, "transparency": "Strong balance sheet and recurring revenue."},
+            {"symbol": "JNJ", "company": "Johnson & Johnson", "price": 154.6, "signal_score": 7.6, "transparency": "Defensive healthcare earnings profile."},
+            {"symbol": "PG", "company": "Procter & Gamble", "price": 168.4, "signal_score": 7.3, "transparency": "Staples demand supports steadier growth."},
+            {"symbol": "KO", "company": "Coca-Cola", "price": 60.2, "signal_score": 7.1, "transparency": "Global cash generation and lower volatility."},
+            {"symbol": "PEP", "company": "PepsiCo", "price": 173.8, "signal_score": 7.0, "transparency": "Diversified beverage/snack resilience."},
         ]
 
-        picks: List[Dict[str, Any]] = []
-        for investor_idx, investor_data in enumerate(investor_universe):
-            stock_rows: List[Dict[str, Any]] = []
-            for stock_idx, symbol in enumerate(investor_data["top_stocks"]):
-                quote = self.get_quote(symbol)
-                price = quote.get("price")
-                change_percent = quote.get("change_percent")
-                if price == "DATA_MISSING":
-                    price = round(110 + (investor_idx * 22.5) + (stock_idx * 9.2), 2)
-                if change_percent == "DATA_MISSING":
-                    change_percent = round(-1.8 + (stock_idx * 0.7) + (investor_idx * 0.15), 2)
+    def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
+        return [
+            {"symbol": "SOFI", "price": 9.84, "score": 9.4, "rationale": "Member growth trend and improving margins."},
+            {"symbol": "PLUG", "price": 3.72, "score": 9.1, "rationale": "High-volume breakout setup in clean-energy swing."},
+            {"symbol": "LCID", "price": 2.98, "score": 8.9, "rationale": "Speculative EV rebound momentum."},
+            {"symbol": "NIO", "price": 4.31, "score": 8.6, "rationale": "Delivery stabilization and trend reversal watch."},
+            {"symbol": "RIOT", "price": 11.42, "score": 8.3, "rationale": "Crypto-beta momentum with strong intraday ranges."},
+            {"symbol": "MARA", "price": 17.38, "score": 8.1, "rationale": "Bitcoin-linked upside bursts."},
+            {"symbol": "AAL", "price": 13.24, "score": 7.8, "rationale": "Airline demand strength and technical continuation."},
+            {"symbol": "UAL", "price": 43.12, "score": 7.6, "rationale": "Sector relative strength with improving trend."},
+            {"symbol": "F", "price": 12.55, "score": 7.4, "rationale": "Low-priced cyclical with renewed momentum interest."},
+            {"symbol": "PFE", "price": 28.77, "score": 7.2, "rationale": "Defensive rotation candidate near support."},
+        ]
 
-                stock_rows.append(
-                    {
-                        "ticker": symbol,
-                        "price": price,
-                        "performance": change_percent,
-                    }
-                )
-
-            picks.append({"investor": investor_data["investor"], "stocks": stock_rows})
-
-        return picks
-
+    def get_wells_picks(self) -> list[Dict[str, Any]]:
+        return [
+            {"investor": "Warren Buffett", "stocks": [{"ticker": "AAPL", "price": 191.2, "performance": 1.42}, {"ticker": "AXP", "price": 227.1, "performance": 0.81}, {"ticker": "KO", "price": 60.2, "performance": 0.33}, {"ticker": "OXY", "price": 62.6, "performance": -0.48}, {"ticker": "BAC", "price": 37.4, "performance": 0.57}]},
+            {"investor": "Cathie Wood", "stocks": [{"ticker": "TSLA", "price": 178.4, "performance": 2.38}, {"ticker": "ROKU", "price": 59.6, "performance": 1.02}, {"ticker": "COIN", "price": 223.7, "performance": -1.12}, {"ticker": "SQ", "price": 73.2, "performance": 0.91}, {"ticker": "CRSP", "price": 61.2, "performance": -0.33}]},
+            {"investor": "Ray Dalio", "stocks": [{"ticker": "JNJ", "price": 154.6, "performance": 0.28}, {"ticker": "PG", "price": 168.4, "performance": 0.21}, {"ticker": "PEP", "price": 173.8, "performance": 0.36}, {"ticker": "XOM", "price": 113.4, "performance": -0.14}, {"ticker": "PFE", "price": 28.8, "performance": 0.42}]},
+        ]
     def _fallback_quote(self, symbol: str, error: str) -> Dict[str, Any]:
         return {
             "symbol": symbol,
