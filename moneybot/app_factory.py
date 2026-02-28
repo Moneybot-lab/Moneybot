@@ -116,8 +116,11 @@ def create_app() -> Flask:
                       { symbol: 'PG', company: 'Procter & Gamble', price: 168.44, signal_score: 7.2, transparency: 'Staples demand and pricing power support consistency.', details: { company: 'Procter & Gamble', sector: 'Consumer Defensive', stability_note: 'Staples demand and pricing power support consistency.' } }
                     ],
                     momentum: [
-                      { symbol: 'NVDA', price: 902.11, score: 9.4, rationale: 'AI demand and earnings revisions remain strong.' },
-                      { symbol: 'AMD', price: 182.42, score: 9.12, rationale: 'Chip momentum and improving gross margin profile.' }
+                      { symbol: 'SOFI', price: 9.84, score: 9.4, rationale: 'Strong member growth and improving profitability trend.' },
+                      { symbol: 'PLUG', price: 3.72, score: 9.12, rationale: 'Hydrogen adoption narrative and high-volume breakout watch.' },
+                      { symbol: 'LCID', price: 2.98, score: 8.86, rationale: 'EV momentum setup with volatility-driven upside potential.' },
+                      { symbol: 'NIO', price: 4.31, score: 8.58, rationale: 'Delivery trend stabilization and speculative rebound interest.' },
+                      { symbol: 'RIOT', price: 11.42, score: 8.30, rationale: 'Bitcoin-linked momentum with expanding trading volume.' }
                     ],
                     wells: [
                       { investor: 'Warren Buffett', stocks: [{ ticker: 'AAPL', price: 191.22, performance: 1.42 }, { ticker: 'AXP', price: 227.13, performance: 0.81 }, { ticker: 'KO', price: 60.18, performance: 0.33 }, { ticker: 'OXY', price: 62.55, performance: -0.48 }, { ticker: 'BAC', price: 37.44, performance: 0.57 }] },
@@ -406,7 +409,7 @@ def create_app() -> Flask:
               </form>
               <pre id="out"></pre>
               <table style="width:100%;background:#fff;border-collapse:collapse">
-                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Why</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
+                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Why</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
                 <tbody id="rows"></tbody>
               </table>
               <script>
@@ -438,6 +441,7 @@ def create_app() -> Flask:
                     <td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td>
                     <td style="border:1px solid #e5e7eb;padding:8px;color:${perfColor}">${perfAbs} (${perfPct})</td>
                     <td style="border:1px solid #e5e7eb;padding:8px">${i.advice ?? 'HOLD'}</td>
+                    <td style="border:1px solid #e5e7eb;padding:8px">${typeof i.score === 'number' ? i.score.toFixed(2) : 'n/a'}</td>
                     <td style="border:1px solid #e5e7eb;padding:8px;max-width:280px">${i.why ?? 'n/a'}</td>
                     <td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td>
                   </tr>`;

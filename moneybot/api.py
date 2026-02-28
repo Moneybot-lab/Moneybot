@@ -236,6 +236,7 @@ def user_watchlist():
         payload["performance"] = advice_data.get("unrealized_pnl_percent")
         payload["performance_amount"] = advice_data.get("unrealized_pnl_per_share")
         payload["advice"] = advice_data.get("advice")
+        payload["score"] = advice_data.get("confidence_score")
         payload["why"] = _transparency_message(advice_data)
         enriched_items.append(payload)
 

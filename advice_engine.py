@@ -46,15 +46,18 @@ def compute_user_advice(
     sentiment_label = sentiment.get("label") or "neutral"
     headlines = sentiment.get("headlines") or []
 
-    missing: List[str] = []
+    fallback_notes: List[str] = []
     if current_price is None:
-        missing.append("quote.price")
+        fallback_notes.append("quote.price missing")
     if rsi is None:
-        missing.append("technical.rsi")
+        fallback_notes.append("RSI defaulted")
+        rsi = 50.0
     if macd_hist is None:
-        missing.append("technical.macd_histogram")
+        fallback_notes.append("MACD defaulted")
+        macd_hist = 0.0
     if sentiment_score is None:
-        missing.append("sentiment.score")
+        fallback_notes.append("sentiment defaulted")
+        sentiment_score = 0.5
 
     pnl_per_share = None
     pnl_percent = None
@@ -83,10 +86,10 @@ def compute_user_advice(
     rule = "base action"
     trigger = ""
 
-    if missing:
+    if current_price is None:
         advice = "HOLD"
-        rule = f"Data missing ({', '.join(missing)})"
-        trigger = "Insufficient market inputs to generate a confident move."
+        rule = "Price unavailable fallback"
+        trigger = "Live price unavailable; holding while using technical/sentiment fallback defaults."
     else:
         oversold_turning_up = (
             (rsi is not None and rsi <= 35)
@@ -135,11 +138,21 @@ def compute_user_advice(
             trigger = "Fallback hold due to non-standard base action."
 
     headline = headlines[0] if headlines else "No major headline available."
+
+    confidence_score = _f(hybrid_score)
+    if confidence_score is None:
+        base = 6.0
+        base += max(-1.5, min(1.5, (sentiment_score - 0.5) * 4))
+        base += max(-1.0, min(1.0, macd_hist * 2.5))
+        if rsi <= 35 or rsi >= 70:
+            base += 0.4
+        confidence_score = round(max(1.0, min(10.0, base)), 2)
     reason_summary = (
         f"Entry={entry if entry is not None else 'n/a'}, Current={current_price if current_price is not None else 'n/a'}, "
         f"PnL%={round(pnl_percent,2) if pnl_percent is not None else 'n/a'}. "
         f"RSI={rsi if rsi is not None else 'n/a'}, MACD_hist={round(macd_hist,3) if macd_hist is not None else 'n/a'}, "
-        f"Sentiment={sentiment_label}. Rule: {rule}. Trigger: {trigger} Headline: {headline}"
+        f"Sentiment={sentiment_label}. Rule: {rule}. Trigger: {trigger} "
+        f"Fallbacks={'; '.join(fallback_notes) if fallback_notes else 'none'}. Headline: {headline}"
     )
 
     return {
@@ -160,6 +173,7 @@ def compute_user_advice(
             "headlines": headlines,
         },
         "hybrid_score": hybrid_score,
+        "confidence_score": confidence_score,
         "base_action": (base_action or "HOLD").upper(),
         "advice": advice,
         "reason_summary": reason_summary,

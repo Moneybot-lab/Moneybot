@@ -179,23 +179,23 @@ class MarketDataService:
 
     def get_hot_momentum_buys(self) -> List[Dict[str, Any]]:
         picks = [
-            ("NVDA", "AI demand and earnings revisions remain strong.", "Technology"),
-            ("AMD", "Chip momentum and improving gross margin profile.", "Technology"),
-            ("SMCI", "Data center infrastructure growth remains elevated.", "Technology"),
-            ("META", "Ad monetization and engagement trends are accelerating.", "Communication Services"),
-            ("AMZN", "Cloud optimization cycle is turning into expansion.", "Consumer Cyclical"),
-            ("TSLA", "Short-term delivery catalyst and volatility breakout.", "Consumer Cyclical"),
-            ("PLTR", "Commercial adoption pace and contract pipeline expansion.", "Technology"),
-            ("NFLX", "Subscriber retention and ad-tier upside surprise.", "Communication Services"),
-            ("AVGO", "Networking and AI custom silicon momentum persists.", "Technology"),
-            ("CRM", "Operating leverage and enterprise demand remain resilient.", "Technology"),
+            ("SOFI", "Strong member growth and improving profitability trend.", "Financial Services"),
+            ("PLUG", "Hydrogen adoption narrative and high-volume breakout watch.", "Industrials"),
+            ("LCID", "EV momentum setup with volatility-driven upside potential.", "Consumer Cyclical"),
+            ("NIO", "Delivery trend stabilization and speculative rebound interest.", "Consumer Cyclical"),
+            ("RIOT", "Bitcoin-linked momentum with expanding trading volume.", "Financial Services"),
+            ("MARA", "Crypto cycle beta with strong short-term momentum swings.", "Financial Services"),
+            ("AAL", "Travel demand momentum and improving near-term pricing power.", "Industrials"),
+            ("UAL", "Airline demand recovery and trend continuation setup.", "Industrials"),
+            ("F", "Undervalued legacy auto name with renewed momentum interest.", "Consumer Cyclical"),
+            ("PFE", "Low-priced large-cap with defensive upside rotation potential.", "Healthcare"),
         ]
         out = []
         for idx, (symbol, rationale, sector) in enumerate(picks):
             quote = self.get_quote(symbol)
             price = quote.get("price")
             if price == "DATA_MISSING":
-                price = round(120 + (idx * 22.15), 2)
+                price = round(18 + (idx * 2.65), 2)
             out.append(
                 {
                     "symbol": symbol,
