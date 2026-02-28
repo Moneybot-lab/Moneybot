@@ -10,6 +10,8 @@ from typing import Any, Dict, Tuple
 from flask import Blueprint, current_app, g, jsonify, request, session
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from advice_engine import compute_user_advice
+
 from .extensions import db
 from .models import User, WatchlistItem
 
@@ -81,6 +83,82 @@ def _watchlist_item_payload(item: WatchlistItem) -> Dict[str, Any]:
     }
 
 
+def _transparency_message(advice_data: Dict[str, Any]) -> str:
+    pnl_percent = advice_data.get("unrealized_pnl_percent")
+    advice = advice_data.get("advice", "HOLD")
+    trigger = advice_data.get("trigger")
+
+    quote = advice_data.get("quote") or {}
+    technical = advice_data.get("technical") or {}
+    sentiment = advice_data.get("sentiment") or {}
+
+    price = quote.get("price")
+    day_move = quote.get("change_percent")
+    rsi = technical.get("rsi")
+    macd = technical.get("macd_histogram")
+    sentiment_label = sentiment.get("label") or "n/a"
+
+    price_txt = f"${price:.2f}" if isinstance(price, (int, float)) else "n/a"
+    day_txt = f"{day_move:+.2f}%" if isinstance(day_move, (int, float)) else "n/a"
+    rsi_txt = f"{rsi:.1f}" if isinstance(rsi, (int, float)) else "n/a"
+    macd_txt = f"{macd:.3f}" if isinstance(macd, (int, float)) else "n/a"
+
+    core = (
+        f"Price {price_txt}, daily move {day_txt}, RSI {rsi_txt}, "
+        f"MACD {macd_txt}, sentiment {sentiment_label}."
+    )
+
+    if pnl_percent is not None and advice == "BUY" and pnl_percent < 0:
+        return f"BUY setup: down {abs(pnl_percent):.2f}% vs entry. {core}"
+    if pnl_percent is not None and advice == "SELL" and pnl_percent > 0:
+        return f"SELL setup: up {pnl_percent:.2f}% vs entry with risk signals. {core}"
+    if trigger:
+        return f"{trigger} {core}"
+    return f"Signal based on current momentum, sentiment, and technical trend checks. {core}"
+
+
+def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> Dict[str, Any]:
+    action = (signal_data.get("action") or "HOLD").upper()
+    technical = signal_data.get("technical") or {}
+    sentiment = signal_data.get("sentiment") or {}
+    rationale_bits = []
+
+    rsi = technical.get("rsi")
+    macd_hist = technical.get("macd_histogram")
+    sentiment_label = (sentiment.get("label") or "neutral").lower()
+
+    if action == "BUY":
+        recommendation = "BUY"
+    elif action == "SELL":
+        recommendation = "SELL"
+    else:
+        bearish_technical = (isinstance(rsi, (int, float)) and rsi >= 68) or (isinstance(macd_hist, (int, float)) and macd_hist < 0)
+        weak_sentiment = sentiment_label in {"negative", "bearish"}
+        recommendation = "SELL" if bearish_technical or weak_sentiment else "BUY"
+
+    if isinstance(rsi, (int, float)):
+        rationale_bits.append(f"RSI {rsi:.1f}")
+    if isinstance(macd_hist, (int, float)):
+        direction = "improving" if macd_hist >= 0 else "weakening"
+        rationale_bits.append(f"MACD {direction}")
+    if sentiment_label and sentiment_label != "n/a":
+        rationale_bits.append(f"sentiment {sentiment_label}")
+
+    rationale = "; ".join(rationale_bits[:3]) or "Price action and technical momentum check"
+    if recommendation == "BUY":
+        rationale = f"BUY signal: {rationale}. Momentum profile appears constructive right now."
+    else:
+        rationale = f"SELL signal: {rationale}. Indicators suggest short-term weakness risk."
+
+    return {
+        "recommendation": recommendation,
+        "rationale": rationale,
+        "current_price": quote_data.get("price"),
+        "change_percent": quote_data.get("change_percent"),
+        "base_action": action,
+    }
+
+
 @api_bp.post("/auth/signup")
 def signup():
     data = request.get_json(silent=True) or {}
@@ -138,7 +216,30 @@ def user_watchlist():
         .order_by(WatchlistItem.created_at.desc())
         .all()
     )
-    return jsonify({"items": [_watchlist_item_payload(i) for i in items], "request_id": g.request_id})
+    svc = current_app.extensions["market_data_service"]
+    enriched_items = []
+    for item in items:
+        payload = _watchlist_item_payload(item)
+        symbol = payload["symbol"]
+        signal = svc.get_signal(symbol)
+        quote = signal.get("quote") or svc.get_quote(symbol)
+        advice_data = compute_user_advice(
+            symbol=symbol,
+            entry_price=payload.get("entry_price"),
+            quote=quote,
+            technical=signal.get("technical") or {},
+            sentiment=signal.get("sentiment") or {},
+            base_action=signal.get("action", "HOLD"),
+            hybrid_score=signal.get("hybrid_score"),
+        )
+        payload["current_price"] = advice_data.get("quote", {}).get("price")
+        payload["performance"] = advice_data.get("unrealized_pnl_percent")
+        payload["performance_amount"] = advice_data.get("unrealized_pnl_per_share")
+        payload["advice"] = advice_data.get("advice")
+        payload["why"] = _transparency_message(advice_data)
+        enriched_items.append(payload)
+
+    return jsonify({"items": enriched_items, "request_id": g.request_id})
 
 
 @api_bp.post("/user-watchlist")
@@ -225,3 +326,40 @@ def api_signal():
 
     svc = current_app.extensions["market_data_service"]
     return jsonify({"data": svc.get_signal(symbol), "request_id": g.request_id})
+
+
+@api_bp.get("/quick-ask")
+def quick_ask():
+    symbol = (request.args.get("symbol") or "").strip().upper()
+    if not symbol:
+        return jsonify({"error": "symbol required", "request_id": g.request_id}), 400
+
+    svc = current_app.extensions["market_data_service"]
+    signal_data = svc.get_signal(symbol)
+    quote_data = signal_data.get("quote") or svc.get_quote(symbol)
+    decision = _quick_decision(signal_data, quote_data)
+    return jsonify({"data": {"symbol": symbol, **decision}, "request_id": g.request_id})
+
+
+@api_bp.get("/market-overview")
+def market_overview():
+    svc = current_app.extensions["market_data_service"]
+    return jsonify({"items": svc.get_market_indices(), "request_id": g.request_id})
+
+
+@api_bp.get("/stable-watchlist")
+def stable_watchlist():
+    svc = current_app.extensions["market_data_service"]
+    return jsonify({"items": svc.get_stable_watchlist(), "request_id": g.request_id})
+
+
+@api_bp.get("/hot-momentum-buys")
+def hot_momentum_buys():
+    svc = current_app.extensions["market_data_service"]
+    return jsonify({"items": svc.get_hot_momentum_buys(), "request_id": g.request_id})
+
+
+@api_bp.get("/wells-picks")
+def wells_picks():
+    svc = current_app.extensions["market_data_service"]
+    return jsonify({"items": svc.get_wells_picks(), "request_id": g.request_id})
