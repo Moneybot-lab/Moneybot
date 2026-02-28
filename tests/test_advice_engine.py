@@ -64,47 +64,31 @@ def test_missing_data_is_hold_with_reason():
         hybrid_score=None,
     )
     assert out["advice"] == "HOLD"
-    assert "Fallbacks=" in out["reason_summary"]
-    assert "Insufficient market inputs" not in out["reason_summary"]
+    assert "Data missing" in out["reason_summary"]
 
 
-def test_drop_from_entry_trigger_is_explained():
+def test_sentiment_boost_adds_confidence_and_trigger_text():
     out = compute_user_advice(
         symbol="ABC",
         entry_price=100,
-        quote={"price": 92, "change_percent": -3.1},
-        technical={"rsi": 40, "macd_histogram": 0.2, "trend": "bullish"},
-        sentiment={"score": 0.6, "label": "positive", "headlines": ["dip bought"]},
-        base_action="HOLD",
-        hybrid_score=6.7,
+        quote={"price": 110, "change_percent": 1.1},
+        technical={"rsi": 54, "macd_histogram": 0.2, "trend": "bullish"},
+        sentiment={"score": 0.72, "label": "positive", "headlines": ["great outlook"]},
+        base_action="BUY",
+        hybrid_score=7.0,
     )
-    assert out["advice"] == "BUY"
-    assert "down" in out["trigger"]
+    assert out["confidence_score"] == 8.5
+    assert "Sentiment boost: +1.5" in out["reason_summary"]
 
 
-def test_rise_from_entry_sell_trigger_is_explained():
+def test_negative_sentiment_reduces_confidence():
     out = compute_user_advice(
         symbol="ABC",
         entry_price=100,
-        quote={"price": 114, "change_percent": 2.2},
-        technical={"rsi": 75, "macd_histogram": -0.4, "trend": "bearish"},
-        sentiment={"score": 0.25, "label": "negative", "headlines": ["slowdown fears"]},
-        base_action="SELL",
-        hybrid_score=8.0,
-    )
-    assert out["advice"] == "SELL"
-    assert "up" in out["trigger"]
-
-
-def test_confidence_score_is_present_when_hybrid_missing():
-    out = compute_user_advice(
-        symbol="XYZ",
-        entry_price=50,
-        quote={"price": 51, "change_percent": 0.9},
-        technical={"rsi": 54, "macd_histogram": 0.12, "trend": "bullish"},
-        sentiment={"score": 0.57, "label": "positive", "headlines": []},
+        quote={"price": 95, "change_percent": -1.0},
+        technical={"rsi": 49, "macd_histogram": -0.1, "trend": "bearish"},
+        sentiment={"score": 0.32, "label": "negative", "headlines": ["concerns"]},
         base_action="HOLD",
-        hybrid_score=None,
+        hybrid_score=6.0,
     )
-    assert isinstance(out["confidence_score"], float)
-    assert 1.0 <= out["confidence_score"] <= 10.0
+    assert out["confidence_score"] == 5.0

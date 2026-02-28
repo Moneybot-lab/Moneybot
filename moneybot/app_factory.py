@@ -271,10 +271,10 @@ def create_app() -> Flask:
                 <button type="submit">Add</button>
               </form>
               <div id="out" style="margin:10px 0;color:#334155"></div>
-              <table style="width:100%;background:#fff;border-collapse:collapse">
-                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Why</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
+              <div style="overflow-x:auto"><table style="width:100%;background:#fff;border-collapse:collapse;min-width:680px">
+                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Sentiment</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
                 <tbody id="rows"></tbody>
-              </table>
+              </table></div>
               <script>
               const rowsEl = document.getElementById('rows');
               const outEl = document.getElementById('out');
@@ -284,40 +284,54 @@ def create_app() -> Flask:
               document.getElementById('addForm').addEventListener('submit', addItem);
 
               async function logout(){ await fetch('/api/auth/logout',{method:'POST'}); location.href='/'; }
+              function displayValue(value){
+                return (value === null || value === undefined || value === '') ? 'n/a' : value;
+              }
+
+              function sentimentBadge(value){
+                const sentiment = String(value || 'Neutral').toLowerCase();
+                if(sentiment === 'bullish' || sentiment === 'positive'){
+                  return '<span style="color:#166534;font-weight:700;white-space:nowrap">▇ Bullish</span>';
+                }
+                if(sentiment === 'bearish' || sentiment === 'negative'){
+                  return '<span style="color:#b91c1c;font-weight:700;white-space:nowrap">▇ Bearish</span>';
+                }
+                return '<span style="color:#475569;font-weight:600;white-space:nowrap">▇ Neutral</span>';
+              }
+
+              function renderRows(items){
+                if(!items || !items.length){
+                  rowsEl.innerHTML = '<tr><td colspan="6" style="padding:8px;color:#64748b">No watchlist entries yet.</td></tr>';
+                  return;
+                }
+                rowsEl.innerHTML = items.map(i=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${i.symbol}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td></tr>`).join('');
+              }
+
               async function load(){
                 const res = await fetch('/api/user-watchlist');
                 const data = await res.json();
                 if(!res.ok){
                   if (res.status === 401) { location.href='/login'; return; }
-                  rowsEl.innerHTML = '<tr><td colspan="4" style="padding:8px;color:#b91c1c">Unable to load watchlist right now.</td></tr>';
+                  rowsEl.innerHTML = '<tr><td colspan="6" style="padding:8px;color:#b91c1c">Unable to load watchlist right now.</td></tr>';
                   outEl.textContent = data.error || 'Please try again in a moment.';
                   return;
                 }
-                const formatMoney = (v) => typeof v === 'number' ? `$${v.toLocaleString(undefined,{maximumFractionDigits:2})}` : 'n/a';
-                rowsEl.innerHTML = (data.items||[]).map(i=>{
-                  const perfPct = typeof i.performance === 'number' ? `${i.performance.toFixed(2)}%` : 'n/a';
-                  const perfAbs = typeof i.performance_amount === 'number' ? `${i.performance_amount >= 0 ? '+' : '-'}${formatMoney(Math.abs(i.performance_amount))}` : 'n/a';
-                  const perfColor = typeof i.performance === 'number' ? (i.performance >= 0 ? '#166534' : '#b91c1c') : '#334155';
-                  return `<tr>
-                    <td style="border:1px solid #e5e7eb;padding:8px">${i.symbol}</td>
-                    <td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td>
-                    <td style="border:1px solid #e5e7eb;padding:8px">${i.shares ?? 'n/a'}</td>
-                    <td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td>
-                    <td style="border:1px solid #e5e7eb;padding:8px;color:${perfColor}">${perfAbs} (${perfPct})</td>
-                    <td style="border:1px solid #e5e7eb;padding:8px">${i.advice ?? 'HOLD'}</td>
-                    <td style="border:1px solid #e5e7eb;padding:8px">${typeof i.score === 'number' ? i.score.toFixed(2) : 'n/a'}</td>
-                    <td style="border:1px solid #e5e7eb;padding:8px;max-width:280px">${i.why ?? 'n/a'}</td>
-                    <td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td>
-                  </tr>`;
-                }).join('');
+                renderRows(data.enriched_items || data.items || []);
               }
               async function addItem(event){
                 if (event) event.preventDefault();
-                const res = await fetch('/api/user-watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:symbolEl.value,buy_price:buyPriceEl.value||null,shares:sharesEl.value||null})});
+                const payload = {
+                  symbol:(symbolEl.value || '').trim().toUpperCase(),
+                  buy_price:buyPriceEl.value||null,
+                  shares:sharesEl.value||null,
+                };
+                const res = await fetch('/api/user-watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
                 const data = await res.json();
                 if (res.ok) {
                   outEl.textContent = 'Watchlist item added.';
                   symbolEl.value='';
+                  buyPriceEl.value='';
+                  sharesEl.value='';
                   await load();
                 } else {
                   outEl.textContent = data.error || 'Unable to add item.';
