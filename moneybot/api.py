@@ -88,13 +88,33 @@ def _transparency_message(advice_data: Dict[str, Any]) -> str:
     advice = advice_data.get("advice", "HOLD")
     trigger = advice_data.get("trigger")
 
+    quote = advice_data.get("quote") or {}
+    technical = advice_data.get("technical") or {}
+    sentiment = advice_data.get("sentiment") or {}
+
+    price = quote.get("price")
+    day_move = quote.get("change_percent")
+    rsi = technical.get("rsi")
+    macd = technical.get("macd_histogram")
+    sentiment_label = sentiment.get("label") or "n/a"
+
+    price_txt = f"${price:.2f}" if isinstance(price, (int, float)) else "n/a"
+    day_txt = f"{day_move:+.2f}%" if isinstance(day_move, (int, float)) else "n/a"
+    rsi_txt = f"{rsi:.1f}" if isinstance(rsi, (int, float)) else "n/a"
+    macd_txt = f"{macd:.3f}" if isinstance(macd, (int, float)) else "n/a"
+
+    core = (
+        f"Price {price_txt}, daily move {day_txt}, RSI {rsi_txt}, "
+        f"MACD {macd_txt}, sentiment {sentiment_label}."
+    )
+
     if pnl_percent is not None and advice == "BUY" and pnl_percent < 0:
-        return f"BUY setup: price is {abs(pnl_percent):.2f}% below your entry and dip conditions are active."
+        return f"BUY setup: down {abs(pnl_percent):.2f}% vs entry. {core}"
     if pnl_percent is not None and advice == "SELL" and pnl_percent > 0:
-        return f"SELL setup: position is up {pnl_percent:.2f}% and momentum/risk signals favor taking profit."
+        return f"SELL setup: up {pnl_percent:.2f}% vs entry with risk signals. {core}"
     if trigger:
-        return trigger
-    return "Signal is based on current momentum, sentiment, and technical trend checks."
+        return f"{trigger} {core}"
+    return f"Signal based on current momentum, sentiment, and technical trend checks. {core}"
 
 
 def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> Dict[str, Any]:
