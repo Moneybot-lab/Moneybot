@@ -65,3 +65,30 @@ def test_missing_data_is_hold_with_reason():
     )
     assert out["advice"] == "HOLD"
     assert "Data missing" in out["reason_summary"]
+
+
+def test_sentiment_boost_adds_confidence_and_trigger_text():
+    out = compute_user_advice(
+        symbol="ABC",
+        entry_price=100,
+        quote={"price": 110, "change_percent": 1.1},
+        technical={"rsi": 54, "macd_histogram": 0.2, "trend": "bullish"},
+        sentiment={"score": 0.72, "label": "positive", "headlines": ["great outlook"]},
+        base_action="BUY",
+        hybrid_score=7.0,
+    )
+    assert out["confidence_score"] == 8.5
+    assert "Sentiment boost: +1.5" in out["reason_summary"]
+
+
+def test_negative_sentiment_reduces_confidence():
+    out = compute_user_advice(
+        symbol="ABC",
+        entry_price=100,
+        quote={"price": 95, "change_percent": -1.0},
+        technical={"rsi": 49, "macd_histogram": -0.1, "trend": "bearish"},
+        sentiment={"score": 0.32, "label": "negative", "headlines": ["concerns"]},
+        base_action="HOLD",
+        hybrid_score=6.0,
+    )
+    assert out["confidence_score"] == 5.0

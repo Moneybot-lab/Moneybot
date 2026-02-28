@@ -81,6 +81,31 @@ def _watchlist_item_payload(item: WatchlistItem) -> Dict[str, Any]:
     }
 
 
+def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> Dict[str, Any]:
+    action = (signal_data.get("action") or "HOLD").upper()
+    technical = signal_data.get("technical") or {}
+    sentiment = signal_data.get("sentiment") or {}
+
+    rsi = technical.get("rsi")
+    macd = technical.get("macd_histogram")
+    sentiment_label = (sentiment.get("label") or "neutral").lower()
+
+    if action in {"STRONG BUY", "BUY", "SELL"}:
+        recommendation = action
+    else:
+        bearish = (isinstance(rsi, (int, float)) and rsi >= 68) or (isinstance(macd, (int, float)) and macd < 0)
+        recommendation = "SELL" if bearish or sentiment_label in {"negative", "bearish"} else "BUY"
+
+    rationale = signal_data.get("reasons") or signal_data.get("rationale") or []
+    short_reason = rationale[0] if rationale else "Derived from momentum and sentiment checks."
+    return {
+        "recommendation": recommendation,
+        "rationale": short_reason,
+        "current_price": quote_data.get("price"),
+        "change_percent": quote_data.get("change_percent"),
+    }
+
+
 @api_bp.post("/auth/signup")
 def signup():
     data = request.get_json(silent=True) or {}
@@ -138,7 +163,35 @@ def user_watchlist():
         .order_by(WatchlistItem.created_at.desc())
         .all()
     )
-    return jsonify({"items": [_watchlist_item_payload(i) for i in items], "request_id": g.request_id})
+    base_items = [_watchlist_item_payload(i) for i in items]
+
+    svc = current_app.extensions.get("market_data_service")
+    enriched_items: list[Dict[str, Any]] = []
+    for item in base_items:
+        signal = {}
+        if svc is not None:
+            try:
+                signal = svc.get_signal(item["symbol"]) or {}
+            except Exception:  # noqa: BLE001
+                signal = {}
+
+        sentiment_label = str((signal.get("sentiment") or {}).get("label") or "neutral").lower()
+        if sentiment_label in {"positive", "bullish"}:
+            sentiment = "Bullish"
+        elif sentiment_label in {"negative", "bearish"}:
+            sentiment = "Bearish"
+        else:
+            sentiment = "Neutral"
+
+        enriched_items.append(
+            {
+                **item,
+                "score": signal.get("hybrid_score"),
+                "sentiment": sentiment,
+            }
+        )
+
+    return jsonify({"items": base_items, "enriched_items": enriched_items, "request_id": g.request_id})
 
 
 @api_bp.post("/user-watchlist")
@@ -207,6 +260,73 @@ def delete_watchlist_item(item_id: int):
     return jsonify({"ok": True, "request_id": g.request_id})
 
 
+@api_bp.get("/portfolio-summary")
+@login_required
+def portfolio_summary():
+    items = (
+        WatchlistItem.query.filter_by(user_id=session["user_id"])
+        .order_by(WatchlistItem.created_at.desc())
+        .all()
+    )
+
+    svc = current_app.extensions.get("market_data_service")
+    total_value = 0.0
+    score_values: list[float] = []
+    sector_totals: Dict[str, float] = defaultdict(float)
+
+    for item in items:
+        symbol = item.symbol
+        shares = float(item.shares) if item.shares is not None else 1.0
+
+        quote_price = None
+        signal_score = None
+        sector = "Unknown"
+
+        if svc is not None:
+            try:
+                quote = svc.get_quote(symbol) or {}
+                quote_price = quote.get("price")
+            except Exception:  # noqa: BLE001
+                quote_price = None
+
+            try:
+                signal = svc.get_signal(symbol) or {}
+                signal_score = signal.get("score") if signal.get("score") is not None else signal.get("hybrid_score")
+            except Exception:  # noqa: BLE001
+                signal_score = None
+
+            try:
+                sector = svc.get_sector(symbol)
+            except Exception:  # noqa: BLE001
+                sector = "Unknown"
+
+        if not isinstance(quote_price, (int, float)):
+            quote_price = float(item.buy_price) if item.buy_price is not None else 0.0
+
+        position_value = float(quote_price) * shares
+        total_value += position_value
+        sector_totals[sector or "Unknown"] += position_value
+
+        if isinstance(signal_score, (int, float)):
+            score_values.append(float(signal_score))
+
+    avg_score = round(sum(score_values) / len(score_values), 2) if score_values else None
+    sector_breakdown = [
+        {"sector": sector, "value": round(value, 2)}
+        for sector, value in sorted(sector_totals.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+
+    return jsonify(
+        {
+            "total_value": round(total_value, 2),
+            "avg_score": avg_score,
+            "sector_breakdown": sector_breakdown,
+            "positions": len(items),
+            "request_id": g.request_id,
+        }
+    )
+
+
 @api_bp.get("/quote")
 def api_quote():
     symbol = (request.args.get("symbol") or "").strip().upper()
@@ -225,3 +345,39 @@ def api_signal():
 
     svc = current_app.extensions["market_data_service"]
     return jsonify({"data": svc.get_signal(symbol), "request_id": g.request_id})
+
+
+@api_bp.get("/quick-ask")
+def quick_ask():
+    symbol = (request.args.get("symbol") or "").strip().upper()
+    if not symbol:
+        return jsonify({"error": "symbol required", "request_id": g.request_id}), 400
+
+    svc = current_app.extensions["market_data_service"]
+    signal_data = svc.get_signal(symbol)
+    quote_data = signal_data.get("quote") or svc.get_quote(symbol)
+    return jsonify({"data": {"symbol": symbol, **_quick_decision(signal_data, quote_data)}, "request_id": g.request_id})
+
+
+@api_bp.get("/market-overview")
+def market_overview():
+    svc = current_app.extensions["market_data_service"]
+    return jsonify({"items": svc.get_market_indices(), "request_id": g.request_id})
+
+
+@api_bp.get("/stable-watchlist")
+def stable_watchlist():
+    svc = current_app.extensions["market_data_service"]
+    return jsonify({"items": svc.get_stable_watchlist(), "request_id": g.request_id})
+
+
+@api_bp.get("/hot-momentum-buys")
+def hot_momentum_buys():
+    svc = current_app.extensions["market_data_service"]
+    return jsonify({"items": svc.get_hot_momentum_buys(), "request_id": g.request_id})
+
+
+@api_bp.get("/wells-picks")
+def wells_picks():
+    svc = current_app.extensions["market_data_service"]
+    return jsonify({"items": svc.get_wells_picks(), "request_id": g.request_id})

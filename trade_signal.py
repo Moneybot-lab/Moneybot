@@ -19,6 +19,53 @@ import yfinance as yf
 from bs4 import BeautifulSoup
 
 try:
+    from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+except Exception:  # fallback keeps runtime functional when dependency is unavailable
+    POSITIVE_WORDS = {
+        "up",
+        "strong",
+        "bullish",
+        "healthy",
+        "improving",
+        "sharp",
+        "gain",
+        "earnings beat",
+        "guidance raise",
+        "buyback",
+        "dividend hike",
+    }
+    NEGATIVE_WORDS = {
+        "down",
+        "weak",
+        "bearish",
+        "slowing",
+        "loss",
+        "drop",
+        "guidance lower",
+        "missed estimates",
+        "lawsuit",
+        "recall",
+    }
+
+    class SentimentIntensityAnalyzer:  # type: ignore[override]
+        _positive = POSITIVE_WORDS
+        _negative = NEGATIVE_WORDS
+
+        def polarity_scores(self, text: str) -> Dict[str, float]:
+            text_l = (text or "").lower()
+            words = [w.strip(".,:;!?()[]\'\"-").lower() for w in text_l.split()]
+            pos = sum(1 for w in words if w in self._positive)
+            neg = sum(1 for w in words if w in self._negative)
+
+            # Phrase support keeps same count-based scoring logic.
+            pos += sum(1 for phrase in self._positive if " " in phrase and phrase in text_l)
+            neg += sum(1 for phrase in self._negative if " " in phrase and phrase in text_l)
+
+            total = pos + neg
+            compound = 0.0 if total == 0 else max(-1.0, min(1.0, (pos - neg) / total))
+            return {"compound": compound}
+
+try:
     import pandas_ta as ta
 except Exception:  # fallback if pandas-ta is unavailable at runtime
     ta = None
@@ -40,16 +87,8 @@ HEADERS = {
     )
 }
 
-POSITIVE_WORDS = {
-    "beat", "beats", "growth", "surge", "record", "upgrade", "outperform", "profit",
-    "strong", "bullish", "rebound", "launch", "expands", "wins", "demand"
-}
-NEGATIVE_WORDS = {
-    "miss", "misses", "downgrade", "loss", "lawsuit", "probe", "decline", "down",
-    "weak", "warning", "cut", "cuts", "bearish", "drop", "risk"
-}
-
 MAX_SCORE = 12.0
+SENTIMENT_ANALYZER = SentimentIntensityAnalyzer()
 
 
 def _calc_macd_rsi(close: pd.Series) -> Tuple[Optional[float], Optional[float]]:
@@ -197,33 +236,59 @@ def fetch_fundamentals(ticker: str) -> Dict:
 
 
 def fetch_sentiment_score(ticker: str) -> float:
-    tk = get_ticker(ticker)
-
+    """Score cached news headlines with VADER and normalize average compound to 0..1."""
+    ticker = ticker.upper().strip()
     now = time.time()
     cached = NEWS_CACHE.get(ticker)
     if cached and now - cached.get("ts", 0) < CACHE_TTL:
-        news_items = cached["items"]
+        return float(cached.get("score", 0.5))
+
+    tk = get_ticker(ticker)
+    try:
+        news_items = tk.news or []
+    except Exception as exc:
+        logging.warning(f"News unavailable for {ticker}: {exc}")
+        news_items = []
+
+    headlines = [
+        item.get("title", "").strip()
+        for item in news_items
+        if isinstance(item, dict) and item.get("title")
+    ]
+
+    if not headlines:
+        score = 0.5
+        sentiment_class = "neutral"
     else:
-        try:
-            news_items = tk.news or []
-            NEWS_CACHE[ticker] = {"items": news_items, "ts": now}
-        except Exception as exc:
-            logging.warning(f"News unavailable for {ticker}: {exc}")
-            return 0.5
+        compounds: List[float] = []
+        for headline in headlines:
+            try:
+                compounds.append(float(SENTIMENT_ANALYZER.polarity_scores(headline).get("compound", 0.0)))
+            except Exception as exc:
+                logging.warning("VADER sentiment scoring failed for %s headline %r: %s", ticker, headline, exc)
 
-    headlines = [item.get("title", "") for item in news_items if isinstance(item, dict)]
+        if not compounds:
+            score = 0.5
+            sentiment_class = "neutral"
+        else:
+            avg_compound = sum(compounds) / len(compounds)
+            if avg_compound > 0.05:
+                sentiment_class = "positive"
+            elif avg_compound < -0.05:
+                sentiment_class = "negative"
+            else:
+                sentiment_class = "neutral"
 
-    pos = 0
-    neg = 0
-    for title in headlines:
-        words = {w.strip(".,:;!?()[]'\"").lower() for w in title.split()}
-        pos += len(words & POSITIVE_WORDS)
-        neg += len(words & NEGATIVE_WORDS)
+            score = (avg_compound + 1.0) / 2.0
 
-    denominator = max(pos + neg, 1)
-    raw = (pos - neg) / denominator
-    score = (raw + 1) / 2
-    return round(score, 1)
+    normalized = round(max(0.0, min(1.0, score)), 2)
+    NEWS_CACHE[ticker] = {
+        "score": normalized,
+        "sentiment": sentiment_class,
+        "headline_count": len(headlines),
+        "ts": now,
+    }
+    return normalized
 
 
 def analyze_ticker(ticker: str) -> SignalResult:
