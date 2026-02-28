@@ -59,7 +59,7 @@ def create_app() -> Flask:
                 <h3 style="margin-top:0">Quick Quote</h3>
                 <input id="symbol" placeholder="AAPL" style="padding:8px;border:1px solid #cbd5e1;border-radius:8px"/>
                 <button onclick="lookup()" style="padding:8px 12px;border:none;background:#1e40af;color:#fff;border-radius:8px">Lookup</button>
-                <pre id="out" style="background:#0f172a;color:#e2e8f0;padding:10px;border-radius:8px;min-height:56px"></pre>
+                <div id="out" style="background:#0f172a;color:#e2e8f0;padding:10px;border-radius:8px;min-height:56px">Enter a ticker to see a quick signal.</div>
               </div>
               <p style="color:#64748b">Rule-based guidance; not financial advice.</p>
               <script>
@@ -68,7 +68,12 @@ def create_app() -> Flask:
                 if(!symbol) return;
                 const res = await fetch('/api/signal?symbol=' + encodeURIComponent(symbol));
                 const data = await res.json();
-                document.getElementById('out').textContent = JSON.stringify(data,null,2);
+                const signal = data.data || {};
+                const quote = signal.quote || {};
+                const price = typeof quote.price === 'number' ? `$${quote.price.toFixed(2)}` : 'n/a';
+                const action = signal.action || 'HOLD';
+                const reason = (signal.rationale && signal.rationale[0]) || 'Signal generated from latest indicators.';
+                document.getElementById('out').textContent = `${action} · ${price} · ${reason}`;
               }
               </script>
             </body></html>
@@ -88,7 +93,7 @@ def create_app() -> Flask:
                 <input id="password" type="password" placeholder="password" required />
                 <button type="submit">Login</button>
               </form>
-              <pre id="out"></pre>
+              <div id="out" style="margin-top:10px;color:#334155"></div>
               <script>
               const emailEl = document.getElementById('email');
               const passwordEl = document.getElementById('password');
@@ -99,8 +104,8 @@ def create_app() -> Flask:
                 if (event) event.preventDefault();
                 const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value})});
                 const data = await res.json();
-                outEl.textContent = JSON.stringify(data,null,2);
-                if(res.ok) location.href='/watchlist';
+                if(res.ok){ outEl.textContent='Login successful. Redirecting...'; location.href='/watchlist'; }
+                else { outEl.textContent = data.error || 'Login failed. Please verify your credentials.'; }
               }
               </script>
             </body></html>
@@ -120,7 +125,7 @@ def create_app() -> Flask:
                 <input id="password" type="password" placeholder="password" required />
                 <button type="submit">Create</button>
               </form>
-              <pre id="out"></pre>
+              <div id="out" style="margin-top:10px;color:#334155"></div>
               <script>
               const emailEl = document.getElementById('email');
               const passwordEl = document.getElementById('password');
@@ -131,8 +136,8 @@ def create_app() -> Flask:
                 if (event) event.preventDefault();
                 const res = await fetch('/api/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value})});
                 const data = await res.json();
-                outEl.textContent = JSON.stringify(data,null,2);
-                if(res.ok) location.href='/watchlist';
+                if(res.ok){ outEl.textContent='Account created. Redirecting...'; location.href='/watchlist'; }
+                else { outEl.textContent = data.error || 'Sign-up failed. Please try again.'; }
               }
               </script>
             </body></html>
@@ -153,7 +158,7 @@ def create_app() -> Flask:
                 <input id="shares" type="number" step="0.0001" placeholder="shares"/>
                 <button type="submit">Add</button>
               </form>
-              <pre id="out"></pre>
+              <div id="out" style="margin:10px 0;color:#334155"></div>
               <table style="width:100%;background:#fff;border-collapse:collapse">
                 <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
                 <tbody id="rows"></tbody>
@@ -172,7 +177,8 @@ def create_app() -> Flask:
                 const data = await res.json();
                 if(!res.ok){
                   if (res.status === 401) { location.href='/login'; return; }
-                  rowsEl.innerHTML = '<pre>'+JSON.stringify(data,null,2)+'</pre>';
+                  rowsEl.innerHTML = '<tr><td colspan="4" style="padding:8px;color:#b91c1c">Unable to load watchlist right now.</td></tr>';
+                  outEl.textContent = data.error || 'Please try again in a moment.';
                   return;
                 }
                 rowsEl.innerHTML = (data.items||[]).map(i=>`<tr><td style="border:1px solid #e5e7eb;padding:8px">${i.symbol}</td><td style="border:1px solid #e5e7eb;padding:8px">${i.entry_price ?? 'n/a'}</td><td style="border:1px solid #e5e7eb;padding:8px">${i.shares ?? 'n/a'}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td></tr>`).join('');
@@ -181,10 +187,12 @@ def create_app() -> Flask:
                 if (event) event.preventDefault();
                 const res = await fetch('/api/user-watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:symbolEl.value,buy_price:buyPriceEl.value||null,shares:sharesEl.value||null})});
                 const data = await res.json();
-                outEl.textContent = JSON.stringify(data,null,2);
                 if (res.ok) {
+                  outEl.textContent = 'Watchlist item added.';
                   symbolEl.value='';
                   await load();
+                } else {
+                  outEl.textContent = data.error || 'Unable to add item.';
                 }
               }
               async function del(id){ await fetch('/api/user-watchlist/'+id,{method:'DELETE'}); await load(); }
