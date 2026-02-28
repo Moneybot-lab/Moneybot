@@ -46,15 +46,18 @@ def compute_user_advice(
     sentiment_label = sentiment.get("label") or "neutral"
     headlines = sentiment.get("headlines") or []
 
-    missing: List[str] = []
+    fallback_notes: List[str] = []
     if current_price is None:
-        missing.append("quote.price")
+        fallback_notes.append("quote.price missing")
     if rsi is None:
-        missing.append("technical.rsi")
+        fallback_notes.append("RSI defaulted")
+        rsi = 50.0
     if macd_hist is None:
-        missing.append("technical.macd_histogram")
+        fallback_notes.append("MACD defaulted")
+        macd_hist = 0.0
     if sentiment_score is None:
-        missing.append("sentiment.score")
+        fallback_notes.append("sentiment defaulted")
+        sentiment_score = 0.5
 
     pnl_per_share = None
     pnl_percent = None
@@ -81,34 +84,58 @@ def compute_user_advice(
 
     advice = (base_action or "HOLD").upper()
     rule = "base action"
+    trigger = ""
 
-    if missing:
+    if current_price is None:
         advice = "HOLD"
-        rule = f"Data missing ({', '.join(missing)})"
+        rule = "Price unavailable fallback"
+        trigger = "Live price unavailable; holding while using technical/sentiment fallback defaults."
     else:
-        # BUY low on dip or oversold turning up
-        oversold_turning_up = (rsi is not None and rsi <= 35) and (macd_hist is not None and macd_hist > 0) and (sentiment_score is not None and sentiment_score >= 0.55)
-        dipped = entry is not None and current_price is not None and current_price <= entry * (1 - dip_threshold)
+        oversold_turning_up = (
+            (rsi is not None and rsi <= 35)
+            and (macd_hist is not None and macd_hist > 0)
+            and (sentiment_score is not None and sentiment_score >= 0.55)
+        )
+        dipped_from_entry = (
+            entry is not None
+            and current_price is not None
+            and current_price <= entry * (1 - dip_threshold)
+        )
+        rose_from_entry = (
+            entry is not None
+            and current_price is not None
+            and pnl_percent is not None
+            and pnl_percent >= profit_min
+        )
 
-        if dipped or oversold_turning_up:
+        if dipped_from_entry or oversold_turning_up:
             advice = "BUY"
             rule = "Buy-low rule"
-        elif pnl_percent is not None and pnl_percent >= profit_min and risk_flags:
+            if dipped_from_entry and pnl_percent is not None:
+                trigger = f"Price is down {abs(pnl_percent):.2f}% from your entry, triggering a buy-the-dip signal."
+            else:
+                trigger = "Oversold reversal conditions triggered a buy signal."
+        elif rose_from_entry and (risk_flags or advice == "SELL"):
             advice = "SELL"
             rule = "Sell-high rule"
+            trigger = f"Price is up {pnl_percent:.2f}% from your entry; gains plus risk signals trigger profit-taking."
         elif pnl_percent is not None and pnl_percent < 0:
             if (sentiment_score is not None and sentiment_score <= 0.25) and trend == "bearish" and (rsi is not None and rsi >= 45):
                 advice = "SELL"
                 rule = "Strong downside risk while in loss"
+                trigger = f"Price is below entry by {abs(pnl_percent):.2f}% with bearish technicals; loss-control sell triggered."
             else:
                 advice = "HOLD"
                 rule = "Loss but no strong forced-sell risk"
+                trigger = f"Price is below entry by {abs(pnl_percent):.2f}%, but downside confirmation is not strong enough to force a sell."
         elif pnl_percent is not None and -5 <= pnl_percent <= 15 and not risk_flags:
             advice = "HOLD"
             rule = "Hold-steady range"
+            trigger = f"Price is {pnl_percent:.2f}% versus entry, inside the hold zone without major risk flags."
         elif advice not in {"BUY", "HOLD", "SELL"}:
             advice = "HOLD"
             rule = "Fallback hold"
+            trigger = "Fallback hold due to non-standard base action."
 
     # Confidence score starts from hybrid score when available.
     confidence_score = float(hybrid_score) if hybrid_score is not None else 5.0
@@ -131,7 +158,10 @@ def compute_user_advice(
     return {
         "symbol": symbol,
         "entry_price": entry,
-        "quote": {"price": current_price if current_price is not None else quote.get("price"), "change_percent": change_percent if change_percent is not None else quote.get("change_percent")},
+        "quote": {
+            "price": current_price if current_price is not None else quote.get("price"),
+            "change_percent": change_percent if change_percent is not None else quote.get("change_percent"),
+        },
         "technical": {
             "rsi": rsi,
             "macd_histogram": macd_hist,
@@ -147,6 +177,7 @@ def compute_user_advice(
         "base_action": (base_action or "HOLD").upper(),
         "advice": advice,
         "reason_summary": reason_summary,
+        "trigger": trigger,
         "risk_flags": risk_flags,
         "profit_flags": profit_flags,
         "unrealized_pnl_per_share": pnl_per_share,
