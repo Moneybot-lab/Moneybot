@@ -6,6 +6,7 @@
 
 ## 2) Environment variables
 Set these env vars on the web service:
+- `PYTHON_VERSION` = `3.11.11` (prevents Render from selecting Python 3.14, which breaks `numba`-based builds)
 - `DATABASE_URL` = internal connection string from Render Postgres
 - `MONEYBOT_SECRET_KEY` = long random stable secret (do not rotate frequently)
 - `DATA_PROVIDER` = `yfinance` (optional; defaults to `yfinance`)

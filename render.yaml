@@ -10,6 +10,8 @@ services:
       flask --app app:app db upgrade || true
       python app.py
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
       - key: MONEYBOT_SECRET_KEY
         sync: false
       - key: DATABASE_URL
