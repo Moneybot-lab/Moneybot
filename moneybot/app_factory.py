@@ -5,6 +5,8 @@ import os
 
 from flask import Flask, render_template_string
 from flask_cors import CORS
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 from .api import api_bp
 from .extensions import db, migrate
@@ -16,9 +18,19 @@ def create_app() -> Flask:
     if not secret:
         raise RuntimeError("MONEYBOT_SECRET_KEY must be set")
 
-    database_url = os.environ.get("DATABASE_URL", "sqlite:///moneybot.db")
+    raw_database_url = os.environ.get("DATABASE_URL")
+    database_url = (raw_database_url or "").strip() or "sqlite:///moneybot.db"
     if database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+    try:
+        make_url(database_url)
+    except ArgumentError as exc:
+        raise RuntimeError(
+            "DATABASE_URL is not a valid SQLAlchemy database URL. "
+            "Set DATABASE_URL to a valid value such as "
+            "postgresql://user:password@host:5432/dbname."
+        ) from exc
 
     app = Flask(__name__)
     app.url_map.strict_slashes = False
