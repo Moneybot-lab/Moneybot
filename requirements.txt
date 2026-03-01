@@ -9,6 +9,5 @@ pandas
 numpy
 requests
 beautifulsoup4
-pandas-ta
 pytest
 vaderSentiment
