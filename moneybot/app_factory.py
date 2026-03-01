@@ -5,9 +5,6 @@ import os
 
 from flask import Flask, render_template_string
 from flask_cors import CORS
-from sqlalchemy.engine import make_url
-from sqlalchemy.exc import ArgumentError
-
 from .api import api_bp
 from .extensions import db, migrate
 from .services.market_data import MarketDataService
@@ -23,14 +20,12 @@ def create_app() -> Flask:
     if database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql://", 1)
 
-    try:
-        make_url(database_url)
-    except ArgumentError as exc:
+    if " " in database_url or "://" not in database_url:
         raise RuntimeError(
-            "DATABASE_URL is not a valid SQLAlchemy database URL. "
+            "DATABASE_URL is not a valid database URL. "
             "Set DATABASE_URL to a valid value such as "
             "postgresql://user:password@host:5432/dbname."
-        ) from exc
+        )
 
     app = Flask(__name__)
     app.url_map.strict_slashes = False
