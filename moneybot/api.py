@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from datetime import datetime
 from collections import defaultdict, deque
 from decimal import Decimal
 from functools import wraps
@@ -220,6 +221,16 @@ def user_watchlist():
         elif isinstance(sentiment_score, (int, float)) and sentiment_score < -0.5:
             advice = "SELL"
 
+        reasons = signal.get("reasons")
+        rationale = signal.get("rationale")
+        advice_reason = "Rule-based recommendation from technical momentum and sentiment checks."
+        if isinstance(reasons, list) and reasons:
+            advice_reason = str(reasons[0])
+        elif isinstance(rationale, list) and rationale:
+            advice_reason = str(rationale[0])
+        elif isinstance(rationale, str) and rationale.strip():
+            advice_reason = rationale.strip()
+
         enriched_items.append(
             {
                 **item,
@@ -229,6 +240,7 @@ def user_watchlist():
                 "performance_percent": round(performance_percent, 2) if performance_percent is not None else None,
                 "performance_amount": round(performance_amount, 2) if performance_amount is not None else None,
                 "advice": advice,
+                "advice_reason": advice_reason,
                 "history30": history30,
             }
         )
@@ -286,6 +298,15 @@ def update_watchlist_item(item_id: int):
 
     if "company" in data:
         item.company = (data.get("company") or "").strip() or None
+
+    if "acquired_date" in data:
+        acquired_date = (data.get("acquired_date") or "").strip()
+        if acquired_date:
+            try:
+                parsed = datetime.strptime(acquired_date, "%Y-%m-%d")
+                item.created_at = parsed.replace(hour=0, minute=0, second=0, microsecond=0)
+            except ValueError:
+                return jsonify({"error": "acquired_date must be YYYY-MM-DD", "request_id": g.request_id}), 400
 
     db.session.commit()
     return jsonify({"item": _watchlist_item_payload(item), "request_id": g.request_id})

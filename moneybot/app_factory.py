@@ -58,7 +58,7 @@ def create_app() -> Flask:
                   <div style="display:flex;gap:10px;flex-wrap:wrap">
                     <a href="/login" style="padding:8px 12px;background:#dbeafe;border-radius:999px;text-decoration:none;font-weight:600">Login</a>
                     <a href="/signup" style="padding:8px 12px;background:#dbeafe;border-radius:999px;text-decoration:none;font-weight:600">Sign up</a>
-                    <a href="/watchlist" style="padding:8px 12px;background:#1e40af;color:#fff;border-radius:999px;text-decoration:none;font-weight:700">My Watchlist</a>
+                    <a href="/portfolio" style="padding:8px 12px;background:#1e40af;color:#fff;border-radius:999px;text-decoration:none;font-weight:700">User Portfolio</a>
                   </div>
                 </header>
 
@@ -76,16 +76,33 @@ def create_app() -> Flask:
                   <div id="market-charts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px"></div>
                 </section>
 
+                <section style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:12px;padding:14px;margin-bottom:12px">
+                  <h3 style="margin:0 0 8px 0">Buyer's Guide</h3>
+                  <p style="margin:0 0 6px 0;color:#334155"><strong>Stable Watchlist:</strong> Lower risk, long-term stocks.</p>
+                  <p style="margin:0 0 6px 0;color:#334155"><strong>Hot Momentum:</strong> Higher risk, low-price stocks with growth potential.</p>
+                  <p style="margin:0;color:#334155"><strong>Whales of Wall Street:</strong> See and follow top investors' picks.</p>
+                </section>
+
                 <section style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px">
                   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
                     <button class="tab-btn" data-tab="stable" onclick="switchTab('stable')" style="padding:8px 12px;border:1px solid #cbd5e1;background:#dbeafe;border-radius:8px">Stable Watchlist</button>
                     <button class="tab-btn" data-tab="momentum" onclick="switchTab('momentum')" style="padding:8px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:8px">Hot Momentum Buys</button>
-                    <button class="tab-btn" data-tab="wells" onclick="switchTab('wells')" style="padding:8px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:8px">Wells of Wall Street</button>
+                    <button class="tab-btn" data-tab="wells" onclick="switchTab('wells')" style="padding:8px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:8px">Whales of Wall Street</button>
                   </div>
                   <div id="stable" class="tab-panel"></div>
                   <div id="momentum" class="tab-panel" style="display:none"></div>
                   <div id="wells" class="tab-panel" style="display:none"></div>
                 </section>
+
+                <div id="homeTickerModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:50;align-items:center;justify-content:center;padding:14px">
+                  <div style="background:#fff;border-radius:12px;max-width:680px;width:100%;max-height:80vh;overflow:auto;padding:14px">
+                    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+                      <h3 id="homeModalTitle" style="margin:0">Company Details</h3>
+                      <button onclick="closeHomeModal()" style="border:none;background:#e2e8f0;border-radius:8px;padding:6px 10px">Close</button>
+                    </div>
+                    <p id="homeModalSummary" style="color:#334155"></p>
+                  </div>
+                </div>
 
                 <p style="color:#64748b">Rule-based guidance; not financial advice.</p>
 
@@ -130,6 +147,34 @@ def create_app() -> Flask:
                     outEl.textContent = `${data.recommendation || 'HOLD'} · ${formatMoney(data.current_price)} · ${data.rationale || 'Signal generated from current indicators.'}`;
                   }
 
+                  function tickerButton(symbol){
+                    return `<button onclick="showCompanyDetails('${symbol}')" style="border:none;background:none;color:#1d4ed8;font-weight:700;cursor:pointer;font-size:14px;padding:0">${symbol}</button>`;
+                  }
+                  function openHomeModal(){ document.getElementById('homeTickerModal').style.display='flex'; }
+                  function closeHomeModal(){ document.getElementById('homeTickerModal').style.display='none'; }
+                  async function showCompanyDetails(symbol){
+                    const titleEl = document.getElementById('homeModalTitle');
+                    const summaryEl = document.getElementById('homeModalSummary');
+                    titleEl.textContent = `${symbol} · Loading...`;
+                    summaryEl.textContent = 'Fetching company profile...';
+                    openHomeModal();
+                    try {
+                      const res = await fetch('/api/company-details?symbol=' + encodeURIComponent(symbol));
+                      const payload = await res.json();
+                      if(!res.ok){
+                        titleEl.textContent = symbol;
+                        summaryEl.textContent = payload.error || 'Unable to load company details.';
+                        return;
+                      }
+                      const data = payload.data || {};
+                      titleEl.textContent = `${data.company_name || symbol} (${symbol})`;
+                      summaryEl.textContent = data.summary || 'No summary available.';
+                    } catch (err) {
+                      titleEl.textContent = symbol;
+                      summaryEl.textContent = 'Unable to load company details right now.';
+                    }
+                  }
+
                   function renderMarket(items){
                     const grid = document.getElementById('market-charts');
                     destroyMarketCharts();
@@ -157,15 +202,15 @@ def create_app() -> Flask:
                   }
 
                   function renderStable(items){
-                    document.getElementById('stable').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.symbol}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.signal_score}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.transparency || ''}</td></tr>`).join('')}</tbody></table>`;
+                    document.getElementById('stable').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #f1f5f9">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.signal_score}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.transparency || ''}</td></tr>`).join('')}</tbody></table>`;
                   }
 
                   function renderMomentum(items){
-                    document.getElementById('momentum').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.symbol}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.score}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.rationale}</td></tr>`).join('')}</tbody></table>`;
+                    document.getElementById('momentum').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #f1f5f9">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.score}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.rationale}</td></tr>`).join('')}</tbody></table>`;
                   }
 
                   function renderWells(items){
-                    document.getElementById('wells').innerHTML = items.map(item=>`<article style="border:1px solid #e2e8f0;border-radius:10px;padding:10px;margin-bottom:10px"><div style="font-weight:700;margin-bottom:8px">${item.investor}</div><table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Performance</th></tr></thead><tbody>${(item.stocks||[]).map(stock=>`<tr><td style="padding:8px;border-bottom:1px solid #f1f5f9">${stock.ticker}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${formatMoney(stock.price)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${Number(stock.performance||0).toFixed(2)}%</td></tr>`).join('')}</tbody></table></article>`).join('');
+                    document.getElementById('wells').innerHTML = items.map(item=>`<article style="border:1px solid #e2e8f0;border-radius:10px;padding:10px;margin-bottom:10px"><div style="font-weight:700;margin-bottom:8px">${item.investor}</div><table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Performance</th></tr></thead><tbody>${(item.stocks||[]).map(stock=>`<tr><td style="padding:8px;border-bottom:1px solid #f1f5f9">${tickerButton(stock.ticker)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${formatMoney(stock.price)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${Number(stock.performance||0).toFixed(2)}%</td></tr>`).join('')}</tbody></table></article>`).join('');
                   }
 
                   function switchTab(tab){
@@ -174,6 +219,7 @@ def create_app() -> Flask:
                   }
 
                   document.getElementById('quickSymbol').addEventListener('keydown', (event) => { if(event.key==='Enter'){event.preventDefault();quickAsk();} });
+                  document.getElementById('homeTickerModal').addEventListener('click', (event) => { if(event.target.id==='homeTickerModal'){ closeHomeModal(); }});
 
                   async function init(){
                     const [market, stable, momentum, wells] = await Promise.all([
@@ -216,7 +262,7 @@ def create_app() -> Flask:
                 if (event) event.preventDefault();
                 const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value})});
                 const data = await res.json();
-                if(res.ok){ outEl.textContent='Login successful. Redirecting...'; location.href='/watchlist'; }
+                if(res.ok){ outEl.textContent='Login successful. Redirecting...'; location.href='/portfolio'; }
                 else { outEl.textContent = data.error || 'Login failed. Please verify your credentials.'; }
               }
               </script>
@@ -248,7 +294,7 @@ def create_app() -> Flask:
                 if (event) event.preventDefault();
                 const res = await fetch('/api/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value})});
                 const data = await res.json();
-                if(res.ok){ outEl.textContent='Account created. Redirecting...'; location.href='/watchlist'; }
+                if(res.ok){ outEl.textContent='Account created. Redirecting...'; location.href='/portfolio'; }
                 else { outEl.textContent = data.error || 'Sign-up failed. Please try again.'; }
               }
               </script>
@@ -256,13 +302,13 @@ def create_app() -> Flask:
             """
         )
 
-    @app.get("/watchlist")
-    @app.get("/watchlist/")
-    def watchlist_page():
+    @app.get("/portfolio")
+    @app.get("/portfolio/")
+    def portfolio_page():
         return render_template_string(
             """
             <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc;max-width:1100px;margin:0 auto">
-              <h2>User Watchlist</h2>
+              <h2>User Portfolio</h2>
               <p><a href="/">Home</a> · <button onclick="logout()">Logout</button></p>
               <form id="addForm">
                 <input id="symbol" placeholder="AAPL" required />
@@ -272,7 +318,7 @@ def create_app() -> Flask:
               </form>
               <div id="out" style="margin:10px 0;color:#334155"></div>
               <div style="overflow-x:auto"><table style="width:100%;background:#fff;border-collapse:collapse;min-width:980px">
-                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Sentiment</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
+                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Acquired</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Trend</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Sentiment</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
                 <tbody id="rows"></tbody>
               </table></div>
               <div id="tickerModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:50;align-items:center;justify-content:center;padding:14px">
@@ -285,6 +331,15 @@ def create_app() -> Flask:
                   <div id="modalNews" style="display:grid;gap:8px"></div>
                 </div>
               </div>
+              <div id="adviceModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:51;align-items:center;justify-content:center;padding:14px">
+                <div style="background:#fff;border-radius:12px;max-width:520px;width:100%;padding:14px">
+                  <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+                    <h3 id="adviceTitle" style="margin:0">Advice Reasoning</h3>
+                    <button onclick="closeAdviceModal()" style="border:none;background:#e2e8f0;border-radius:8px;padding:6px 10px">Close</button>
+                  </div>
+                  <p id="adviceReason" style="color:#334155;margin-top:10px">No reasoning available.</p>
+                </div>
+              </div>
               <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
               <script>
               const rowsEl = document.getElementById('rows');
@@ -292,6 +347,7 @@ def create_app() -> Flask:
               const symbolEl = document.getElementById('symbol');
               const buyPriceEl = document.getElementById('buy_price');
               const sharesEl = document.getElementById('shares');
+              let currentPortfolioItems = [];
               document.getElementById('addForm').addEventListener('submit', addItem);
 
               async function logout(){ await fetch('/api/auth/logout',{method:'POST'}); location.href='/'; }
@@ -301,6 +357,18 @@ def create_app() -> Flask:
               function formatMoney(v){
                 return (typeof v === 'number' && isFinite(v)) ? ('$' + v.toLocaleString(undefined,{maximumFractionDigits:2})) : 'n/a';
               }
+              function formatDate(value){
+                if(!value) return 'n/a';
+                const d = new Date(value);
+                return Number.isNaN(d.getTime()) ? 'n/a' : d.toLocaleDateString();
+              }
+              function formatDateInput(value){
+                if(!value) return '';
+                const d = new Date(value);
+                if(Number.isNaN(d.getTime())) return '';
+                return d.toISOString().slice(0,10);
+              }
+
               function sentimentBadge(value){
                 const sentiment = String(value || 'Neutral').toLowerCase();
                 if(sentiment === 'bullish' || sentiment === 'positive') return '<span style="color:#166534;font-weight:700;white-space:nowrap">▇ Bullish</span>';
@@ -311,6 +379,17 @@ def create_app() -> Flask:
                 const advice = String(value || 'HOLD').toUpperCase();
                 const color = advice === 'BUY' ? '#166534' : (advice === 'SELL' ? '#b91c1c' : '#475569');
                 return `<span style="display:inline-block;padding:4px 8px;border-radius:999px;background:${color};color:#fff;font-weight:700;font-size:12px">${advice}</span>`;
+              }
+              function adviceButton(item, idx){
+                return `<button onclick="showAdvice(${idx})" style="border:none;background:none;padding:0;cursor:pointer">${adviceBadge(item.advice)}</button>`;
+              }
+              function openAdviceModal(){ document.getElementById('adviceModal').style.display='flex'; }
+              function closeAdviceModal(){ document.getElementById('adviceModal').style.display='none'; }
+              function showAdvice(idx){
+                const item = currentPortfolioItems[idx] || {};
+                document.getElementById('adviceTitle').textContent = `${item.symbol || ''} · ${String(item.advice || 'HOLD').toUpperCase()} rationale`;
+                document.getElementById('adviceReason').textContent = item.advice_reason || 'Rule-based recommendation from technical momentum and sentiment checks.';
+                openAdviceModal();
               }
               function performanceCell(amount, pct){
                 if(typeof amount !== 'number' || typeof pct !== 'number') return '<span style="color:#64748b">n/a</span>';
@@ -325,7 +404,7 @@ def create_app() -> Flask:
                   const el = document.getElementById(divId); if(el) el.innerHTML='<span style="color:#94a3b8">No trend data</span>'; return;
                 }
                 const up = series[series.length-1] >= series[0];
-                Plotly.newPlot(divId,[{y:series,mode:'lines',type:'scatter',line:{color:up?'#16a34a':'#dc2626',width:2}}],{margin:{l:10,r:10,t:4,b:10},height:70,showlegend:false,xaxis:{visible:false},yaxis:{visible:false},paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)'},{displayModeBar:false,responsive:true});
+                Plotly.newPlot(divId,[{y:series,mode:'lines',type:'scatter',line:{color:up?'#16a34a':'#dc2626',width:2},hoverinfo:'skip'}],{margin:{l:2,r:2,t:2,b:2},height:30,width:100,showlegend:false,xaxis:{visible:false,fixedrange:true},yaxis:{visible:false,fixedrange:true},paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)'},{displayModeBar:false,responsive:true,staticPlot:true});
               }
 
 
@@ -363,10 +442,11 @@ def create_app() -> Flask:
 
               function renderRows(items){
                 if(!items || !items.length){
-                  rowsEl.innerHTML = '<tr><td colspan="9" style="padding:8px;color:#64748b">No watchlist entries yet.</td></tr>';
+                  rowsEl.innerHTML = '<tr><td colspan="11" style="padding:8px;color:#64748b">No watchlist entries yet.</td></tr>';
                   return;
                 }
-                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceBadge(i.advice)}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td></tr><tr><td colspan="9" style="border:1px solid #e5e7eb;padding:6px 10px;background:#f8fafc"><div id="trend-${idx}" style="width:100%;height:70px"></div></td></tr>`).join('');
+                currentPortfolioItems = items;
+                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px;white-space:nowrap"><div style="display:flex;gap:6px;align-items:center"><input id="acquired-${i.id}" type="date" value="${formatDateInput(i.created_at)}" style="padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px"/><button onclick="updateAcquiredDate(${i.id})" style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:6px;background:#fff">Save</button></div></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td></tr>`).join('');
                 items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || []));
               }
 
@@ -375,7 +455,7 @@ def create_app() -> Flask:
                 const data = await res.json();
                 if(!res.ok){
                   if (res.status === 401) { location.href='/login'; return; }
-                  rowsEl.innerHTML = '<tr><td colspan="9" style="padding:8px;color:#b91c1c">Unable to load watchlist right now.</td></tr>';
+                  rowsEl.innerHTML = '<tr><td colspan="11" style="padding:8px;color:#b91c1c">Unable to load watchlist right now.</td></tr>';
                   outEl.textContent = data.error || 'Please try again in a moment.';
                   return;
                 }
@@ -394,8 +474,24 @@ def create_app() -> Flask:
                   outEl.textContent = data.error || 'Unable to add item.';
                 }
               }
+
+              async function updateAcquiredDate(id){
+                const inputEl = document.getElementById(`acquired-${id}`);
+                const acquiredDate = (inputEl?.value || '').trim();
+                if(!acquiredDate){ outEl.textContent = 'Please choose an acquired date.'; return; }
+                const res = await fetch('/api/user-watchlist/' + id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({acquired_date: acquiredDate})});
+                const data = await res.json();
+                if(res.ok){
+                  outEl.textContent = 'Acquired date updated.';
+                  await load();
+                } else {
+                  outEl.textContent = data.error || 'Unable to update acquired date.';
+                }
+              }
+
               async function del(id){ await fetch('/api/user-watchlist/'+id,{method:'DELETE'}); await load(); }
               document.getElementById('tickerModal').addEventListener('click', (event) => { if(event.target.id==='tickerModal'){ closeModal(); }});
+              document.getElementById('adviceModal').addEventListener('click', (event) => { if(event.target.id==='adviceModal'){ closeAdviceModal(); }});
               load();
               </script>
             </body></html>
