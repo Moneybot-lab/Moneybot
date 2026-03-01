@@ -7,9 +7,15 @@ services:
       pip install -r requirements.txt
       pip install Flask-SQLAlchemy Flask-Migrate SQLAlchemy psycopg2-binary
     startCommand: |
-      flask --app app:app db upgrade || true
+      if [ -d migrations ]; then
+        flask --app app:app db upgrade
+      else
+        echo "No migrations directory found; skipping database migration step."
+      fi
       python app.py
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
       - key: MONEYBOT_SECRET_KEY
         sync: false
       - key: DATABASE_URL

@@ -6,6 +6,7 @@
 
 ## 2) Environment variables
 Set these env vars on the web service:
+- `PYTHON_VERSION` = `3.11.11` (prevents Render from selecting Python 3.14, which breaks `numba`-based builds)
 - `DATABASE_URL` = internal connection string from Render Postgres
 - `MONEYBOT_SECRET_KEY` = long random stable secret (do not rotate frequently)
 - `DATA_PROVIDER` = `yfinance` (optional; defaults to `yfinance`)
@@ -20,13 +21,13 @@ Configure the web service with the following commands:
 
 - **Start Command**
   ```bash
-  bash -lc 'flask --app app:app db upgrade && gunicorn app:app --bind 0.0.0.0:$PORT'
+  bash -lc 'if [ -d migrations ]; then flask --app app:app db upgrade; else echo "No migrations directory found; skipping database migration step."; fi; python app.py'
   ```
 
 Notes:
-- `db upgrade` applies any committed Alembic migrations on each deploy.
-- If there are no new migrations, `db upgrade` is a no-op and startup continues.
-- Keep `gunicorn` as the long-running process; Render uses it to keep the service alive.
+- `db upgrade` applies committed Alembic migrations when a `migrations/` folder exists.
+- If `migrations/` is missing, startup now skips migrations instead of failing the deploy.
+- The start command runs `python app.py` as the long-running process.
 
 ## 4) First-time migration bootstrap (local/dev)
 If your repo does **not** already contain a `migrations/` folder, initialize it once locally:
