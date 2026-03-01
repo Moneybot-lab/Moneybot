@@ -76,11 +76,18 @@ def create_app() -> Flask:
                   <div id="market-charts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px"></div>
                 </section>
 
+                <section style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:12px;padding:14px;margin-bottom:12px">
+                  <h3 style="margin:0 0 8px 0">Buyer's Guide</h3>
+                  <p style="margin:0 0 6px 0;color:#334155"><strong>Stable Watchlist:</strong> Lower risk, long-term stocks.</p>
+                  <p style="margin:0 0 6px 0;color:#334155"><strong>Hot Momentum:</strong> Higher risk, low-price stocks with growth potential.</p>
+                  <p style="margin:0;color:#334155"><strong>Whales of Wall Street:</strong> See and follow top investors' picks.</p>
+                </section>
+
                 <section style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px">
                   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
                     <button class="tab-btn" data-tab="stable" onclick="switchTab('stable')" style="padding:8px 12px;border:1px solid #cbd5e1;background:#dbeafe;border-radius:8px">Stable Watchlist</button>
                     <button class="tab-btn" data-tab="momentum" onclick="switchTab('momentum')" style="padding:8px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:8px">Hot Momentum Buys</button>
-                    <button class="tab-btn" data-tab="wells" onclick="switchTab('wells')" style="padding:8px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:8px">Wells of Wall Street</button>
+                    <button class="tab-btn" data-tab="wells" onclick="switchTab('wells')" style="padding:8px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:8px">Whales of Wall Street</button>
                   </div>
                   <div id="stable" class="tab-panel"></div>
                   <div id="momentum" class="tab-panel" style="display:none"></div>
@@ -324,6 +331,15 @@ def create_app() -> Flask:
                   <div id="modalNews" style="display:grid;gap:8px"></div>
                 </div>
               </div>
+              <div id="adviceModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:51;align-items:center;justify-content:center;padding:14px">
+                <div style="background:#fff;border-radius:12px;max-width:520px;width:100%;padding:14px">
+                  <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+                    <h3 id="adviceTitle" style="margin:0">Advice Reasoning</h3>
+                    <button onclick="closeAdviceModal()" style="border:none;background:#e2e8f0;border-radius:8px;padding:6px 10px">Close</button>
+                  </div>
+                  <p id="adviceReason" style="color:#334155;margin-top:10px">No reasoning available.</p>
+                </div>
+              </div>
               <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
               <script>
               const rowsEl = document.getElementById('rows');
@@ -331,6 +347,7 @@ def create_app() -> Flask:
               const symbolEl = document.getElementById('symbol');
               const buyPriceEl = document.getElementById('buy_price');
               const sharesEl = document.getElementById('shares');
+              let currentPortfolioItems = [];
               document.getElementById('addForm').addEventListener('submit', addItem);
 
               async function logout(){ await fetch('/api/auth/logout',{method:'POST'}); location.href='/'; }
@@ -345,6 +362,12 @@ def create_app() -> Flask:
                 const d = new Date(value);
                 return Number.isNaN(d.getTime()) ? 'n/a' : d.toLocaleDateString();
               }
+              function formatDateInput(value){
+                if(!value) return '';
+                const d = new Date(value);
+                if(Number.isNaN(d.getTime())) return '';
+                return d.toISOString().slice(0,10);
+              }
 
               function sentimentBadge(value){
                 const sentiment = String(value || 'Neutral').toLowerCase();
@@ -356,6 +379,17 @@ def create_app() -> Flask:
                 const advice = String(value || 'HOLD').toUpperCase();
                 const color = advice === 'BUY' ? '#166534' : (advice === 'SELL' ? '#b91c1c' : '#475569');
                 return `<span style="display:inline-block;padding:4px 8px;border-radius:999px;background:${color};color:#fff;font-weight:700;font-size:12px">${advice}</span>`;
+              }
+              function adviceButton(item, idx){
+                return `<button onclick="showAdvice(${idx})" style="border:none;background:none;padding:0;cursor:pointer">${adviceBadge(item.advice)}</button>`;
+              }
+              function openAdviceModal(){ document.getElementById('adviceModal').style.display='flex'; }
+              function closeAdviceModal(){ document.getElementById('adviceModal').style.display='none'; }
+              function showAdvice(idx){
+                const item = currentPortfolioItems[idx] || {};
+                document.getElementById('adviceTitle').textContent = `${item.symbol || ''} · ${String(item.advice || 'HOLD').toUpperCase()} rationale`;
+                document.getElementById('adviceReason').textContent = item.advice_reason || 'Rule-based recommendation from technical momentum and sentiment checks.';
+                openAdviceModal();
               }
               function performanceCell(amount, pct){
                 if(typeof amount !== 'number' || typeof pct !== 'number') return '<span style="color:#64748b">n/a</span>';
@@ -411,7 +445,8 @@ def create_app() -> Flask:
                   rowsEl.innerHTML = '<tr><td colspan="11" style="padding:8px;color:#64748b">No watchlist entries yet.</td></tr>';
                   return;
                 }
-                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px;white-space:nowrap">${formatDate(i.created_at)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceBadge(i.advice)}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td></tr>`).join('');
+                currentPortfolioItems = items;
+                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px;white-space:nowrap"><div style="display:flex;gap:6px;align-items:center"><input id="acquired-${i.id}" type="date" value="${formatDateInput(i.created_at)}" style="padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px"/><button onclick="updateAcquiredDate(${i.id})" style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:6px;background:#fff">Save</button></div></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td></tr>`).join('');
                 items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || []));
               }
 
@@ -439,8 +474,24 @@ def create_app() -> Flask:
                   outEl.textContent = data.error || 'Unable to add item.';
                 }
               }
+
+              async function updateAcquiredDate(id){
+                const inputEl = document.getElementById(`acquired-${id}`);
+                const acquiredDate = (inputEl?.value || '').trim();
+                if(!acquiredDate){ outEl.textContent = 'Please choose an acquired date.'; return; }
+                const res = await fetch('/api/user-watchlist/' + id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({acquired_date: acquiredDate})});
+                const data = await res.json();
+                if(res.ok){
+                  outEl.textContent = 'Acquired date updated.';
+                  await load();
+                } else {
+                  outEl.textContent = data.error || 'Unable to update acquired date.';
+                }
+              }
+
               async function del(id){ await fetch('/api/user-watchlist/'+id,{method:'DELETE'}); await load(); }
               document.getElementById('tickerModal').addEventListener('click', (event) => { if(event.target.id==='tickerModal'){ closeModal(); }});
+              document.getElementById('adviceModal').addEventListener('click', (event) => { if(event.target.id==='adviceModal'){ closeAdviceModal(); }});
               load();
               </script>
             </body></html>
