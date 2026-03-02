@@ -17,11 +17,12 @@ Configure the web service with the following commands:
 - **Build Command**
   ```bash
   pip install -r requirements.txt
+  pip install Flask-SQLAlchemy Flask-Migrate SQLAlchemy psycopg2-binary "psycopg[binary]"
   ```
 
 - **Start Command**
   ```bash
-  bash -lc 'if [ -d migrations ]; then flask --app app:app db upgrade; else echo "No migrations directory found; skipping database migration step."; fi; python app.py'
+  bash -lc 'if [ -d migrations ]; then flask --app app:app db upgrade || echo "Migration step failed; starting web server anyway."; else echo "No migrations directory found; skipping database migration step."; fi; python app.py'
   ```
 
 Notes:
@@ -49,3 +50,10 @@ git commit -m "Add initial database migrations"
 ```
 
 After that, deploy to Render and keep using step 3 (`db upgrade && gunicorn`) for ongoing deploys.
+
+## 5) If deploy logs still show missing psycopg/psycopg2
+- Ensure your **actual Render Build Command** includes both:
+  - `pip install -r requirements.txt`
+  - `pip install Flask-SQLAlchemy Flask-Migrate SQLAlchemy psycopg2-binary "psycopg[binary]"`
+- If you set custom commands in the Render dashboard, they override repo defaults from `render.yaml`.
+- A missing Postgres driver forces MoneyBot to fall back to SQLite, which means login/portfolio data will not persist across deploys.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import logging
 import os
 
@@ -13,12 +14,29 @@ from .services.market_data import MarketDataService
 def create_app() -> Flask:
     secret = os.environ.get("MONEYBOT_SECRET_KEY")
     if not secret:
-        raise RuntimeError("MONEYBOT_SECRET_KEY must be set")
+        logging.warning(
+            "MONEYBOT_SECRET_KEY is not set. Using an insecure fallback key; set MONEYBOT_SECRET_KEY in production."
+        )
+        secret = "moneybot-insecure-fallback-key"
 
     raw_database_url = os.environ.get("DATABASE_URL")
     database_url = (raw_database_url or "").strip() or "sqlite:///moneybot.db"
     if database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+    # Pick an installed PostgreSQL DBAPI when the URL does not pin one.
+    if database_url.startswith("postgresql://") and "+" not in database_url.split("://", 1)[0]:
+        has_psycopg = importlib.util.find_spec("psycopg") is not None
+        has_psycopg2 = importlib.util.find_spec("psycopg2") is not None
+        if has_psycopg:
+            database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+        elif not has_psycopg2:
+            logging.error(
+                "DATABASE_URL points to PostgreSQL but no PostgreSQL driver is installed. "
+                "Falling back to local SQLite; persistent login/portfolio data will not be saved. "
+                "Install psycopg[binary] or psycopg2-binary in the build command."
+            )
+            database_url = "sqlite:///moneybot.db"
 
     if " " in database_url or "://" not in database_url:
         raise RuntimeError(
