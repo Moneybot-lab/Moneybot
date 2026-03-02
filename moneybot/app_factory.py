@@ -31,10 +31,12 @@ def create_app() -> Flask:
         if has_psycopg:
             database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
         elif not has_psycopg2:
-            raise RuntimeError(
+            logging.error(
                 "DATABASE_URL points to PostgreSQL but no PostgreSQL driver is installed. "
-                "Install psycopg[binary] or psycopg2-binary."
+                "Falling back to local SQLite; persistent login/portfolio data will not be saved. "
+                "Install psycopg[binary] or psycopg2-binary in the build command."
             )
+            database_url = "sqlite:///moneybot.db"
 
     if " " in database_url or "://" not in database_url:
         raise RuntimeError(
