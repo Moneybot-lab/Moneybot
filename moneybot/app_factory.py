@@ -20,6 +20,11 @@ def create_app() -> Flask:
     if database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql://", 1)
 
+    # Prefer the psycopg (v3) SQLAlchemy driver for PostgreSQL URLs that do
+    # not explicitly pin a DBAPI. This avoids hard dependency on psycopg2.
+    if database_url.startswith("postgresql://") and "+" not in database_url.split("://", 1)[0]:
+        database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
     if " " in database_url or "://" not in database_url:
         raise RuntimeError(
             "DATABASE_URL is not a valid database URL. "
