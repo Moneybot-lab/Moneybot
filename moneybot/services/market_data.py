@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+import requests
 import yfinance as yf
 
 from trade_signal import analyze_ticker
+
+
+FINNHUB_KEY = os.environ.get("FINNHUB_API_KEY") or None
 
 
 @dataclass
@@ -327,7 +332,7 @@ class MarketDataService:
         ]
 
     def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
-        return [
+        items = [
             {"symbol": "SOFI", "price": 9.84, "score": 9.4, "rationale": "Member growth trend and improving margins."},
             {"symbol": "PLUG", "price": 3.72, "score": 9.1, "rationale": "High-volume breakout setup in clean-energy swing."},
             {"symbol": "LCID", "price": 2.98, "score": 8.9, "rationale": "Speculative EV rebound momentum."},
@@ -339,6 +344,20 @@ class MarketDataService:
             {"symbol": "F", "price": 12.55, "score": 7.4, "rationale": "Low-priced cyclical with renewed momentum interest."},
             {"symbol": "PFE", "price": 28.77, "score": 7.2, "rationale": "Defensive rotation candidate near support."},
         ]
+
+        enriched: list[Dict[str, Any]] = []
+        for item in items:
+            quote = self.get_quote(item["symbol"])
+            live_price = quote.get("price")
+            merged = dict(item)
+            if isinstance(live_price, (int, float)):
+                merged["price"] = float(live_price)
+            merged["change_percent"] = quote.get("change_percent")
+            merged["quote_source"] = quote.get("quote_source")
+            merged["live_data_available"] = bool(quote.get("live_data_available"))
+            enriched.append(merged)
+
+        return enriched
 
     def get_wells_picks(self) -> list[Dict[str, Any]]:
         return [
@@ -352,6 +371,7 @@ class MarketDataService:
             "price": "DATA_MISSING",
             "change_percent": "DATA_MISSING",
             "live_data_available": False,
+            "quote_source": "yfinance",
             "diagnostics": {"provider": "yfinance", "error": error},
         }
 
@@ -361,42 +381,77 @@ class MarketDataService:
         if cached:
             return cached
 
-        last_error = "unknown"
-        for _ in range(self.retries + 1):
+        def _yfinance_quote() -> Dict[str, Any]:
+            last_error = "unknown"
+            for _ in range(self.retries + 1):
+                try:
+                    ticker = yf.Ticker(cache_key)
+                    info = ticker.info or {}
+                    price = info.get("regularMarketPrice") or info.get("currentPrice")
+                    prev = info.get("regularMarketPreviousClose") or info.get("previousClose")
+                    change = info.get("regularMarketChangePercent")
+
+                    if (price is None or change is None) and prev not in (None, 0):
+                        change = ((price - prev) / prev) * 100 if price is not None else None
+
+                    if price is None:
+                        hist = ticker.history(period="5d", interval="1d")
+                        if hist is not None and not hist.empty:
+                            price = float(hist["Close"].iloc[-1])
+                            if len(hist.index) > 1:
+                                prev = float(hist["Close"].iloc[-2])
+                            if prev not in (None, 0):
+                                change = ((price - prev) / prev) * 100
+
+                    return {
+                        "symbol": cache_key,
+                        "price": float(price) if price is not None else "DATA_MISSING",
+                        "change_percent": float(change) if change is not None else "DATA_MISSING",
+                        "live_data_available": price is not None and change is not None,
+                        "quote_source": "yfinance",
+                        "diagnostics": {"provider": "yfinance", "error": None},
+                    }
+                except Exception as exc:  # noqa: BLE001
+                    last_error = str(exc)
+                    logging.warning("Quote fetch failed for %s: %s", cache_key, exc)
+                    time.sleep(0.15)
+
+            return self._fallback_quote(cache_key, last_error)
+
+        if FINNHUB_KEY:
             try:
-                ticker = yf.Ticker(cache_key)
-                info = ticker.info or {}
-                price = info.get("regularMarketPrice") or info.get("currentPrice")
-                prev = info.get("regularMarketPreviousClose") or info.get("previousClose")
-                change = info.get("regularMarketChangePercent")
+                resp = requests.get(
+                    "https://finnhub.io/api/v1/quote",
+                    params={"symbol": cache_key, "token": FINNHUB_KEY},
+                    timeout=self.timeout_s,
+                )
+                resp.raise_for_status()
+                data = resp.json() or {}
+                price = data.get("c")
+                prev_close = data.get("pc")
+                change_percent = data.get("dp")
 
-                if (price is None or change is None) and prev not in (None, 0):
-                    change = ((price - prev) / prev) * 100 if price is not None else None
+                if price not in (None, 0):
+                    if change_percent is None and prev_close not in (None, 0):
+                        change_percent = ((float(price) - float(prev_close)) / float(prev_close)) * 100
 
-                if price is None:
-                    hist = ticker.history(period="5d", interval="1d")
-                    if hist is not None and not hist.empty:
-                        price = float(hist["Close"].iloc[-1])
-                        if len(hist.index) > 1:
-                            prev = float(hist["Close"].iloc[-2])
-                        if prev not in (None, 0):
-                            change = ((price - prev) / prev) * 100
+                    if change_percent is not None:
+                        payload = {
+                            "symbol": cache_key,
+                            "price": float(price),
+                            "change_percent": float(change_percent),
+                            "live_data_available": True,
+                            "quote_source": "finnhub",
+                            "diagnostics": {"provider": "finnhub", "error": None},
+                        }
+                        self.quote_cache.set(cache_key, payload)
+                        return payload
 
-                payload = {
-                    "symbol": cache_key,
-                    "price": float(price) if price is not None else "DATA_MISSING",
-                    "change_percent": float(change) if change is not None else "DATA_MISSING",
-                    "live_data_available": price is not None and change is not None,
-                    "diagnostics": {"provider": "yfinance", "error": None},
-                }
-                self.quote_cache.set(cache_key, payload)
-                return payload
+                logging.warning("Finnhub returned incomplete quote for %s: %s", cache_key, data)
             except Exception as exc:  # noqa: BLE001
-                last_error = str(exc)
-                logging.warning("Quote fetch failed for %s: %s", cache_key, exc)
-                time.sleep(0.15)
+                logging.warning("Finnhub quote fetch failed for %s: %s", cache_key, exc)
 
-        fallback = self._fallback_quote(cache_key, last_error)
+        fallback = _yfinance_quote()
         self.quote_cache.set(cache_key, fallback)
         return fallback
 
