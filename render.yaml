@@ -5,10 +5,10 @@ services:
     buildCommand: |
       pip install --upgrade pip
       pip install -r requirements.txt
-      pip install Flask-SQLAlchemy Flask-Migrate SQLAlchemy psycopg2-binary
+      pip install Flask-SQLAlchemy Flask-Migrate SQLAlchemy psycopg2-binary "psycopg[binary]"
     startCommand: |
       if [ -d migrations ]; then
-        flask --app app:app db upgrade
+        flask --app app:app db upgrade || echo "Migration step failed; starting web server anyway."
       else
         echo "No migrations directory found; skipping database migration step."
       fi

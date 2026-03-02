@@ -17,11 +17,12 @@ Configure the web service with the following commands:
 - **Build Command**
   ```bash
   pip install -r requirements.txt
+  pip install Flask-SQLAlchemy Flask-Migrate SQLAlchemy psycopg2-binary "psycopg[binary]"
   ```
 
 - **Start Command**
   ```bash
-  bash -lc 'if [ -d migrations ]; then flask --app app:app db upgrade; else echo "No migrations directory found; skipping database migration step."; fi; python app.py'
+  bash -lc 'if [ -d migrations ]; then flask --app app:app db upgrade || echo "Migration step failed; starting web server anyway."; else echo "No migrations directory found; skipping database migration step."; fi; python app.py'
   ```
 
 Notes:
