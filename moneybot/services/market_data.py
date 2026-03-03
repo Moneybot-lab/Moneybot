@@ -43,6 +43,7 @@ class MarketDataService:
         self.quote_cache = TTLCache(ttl_seconds=20)
         self.signal_cache = TTLCache(ttl_seconds=20)
         self.sector_cache = TTLCache(ttl_seconds=3600)
+        self._logged_missing_finnhub_key = False
 
 
 
@@ -372,14 +373,13 @@ class MarketDataService:
             "diagnostics": {"provider": "yfinance", "error": error},
         }
 
-    def _get_finnhub_key(self) -> str | None:
-        key = (
-            os.environ.get("FINNHUB_API_KEY")
-            or os.environ.get("FINNHUB_TOKEN")
-            or os.environ.get("X_FINNHUB_TOKEN")
-            or ""
-        ).strip()
-        return key or None
+    def _get_finnhub_key(self) -> tuple[str | None, str | None]:
+        key_env_names = ("FINNHUB_API_KEY", "FINNHUB_TOKEN", "X_FINNHUB_TOKEN")
+        for env_name in key_env_names:
+            raw = os.environ.get(env_name)
+            if raw and raw.strip():
+                return raw.strip(), env_name
+        return None, None
 
     def get_quote(self, symbol: str) -> Dict[str, Any]:
         cache_key = symbol.upper()
@@ -424,7 +424,8 @@ class MarketDataService:
 
             return self._fallback_quote(cache_key, last_error)
 
-        finnhub_key = self._get_finnhub_key()
+        finnhub_key, finnhub_key_source = self._get_finnhub_key()
+        finnhub_error: str | None = None
         if finnhub_key:
             try:
                 resp = requests.get(
@@ -450,16 +451,30 @@ class MarketDataService:
                             "change_percent": float(change_percent),
                             "live_data_available": True,
                             "quote_source": "finnhub",
-                            "diagnostics": {"provider": "finnhub", "error": None},
+                            "diagnostics": {"provider": "finnhub", "error": None, "finnhub_key_source": finnhub_key_source},
                         }
                         self.quote_cache.set(cache_key, payload)
                         return payload
 
+                finnhub_error = f"incomplete_response:{data}"
                 logging.warning("Finnhub returned incomplete quote for %s: %s", cache_key, data)
             except Exception as exc:  # noqa: BLE001
+                finnhub_error = str(exc)
                 logging.warning("Finnhub quote fetch failed for %s: %s", cache_key, exc)
+        else:
+            finnhub_error = "missing_api_key"
+            if not self._logged_missing_finnhub_key:
+                logging.info(
+                    "Finnhub key missing; quote requests will use yfinance fallback until FINNHUB_API_KEY/FINNHUB_TOKEN is set."
+                )
+                self._logged_missing_finnhub_key = True
 
         fallback = _yfinance_quote()
+        fallback_diagnostics = fallback.get("diagnostics") or {}
+        fallback_diagnostics["finnhub_attempted"] = bool(finnhub_key)
+        fallback_diagnostics["finnhub_key_source"] = finnhub_key_source
+        fallback_diagnostics["finnhub_error"] = finnhub_error
+        fallback["diagnostics"] = fallback_diagnostics
         self.quote_cache.set(cache_key, fallback)
         return fallback
 

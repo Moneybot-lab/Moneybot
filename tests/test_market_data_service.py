@@ -32,6 +32,7 @@ def test_get_quote_uses_runtime_finnhub_key(monkeypatch):
     assert quote["price"] == 123.45
     assert captured["params"]["token"] == "runtime-key"
     assert captured["headers"]["X-Finnhub-Token"] == "runtime-key"
+    assert quote["diagnostics"]["finnhub_key_source"] == "FINNHUB_API_KEY"
 
 
 def test_get_quote_uses_finnhub_token_alias(monkeypatch):
@@ -61,6 +62,7 @@ def test_get_quote_uses_finnhub_token_alias(monkeypatch):
     assert quote["quote_source"] == "finnhub"
     assert captured["params"]["token"] == "alias-key"
     assert captured["headers"]["X-Finnhub-Token"] == "alias-key"
+    assert quote["diagnostics"]["finnhub_key_source"] == "FINNHUB_TOKEN"
 
 
 def test_get_quote_falls_back_to_yfinance_without_finnhub_key(monkeypatch):
@@ -84,3 +86,5 @@ def test_get_quote_falls_back_to_yfinance_without_finnhub_key(monkeypatch):
     assert quote["quote_source"] == "yfinance"
     assert quote["live_data_available"] is True
     assert quote["price"] == 250.0
+    assert quote["diagnostics"]["finnhub_attempted"] is False
+    assert quote["diagnostics"]["finnhub_error"] == "missing_api_key"

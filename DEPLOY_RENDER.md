@@ -80,3 +80,19 @@ After that, deploy to Render and keep using step 3 (`db upgrade && gunicorn`) fo
 5. Click **Save Changes**.
 6. Go to **Manual Deploy** and choose **Clear build cache & deploy**.
 7. In build logs, verify you see the three expected commands from `scripts/render_build.sh`.
+
+## 7) Verify Finnhub is actually being used (after deploy)
+Run these checks against production after setting the Finnhub env var:
+
+```bash
+curl -s "https://<your-service>.onrender.com/api/quote?symbol=TSLA" | jq .data
+```
+
+Look for:
+- `quote_source: "finnhub"` on success
+- or `quote_source: "yfinance"` with diagnostics containing:
+  - `finnhub_attempted`
+  - `finnhub_key_source`
+  - `finnhub_error`
+
+This makes it explicit whether Finnhub auth was missing/invalid or the service intentionally fell back to yfinance.
