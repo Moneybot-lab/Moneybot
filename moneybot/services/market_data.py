@@ -12,9 +12,6 @@ import yfinance as yf
 from trade_signal import analyze_ticker
 
 
-FINNHUB_KEY = os.environ.get("FINNHUB_API_KEY") or None
-
-
 @dataclass
 class TTLCacheEntry:
     value: Dict[str, Any]
@@ -375,6 +372,10 @@ class MarketDataService:
             "diagnostics": {"provider": "yfinance", "error": error},
         }
 
+    def _get_finnhub_key(self) -> str | None:
+        key = (os.environ.get("FINNHUB_API_KEY") or "").strip()
+        return key or None
+
     def get_quote(self, symbol: str) -> Dict[str, Any]:
         cache_key = symbol.upper()
         cached = self.quote_cache.get(cache_key)
@@ -418,11 +419,12 @@ class MarketDataService:
 
             return self._fallback_quote(cache_key, last_error)
 
-        if FINNHUB_KEY:
+        finnhub_key = self._get_finnhub_key()
+        if finnhub_key:
             try:
                 resp = requests.get(
                     "https://finnhub.io/api/v1/quote",
-                    params={"symbol": cache_key, "token": FINNHUB_KEY},
+                    params={"symbol": cache_key, "token": finnhub_key},
                     timeout=self.timeout_s,
                 )
                 resp.raise_for_status()
