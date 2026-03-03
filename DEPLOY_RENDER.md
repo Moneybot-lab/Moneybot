@@ -97,6 +97,13 @@ Look for:
 
 This makes it explicit whether Finnhub auth was missing/invalid or the service intentionally fell back to yfinance.
 
+
+For quick triage from the UI-backed endpoint, you can also inspect:
+```bash
+curl -s "https://<your-service>.onrender.com/api/quick-ask?symbol=TSLA" | jq .data
+```
+Look for `quote_source` and `quote_diagnostics` to confirm whether Finnhub was used or why fallback occurred.
+
 ## 8) If requests contain `symbol=/api/quote?symbol=TSLA`
 MoneyBot now normalizes URL-like symbol input on API endpoints (e.g. quick-ask, quote, signal, watchlist add).
 If logs still show symbols like `/API/QUOTE?SYMBOL=TSLA`, redeploy the latest commit so normalization is live.

@@ -131,6 +131,7 @@ def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> 
         "current_price": quote_data.get("price"),
         "change_percent": quote_data.get("change_percent"),
         "quote_source": quote_data.get("quote_source"),
+        "quote_diagnostics": quote_data.get("diagnostics"),
     }
 
 
@@ -267,6 +268,8 @@ def user_watchlist():
                 "advice": advice,
                 "advice_reason": advice_reason,
                 "history30": history30,
+                "quote_source": quote.get("quote_source"),
+                "quote_diagnostics": quote.get("diagnostics"),
             }
         )
 

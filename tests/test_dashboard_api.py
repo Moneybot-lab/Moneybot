@@ -17,7 +17,7 @@ class StubMarketService:
         return [{"investor": "Warren Buffett", "stocks": [{"ticker": "AAPL", "price": 190.0, "performance": 1.2}]}]
 
     def get_quote(self, symbol):
-        return {"symbol": symbol, "price": 150.25, "change_percent": 1.2}
+        return {"symbol": symbol, "price": 150.25, "change_percent": 1.2, "quote_source": "finnhub", "diagnostics": {"provider": "finnhub", "error": None}}
 
     def get_signal(self, symbol):
         return {
@@ -70,6 +70,8 @@ def test_quick_ask_returns_buy_or_sell_only():
     assert data["recommendation"] in {"BUY", "SELL"}
     assert data["recommendation"] == "BUY"
     assert "Momentum" in data["rationale"] or "signal" in data["rationale"]
+    assert data["quote_source"] == "finnhub"
+    assert data["quote_diagnostics"]["provider"] == "finnhub"
 
 
 def test_quick_ask_normalizes_symbol_from_url_like_input():
@@ -79,3 +81,17 @@ def test_quick_ask_normalizes_symbol_from_url_like_input():
     data = res.get_json()["data"]
     assert data["symbol"] == "TSLA"
 
+
+
+def test_user_watchlist_exposes_quote_source_diagnostics():
+    client = _client()
+    signup = client.post("/api/auth/signup", json={"email": "a@b.com", "password": "pw"})
+    assert signup.status_code == 201
+    add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 1})
+    assert add.status_code == 201
+
+    res = client.get("/api/user-watchlist")
+    assert res.status_code == 200
+    enriched = res.get_json()["enriched_items"][0]
+    assert enriched["quote_source"] == "finnhub"
+    assert enriched["quote_diagnostics"]["provider"] == "finnhub"
