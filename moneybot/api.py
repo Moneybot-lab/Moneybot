@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import uuid
 from datetime import datetime
+from urllib.parse import parse_qs, urlsplit
 from collections import defaultdict, deque
 from decimal import Decimal
 from functools import wraps
@@ -27,6 +28,29 @@ def _to_decimal(v: Any) -> Decimal | None:
         return Decimal(str(v))
     except Exception:  # noqa: BLE001
         return None
+
+
+def _normalize_symbol(raw_symbol: str) -> str:
+    raw = (raw_symbol or "").strip()
+    if not raw:
+        return ""
+
+    parsed = urlsplit(raw)
+    if parsed.query:
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        for key, values in query.items():
+            if key.lower() == "symbol" and values:
+                raw = str(values[0] or "")
+                break
+
+    lowered = raw.lower()
+    if "symbol=" in lowered:
+        idx = lowered.rfind("symbol=")
+        raw = raw[idx + len("symbol="):].split("&", 1)[0]
+
+    raw = raw.split("/", 1)[0] if "?" not in raw and "/" in raw else raw
+    cleaned = "".join(ch for ch in raw.upper() if ch.isalnum() or ch in {"^", "-", ".", "="})
+    return cleaned[:15]
 
 
 def login_required(view):
@@ -100,12 +124,14 @@ def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> 
         recommendation = "SELL" if bearish or sentiment_label in {"negative", "bearish"} else "BUY"
 
     rationale = signal_data.get("reasons") or signal_data.get("rationale") or []
-    short_reason = rationale[0] if rationale else "Derived from momentum and sentiment checks."
+    short_reason = rationale[0] if rationale else "Derived from momentum and signal checks."
     return {
         "recommendation": recommendation,
         "rationale": short_reason,
         "current_price": quote_data.get("price"),
         "change_percent": quote_data.get("change_percent"),
+        "quote_source": quote_data.get("quote_source"),
+        "quote_diagnostics": quote_data.get("diagnostics"),
     }
 
 
@@ -242,6 +268,8 @@ def user_watchlist():
                 "advice": advice,
                 "advice_reason": advice_reason,
                 "history30": history30,
+                "quote_source": quote.get("quote_source"),
+                "quote_diagnostics": quote.get("diagnostics"),
             }
         )
 
@@ -252,7 +280,7 @@ def user_watchlist():
 @login_required
 def add_watchlist_item():
     data = request.get_json(silent=True) or {}
-    symbol = (data.get("symbol") or "").strip().upper()
+    symbol = _normalize_symbol(data.get("symbol") or "")
     company = (data.get("company") or "").strip() or None
     buy_price = _to_decimal(data.get("buy_price"))
     shares = _to_decimal(data.get("shares"))
@@ -336,6 +364,7 @@ def portfolio_summary():
     total_value = 0.0
     score_values: list[float] = []
     sector_totals: Dict[str, float] = defaultdict(float)
+    quote_sources: set[str] = set()
 
     for item in items:
         symbol = item.symbol
@@ -349,6 +378,9 @@ def portfolio_summary():
             try:
                 quote = svc.get_quote(symbol) or {}
                 quote_price = quote.get("price")
+                quote_source = quote.get("quote_source")
+                if isinstance(quote_source, str) and quote_source:
+                    quote_sources.add(quote_source)
             except Exception:  # noqa: BLE001
                 quote_price = None
 
@@ -385,6 +417,7 @@ def portfolio_summary():
             "avg_score": avg_score,
             "sector_breakdown": sector_breakdown,
             "positions": len(items),
+            "quote_sources": sorted(quote_sources),
             "request_id": g.request_id,
         }
     )
@@ -393,7 +426,7 @@ def portfolio_summary():
 @api_bp.get("/company-details")
 @login_required
 def company_details():
-    symbol = (request.args.get("symbol") or "").strip().upper()
+    symbol = _normalize_symbol(request.args.get("symbol") or "")
     if not symbol:
         return jsonify({"error": "symbol required", "request_id": g.request_id}), 400
 
@@ -406,7 +439,7 @@ def company_details():
 
 @api_bp.get("/quote")
 def api_quote():
-    symbol = (request.args.get("symbol") or "").strip().upper()
+    symbol = _normalize_symbol(request.args.get("symbol") or "")
     if not symbol:
         return jsonify({"error": "symbol required", "request_id": g.request_id}), 400
 
@@ -416,7 +449,7 @@ def api_quote():
 
 @api_bp.get("/signal")
 def api_signal():
-    symbol = (request.args.get("symbol") or "").strip().upper()
+    symbol = _normalize_symbol(request.args.get("symbol") or "")
     if not symbol:
         return jsonify({"error": "symbol required", "request_id": g.request_id}), 400
 
@@ -426,7 +459,7 @@ def api_signal():
 
 @api_bp.get("/quick-ask")
 def quick_ask():
-    symbol = (request.args.get("symbol") or "").strip().upper()
+    symbol = _normalize_symbol(request.args.get("symbol") or "")
     if not symbol:
         return jsonify({"error": "symbol required", "request_id": g.request_id}), 400
 
