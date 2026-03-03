@@ -100,12 +100,13 @@ def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> 
         recommendation = "SELL" if bearish or sentiment_label in {"negative", "bearish"} else "BUY"
 
     rationale = signal_data.get("reasons") or signal_data.get("rationale") or []
-    short_reason = rationale[0] if rationale else "Derived from momentum and sentiment checks."
+    short_reason = rationale[0] if rationale else "Derived from momentum and signal checks."
     return {
         "recommendation": recommendation,
         "rationale": short_reason,
         "current_price": quote_data.get("price"),
         "change_percent": quote_data.get("change_percent"),
+        "quote_source": quote_data.get("quote_source"),
     }
 
 
@@ -336,6 +337,7 @@ def portfolio_summary():
     total_value = 0.0
     score_values: list[float] = []
     sector_totals: Dict[str, float] = defaultdict(float)
+    quote_sources: set[str] = set()
 
     for item in items:
         symbol = item.symbol
@@ -349,6 +351,9 @@ def portfolio_summary():
             try:
                 quote = svc.get_quote(symbol) or {}
                 quote_price = quote.get("price")
+                quote_source = quote.get("quote_source")
+                if isinstance(quote_source, str) and quote_source:
+                    quote_sources.add(quote_source)
             except Exception:  # noqa: BLE001
                 quote_price = None
 
@@ -385,6 +390,7 @@ def portfolio_summary():
             "avg_score": avg_score,
             "sector_breakdown": sector_breakdown,
             "positions": len(items),
+            "quote_sources": sorted(quote_sources),
             "request_id": g.request_id,
         }
     )
