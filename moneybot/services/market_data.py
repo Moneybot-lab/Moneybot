@@ -373,7 +373,12 @@ class MarketDataService:
         }
 
     def _get_finnhub_key(self) -> str | None:
-        key = (os.environ.get("FINNHUB_API_KEY") or "").strip()
+        key = (
+            os.environ.get("FINNHUB_API_KEY")
+            or os.environ.get("FINNHUB_TOKEN")
+            or os.environ.get("X_FINNHUB_TOKEN")
+            or ""
+        ).strip()
         return key or None
 
     def get_quote(self, symbol: str) -> Dict[str, Any]:
@@ -425,6 +430,7 @@ class MarketDataService:
                 resp = requests.get(
                     "https://finnhub.io/api/v1/quote",
                     params={"symbol": cache_key, "token": finnhub_key},
+                    headers={"X-Finnhub-Token": finnhub_key},
                     timeout=self.timeout_s,
                 )
                 resp.raise_for_status()

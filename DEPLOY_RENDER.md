@@ -10,6 +10,8 @@ Set these env vars on the web service:
 - `DATABASE_URL` = internal connection string from Render Postgres
 - `MONEYBOT_SECRET_KEY` = long random stable secret (do not rotate frequently)
 - `DATA_PROVIDER` = `yfinance` (optional; defaults to `yfinance`)
+- `FINNHUB_API_KEY` = your Finnhub key (optional, enables Finnhub quote source before yfinance fallback)
+  - MoneyBot also accepts `FINNHUB_TOKEN` or `X_FINNHUB_TOKEN` for compatibility with different secret naming conventions.
 
 ## 3) Install + migrate + run (Render Web Service)
 Configure the web service with the following commands:
@@ -62,3 +64,19 @@ After that, deploy to Render and keep using step 3 (`db upgrade && gunicorn`) fo
 - If your service still shows the same `No matching distribution found for install` log after this repo change, your Render dashboard is still overriding the repo command. Remove the custom build command in the UI (or set it to `bash scripts/render_build.sh`) and redeploy.
 - If you set custom commands in the Render dashboard, they override repo defaults from `render.yaml`.
 - A missing Postgres driver forces MoneyBot to fall back to SQLite, which means login/portfolio data will not persist across deploys.
+
+## 6) Exact UI recovery steps for the `No matching distribution found for install` error
+1. Open **Render Dashboard → moneybot-pro → Settings**.
+2. In **Build Command**, remove any custom inline pip command.
+3. Set Build Command to exactly:
+   ```bash
+   bash scripts/render_build.sh
+   ```
+4. Confirm it is **not**:
+   ```bash
+   pip install --upgrade pip install -r requirements.txt
+   ```
+   (that command is malformed and causes pip to search for a package named `install`).
+5. Click **Save Changes**.
+6. Go to **Manual Deploy** and choose **Clear build cache & deploy**.
+7. In build logs, verify you see the three expected commands from `scripts/render_build.sh`.
