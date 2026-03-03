@@ -1,5 +1,23 @@
 # Render Deployment Steps (MoneyBot)
 
+## 0) Quick fix for `No matching distribution found for install`
+If your Render logs show:
+
+```text
+ERROR: Could not find a version that satisfies the requirement install
+ERROR: No matching distribution found for install
+```
+
+your Build Command is malformed (it usually contains `pip install --upgrade pip install ...`).
+
+Set **Build Command** to exactly:
+
+```bash
+bash scripts/render_build.sh
+```
+
+Then redeploy using **Clear build cache & deploy**.
+
 ## 1) Create services
 1. Create a **PostgreSQL** service in Render.
 2. Create a **Web Service** for this repo.
