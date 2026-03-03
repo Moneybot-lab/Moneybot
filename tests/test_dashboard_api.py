@@ -70,3 +70,12 @@ def test_quick_ask_returns_buy_or_sell_only():
     assert data["recommendation"] in {"BUY", "SELL"}
     assert data["recommendation"] == "BUY"
     assert "Momentum" in data["rationale"] or "signal" in data["rationale"]
+
+
+def test_quick_ask_normalizes_symbol_from_url_like_input():
+    client = _client()
+    res = client.get('/api/quick-ask?symbol=%2Fapi%2Fquote%3Fsymbol%3DTSLA')
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["symbol"] == "TSLA"
+

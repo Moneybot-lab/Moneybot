@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import uuid
 from datetime import datetime
+from urllib.parse import parse_qs, urlsplit
 from collections import defaultdict, deque
 from decimal import Decimal
 from functools import wraps
@@ -27,6 +28,29 @@ def _to_decimal(v: Any) -> Decimal | None:
         return Decimal(str(v))
     except Exception:  # noqa: BLE001
         return None
+
+
+def _normalize_symbol(raw_symbol: str) -> str:
+    raw = (raw_symbol or "").strip()
+    if not raw:
+        return ""
+
+    parsed = urlsplit(raw)
+    if parsed.query:
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        for key, values in query.items():
+            if key.lower() == "symbol" and values:
+                raw = str(values[0] or "")
+                break
+
+    lowered = raw.lower()
+    if "symbol=" in lowered:
+        idx = lowered.rfind("symbol=")
+        raw = raw[idx + len("symbol="):].split("&", 1)[0]
+
+    raw = raw.split("/", 1)[0] if "?" not in raw and "/" in raw else raw
+    cleaned = "".join(ch for ch in raw.upper() if ch.isalnum() or ch in {"^", "-", ".", "="})
+    return cleaned[:15]
 
 
 def login_required(view):
@@ -253,7 +277,7 @@ def user_watchlist():
 @login_required
 def add_watchlist_item():
     data = request.get_json(silent=True) or {}
-    symbol = (data.get("symbol") or "").strip().upper()
+    symbol = _normalize_symbol(data.get("symbol") or "")
     company = (data.get("company") or "").strip() or None
     buy_price = _to_decimal(data.get("buy_price"))
     shares = _to_decimal(data.get("shares"))
@@ -399,7 +423,7 @@ def portfolio_summary():
 @api_bp.get("/company-details")
 @login_required
 def company_details():
-    symbol = (request.args.get("symbol") or "").strip().upper()
+    symbol = _normalize_symbol(request.args.get("symbol") or "")
     if not symbol:
         return jsonify({"error": "symbol required", "request_id": g.request_id}), 400
 
@@ -412,7 +436,7 @@ def company_details():
 
 @api_bp.get("/quote")
 def api_quote():
-    symbol = (request.args.get("symbol") or "").strip().upper()
+    symbol = _normalize_symbol(request.args.get("symbol") or "")
     if not symbol:
         return jsonify({"error": "symbol required", "request_id": g.request_id}), 400
 
@@ -422,7 +446,7 @@ def api_quote():
 
 @api_bp.get("/signal")
 def api_signal():
-    symbol = (request.args.get("symbol") or "").strip().upper()
+    symbol = _normalize_symbol(request.args.get("symbol") or "")
     if not symbol:
         return jsonify({"error": "symbol required", "request_id": g.request_id}), 400
 
@@ -432,7 +456,7 @@ def api_signal():
 
 @api_bp.get("/quick-ask")
 def quick_ask():
-    symbol = (request.args.get("symbol") or "").strip().upper()
+    symbol = _normalize_symbol(request.args.get("symbol") or "")
     if not symbol:
         return jsonify({"error": "symbol required", "request_id": g.request_id}), 400
 
