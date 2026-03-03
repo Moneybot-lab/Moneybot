@@ -2,10 +2,7 @@ services:
   - type: web
     name: moneybot
     env: python
-    buildCommand: |
-      pip install --upgrade pip
-      pip install -r requirements.txt
-      pip install Flask-SQLAlchemy Flask-Migrate SQLAlchemy psycopg2-binary "psycopg[binary]"
+    buildCommand: bash scripts/render_build.sh
     startCommand: |
       if [ -d migrations ]; then
         flask --app app:app db upgrade || echo "Migration step failed; starting web server anyway."

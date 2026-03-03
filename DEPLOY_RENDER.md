@@ -16,9 +16,13 @@ Configure the web service with the following commands:
 
 - **Build Command**
   ```bash
-  pip install -r requirements.txt
-  pip install Flask-SQLAlchemy Flask-Migrate SQLAlchemy psycopg2-binary "psycopg[binary]"
+  bash scripts/render_build.sh
   ```
+
+  The script runs:
+  - `python -m pip install --upgrade pip`
+  - `python -m pip install -r requirements.txt`
+  - `python -m pip install Flask-SQLAlchemy Flask-Migrate SQLAlchemy psycopg2-binary "psycopg[binary]"`
 
 - **Start Command**
   ```bash
@@ -52,8 +56,9 @@ git commit -m "Add initial database migrations"
 After that, deploy to Render and keep using step 3 (`db upgrade && gunicorn`) for ongoing deploys.
 
 ## 5) If deploy logs still show missing psycopg/psycopg2
-- Ensure your **actual Render Build Command** includes both:
-  - `pip install -r requirements.txt`
-  - `pip install Flask-SQLAlchemy Flask-Migrate SQLAlchemy psycopg2-binary "psycopg[binary]"`
+- Ensure your **actual Render Build Command** is exactly:
+  - `bash scripts/render_build.sh`
+- Common failure: `pip install --upgrade pip install -r requirements.txt` (note the extra `install`) makes pip try to install a package literally named `install`, which matches the error `No matching distribution found for install`.
+- If your service still shows the same `No matching distribution found for install` log after this repo change, your Render dashboard is still overriding the repo command. Remove the custom build command in the UI (or set it to `bash scripts/render_build.sh`) and redeploy.
 - If you set custom commands in the Render dashboard, they override repo defaults from `render.yaml`.
 - A missing Postgres driver forces MoneyBot to fall back to SQLite, which means login/portfolio data will not persist across deploys.
