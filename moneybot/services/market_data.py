@@ -313,6 +313,7 @@ class MarketDataService:
             closes: list[float] = []
 
             try:
+                quote = self.get_quote(item["quote_symbol"])
                 ticker = yf.Ticker(item["symbol"])
                 hist = ticker.history(period="1mo", interval="1d")
                 if hist is not None and not hist.empty:
