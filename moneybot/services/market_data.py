@@ -58,29 +58,35 @@ class MarketDataService:
 
     def get_market_indices(self) -> list[Dict[str, Any]]:
         symbols = [
-            {"name": "Dow", "symbol": "^DJI"},
-            {"name": "S&P 500", "symbol": "^GSPC"},
-            {"name": "Nasdaq", "symbol": "^IXIC"},
-            {"name": "Gold", "symbol": "GC=F"},
-            {"name": "Bitcoin", "symbol": "BTC-USD"},
+            {"name": "Dow", "symbol": "^DJI", "quote_symbol": "DIA"},
+            {"name": "S&P 500", "symbol": "^GSPC", "quote_symbol": "SPY"},
+            {"name": "Nasdaq", "symbol": "^IXIC", "quote_symbol": "QQQ"},
+            {"name": "Gold", "symbol": "GC=F", "quote_symbol": "GLD"},
+            {"name": "Bitcoin", "symbol": "BTC-USD", "quote_symbol": "IBIT"},
         ]
         out: list[Dict[str, Any]] = []
         for item in symbols:
             try:
+                quote = self.get_quote(item["quote_symbol"])
                 ticker = yf.Ticker(item["symbol"])
                 hist = ticker.history(period="1mo", interval="1d")
                 if hist is None or hist.empty:
                     raise ValueError("history unavailable")
                 closes = [round(float(v), 2) for v in hist["Close"].tail(15)]
-                price = closes[-1]
-                prev = closes[-2] if len(closes) > 1 else closes[-1]
-                change = ((price - prev) / prev) * 100 if prev else 0
+                price = quote.get("price") if isinstance(quote.get("price"), (int, float)) else closes[-1]
+                change_raw = quote.get("change_percent")
+                if isinstance(change_raw, (int, float)):
+                    change = float(change_raw)
+                else:
+                    prev = closes[-2] if len(closes) > 1 else closes[-1]
+                    change = ((float(price) - prev) / prev) * 100 if prev else 0
                 out.append({
                     "name": item["name"],
                     "symbol": item["symbol"],
-                    "price": price,
+                    "price": round(float(price), 2),
                     "change_percent": round(change, 2),
                     "series": closes,
+                    "quote_source": quote.get("quote_source"),
                 })
             except Exception as exc:  # noqa: BLE001
                 logging.warning("Index fetch failed for %s: %s", item["symbol"], exc)
@@ -291,32 +297,57 @@ class MarketDataService:
 
     def get_market_indices(self) -> list[Dict[str, Any]]:
         symbols = [
-            {"name": "Dow", "symbol": "^DJI"},
-            {"name": "S&P 500", "symbol": "^GSPC"},
-            {"name": "Nasdaq", "symbol": "^IXIC"},
-            {"name": "Gold", "symbol": "GC=F"},
-            {"name": "Bitcoin", "symbol": "BTC-USD"},
+            {"name": "Dow", "symbol": "^DJI", "quote_symbol": "DIA"},
+            {"name": "S&P 500", "symbol": "^GSPC", "quote_symbol": "SPY"},
+            {"name": "Nasdaq", "symbol": "^IXIC", "quote_symbol": "QQQ"},
+            {"name": "Gold", "symbol": "GC=F", "quote_symbol": "GLD"},
+            {"name": "Bitcoin", "symbol": "BTC-USD", "quote_symbol": "IBIT"},
         ]
         out: list[Dict[str, Any]] = []
         for item in symbols:
+            quote = self.get_quote(item["quote_symbol"])
+            quote_price = quote.get("price")
+            quote_change = quote.get("change_percent")
+            price: float | None = float(quote_price) if isinstance(quote_price, (int, float)) else None
+            change: float | None = float(quote_change) if isinstance(quote_change, (int, float)) else None
+            closes: list[float] = []
+
             try:
                 ticker = yf.Ticker(item["symbol"])
                 hist = ticker.history(period="1mo", interval="1d")
-                if hist is None or hist.empty:
-                    raise ValueError("history unavailable")
-                closes = [round(float(v), 2) for v in hist["Close"].tail(15)]
-                price = closes[-1]
-                prev = closes[-2] if len(closes) > 1 else closes[-1]
-                change = ((price - prev) / prev) * 100 if prev else 0
-                out.append({
-                    "name": item["name"],
-                    "symbol": item["symbol"],
-                    "price": price,
-                    "change_percent": round(change, 2),
-                    "series": closes,
-                })
+                if hist is not None and not hist.empty:
+                    closes = [round(float(v), 2) for v in hist["Close"].tail(15)]
             except Exception as exc:  # noqa: BLE001
-                logging.warning("Index fetch failed for %s: %s", item["symbol"], exc)
+                logging.warning("Index history fetch failed for %s: %s", item["symbol"], exc)
+
+            if not closes:
+                if price is not None:
+                    closes = [round(price, 2)] * 15
+                else:
+                    mock_item = next((m for m in self._mock_market_indices() if m["symbol"] == item["symbol"]), None)
+                    closes = list(mock_item["series"]) if mock_item else []
+
+            if price is None and closes:
+                price = closes[-1]
+
+            if change is None and closes:
+                prev = closes[-2] if len(closes) > 1 else closes[-1]
+                change = ((float(price) - prev) / prev) * 100 if prev and price is not None else 0.0
+
+            if price is None:
+                mock_item = next((m for m in self._mock_market_indices() if m["symbol"] == item["symbol"]), None)
+                if mock_item:
+                    out.append(dict(mock_item))
+                    continue
+
+            out.append({
+                "name": item["name"],
+                "symbol": item["symbol"],
+                "price": round(float(price), 2),
+                "change_percent": round(float(change or 0.0), 2),
+                "series": closes,
+                "quote_source": quote.get("quote_source"),
+            })
 
         return out if len(out) == len(symbols) else self._mock_market_indices()
 
@@ -420,6 +451,8 @@ class MarketDataService:
                 except Exception as exc:  # noqa: BLE001
                     last_error = str(exc)
                     logging.warning("Quote fetch failed for %s: %s", cache_key, exc)
+                    if "Too Many Requests" in last_error:
+                        break
                     time.sleep(0.15)
 
             return self._fallback_quote(cache_key, last_error)
@@ -485,6 +518,28 @@ class MarketDataService:
             return cached
 
         quote = self.get_quote(cache_key)
+        if not quote.get("live_data_available"):
+            payload = {
+                "symbol": cache_key,
+                "action": "HOLD",
+                "verdict": "HOLD",
+                "hybrid_score": None,
+                "score": None,
+                "technical": {"rsi": None, "macd_histogram": None, "trend": "unknown"},
+                "rsi": None,
+                "macd_hist": None,
+                "volume_today": None,
+                "volume_ratio": None,
+                "sentiment": {"score": None, "label": "n/a", "headlines": []},
+                "rationale": ["Signal skipped because quote data was unavailable."],
+                "reasons": ["Signal skipped because quote data was unavailable."],
+                "quote": quote,
+                "quote_data_available": False,
+                "diagnostics": {"provider": "yfinance", "error": "quote_unavailable"},
+            }
+            self.signal_cache.set(cache_key, payload)
+            return payload
+
         try:
             result = analyze_ticker(cache_key)
             verdict = "STRONG BUY" if (result.score is not None and result.score >= 9) else result.verdict.upper()
