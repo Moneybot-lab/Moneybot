@@ -305,30 +305,50 @@ class MarketDataService:
         ]
         out: list[Dict[str, Any]] = []
         for item in symbols:
+            quote = self.get_quote(item["quote_symbol"])
+            quote_price = quote.get("price")
+            quote_change = quote.get("change_percent")
+            price: float | None = float(quote_price) if isinstance(quote_price, (int, float)) else None
+            change: float | None = float(quote_change) if isinstance(quote_change, (int, float)) else None
+            closes: list[float] = []
+
             try:
                 quote = self.get_quote(item["quote_symbol"])
                 ticker = yf.Ticker(item["symbol"])
                 hist = ticker.history(period="1mo", interval="1d")
-                if hist is None or hist.empty:
-                    raise ValueError("history unavailable")
-                closes = [round(float(v), 2) for v in hist["Close"].tail(15)]
-                price = quote.get("price") if isinstance(quote.get("price"), (int, float)) else closes[-1]
-                change_raw = quote.get("change_percent")
-                if isinstance(change_raw, (int, float)):
-                    change = float(change_raw)
-                else:
-                    prev = closes[-2] if len(closes) > 1 else closes[-1]
-                    change = ((float(price) - prev) / prev) * 100 if prev else 0
-                out.append({
-                    "name": item["name"],
-                    "symbol": item["symbol"],
-                    "price": round(float(price), 2),
-                    "change_percent": round(change, 2),
-                    "series": closes,
-                    "quote_source": quote.get("quote_source"),
-                })
+                if hist is not None and not hist.empty:
+                    closes = [round(float(v), 2) for v in hist["Close"].tail(15)]
             except Exception as exc:  # noqa: BLE001
-                logging.warning("Index fetch failed for %s: %s", item["symbol"], exc)
+                logging.warning("Index history fetch failed for %s: %s", item["symbol"], exc)
+
+            if not closes:
+                if price is not None:
+                    closes = [round(price, 2)] * 15
+                else:
+                    mock_item = next((m for m in self._mock_market_indices() if m["symbol"] == item["symbol"]), None)
+                    closes = list(mock_item["series"]) if mock_item else []
+
+            if price is None and closes:
+                price = closes[-1]
+
+            if change is None and closes:
+                prev = closes[-2] if len(closes) > 1 else closes[-1]
+                change = ((float(price) - prev) / prev) * 100 if prev and price is not None else 0.0
+
+            if price is None:
+                mock_item = next((m for m in self._mock_market_indices() if m["symbol"] == item["symbol"]), None)
+                if mock_item:
+                    out.append(dict(mock_item))
+                    continue
+
+            out.append({
+                "name": item["name"],
+                "symbol": item["symbol"],
+                "price": round(float(price), 2),
+                "change_percent": round(float(change or 0.0), 2),
+                "series": closes,
+                "quote_source": quote.get("quote_source"),
+            })
 
         return out if len(out) == len(symbols) else self._mock_market_indices()
 

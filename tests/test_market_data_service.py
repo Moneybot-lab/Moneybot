@@ -171,3 +171,25 @@ def test_get_signal_skips_analysis_when_quote_missing(monkeypatch):
     assert signal["quote_data_available"] is False
     assert signal["diagnostics"]["error"] == "quote_unavailable"
     assert "Signal skipped because quote data was unavailable." in signal["reasons"]
+
+def test_get_market_indices_uses_quote_when_history_rate_limited(monkeypatch):
+    svc = MarketDataService()
+
+    class DummyTicker:
+        def history(self, period, interval):
+            raise Exception("Too Many Requests. Rate limited. Try after a while.")
+
+    monkeypatch.setattr("moneybot.services.market_data.yf.Ticker", lambda _symbol: DummyTicker())
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda _symbol: {"price": 410.5, "change_percent": 0.8, "quote_source": "finnhub"},
+    )
+
+    data = svc.get_market_indices()
+
+    assert len(data) == 5
+    assert all(item["price"] == 410.5 for item in data)
+    assert all(item["change_percent"] == 0.8 for item in data)
+    assert all(item["quote_source"] == "finnhub" for item in data)
+    assert all(len(item["series"]) == 15 for item in data)
