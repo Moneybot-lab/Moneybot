@@ -235,6 +235,14 @@ def user_watchlist():
             performance_percent = ((current_price - entry_price) / entry_price) * 100
             performance_amount = (current_price - entry_price) * shares_value
 
+        today_change_percent = quote.get("change_percent")
+        today_change_amount = None
+        if isinstance(current_price, (int, float)) and isinstance(today_change_percent, (int, float)):
+            denominator = 1 + (today_change_percent / 100)
+            if denominator != 0:
+                previous_close = current_price / denominator
+                today_change_amount = (current_price - previous_close) * shares_value
+
         rsi = (signal.get("technical") or {}).get("rsi")
         sentiment_score = (signal.get("sentiment") or {}).get("score")
         advice = "HOLD"
@@ -263,6 +271,8 @@ def user_watchlist():
                 "score": signal.get("score") if signal.get("score") is not None else signal.get("hybrid_score"),
                 "sentiment": sentiment,
                 "current_price": current_price,
+                "today_change_percent": round(today_change_percent, 2) if isinstance(today_change_percent, (int, float)) else None,
+                "today_change_amount": round(today_change_amount, 2) if today_change_amount is not None else None,
                 "performance_percent": round(performance_percent, 2) if performance_percent is not None else None,
                 "performance_amount": round(performance_amount, 2) if performance_amount is not None else None,
                 "advice": advice,
