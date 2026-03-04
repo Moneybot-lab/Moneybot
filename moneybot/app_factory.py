@@ -370,7 +370,7 @@ def create_app() -> Flask:
               </form>
               <div id="out" style="margin:10px 0;color:#334155"></div>
               <div style="overflow-x:auto"><table style="width:100%;background:#fff;border-collapse:collapse;min-width:980px">
-                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Acquired</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Trend</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Sentiment</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
+                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Today's Gain/Loss</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Trend</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Sentiment</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
                 <tbody id="rows"></tbody>
               </table></div>
               <div id="tickerModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:50;align-items:center;justify-content:center;padding:14px">
@@ -409,18 +409,6 @@ def create_app() -> Flask:
               function formatMoney(v){
                 return (typeof v === 'number' && isFinite(v)) ? ('$' + v.toLocaleString(undefined,{maximumFractionDigits:2})) : 'n/a';
               }
-              function formatDate(value){
-                if(!value) return 'n/a';
-                const d = new Date(value);
-                return Number.isNaN(d.getTime()) ? 'n/a' : d.toLocaleDateString();
-              }
-              function formatDateInput(value){
-                if(!value) return '';
-                const d = new Date(value);
-                if(Number.isNaN(d.getTime())) return '';
-                return d.toISOString().slice(0,10);
-              }
-
               function sentimentBadge(value){
                 const sentiment = String(value || 'Neutral').toLowerCase();
                 if(sentiment === 'bullish' || sentiment === 'positive') return '<span style="color:#166534;font-weight:700;white-space:nowrap">▇ Bullish</span>';
@@ -449,6 +437,13 @@ def create_app() -> Flask:
                 const color = up ? '#166534' : '#b91c1c';
                 const sign = up ? '+' : '';
                 return `<div style="color:${color};font-weight:700">${sign}${formatMoney(amount)}</div><div style="color:${color};font-size:12px">(${sign}${pct.toFixed(2)}%)</div>`;
+              }
+              function amountCell(amount){
+                if(typeof amount !== 'number') return '<span style="color:#64748b">n/a</span>';
+                const up = amount >= 0;
+                const color = up ? '#166534' : '#b91c1c';
+                const sign = up ? '+' : '';
+                return `<div style="color:${color};font-weight:700">${sign}${formatMoney(amount)}</div>`;
               }
               function renderTrend(divId, series){
                 if(!window.Plotly) return;
@@ -498,7 +493,16 @@ def create_app() -> Flask:
                   return;
                 }
                 currentPortfolioItems = items;
-                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px;white-space:nowrap"><div style="display:flex;gap:6px;align-items:center"><input id="acquired-${i.id}" type="date" value="${formatDateInput(i.created_at)}" style="padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px"/><button onclick="updateAcquiredDate(${i.id})" style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:6px;background:#fff">Save</button></div></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td></tr>`).join('');
+                const totalValue = items.reduce((sum, item) => {
+                  const price = typeof item.current_price === 'number' ? item.current_price : 0;
+                  const shares = typeof item.shares === 'number' ? item.shares : 1;
+                  return sum + (price * shares);
+                }, 0);
+                const totalTodayChange = items.reduce((sum, item) => sum + (typeof item.today_change_amount === 'number' ? item.today_change_amount : 0), 0);
+                const totalPerformance = items.reduce((sum, item) => sum + (typeof item.performance_amount === 'number' ? item.performance_amount : 0), 0);
+
+                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td></tr>`).join('')
+                + `<tr style="background:#f8fafc;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
                 items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || []));
               }
 
@@ -524,20 +528,6 @@ def create_app() -> Flask:
                   await load();
                 } else {
                   outEl.textContent = data.error || 'Unable to add item.';
-                }
-              }
-
-              async function updateAcquiredDate(id){
-                const inputEl = document.getElementById(`acquired-${id}`);
-                const acquiredDate = (inputEl?.value || '').trim();
-                if(!acquiredDate){ outEl.textContent = 'Please choose an acquired date.'; return; }
-                const res = await fetch('/api/user-watchlist/' + id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({acquired_date: acquiredDate})});
-                const data = await res.json();
-                if(res.ok){
-                  outEl.textContent = 'Acquired date updated.';
-                  await load();
-                } else {
-                  outEl.textContent = data.error || 'Unable to update acquired date.';
                 }
               }
 
