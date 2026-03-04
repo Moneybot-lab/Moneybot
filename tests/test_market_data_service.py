@@ -143,3 +143,31 @@ def test_get_quote_stops_yfinance_retries_on_rate_limit(monkeypatch):
     assert quote["quote_source"] == "yfinance"
     assert quote["live_data_available"] is False
     assert calls["count"] == 1
+
+def test_get_signal_skips_analysis_when_quote_missing(monkeypatch):
+    svc = MarketDataService()
+
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda _symbol: {
+            "symbol": "LCDI",
+            "price": "DATA_MISSING",
+            "change_percent": "DATA_MISSING",
+            "live_data_available": False,
+            "quote_source": "yfinance",
+            "diagnostics": {"provider": "yfinance", "error": "not_found"},
+        },
+    )
+
+    def explode(_symbol):
+        raise AssertionError("analyze_ticker should not be called when quote is unavailable")
+
+    monkeypatch.setattr("moneybot.services.market_data.analyze_ticker", explode)
+
+    signal = svc.get_signal("LCDI")
+
+    assert signal["action"] == "HOLD"
+    assert signal["quote_data_available"] is False
+    assert signal["diagnostics"]["error"] == "quote_unavailable"
+    assert "Signal skipped because quote data was unavailable." in signal["reasons"]

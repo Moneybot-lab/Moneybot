@@ -499,6 +499,28 @@ class MarketDataService:
             return cached
 
         quote = self.get_quote(cache_key)
+        if not quote.get("live_data_available"):
+            payload = {
+                "symbol": cache_key,
+                "action": "HOLD",
+                "verdict": "HOLD",
+                "hybrid_score": None,
+                "score": None,
+                "technical": {"rsi": None, "macd_histogram": None, "trend": "unknown"},
+                "rsi": None,
+                "macd_hist": None,
+                "volume_today": None,
+                "volume_ratio": None,
+                "sentiment": {"score": None, "label": "n/a", "headlines": []},
+                "rationale": ["Signal skipped because quote data was unavailable."],
+                "reasons": ["Signal skipped because quote data was unavailable."],
+                "quote": quote,
+                "quote_data_available": False,
+                "diagnostics": {"provider": "yfinance", "error": "quote_unavailable"},
+            }
+            self.signal_cache.set(cache_key, payload)
+            return payload
+
         try:
             result = analyze_ticker(cache_key)
             verdict = "STRONG BUY" if (result.score is not None and result.score >= 9) else result.verdict.upper()
