@@ -119,3 +119,27 @@ def test_get_market_indices_prefers_finnhub_quote_data(monkeypatch):
     assert len(data) == 5
     assert all(item["price"] == 321.0 for item in data)
     assert all(item["quote_source"] == "finnhub" for item in data)
+
+
+def test_get_quote_stops_yfinance_retries_on_rate_limit(monkeypatch):
+    svc = MarketDataService(retries=3)
+
+    monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
+    monkeypatch.delenv("FINNHUB_TOKEN", raising=False)
+    monkeypatch.delenv("X_FINNHUB_TOKEN", raising=False)
+
+    calls = {"count": 0}
+
+    class DummyTicker:
+        @property
+        def info(self):
+            calls["count"] += 1
+            raise Exception("Too Many Requests. Rate limited. Try after a while.")
+
+    monkeypatch.setattr("moneybot.services.market_data.yf.Ticker", lambda _symbol: DummyTicker())
+
+    quote = svc.get_quote("AAPL")
+
+    assert quote["quote_source"] == "yfinance"
+    assert quote["live_data_available"] is False
+    assert calls["count"] == 1

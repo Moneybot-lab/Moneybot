@@ -58,11 +58,11 @@ class MarketDataService:
 
     def get_market_indices(self) -> list[Dict[str, Any]]:
         symbols = [
-            {"name": "Dow", "symbol": "^DJI", "quote_symbol": "^DJI"},
-            {"name": "S&P 500", "symbol": "^GSPC", "quote_symbol": "^GSPC"},
-            {"name": "Nasdaq", "symbol": "^IXIC", "quote_symbol": "^IXIC"},
-            {"name": "Gold", "symbol": "GC=F", "quote_symbol": "OANDA:XAU_USD"},
-            {"name": "Bitcoin", "symbol": "BTC-USD", "quote_symbol": "BINANCE:BTCUSDT"},
+            {"name": "Dow", "symbol": "^DJI", "quote_symbol": "DIA"},
+            {"name": "S&P 500", "symbol": "^GSPC", "quote_symbol": "SPY"},
+            {"name": "Nasdaq", "symbol": "^IXIC", "quote_symbol": "QQQ"},
+            {"name": "Gold", "symbol": "GC=F", "quote_symbol": "GLD"},
+            {"name": "Bitcoin", "symbol": "BTC-USD", "quote_symbol": "IBIT"},
         ]
         out: list[Dict[str, Any]] = []
         for item in symbols:
@@ -297,11 +297,11 @@ class MarketDataService:
 
     def get_market_indices(self) -> list[Dict[str, Any]]:
         symbols = [
-            {"name": "Dow", "symbol": "^DJI", "quote_symbol": "^DJI"},
-            {"name": "S&P 500", "symbol": "^GSPC", "quote_symbol": "^GSPC"},
-            {"name": "Nasdaq", "symbol": "^IXIC", "quote_symbol": "^IXIC"},
-            {"name": "Gold", "symbol": "GC=F", "quote_symbol": "OANDA:XAU_USD"},
-            {"name": "Bitcoin", "symbol": "BTC-USD", "quote_symbol": "BINANCE:BTCUSDT"},
+            {"name": "Dow", "symbol": "^DJI", "quote_symbol": "DIA"},
+            {"name": "S&P 500", "symbol": "^GSPC", "quote_symbol": "SPY"},
+            {"name": "Nasdaq", "symbol": "^IXIC", "quote_symbol": "QQQ"},
+            {"name": "Gold", "symbol": "GC=F", "quote_symbol": "GLD"},
+            {"name": "Bitcoin", "symbol": "BTC-USD", "quote_symbol": "IBIT"},
         ]
         out: list[Dict[str, Any]] = []
         for item in symbols:
@@ -432,6 +432,8 @@ class MarketDataService:
                 except Exception as exc:  # noqa: BLE001
                     last_error = str(exc)
                     logging.warning("Quote fetch failed for %s: %s", cache_key, exc)
+                    if "Too Many Requests" in last_error:
+                        break
                     time.sleep(0.15)
 
             return self._fallback_quote(cache_key, last_error)
