@@ -88,3 +88,34 @@ def test_get_quote_falls_back_to_yfinance_without_finnhub_key(monkeypatch):
     assert quote["price"] == 250.0
     assert quote["diagnostics"]["finnhub_attempted"] is False
     assert quote["diagnostics"]["finnhub_error"] == "missing_api_key"
+
+
+def test_get_market_indices_prefers_finnhub_quote_data(monkeypatch):
+    svc = MarketDataService()
+
+    class DummyHistory:
+        empty = False
+
+        def __getitem__(self, _key):
+            class Tailable:
+                def tail(self, _days):
+                    return [100.0, 101.0, 102.0]
+
+            return Tailable()
+
+    class DummyTicker:
+        def history(self, period, interval):
+            return DummyHistory()
+
+    monkeypatch.setattr("moneybot.services.market_data.yf.Ticker", lambda _symbol: DummyTicker())
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda _symbol: {"price": 321.0, "change_percent": 1.5, "quote_source": "finnhub"},
+    )
+
+    data = svc.get_market_indices()
+
+    assert len(data) == 5
+    assert all(item["price"] == 321.0 for item in data)
+    assert all(item["quote_source"] == "finnhub" for item in data)
