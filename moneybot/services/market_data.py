@@ -58,29 +58,35 @@ class MarketDataService:
 
     def get_market_indices(self) -> list[Dict[str, Any]]:
         symbols = [
-            {"name": "Dow", "symbol": "^DJI"},
-            {"name": "S&P 500", "symbol": "^GSPC"},
-            {"name": "Nasdaq", "symbol": "^IXIC"},
-            {"name": "Gold", "symbol": "GC=F"},
-            {"name": "Bitcoin", "symbol": "BTC-USD"},
+            {"name": "Dow", "symbol": "^DJI", "quote_symbol": "^DJI"},
+            {"name": "S&P 500", "symbol": "^GSPC", "quote_symbol": "^GSPC"},
+            {"name": "Nasdaq", "symbol": "^IXIC", "quote_symbol": "^IXIC"},
+            {"name": "Gold", "symbol": "GC=F", "quote_symbol": "OANDA:XAU_USD"},
+            {"name": "Bitcoin", "symbol": "BTC-USD", "quote_symbol": "BINANCE:BTCUSDT"},
         ]
         out: list[Dict[str, Any]] = []
         for item in symbols:
             try:
+                quote = self.get_quote(item["quote_symbol"])
                 ticker = yf.Ticker(item["symbol"])
                 hist = ticker.history(period="1mo", interval="1d")
                 if hist is None or hist.empty:
                     raise ValueError("history unavailable")
                 closes = [round(float(v), 2) for v in hist["Close"].tail(15)]
-                price = closes[-1]
-                prev = closes[-2] if len(closes) > 1 else closes[-1]
-                change = ((price - prev) / prev) * 100 if prev else 0
+                price = quote.get("price") if isinstance(quote.get("price"), (int, float)) else closes[-1]
+                change_raw = quote.get("change_percent")
+                if isinstance(change_raw, (int, float)):
+                    change = float(change_raw)
+                else:
+                    prev = closes[-2] if len(closes) > 1 else closes[-1]
+                    change = ((float(price) - prev) / prev) * 100 if prev else 0
                 out.append({
                     "name": item["name"],
                     "symbol": item["symbol"],
-                    "price": price,
+                    "price": round(float(price), 2),
                     "change_percent": round(change, 2),
                     "series": closes,
+                    "quote_source": quote.get("quote_source"),
                 })
             except Exception as exc:  # noqa: BLE001
                 logging.warning("Index fetch failed for %s: %s", item["symbol"], exc)
@@ -291,29 +297,35 @@ class MarketDataService:
 
     def get_market_indices(self) -> list[Dict[str, Any]]:
         symbols = [
-            {"name": "Dow", "symbol": "^DJI"},
-            {"name": "S&P 500", "symbol": "^GSPC"},
-            {"name": "Nasdaq", "symbol": "^IXIC"},
-            {"name": "Gold", "symbol": "GC=F"},
-            {"name": "Bitcoin", "symbol": "BTC-USD"},
+            {"name": "Dow", "symbol": "^DJI", "quote_symbol": "^DJI"},
+            {"name": "S&P 500", "symbol": "^GSPC", "quote_symbol": "^GSPC"},
+            {"name": "Nasdaq", "symbol": "^IXIC", "quote_symbol": "^IXIC"},
+            {"name": "Gold", "symbol": "GC=F", "quote_symbol": "OANDA:XAU_USD"},
+            {"name": "Bitcoin", "symbol": "BTC-USD", "quote_symbol": "BINANCE:BTCUSDT"},
         ]
         out: list[Dict[str, Any]] = []
         for item in symbols:
             try:
+                quote = self.get_quote(item["quote_symbol"])
                 ticker = yf.Ticker(item["symbol"])
                 hist = ticker.history(period="1mo", interval="1d")
                 if hist is None or hist.empty:
                     raise ValueError("history unavailable")
                 closes = [round(float(v), 2) for v in hist["Close"].tail(15)]
-                price = closes[-1]
-                prev = closes[-2] if len(closes) > 1 else closes[-1]
-                change = ((price - prev) / prev) * 100 if prev else 0
+                price = quote.get("price") if isinstance(quote.get("price"), (int, float)) else closes[-1]
+                change_raw = quote.get("change_percent")
+                if isinstance(change_raw, (int, float)):
+                    change = float(change_raw)
+                else:
+                    prev = closes[-2] if len(closes) > 1 else closes[-1]
+                    change = ((float(price) - prev) / prev) * 100 if prev else 0
                 out.append({
                     "name": item["name"],
                     "symbol": item["symbol"],
-                    "price": price,
+                    "price": round(float(price), 2),
                     "change_percent": round(change, 2),
                     "series": closes,
+                    "quote_source": quote.get("quote_source"),
                 })
             except Exception as exc:  # noqa: BLE001
                 logging.warning("Index fetch failed for %s: %s", item["symbol"], exc)
