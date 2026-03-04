@@ -11,18 +11,21 @@ from .extensions import db, migrate
 from .services.market_data import MarketDataService
 
 
-def create_app() -> Flask:
-    secret = os.environ.get("MONEYBOT_SECRET_KEY")
-    if not secret:
-        logging.warning(
-            "MONEYBOT_SECRET_KEY is not set. Using an insecure fallback key; set MONEYBOT_SECRET_KEY in production."
-        )
-        secret = "moneybot-insecure-fallback-key"
-
-    raw_database_url = os.environ.get("DATABASE_URL")
+def _resolve_database_url() -> str:
+    # Prefer explicit DATABASE_URL, but support common provider aliases used on hosted platforms.
+    raw_database_url = (
+        os.environ.get("DATABASE_URL")
+        or os.environ.get("POSTGRES_INTERNAL_URL")
+        or os.environ.get("POSTGRES_URL")
+        or os.environ.get("POSTGRESQL_URL")
+    )
     database_url = (raw_database_url or "").strip() or "sqlite:///moneybot.db"
+
     if database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+    # Fail fast on hosted deployments so we do not silently deploy with non-persistent auth/portfolio storage.
+    is_hosted = os.environ.get("RENDER") == "true" or os.environ.get("FLASK_ENV") == "production"
 
     # Pick an installed PostgreSQL DBAPI when the URL does not pin one.
     if database_url.startswith("postgresql://") and "+" not in database_url.split("://", 1)[0]:
@@ -31,12 +34,23 @@ def create_app() -> Flask:
         if has_psycopg:
             database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
         elif not has_psycopg2:
-            logging.error(
+            msg = (
                 "DATABASE_URL points to PostgreSQL but no PostgreSQL driver is installed. "
-                "Falling back to local SQLite; persistent login/portfolio data will not be saved. "
                 "Install psycopg[binary] or psycopg2-binary in the build command."
             )
+            if is_hosted:
+                raise RuntimeError(msg)
+            logging.error(
+                "%s Falling back to local SQLite for local/dev only; data will not persist.",
+                msg,
+            )
             database_url = "sqlite:///moneybot.db"
+
+    if database_url.startswith("sqlite") and is_hosted:
+        raise RuntimeError(
+            "No persistent PostgreSQL database is configured for production. "
+            "Set DATABASE_URL (or POSTGRES_INTERNAL_URL/POSTGRES_URL) and ensure a PostgreSQL driver is installed."
+        )
 
     if " " in database_url or "://" not in database_url:
         raise RuntimeError(
@@ -44,6 +58,19 @@ def create_app() -> Flask:
             "Set DATABASE_URL to a valid value such as "
             "postgresql://user:password@host:5432/dbname."
         )
+
+    return database_url
+
+
+def create_app() -> Flask:
+    secret = os.environ.get("MONEYBOT_SECRET_KEY")
+    if not secret:
+        logging.warning(
+            "MONEYBOT_SECRET_KEY is not set. Using an insecure fallback key; set MONEYBOT_SECRET_KEY in production."
+        )
+        secret = "moneybot-insecure-fallback-key"
+
+    database_url = _resolve_database_url()
 
     app = Flask(__name__)
     app.url_map.strict_slashes = False
