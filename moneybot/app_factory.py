@@ -24,6 +24,9 @@ def _resolve_database_url() -> str:
     if database_url.startswith("postgres://"):
         database_url = database_url.replace("postgres://", "postgresql://", 1)
 
+    # Fail fast on hosted deployments so we do not silently deploy with non-persistent auth/portfolio storage.
+    is_hosted = os.environ.get("RENDER") == "true" or os.environ.get("FLASK_ENV") == "production"
+
     # Pick an installed PostgreSQL DBAPI when the URL does not pin one.
     if database_url.startswith("postgresql://") and "+" not in database_url.split("://", 1)[0]:
         has_psycopg = importlib.util.find_spec("psycopg") is not None
@@ -31,15 +34,18 @@ def _resolve_database_url() -> str:
         if has_psycopg:
             database_url = database_url.replace("postgresql://", "postgresql+psycopg://", 1)
         elif not has_psycopg2:
-            logging.error(
+            msg = (
                 "DATABASE_URL points to PostgreSQL but no PostgreSQL driver is installed. "
-                "Falling back to local SQLite; persistent login/portfolio data will not be saved. "
                 "Install psycopg[binary] or psycopg2-binary in the build command."
+            )
+            if is_hosted:
+                raise RuntimeError(msg)
+            logging.error(
+                "%s Falling back to local SQLite for local/dev only; data will not persist.",
+                msg,
             )
             database_url = "sqlite:///moneybot.db"
 
-    # Fail fast on hosted deployments so we do not silently deploy with non-persistent auth/portfolio storage.
-    is_hosted = os.environ.get("RENDER") == "true" or os.environ.get("FLASK_ENV") == "production"
     if database_url.startswith("sqlite") and is_hosted:
         raise RuntimeError(
             "No persistent PostgreSQL database is configured for production. "

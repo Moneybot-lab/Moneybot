@@ -13,6 +13,8 @@ def _install_runtime_deps() -> None:
             "Flask-SQLAlchemy",
             "SQLAlchemy",
             "Flask-Migrate",
+            "psycopg2-binary",
+            "psycopg[binary]",
         ]
     )
 
