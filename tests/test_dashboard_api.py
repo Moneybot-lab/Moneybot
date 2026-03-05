@@ -62,12 +62,12 @@ def test_tab_data_endpoints_return_items():
     assert wells.get_json()["items"][0]["stocks"][0]["ticker"] == "AAPL"
 
 
-def test_quick_ask_returns_buy_or_sell_only():
+def test_quick_ask_returns_shopping_friendly_recommendation_scale():
     client = _client()
     res = client.get("/api/quick-ask?symbol=AAPL")
     assert res.status_code == 200
     data = res.get_json()["data"]
-    assert data["recommendation"] in {"BUY", "SELL"}
+    assert data["recommendation"] in {"STRONG BUY", "BUY", "HOLD OFF FOR NOW"}
     assert data["recommendation"] == "BUY"
     assert "Momentum" in data["rationale"] or "signal" in data["rationale"]
     assert data["quote_source"] == "finnhub"

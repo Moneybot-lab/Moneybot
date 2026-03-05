@@ -115,13 +115,28 @@ def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> 
 
     rsi = technical.get("rsi")
     macd = technical.get("macd_histogram")
+    sentiment_score = sentiment.get("score")
     sentiment_label = (sentiment.get("label") or "neutral").lower()
 
-    if action in {"STRONG BUY", "BUY", "SELL"}:
-        recommendation = action
+    strong_buy_signal = action == "STRONG BUY" or (
+        isinstance(rsi, (int, float))
+        and rsi <= 35
+        and isinstance(sentiment_score, (int, float))
+        and sentiment_score >= 0.7
+    )
+    buy_signal = action == "BUY" or (
+        isinstance(rsi, (int, float))
+        and rsi < 55
+        and sentiment_label in {"positive", "bullish"}
+        and (not isinstance(macd, (int, float)) or macd >= 0)
+    )
+
+    if strong_buy_signal:
+        recommendation = "STRONG BUY"
+    elif buy_signal:
+        recommendation = "BUY"
     else:
-        bearish = (isinstance(rsi, (int, float)) and rsi >= 68) or (isinstance(macd, (int, float)) and macd < 0)
-        recommendation = "SELL" if bearish or sentiment_label in {"negative", "bearish"} else "BUY"
+        recommendation = "HOLD OFF FOR NOW"
 
     rationale = signal_data.get("reasons") or signal_data.get("rationale") or []
     short_reason = rationale[0] if rationale else "Derived from momentum and signal checks."

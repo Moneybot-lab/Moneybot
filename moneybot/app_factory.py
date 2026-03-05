@@ -115,12 +115,12 @@ def create_app() -> Flask:
                 </header>
 
                 <section style="background:#0f172a;color:#e2e8f0;border-radius:14px;padding:16px;margin-bottom:18px;box-shadow:0 10px 24px rgba(2,6,23,.18)">
-                  <h3 style="margin:0 0 10px 0;color:#f8fafc">Quick Ask · Buy or Sell Now</h3>
+                  <h3 style="margin:0 0 10px 0;color:#f8fafc">Quick Ask · What should I do now?</h3>
                   <div style="display:flex;gap:8px;flex-wrap:wrap">
                     <input id="quickSymbol" placeholder="Ticker (e.g. AAPL)" style="padding:10px 12px;border:1px solid #334155;border-radius:10px;min-width:210px;background:#111827;color:#f8fafc"/>
                     <button onclick="quickAsk()" style="padding:10px 14px;border:none;background:#2563eb;color:#fff;border-radius:10px;font-weight:700">Analyze</button>
                   </div>
-                  <div id="quickOut" style="margin-top:10px;color:#cbd5e1">Type a ticker to get an instant BUY/SELL call.</div>
+                  <div id="quickOut" style="margin-top:10px;color:#cbd5e1">Type a ticker to get an instant STRONG BUY / BUY / HOLD OFF FOR NOW call.</div>
                 </section>
 
                 <section style="margin-bottom:18px">
@@ -174,6 +174,11 @@ def create_app() -> Flask:
                   };
 
                   function formatMoney(v){ return typeof v === 'number' ? '$' + v.toLocaleString(undefined,{maximumFractionDigits:2}) : 'n/a'; }
+                  function quickRecommendationBadge(recommendation){
+                    const rec = String(recommendation || 'HOLD OFF FOR NOW').toUpperCase();
+                    const color = rec === 'STRONG BUY' ? '#22c55e' : (rec === 'BUY' ? '#166534' : '#b91c1c');
+                    return `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${color};color:#fff;font-weight:800;font-size:12px;letter-spacing:.02em">${rec}</span>`;
+                  }
                   const marketChartInstances = {};
                   function destroyMarketCharts(){ Object.values(marketChartInstances).forEach(c => c.destroy()); Object.keys(marketChartInstances).forEach(k => delete marketChartInstances[k]); }
 
@@ -196,7 +201,8 @@ def create_app() -> Flask:
                     const payload = await res.json();
                     if(!res.ok){ outEl.textContent = payload.error || 'Unable to analyze this ticker.'; return; }
                     const data = payload.data || {};
-                    outEl.textContent = `${data.recommendation || 'HOLD'} · ${formatMoney(data.current_price)} · ${data.rationale || 'Signal generated from current indicators.'}`;
+                    const recommendation = String(data.recommendation || 'HOLD OFF FOR NOW').toUpperCase();
+                    outEl.innerHTML = `${quickRecommendationBadge(recommendation)} <span style="margin-left:8px">· ${formatMoney(data.current_price)} · ${data.rationale || 'Signal generated from current indicators.'}</span>`;
                   }
 
                   function tickerButton(symbol){
@@ -390,6 +396,10 @@ def create_app() -> Flask:
                     <button onclick="closeAdviceModal()" style="border:none;background:#e2e8f0;border-radius:8px;padding:6px 10px">Close</button>
                   </div>
                   <p id="adviceReason" style="color:#334155;margin-top:10px">No reasoning available.</p>
+                  <div style="margin-top:12px">
+                    <div style="font-size:12px;color:#64748b;font-weight:700;letter-spacing:.02em;text-transform:uppercase">Latest Headlines</div>
+                    <div id="adviceHeadlines" style="display:grid;gap:8px;margin-top:8px"></div>
+                  </div>
                 </div>
               </div>
               <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
@@ -421,15 +431,36 @@ def create_app() -> Flask:
                 return `<span style="display:inline-block;padding:4px 8px;border-radius:999px;background:${color};color:#fff;font-weight:700;font-size:12px">${advice}</span>`;
               }
               function adviceButton(item, idx){
-                return `<button onclick="showAdvice(${idx})" style="border:none;background:none;padding:0;cursor:pointer">${adviceBadge(item.advice)}</button>`;
+                return `<button onclick="showAdvice(${idx})" title="Click to see why this advice was generated" style="border:none;background:none;padding:0;cursor:pointer">${adviceBadge(item.advice)}</button>`;
               }
               function openAdviceModal(){ document.getElementById('adviceModal').style.display='flex'; }
               function closeAdviceModal(){ document.getElementById('adviceModal').style.display='none'; }
-              function showAdvice(idx){
+              async function showAdvice(idx){
                 const item = currentPortfolioItems[idx] || {};
-                document.getElementById('adviceTitle').textContent = `${item.symbol || ''} · ${String(item.advice || 'HOLD').toUpperCase()} rationale`;
-                document.getElementById('adviceReason').textContent = item.advice_reason || 'Rule-based recommendation from technical momentum and sentiment checks.';
+                const symbol = item.symbol || '';
+                const advice = String(item.advice || 'HOLD').toUpperCase();
+                const reason = item.advice_reason || 'Rule-based recommendation from technical momentum and sentiment checks.';
+                document.getElementById('adviceTitle').textContent = `${symbol} · ${advice} rationale`;
+                document.getElementById('adviceReason').textContent = `Why this advice was given: ${reason}`;
+                const headlinesEl = document.getElementById('adviceHeadlines');
+                headlinesEl.innerHTML = '<div style="color:#64748b">Loading latest headlines...</div>';
                 openAdviceModal();
+                if(!symbol){
+                  headlinesEl.innerHTML = '<div style="color:#64748b">No recent headlines available.</div>';
+                  return;
+                }
+                try {
+                  const res = await fetch('/api/company-details?symbol=' + encodeURIComponent(symbol));
+                  const payload = await res.json();
+                  if(!res.ok){
+                    headlinesEl.innerHTML = '<div style="color:#64748b">No recent headlines available.</div>';
+                    return;
+                  }
+                  const news = (payload.data && payload.data.latest_news) || [];
+                  headlinesEl.innerHTML = news.length ? news.map(n => `<a href="${n.link || '#'}" target="_blank" rel="noopener" style="display:block;padding:8px;border:1px solid #e2e8f0;border-radius:8px;text-decoration:none;color:#0f172a"><div style="font-weight:600">${n.title || 'Story'}</div><div style="font-size:12px;color:#64748b">${n.publisher || 'Source unavailable'}</div></a>`).join('') : '<div style="color:#64748b">No recent headlines available.</div>';
+                } catch (err) {
+                  headlinesEl.innerHTML = '<div style="color:#64748b">Unable to load headlines right now.</div>';
+                }
               }
               function performanceCell(amount, pct){
                 if(typeof amount !== 'number' || typeof pct !== 'number') return '<span style="color:#64748b">n/a</span>';
@@ -480,7 +511,7 @@ def create_app() -> Flask:
                   titleEl.textContent = `${data.company_name || symbol} (${symbol})`;
                   summaryEl.textContent = data.summary || 'No summary available.';
                   const news = data.latest_news || [];
-                  newsEl.innerHTML = news.length ? news.map(n => `<a href="${n.link || '#'}" target="_blank" rel="noopener" style="display:block;padding:8px;border:1px solid #e2e8f0;border-radius:8px;text-decoration:none;color:#0f172a"><div style="font-weight:600">${n.title || 'Untitled'}</div><div style="font-size:12px;color:#64748b">${n.publisher || ''}</div></a>`).join('') : '<div style="color:#64748b">No recent news available.</div>';
+                  newsEl.innerHTML = news.length ? news.map(n => `<a href="${n.link || '#'}" target="_blank" rel="noopener" style="display:block;padding:8px;border:1px solid #e2e8f0;border-radius:8px;text-decoration:none;color:#0f172a"><div style="font-weight:600">${n.title || 'Story'}</div><div style="font-size:12px;color:#64748b">${n.publisher || 'Source unavailable'}</div></a>`).join('') : '<div style="color:#64748b">No recent news available.</div>';
                 } catch (err) {
                   titleEl.textContent = symbol;
                   summaryEl.textContent = 'Unable to load company details right now.';
@@ -502,7 +533,7 @@ def create_app() -> Flask:
                 const totalPerformance = items.reduce((sum, item) => sum + (typeof item.performance_amount === 'number' ? item.performance_amount : 0), 0);
 
                 rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td></tr>`).join('')
-                + `<tr style="background:#f8fafc;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
+                + `<tr style="background:#f8fafc;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px;color:#475569;font-size:12px">Click advice badges to see why.</td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
                 items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || []));
               }
 
