@@ -190,6 +190,7 @@ def fetch_fundamentals(ticker: str) -> Dict:
 
     now = time.time()
     cached = INFO_CACHE.get(ticker)
+    info_rate_limited = False
     if cached and now - cached.get("ts", 0) < CACHE_TTL:
         info = cached["data"]
     else:
@@ -199,6 +200,7 @@ def fetch_fundamentals(ticker: str) -> Dict:
         except Exception as exc:
             logging.warning(f"yfinance info unavailable for {ticker}: {exc}")
             info = {}
+            info_rate_limited = "Too Many Requests" in str(exc)
 
     revenue_growth = info.get("revenueGrowth")
     revenue_growth = float(revenue_growth) if revenue_growth is not None else None
@@ -216,17 +218,18 @@ def fetch_fundamentals(ticker: str) -> Dict:
         except Exception:
             pass
 
-    # Scrape still happens once per cache miss—add timeout
+    # Scrape only when info call was not rate-limited; keep timeout short to avoid API latency spikes.
     active_users_qoq = None
     subs_yoy = None
-    try:
-        res = requests.get(f"https://finance.yahoo.com/quote/{ticker}", headers=HEADERS, timeout=10)
-        res.raise_for_status()
-        html = res.text
-        active_users_qoq = _find_pct_metric(html, ["daily active users", "monthly active users", "active users", "DAU", "MAU"])
-        subs_yoy = _find_pct_metric(html, ["subscribers", "subscriptions", "paid users"])
-    except Exception as exc:
-        logging.warning(f"Metric scrape fail for {ticker}: {exc}")
+    if not info_rate_limited:
+        try:
+            res = requests.get(f"https://finance.yahoo.com/quote/{ticker}", headers=HEADERS, timeout=2)
+            res.raise_for_status()
+            html = res.text
+            active_users_qoq = _find_pct_metric(html, ["daily active users", "monthly active users", "active users", "DAU", "MAU"])
+            subs_yoy = _find_pct_metric(html, ["subscribers", "subscriptions", "paid users"])
+        except Exception as exc:
+            logging.warning(f"Metric scrape fail for {ticker}: {exc}")
 
     return {
         "revenue_growth_yoy": revenue_growth,

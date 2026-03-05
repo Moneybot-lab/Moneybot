@@ -28,7 +28,9 @@ Set these env vars on the web service:
 - `DATABASE_URL` = internal connection string from Render Postgres
 - `MONEYBOT_SECRET_KEY` = long random stable secret (do not rotate frequently)
 - `DATA_PROVIDER` = `yfinance` (optional; defaults to `yfinance`)
-- `FINNHUB_API_KEY` = your Finnhub key (optional, enables Finnhub quote source before yfinance fallback)
+- `MASSIVE_API_KEY` = your Massive (Polygon) API key (optional but recommended; primary quote source when set)
+  - MoneyBot also accepts `POLYGON_API_KEY` as an alias.
+- `FINNHUB_API_KEY` = your Finnhub key (optional; secondary quote fallback when Massive is unavailable)
   - MoneyBot also accepts `FINNHUB_TOKEN` or `X_FINNHUB_TOKEN` for compatibility with different secret naming conventions.
 
 ## 3) Install + migrate + run (Render Web Service)
@@ -107,8 +109,12 @@ curl -s "https://<your-service>.onrender.com/api/quote?symbol=TSLA" | jq .data
 ```
 
 Look for:
-- `quote_source: "finnhub"` on success
+- `quote_source: "massive"` when Massive is configured and responds with valid quote data
+- `quote_source: "finnhub"` when Massive is unavailable and Finnhub succeeds
 - or `quote_source: "yfinance"` with diagnostics containing:
+  - `massive_attempted`
+  - `massive_key_source`
+  - `massive_error`
   - `finnhub_attempted`
   - `finnhub_key_source`
   - `finnhub_error`
@@ -120,7 +126,7 @@ For quick triage from the UI-backed endpoint, you can also inspect:
 ```bash
 curl -s "https://<your-service>.onrender.com/api/quick-ask?symbol=TSLA" | jq .data
 ```
-Look for `quote_source` and `quote_diagnostics` to confirm whether Finnhub was used or why fallback occurred.
+Look for `quote_source` and `quote_diagnostics` to confirm whether Massive/Finnhub was used or why fallback occurred.
 
 ## 8) If requests contain `symbol=/api/quote?symbol=TSLA`
 MoneyBot now normalizes URL-like symbol input on API endpoints (e.g. quick-ask, quote, signal, watchlist add).
