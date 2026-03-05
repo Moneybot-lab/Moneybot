@@ -260,3 +260,28 @@ def test_get_quote_falls_back_to_finnhub_when_massive_unavailable(monkeypatch):
 
     assert quote["quote_source"] == "finnhub"
     assert quote["price"] == 150.0
+
+
+def test_get_company_snapshot_skips_placeholder_news(monkeypatch):
+    svc = MarketDataService()
+
+    class DummyTicker:
+        info = {"longName": "Lucid Group, Inc.", "longBusinessSummary": "EV maker."}
+        news = [
+            {"title": "Untitled", "publisher": "Unknown source", "link": "https://example.com/a"},
+            {"title": "Valid headline", "publisher": "Reuters", "link": "https://example.com/b"},
+            {"title": "", "publisher": "Bloomberg", "link": "https://example.com/c"},
+        ]
+
+    monkeypatch.setattr("moneybot.services.market_data.yf.Ticker", lambda _symbol: DummyTicker())
+
+    snapshot = svc.get_company_snapshot("LCID")
+
+    assert snapshot["company_name"] == "Lucid Group, Inc."
+    assert snapshot["latest_news"] == [
+        {
+            "title": "Valid headline",
+            "publisher": "Reuters",
+            "link": "https://example.com/b",
+        }
+    ]

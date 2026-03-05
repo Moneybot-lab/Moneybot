@@ -140,16 +140,24 @@ class MarketDataService:
             summary = summary[:320].strip() + ("..." if len(summary) > 320 else "")
 
             news_items = ticker.news or []
-            for item in news_items[:3]:
+            for item in news_items:
                 if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title") or "").strip()
+                publisher = str(item.get("publisher") or "").strip()
+                if not title or title.lower() == "untitled":
+                    continue
+                if not publisher or publisher.lower() == "unknown source":
                     continue
                 latest_news.append(
                     {
-                        "title": str(item.get("title") or "Untitled"),
-                        "publisher": str(item.get("publisher") or "Unknown source"),
+                        "title": title,
+                        "publisher": publisher,
                         "link": str(item.get("link") or ""),
                     }
                 )
+                if len(latest_news) == 3:
+                    break
 
             return {
                 "symbol": ticker_symbol,
