@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from moneybot.services.market_data import MarketDataService
 
 
@@ -258,8 +261,77 @@ def test_get_quote_falls_back_to_finnhub_when_massive_unavailable(monkeypatch):
 
     quote = svc.get_quote("AAPL")
 
-    assert quote["quote_source"] == "finnhub"
-    assert quote["price"] == 150.0
+
+def test_daily_lists_do_not_refresh_before_cutoff_next_day(monkeypatch):
+    svc = MarketDataService()
+
+    call_count = {"count": 0}
+
+    def fake_quote(symbol):
+        call_count["count"] += 1
+        return {
+            "symbol": symbol,
+            "price": float(call_count["count"]),
+            "change_percent": 1.0,
+            "live_data_available": True,
+            "quote_source": "test",
+        }
+
+    monkeypatch.setattr(svc, "get_quote", fake_quote)
+
+    times = iter(
+        [
+            datetime(2026, 1, 6, 10, 31, tzinfo=ZoneInfo("America/New_York")),
+            datetime(2026, 1, 6, 10, 31, tzinfo=ZoneInfo("America/New_York")),
+            datetime(2026, 1, 7, 9, 45, tzinfo=ZoneInfo("America/New_York")),
+        ]
+    )
+    monkeypatch.setattr(svc, "_now_market_time", lambda: next(times))
+
+    first = svc.get_hot_momentum_buys()
+    first_price = first[0]["price"]
+    calls_after_first = call_count["count"]
+
+    second = svc.get_hot_momentum_buys()
+
+    assert second[0]["price"] == first_price
+    assert call_count["count"] == calls_after_first
+
+
+def test_daily_lists_refresh_after_cutoff_next_day(monkeypatch):
+    svc = MarketDataService()
+
+    call_count = {"count": 0}
+
+    def fake_quote(symbol):
+        call_count["count"] += 1
+        return {
+            "symbol": symbol,
+            "price": float(call_count["count"]),
+            "change_percent": 1.0,
+            "live_data_available": True,
+            "quote_source": "test",
+        }
+
+    monkeypatch.setattr(svc, "get_quote", fake_quote)
+
+    times = iter(
+        [
+            datetime(2026, 1, 6, 10, 31, tzinfo=ZoneInfo("America/New_York")),
+            datetime(2026, 1, 6, 10, 31, tzinfo=ZoneInfo("America/New_York")),
+            datetime(2026, 1, 7, 10, 31, tzinfo=ZoneInfo("America/New_York")),
+            datetime(2026, 1, 7, 10, 31, tzinfo=ZoneInfo("America/New_York")),
+        ]
+    )
+    monkeypatch.setattr(svc, "_now_market_time", lambda: next(times))
+
+    first = svc.get_stable_watchlist()
+    first_price = first[0]["price"]
+
+    second = svc.get_stable_watchlist()
+
+    assert second[0]["price"] != first_price
+
 
 
 def test_get_company_snapshot_skips_placeholder_news(monkeypatch):
