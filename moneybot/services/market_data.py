@@ -44,7 +44,7 @@ class MarketDataService:
         self.signal_cache = TTLCache(ttl_seconds=20)
         self.sector_cache = TTLCache(ttl_seconds=3600)
         self._logged_missing_finnhub_key = False
-
+        self._logged_missing_massive_key = False
 
 
     def _mock_market_indices(self) -> list[Dict[str, Any]]:
@@ -405,6 +405,14 @@ class MarketDataService:
             "diagnostics": {"provider": "yfinance", "error": error},
         }
 
+    def _get_massive_key(self) -> tuple[str | None, str | None]:
+        key_env_names = ("MASSIVE_API_KEY", "POLYGON_API_KEY")
+        for env_name in key_env_names:
+            raw = os.environ.get(env_name)
+            if raw and raw.strip():
+                return raw.strip(), env_name
+        return None, None
+
     def _get_finnhub_key(self) -> tuple[str | None, str | None]:
         key_env_names = ("FINNHUB_API_KEY", "FINNHUB_TOKEN", "X_FINNHUB_TOKEN")
         for env_name in key_env_names:
@@ -458,6 +466,52 @@ class MarketDataService:
 
             return self._fallback_quote(cache_key, last_error)
 
+        massive_key, massive_key_source = self._get_massive_key()
+        massive_error: str | None = None
+        if massive_key:
+            try:
+                resp = requests.get(
+                    f"https://api.massive.com/v2/snapshot/locale/us/markets/stocks/tickers/{cache_key}",
+                    params={"apiKey": massive_key},
+                    timeout=self.timeout_s,
+                )
+                resp.raise_for_status()
+                data = resp.json() or {}
+                ticker_data = data.get("ticker") or {}
+                day = ticker_data.get("day") or {}
+                prev_day = ticker_data.get("prevDay") or {}
+
+                price = day.get("c")
+                prev_close = prev_day.get("c")
+                change_percent = None
+                if price not in (None, 0) and prev_close not in (None, 0):
+                    change_percent = ((float(price) - float(prev_close)) / float(prev_close)) * 100
+
+                if price not in (None, 0) and change_percent is not None:
+                    payload = {
+                        "symbol": cache_key,
+                        "price": float(price),
+                        "change_percent": float(change_percent),
+                        "live_data_available": True,
+                        "quote_source": "massive",
+                        "diagnostics": {"provider": "massive", "error": None, "massive_key_source": massive_key_source},
+                    }
+                    self.quote_cache.set(cache_key, payload)
+                    return payload
+
+                massive_error = f"incomplete_response:{data}"
+                logging.warning("Massive returned incomplete quote for %s: %s", cache_key, data)
+            except Exception as exc:  # noqa: BLE001
+                massive_error = str(exc)
+                logging.warning("Massive quote fetch failed for %s: %s", cache_key, exc)
+        else:
+            massive_error = "missing_api_key"
+            if not self._logged_missing_massive_key:
+                logging.info(
+                    "Massive key missing; quote requests will use Finnhub/yfinance fallback until MASSIVE_API_KEY is set."
+                )
+                self._logged_missing_massive_key = True
+
         finnhub_key, finnhub_key_source = self._get_finnhub_key()
         finnhub_error: str | None = None
         if finnhub_key:
@@ -505,6 +559,9 @@ class MarketDataService:
 
         fallback = _yfinance_quote()
         fallback_diagnostics = fallback.get("diagnostics") or {}
+        fallback_diagnostics["massive_attempted"] = bool(massive_key)
+        fallback_diagnostics["massive_key_source"] = massive_key_source
+        fallback_diagnostics["massive_error"] = massive_error
         fallback_diagnostics["finnhub_attempted"] = bool(finnhub_key)
         fallback_diagnostics["finnhub_key_source"] = finnhub_key_source
         fallback_diagnostics["finnhub_error"] = finnhub_error

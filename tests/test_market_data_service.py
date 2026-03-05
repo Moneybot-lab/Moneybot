@@ -193,3 +193,70 @@ def test_get_market_indices_uses_quote_when_history_rate_limited(monkeypatch):
     assert all(item["change_percent"] == 0.8 for item in data)
     assert all(item["quote_source"] == "finnhub" for item in data)
     assert all(len(item["series"]) == 15 for item in data)
+
+
+
+def test_get_quote_uses_massive_primary_when_configured(monkeypatch):
+    svc = MarketDataService()
+
+    monkeypatch.setenv("MASSIVE_API_KEY", "massive-key")
+    monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
+    monkeypatch.delenv("FINNHUB_TOKEN", raising=False)
+    monkeypatch.delenv("X_FINNHUB_TOKEN", raising=False)
+
+    captured = {}
+
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"ticker": {"day": {"c": 456.0}, "prevDay": {"c": 450.0}}}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        captured["url"] = url
+        captured["params"] = params or {}
+        return DummyResponse()
+
+    monkeypatch.setattr("moneybot.services.market_data.requests.get", fake_get)
+
+    quote = svc.get_quote("MSFT")
+
+    assert quote["quote_source"] == "massive"
+    assert quote["price"] == 456.0
+    assert round(quote["change_percent"], 2) == 1.33
+    assert captured["url"].startswith("https://api.massive.com/v2/snapshot")
+    assert captured["params"]["apiKey"] == "massive-key"
+
+
+def test_get_quote_falls_back_to_finnhub_when_massive_unavailable(monkeypatch):
+    svc = MarketDataService()
+
+    monkeypatch.setenv("MASSIVE_API_KEY", "massive-key")
+    monkeypatch.setenv("FINNHUB_API_KEY", "finnhub-key")
+
+    class MassiveFailResponse:
+        def raise_for_status(self):
+            raise Exception("403 Forbidden")
+
+        def json(self):
+            return {}
+
+    class FinnhubOkResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"c": 150.0, "dp": 1.0, "pc": 148.5}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        if "api.massive.com" in url:
+            return MassiveFailResponse()
+        return FinnhubOkResponse()
+
+    monkeypatch.setattr("moneybot.services.market_data.requests.get", fake_get)
+
+    quote = svc.get_quote("AAPL")
+
+    assert quote["quote_source"] == "finnhub"
+    assert quote["price"] == 150.0
