@@ -360,17 +360,60 @@ class MarketDataService:
 
         return out if len(out) == len(symbols) else self._mock_market_indices()
 
+    def _score_from_signal(self, signal: Dict[str, Any], default_score: float) -> float:
+        raw_score = signal.get("score")
+        if isinstance(raw_score, (int, float)):
+            return round(float(raw_score), 2)
+        return round(float(default_score), 2)
+
+    def _reason_from_signal(self, signal: Dict[str, Any], fallback: str) -> str:
+        reasons = signal.get("reasons") or signal.get("rationale") or []
+        if isinstance(reasons, list) and reasons:
+            return str(reasons[0])
+        if isinstance(reasons, str) and reasons.strip():
+            return reasons.strip()
+        return fallback
+
+    def _is_buy_like(self, signal: Dict[str, Any]) -> bool:
+        action = str(signal.get("action") or signal.get("verdict") or "").upper()
+        return action in {"BUY", "STRONG BUY"}
+
     def get_stable_watchlist(self) -> list[Dict[str, Any]]:
-        return [
+        candidates = [
             {"symbol": "MSFT", "company": "Microsoft", "price": 418.2, "signal_score": 7.9, "transparency": "Strong balance sheet and recurring revenue."},
             {"symbol": "JNJ", "company": "Johnson & Johnson", "price": 154.6, "signal_score": 7.6, "transparency": "Defensive healthcare earnings profile."},
             {"symbol": "PG", "company": "Procter & Gamble", "price": 168.4, "signal_score": 7.3, "transparency": "Staples demand supports steadier growth."},
             {"symbol": "KO", "company": "Coca-Cola", "price": 60.2, "signal_score": 7.1, "transparency": "Global cash generation and lower volatility."},
             {"symbol": "PEP", "company": "PepsiCo", "price": 173.8, "signal_score": 7.0, "transparency": "Diversified beverage/snack resilience."},
+            {"symbol": "MCD", "company": "McDonald's", "price": 287.4, "signal_score": 6.9, "transparency": "Durable consumer demand and predictable cash flow."},
+            {"symbol": "WMT", "company": "Walmart", "price": 71.3, "signal_score": 6.8, "transparency": "Scale and defensive consumer spending profile."},
+            {"symbol": "COST", "company": "Costco", "price": 738.5, "signal_score": 6.7, "transparency": "Membership model supports resilient margins."},
         ]
 
+        enriched: list[Dict[str, Any]] = []
+        for item in candidates:
+            quote = self.get_quote(item["symbol"])
+            signal = self.get_signal(item["symbol"])
+            merged = dict(item)
+            if isinstance(quote.get("price"), (int, float)):
+                merged["price"] = float(quote["price"])
+            merged["signal_score"] = self._score_from_signal(signal, item["signal_score"])
+            merged["transparency"] = self._reason_from_signal(signal, item["transparency"])
+            merged["change_percent"] = quote.get("change_percent")
+            merged["quote_source"] = quote.get("quote_source")
+            merged["live_data_available"] = bool(quote.get("live_data_available"))
+            merged["qualified"] = bool(merged["live_data_available"] and merged["signal_score"] >= 6.5)
+            enriched.append(merged)
+
+        qualified = [item for item in enriched if item["qualified"]]
+        pool = qualified if len(qualified) >= 5 else sorted(enriched, key=lambda x: x["signal_score"], reverse=True)
+        selected = sorted(pool, key=lambda x: (x["signal_score"], float(x.get("change_percent") or 0.0)), reverse=True)[:5]
+        for item in selected:
+            item.pop("qualified", None)
+        return selected
+
     def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
-        items = [
+        candidates = [
             {"symbol": "SOFI", "price": 9.84, "score": 9.4, "rationale": "Member growth trend and improving margins."},
             {"symbol": "PLUG", "price": 3.72, "score": 9.1, "rationale": "High-volume breakout setup in clean-energy swing."},
             {"symbol": "LCID", "price": 2.98, "score": 8.9, "rationale": "Speculative EV rebound momentum."},
@@ -381,28 +424,70 @@ class MarketDataService:
             {"symbol": "UAL", "price": 43.12, "score": 7.6, "rationale": "Sector relative strength with improving trend."},
             {"symbol": "F", "price": 12.55, "score": 7.4, "rationale": "Low-priced cyclical with renewed momentum interest."},
             {"symbol": "PFE", "price": 28.77, "score": 7.2, "rationale": "Defensive rotation candidate near support."},
+            {"symbol": "CCL", "price": 16.1, "score": 7.1, "rationale": "Travel beta with strong volume participation."},
+            {"symbol": "RUN", "price": 13.5, "score": 7.0, "rationale": "High-beta clean energy momentum candidate."},
         ]
 
         enriched: list[Dict[str, Any]] = []
-        for item in items:
+        for item in candidates:
             quote = self.get_quote(item["symbol"])
-            live_price = quote.get("price")
+            signal = self.get_signal(item["symbol"])
             merged = dict(item)
-            if isinstance(live_price, (int, float)):
-                merged["price"] = float(live_price)
+            if isinstance(quote.get("price"), (int, float)):
+                merged["price"] = float(quote["price"])
+            merged["score"] = self._score_from_signal(signal, item["score"])
+            merged["rationale"] = self._reason_from_signal(signal, item["rationale"])
             merged["change_percent"] = quote.get("change_percent")
             merged["quote_source"] = quote.get("quote_source")
             merged["live_data_available"] = bool(quote.get("live_data_available"))
+            merged["qualified"] = bool(merged["live_data_available"] and merged["score"] >= 7.0 and self._is_buy_like(signal))
             enriched.append(merged)
 
-        return enriched
+        qualified = [item for item in enriched if item["qualified"]]
+        pool = qualified if len(qualified) >= 10 else sorted(enriched, key=lambda x: x["score"], reverse=True)
+        selected = sorted(pool, key=lambda x: (x["score"], float(x.get("change_percent") or 0.0)), reverse=True)[:10]
+        for item in selected:
+            item.pop("qualified", None)
+        return selected
 
     def get_wells_picks(self) -> list[Dict[str, Any]]:
-        return [
-            {"investor": "Warren Buffett", "stocks": [{"ticker": "AAPL", "price": 191.2, "performance": 1.42}, {"ticker": "AXP", "price": 227.1, "performance": 0.81}, {"ticker": "KO", "price": 60.2, "performance": 0.33}, {"ticker": "OXY", "price": 62.6, "performance": -0.48}, {"ticker": "BAC", "price": 37.4, "performance": 0.57}]},
-            {"investor": "Cathie Wood", "stocks": [{"ticker": "TSLA", "price": 178.4, "performance": 2.38}, {"ticker": "ROKU", "price": 59.6, "performance": 1.02}, {"ticker": "COIN", "price": 223.7, "performance": -1.12}, {"ticker": "SQ", "price": 73.2, "performance": 0.91}, {"ticker": "CRSP", "price": 61.2, "performance": -0.33}]},
-            {"investor": "Ray Dalio", "stocks": [{"ticker": "JNJ", "price": 154.6, "performance": 0.28}, {"ticker": "PG", "price": 168.4, "performance": 0.21}, {"ticker": "PEP", "price": 173.8, "performance": 0.36}, {"ticker": "XOM", "price": 113.4, "performance": -0.14}, {"ticker": "PFE", "price": 28.8, "performance": 0.42}]},
+        investors = [
+            {"investor": "Warren Buffett", "stocks": ["AAPL", "AXP", "KO", "OXY", "BAC", "CVX", "AMZN", "V"]},
+            {"investor": "Cathie Wood", "stocks": ["TSLA", "ROKU", "COIN", "SQ", "CRSP", "PATH", "TDOC", "U"]},
+            {"investor": "Ray Dalio", "stocks": ["JNJ", "PG", "PEP", "XOM", "PFE", "WMT", "UNH", "MRK"]},
         ]
+
+        out: list[Dict[str, Any]] = []
+        for investor in investors:
+            ranked: list[Dict[str, Any]] = []
+            for ticker in investor["stocks"]:
+                quote = self.get_quote(ticker)
+                signal = self.get_signal(ticker)
+                score = self._score_from_signal(signal, 6.5)
+                raw_change = quote.get("change_percent")
+                performance = round(float(raw_change), 2) if isinstance(raw_change, (int, float)) else 0.0
+                ranked.append(
+                    {
+                        "ticker": ticker,
+                        "price": float(quote["price"]) if isinstance(quote.get("price"), (int, float)) else "DATA_MISSING",
+                        "performance": performance,
+                        "quote_source": quote.get("quote_source"),
+                        "live_data_available": bool(quote.get("live_data_available")),
+                        "score": score,
+                        "qualified": bool(bool(quote.get("live_data_available")) and score >= 6.5 and self._is_buy_like(signal)),
+                    }
+                )
+
+            qualified = [item for item in ranked if item["qualified"]]
+            pool = qualified if len(qualified) >= 5 else sorted(ranked, key=lambda x: x["score"], reverse=True)
+            selected = sorted(pool, key=lambda x: (x["score"], x["performance"]), reverse=True)[:5]
+            for stock in selected:
+                stock.pop("qualified", None)
+                stock.pop("score", None)
+            out.append({"investor": investor["investor"], "stocks": selected})
+
+        return out
+
     def _fallback_quote(self, symbol: str, error: str) -> Dict[str, Any]:
         return {
             "symbol": symbol,

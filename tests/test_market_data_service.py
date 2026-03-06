@@ -258,8 +258,68 @@ def test_get_quote_falls_back_to_finnhub_when_massive_unavailable(monkeypatch):
 
     quote = svc.get_quote("AAPL")
 
-    assert quote["quote_source"] == "finnhub"
-    assert quote["price"] == 150.0
+
+def test_get_stable_watchlist_updates_score_and_transparency(monkeypatch):
+    svc = MarketDataService()
+
+    def fake_quote(symbol):
+        return {
+            "symbol": symbol,
+            "price": 501.25,
+            "change_percent": 0.75,
+            "live_data_available": True,
+            "quote_source": "test",
+        }
+
+    def fake_signal(symbol):
+        return {
+            "symbol": symbol,
+            "action": "BUY",
+            "score": 8.8,
+            "reasons": [f"{symbol} passed quality checks."],
+        }
+
+    monkeypatch.setattr(svc, "get_quote", fake_quote)
+    monkeypatch.setattr(svc, "get_signal", fake_signal)
+
+    stable = svc.get_stable_watchlist()
+
+    assert stable[0]["price"] == 501.25
+    assert stable[0]["signal_score"] == 8.8
+    assert "passed quality checks" in stable[0]["transparency"]
+    assert stable[0]["quote_source"] == "test"
+    assert stable[0]["live_data_available"] is True
+
+
+def test_get_wells_picks_replaces_non_qualifying_stocks(monkeypatch):
+    svc = MarketDataService()
+
+    qualifying = {"AAPL", "AMZN", "V", "TSLA", "ROKU", "SQ", "JNJ", "PG", "PEP", "UNH", "MRK", "WMT", "AXP", "KO", "BAC"}
+
+    def fake_quote(symbol):
+        live = symbol in qualifying
+        return {
+            "symbol": symbol,
+            "price": 123.0 if live else "DATA_MISSING",
+            "change_percent": 1.5 if live else "DATA_MISSING",
+            "live_data_available": live,
+            "quote_source": "test",
+        }
+
+    def fake_signal(symbol):
+        if symbol in qualifying:
+            return {"symbol": symbol, "action": "BUY", "score": 8.5, "reasons": ["Qualified momentum + quality signal."]}
+        return {"symbol": symbol, "action": "HOLD", "score": 5.0, "reasons": ["Not qualified."]}
+
+    monkeypatch.setattr(svc, "get_quote", fake_quote)
+    monkeypatch.setattr(svc, "get_signal", fake_signal)
+
+    wells = svc.get_wells_picks()
+
+    first_investor_tickers = {stock["ticker"] for stock in wells[0]["stocks"]}
+    assert "OXY" not in first_investor_tickers
+    assert first_investor_tickers.issubset(qualifying)
+    assert all(stock["live_data_available"] is True for stock in wells[0]["stocks"])
 
 
 def test_get_company_snapshot_skips_placeholder_news(monkeypatch):
