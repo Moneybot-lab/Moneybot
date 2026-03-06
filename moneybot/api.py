@@ -155,8 +155,11 @@ def signup():
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
     password = data.get("password") or ""
+    password_confirmation = data.get("password_confirmation")
     if not email or not password:
         return jsonify({"error": "email and password required", "request_id": g.request_id}), 400
+    if password_confirmation is not None and password != password_confirmation:
+        return jsonify({"error": "passwords do not match", "request_id": g.request_id}), 400
 
     if User.query.filter_by(email=email).first():
         return jsonify({"error": "email already exists", "request_id": g.request_id}), 409

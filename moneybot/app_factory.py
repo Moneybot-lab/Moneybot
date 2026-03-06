@@ -327,15 +327,20 @@ def create_app() -> Flask:
     def login_page():
         return render_template_string(
             """
-            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc;max-width:720px;margin:0 auto">
-              <h2>Login</h2>
-              <p><a href="/">Home</a> · <a href="/signup">Create account</a></p>
-              <form id="loginForm">
-                <input id="email" placeholder="email" required />
-                <input id="password" type="password" placeholder="password" required />
-                <button type="submit">Login</button>
-              </form>
-              <div id="out" style="margin-top:10px;color:#334155"></div>
+            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;display:flex;align-items:center;justify-content:center;background:#f8fafc;padding:24px;box-sizing:border-box">
+              <div style="width:100%;max-width:520px;background:#fff;padding:34px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08)">
+                <h2 style="font-size:2.2rem;margin:0 0 18px;text-align:center">Login</h2>
+                <p style="display:flex;justify-content:center;gap:10px;margin:0 0 18px">
+                  <a href="/" style="text-decoration:none;background:#dbeafe;color:#1e3a8a;padding:10px 16px;border-radius:999px;font-size:1.05rem;font-weight:600">Home</a>
+                  <a href="/signup" style="text-decoration:none;background:#e2e8f0;color:#0f172a;padding:10px 16px;border-radius:999px;font-size:1.05rem;font-weight:600">Create account</a>
+                </p>
+                <form id="loginForm" style="display:flex;flex-direction:column;gap:12px">
+                  <input id="email" placeholder="email" required style="font-size:1.08rem;padding:12px;border:1px solid #cbd5e1;border-radius:10px" />
+                  <input id="password" type="password" placeholder="password" required style="font-size:1.08rem;padding:12px;border:1px solid #cbd5e1;border-radius:10px" />
+                  <button type="submit" style="font-size:1.08rem;padding:12px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-weight:700;cursor:pointer">Login</button>
+                </form>
+                <div id="out" style="margin-top:12px;color:#334155;text-align:center;font-size:1.02rem"></div>
+              </div>
               <script>
               const emailEl = document.getElementById('email');
               const passwordEl = document.getElementById('password');
@@ -359,24 +364,35 @@ def create_app() -> Flask:
     def signup_page():
         return render_template_string(
             """
-            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc;max-width:720px;margin:0 auto">
-              <h2>Sign Up</h2>
-              <p><a href="/">Home</a> · <a href="/login">Login</a></p>
-              <form id="signupForm">
-                <input id="email" placeholder="email" required />
-                <input id="password" type="password" placeholder="password" required />
-                <button type="submit">Create</button>
-              </form>
-              <div id="out" style="margin-top:10px;color:#334155"></div>
+            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;display:flex;align-items:center;justify-content:center;background:#f8fafc;padding:24px;box-sizing:border-box">
+              <div style="width:100%;max-width:520px;background:#fff;padding:34px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08)">
+                <h2 style="font-size:2.2rem;margin:0 0 18px;text-align:center">Sign Up</h2>
+                <p style="display:flex;justify-content:center;gap:10px;margin:0 0 18px">
+                  <a href="/" style="text-decoration:none;background:#dbeafe;color:#1e3a8a;padding:10px 16px;border-radius:999px;font-size:1.05rem;font-weight:600">Home</a>
+                  <a href="/login" style="text-decoration:none;background:#e2e8f0;color:#0f172a;padding:10px 16px;border-radius:999px;font-size:1.05rem;font-weight:600">Login</a>
+                </p>
+                <form id="signupForm" style="display:flex;flex-direction:column;gap:12px">
+                  <input id="email" placeholder="email" required style="font-size:1.08rem;padding:12px;border:1px solid #cbd5e1;border-radius:10px" />
+                  <input id="password" type="password" placeholder="password" required style="font-size:1.08rem;padding:12px;border:1px solid #cbd5e1;border-radius:10px" />
+                  <input id="confirmPassword" type="password" placeholder="confirm password" required style="font-size:1.08rem;padding:12px;border:1px solid #cbd5e1;border-radius:10px" />
+                  <button type="submit" style="font-size:1.08rem;padding:12px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-weight:700;cursor:pointer">Create</button>
+                </form>
+                <div id="out" style="margin-top:12px;color:#334155;text-align:center;font-size:1.02rem"></div>
+              </div>
               <script>
               const emailEl = document.getElementById('email');
               const passwordEl = document.getElementById('password');
+              const confirmPasswordEl = document.getElementById('confirmPassword');
               const outEl = document.getElementById('out');
               document.getElementById('signupForm').addEventListener('submit', go);
 
               async function go(event){
                 if (event) event.preventDefault();
-                const res = await fetch('/api/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value})});
+                if(passwordEl.value !== confirmPasswordEl.value){
+                  outEl.textContent = 'Passwords do not match.';
+                  return;
+                }
+                const res = await fetch('/api/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,password_confirmation:confirmPasswordEl.value})});
                 const data = await res.json();
                 if(res.ok){ outEl.textContent='Account created. Redirecting...'; location.href='/portfolio'; }
                 else { outEl.textContent = data.error || 'Sign-up failed. Please try again.'; }
