@@ -108,8 +108,8 @@ def create_app() -> Flask:
                     <img src="/static/moneybot-pro-logo.svg" alt="MoneyBot Pro logo" style="display:block;width:100%;max-width:860px;height:auto"/>
                   </div>
                   <div style="display:flex;gap:10px;flex-wrap:wrap">
-                    <a href="/login" style="padding:8px 12px;background:#dcfce7;border-radius:999px;text-decoration:none;font-weight:600">Login</a>
-                    <a href="/signup" style="padding:8px 12px;background:#dcfce7;border-radius:999px;text-decoration:none;font-weight:600">Sign up</a>
+                    <a href="/login" style="padding:8px 12px;background:#dcfce7;color:#000;border-radius:999px;text-decoration:none;font-weight:600">Login</a>
+                    <a href="/signup" style="padding:8px 12px;background:#dcfce7;color:#000;border-radius:999px;text-decoration:none;font-weight:600">Sign up</a>
                     <a href="/portfolio" style="padding:8px 12px;background:#166534;color:#f0fdf4;border-radius:999px;text-decoration:none;font-weight:700">User Portfolio</a>
                   </div>
                 </header>
@@ -181,7 +181,7 @@ def create_app() -> Flask:
                   function formatMoney(v){ return typeof v === 'number' ? '$' + v.toLocaleString(undefined,{maximumFractionDigits:2}) : 'n/a'; }
                   function quickRecommendationBadge(recommendation){
                     const rec = String(recommendation || 'HOLD OFF FOR NOW').toUpperCase();
-                    const color = rec === 'STRONG BUY' ? '#22c55e' : (rec === 'BUY' ? '#166534' : '#4d7c0f');
+                    const color = rec === 'STRONG BUY' ? '#22c55e' : (rec === 'BUY' ? '#166534' : '#dc2626');
                     return `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${color};color:#f0fdf4;font-weight:800;font-size:12px;letter-spacing:.02em">${rec}</span>`;
                   }
                   const marketChartInstances = {};
@@ -532,14 +532,14 @@ def create_app() -> Flask:
               function performanceCell(amount, pct){
                 if(typeof amount !== 'number' || typeof pct !== 'number') return '<span style="color:#3f6212">n/a</span>';
                 const up = amount >= 0;
-                const color = up ? '#166534' : '#4d7c0f';
+                const color = up ? '#166534' : '#dc2626';
                 const sign = up ? '+' : '';
                 return `<div style="color:${color};font-weight:700">${sign}${formatMoney(amount)}</div><div style="color:${color};font-size:12px">(${sign}${pct.toFixed(2)}%)</div>`;
               }
               function amountCell(amount){
                 if(typeof amount !== 'number') return '<span style="color:#3f6212">n/a</span>';
                 const up = amount >= 0;
-                const color = up ? '#166534' : '#4d7c0f';
+                const color = up ? '#166534' : '#dc2626';
                 const sign = up ? '+' : '';
                 return `<div style="color:${color};font-weight:700">${sign}${formatMoney(amount)}</div>`;
               }
