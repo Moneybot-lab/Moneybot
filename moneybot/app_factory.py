@@ -409,7 +409,10 @@ def create_app() -> Flask:
             """
             <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc;max-width:1100px;margin:0 auto">
               <h2>User Portfolio</h2>
-              <p><a href="/">Home</a> · <button onclick="logout()">Logout</button></p>
+              <p style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <a href="/" style="text-decoration:none;background:#dbeafe;color:#1e3a8a;padding:12px 18px;border-radius:999px;font-size:1.08rem;font-weight:700">Home</a>
+                <button onclick="logout()" style="border:none;background:#1e40af;color:#fff;padding:12px 18px;border-radius:999px;font-size:1.08rem;font-weight:700;cursor:pointer">Logout</button>
+              </p>
               <form id="addForm">
                 <input id="symbol" placeholder="AAPL" required />
                 <input id="buy_price" type="number" step="0.01" placeholder="buy price"/>
@@ -417,6 +420,10 @@ def create_app() -> Flask:
                 <button type="submit">Add</button>
               </form>
               <div id="out" style="margin:10px 0;color:#334155"></div>
+              <div id="loadingState" style="display:none;align-items:center;gap:10px;margin:12px 0;color:#1e3a8a;font-weight:600">
+                <span style="width:16px;height:16px;border:2px solid #bfdbfe;border-top-color:#2563eb;border-radius:999px;display:inline-block;animation:spin .8s linear infinite"></span>
+                Loading latest portfolio stock data...
+              </div>
               <div style="overflow-x:auto"><table style="width:100%;background:#fff;border-collapse:collapse;min-width:980px">
                 <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Today's Gain/Loss</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Trend</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Sentiment</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
                 <tbody id="rows"></tbody>
@@ -446,8 +453,13 @@ def create_app() -> Flask:
               </div>
               <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
               <script>
+              const styleTag = document.createElement('style');
+              styleTag.textContent = '@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }';
+              document.head.appendChild(styleTag);
+
               const rowsEl = document.getElementById('rows');
               const outEl = document.getElementById('out');
+              const loadingStateEl = document.getElementById('loadingState');
               const symbolEl = document.getElementById('symbol');
               const buyPriceEl = document.getElementById('buy_price');
               const sharesEl = document.getElementById('shares');
@@ -455,6 +467,7 @@ def create_app() -> Flask:
               document.getElementById('addForm').addEventListener('submit', addItem);
 
               async function logout(){ await fetch('/api/auth/logout',{method:'POST'}); location.href='/'; }
+              function setLoading(isLoading){ loadingStateEl.style.display = isLoading ? 'flex' : 'none'; }
               function displayValue(value){
                 return (value === null || value === undefined || value === '') ? 'n/a' : value;
               }
@@ -580,15 +593,20 @@ def create_app() -> Flask:
               }
 
               async function load(){
-                const res = await fetch('/api/user-watchlist');
-                const data = await res.json();
-                if(!res.ok){
-                  if (res.status === 401) { location.href='/login'; return; }
-                  rowsEl.innerHTML = '<tr><td colspan="11" style="padding:8px;color:#b91c1c">Unable to load watchlist right now.</td></tr>';
-                  outEl.textContent = data.error || 'Please try again in a moment.';
-                  return;
+                setLoading(true);
+                try {
+                  const res = await fetch('/api/user-watchlist');
+                  const data = await res.json();
+                  if(!res.ok){
+                    if (res.status === 401) { location.href='/login'; return; }
+                    rowsEl.innerHTML = '<tr><td colspan="11" style="padding:8px;color:#b91c1c">Unable to load watchlist right now.</td></tr>';
+                    outEl.textContent = data.error || 'Please try again in a moment.';
+                    return;
+                  }
+                  renderRows(data.enriched_items || data.items || []);
+                } finally {
+                  setLoading(false);
                 }
-                renderRows(data.enriched_items || data.items || []);
               }
               async function addItem(event){
                 if (event) event.preventDefault();
