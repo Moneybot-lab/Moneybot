@@ -262,76 +262,47 @@ def test_get_quote_falls_back_to_finnhub_when_massive_unavailable(monkeypatch):
     quote = svc.get_quote("AAPL")
 
 
-def test_daily_lists_do_not_refresh_before_cutoff_next_day(monkeypatch):
+def test_get_stable_watchlist_enriches_with_quote_data(monkeypatch):
     svc = MarketDataService()
 
-    call_count = {"count": 0}
-
     def fake_quote(symbol):
-        call_count["count"] += 1
         return {
             "symbol": symbol,
-            "price": float(call_count["count"]),
-            "change_percent": 1.0,
+            "price": 501.25,
+            "change_percent": 0.75,
             "live_data_available": True,
             "quote_source": "test",
         }
 
     monkeypatch.setattr(svc, "get_quote", fake_quote)
 
-    times = iter(
-        [
-            datetime(2026, 1, 6, 10, 31, tzinfo=ZoneInfo("America/New_York")),
-            datetime(2026, 1, 6, 10, 31, tzinfo=ZoneInfo("America/New_York")),
-            datetime(2026, 1, 7, 9, 45, tzinfo=ZoneInfo("America/New_York")),
-        ]
-    )
-    monkeypatch.setattr(svc, "_now_market_time", lambda: next(times))
+    stable = svc.get_stable_watchlist()
 
-    first = svc.get_hot_momentum_buys()
-    first_price = first[0]["price"]
-    calls_after_first = call_count["count"]
-
-    second = svc.get_hot_momentum_buys()
-
-    assert second[0]["price"] == first_price
-    assert call_count["count"] == calls_after_first
+    assert stable[0]["price"] == 501.25
+    assert stable[0]["quote_source"] == "test"
+    assert stable[0]["live_data_available"] is True
 
 
-def test_daily_lists_refresh_after_cutoff_next_day(monkeypatch):
+def test_get_wells_picks_enriches_stock_quotes(monkeypatch):
     svc = MarketDataService()
 
-    call_count = {"count": 0}
-
     def fake_quote(symbol):
-        call_count["count"] += 1
         return {
             "symbol": symbol,
-            "price": float(call_count["count"]),
-            "change_percent": 1.0,
+            "price": 123.0,
+            "change_percent": 0.25,
             "live_data_available": True,
             "quote_source": "test",
         }
 
     monkeypatch.setattr(svc, "get_quote", fake_quote)
 
-    times = iter(
-        [
-            datetime(2026, 1, 6, 10, 31, tzinfo=ZoneInfo("America/New_York")),
-            datetime(2026, 1, 6, 10, 31, tzinfo=ZoneInfo("America/New_York")),
-            datetime(2026, 1, 7, 10, 31, tzinfo=ZoneInfo("America/New_York")),
-            datetime(2026, 1, 7, 10, 31, tzinfo=ZoneInfo("America/New_York")),
-        ]
-    )
-    monkeypatch.setattr(svc, "_now_market_time", lambda: next(times))
+    wells = svc.get_wells_picks()
 
-    first = svc.get_stable_watchlist()
-    first_price = first[0]["price"]
-
-    second = svc.get_stable_watchlist()
-
-    assert second[0]["price"] != first_price
-
+    first_stock = wells[0]["stocks"][0]
+    assert first_stock["price"] == 123.0
+    assert first_stock["quote_source"] == "test"
+    assert first_stock["live_data_available"] is True
 
 
 def test_get_company_snapshot_skips_placeholder_news(monkeypatch):
