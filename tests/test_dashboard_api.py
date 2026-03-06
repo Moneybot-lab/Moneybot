@@ -82,10 +82,19 @@ def test_quick_ask_normalizes_symbol_from_url_like_input():
     assert data["symbol"] == "TSLA"
 
 
+def test_signup_rejects_mismatched_password_confirmation():
+    client = _client()
+    signup = client.post(
+        "/api/auth/signup",
+        json={"email": "mismatch@b.com", "password": "pw1", "password_confirmation": "pw2"},
+    )
+    assert signup.status_code == 400
+    assert signup.get_json()["error"] == "passwords do not match"
+
 
 def test_user_watchlist_exposes_quote_source_diagnostics():
     client = _client()
-    signup = client.post("/api/auth/signup", json={"email": "a@b.com", "password": "pw"})
+    signup = client.post("/api/auth/signup", json={"email": "a@b.com", "password": "pw", "password_confirmation": "pw"})
     assert signup.status_code == 201
     add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 1})
     assert add.status_code == 201
