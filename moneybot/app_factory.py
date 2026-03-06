@@ -102,25 +102,25 @@ def create_app() -> Flask:
         return render_template_string(
             """
             <html>
-              <body style="font-family:Inter,Segoe UI,system-ui,sans-serif;padding:24px;background:linear-gradient(180deg,#f8fafc,#eef2ff);max-width:1120px;margin:0 auto;color:#0f172a">
+              <body style="font-family:Inter,Segoe UI,system-ui,sans-serif;padding:24px;background:linear-gradient(180deg,#f7fee7,#ecfdf3);max-width:1120px;margin:0 auto;color:#0f172a">
                 <header style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px">
                   <div style="flex:1;min-width:280px">
                     <img src="/static/moneybot-pro-logo.svg" alt="MoneyBot Pro logo" style="display:block;width:100%;max-width:860px;height:auto"/>
                   </div>
                   <div style="display:flex;gap:10px;flex-wrap:wrap">
-                    <a href="/login" style="padding:8px 12px;background:#dbeafe;border-radius:999px;text-decoration:none;font-weight:600">Login</a>
-                    <a href="/signup" style="padding:8px 12px;background:#dbeafe;border-radius:999px;text-decoration:none;font-weight:600">Sign up</a>
-                    <a href="/portfolio" style="padding:8px 12px;background:#1e40af;color:#fff;border-radius:999px;text-decoration:none;font-weight:700">User Portfolio</a>
+                    <a href="/login" style="padding:8px 12px;background:#dcfce7;border-radius:999px;text-decoration:none;font-weight:600">Login</a>
+                    <a href="/signup" style="padding:8px 12px;background:#dcfce7;border-radius:999px;text-decoration:none;font-weight:600">Sign up</a>
+                    <a href="/portfolio" style="padding:8px 12px;background:#166534;color:#f0fdf4;border-radius:999px;text-decoration:none;font-weight:700">User Portfolio</a>
                   </div>
                 </header>
 
-                <section style="background:#0f172a;color:#e2e8f0;border-radius:14px;padding:16px;margin-bottom:18px;box-shadow:0 10px 24px rgba(2,6,23,.18)">
-                  <h3 style="margin:0 0 10px 0;color:#f8fafc">Quick Ask · What should I do now?</h3>
+                <section style="background:#000;color:#d1fae5;border-radius:14px;padding:16px;margin-bottom:18px;box-shadow:0 10px 24px rgba(2,6,23,.18)">
+                  <h3 style="margin:0 0 10px 0;color:#f0fdf4">Quick Ask · What should I do now?</h3>
                   <div style="display:flex;gap:8px;flex-wrap:wrap">
-                    <input id="quickSymbol" placeholder="Ticker (e.g. AAPL)" style="padding:10px 12px;border:1px solid #334155;border-radius:10px;min-width:210px;background:#111827;color:#f8fafc"/>
-                    <button onclick="quickAsk()" style="padding:10px 14px;border:none;background:#2563eb;color:#fff;border-radius:10px;font-weight:700">Analyze</button>
+                    <input id="quickSymbol" placeholder="Ticker (e.g. AAPL)" style="padding:10px 12px;border:1px solid #166534;border-radius:10px;min-width:210px;background:#000;color:#f7fee7"/>
+                    <button onclick="quickAsk()" style="padding:10px 16px;border:none;background:#16a34a;color:#f0fdf4;border-radius:10px;font-weight:700;font-size:1.08rem">Analyze</button>
                   </div>
-                  <div id="quickOut" style="margin-top:10px;color:#cbd5e1">Type a ticker to get an instant STRONG BUY / BUY / HOLD OFF FOR NOW call.</div>
+                  <div id="quickOut" style="margin-top:10px;color:#bbf7d0">Type a ticker to get an instant STRONG BUY / BUY / HOLD OFF FOR NOW call.</div>
                 </section>
 
                 <section style="margin-bottom:18px">
@@ -128,21 +128,21 @@ def create_app() -> Flask:
                   <div id="market-charts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px"></div>
                 </section>
 
-                <section style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:12px;padding:14px;margin-bottom:12px">
+                <section style="background:#f7fee7;border:1px solid #bbf7d0;border-radius:12px;padding:14px;margin-bottom:12px">
                   <h3 style="margin:0 0 8px 0">Buyer's Guide</h3>
-                  <p style="margin:0 0 6px 0;color:#334155"><strong>Stable Watchlist:</strong> Lower risk, long-term stocks.</p>
-                  <p style="margin:0 0 6px 0;color:#334155"><strong>Hot Momentum:</strong> Higher risk, low-price stocks with growth potential.</p>
-                  <p style="margin:0;color:#334155"><strong>Whales of Wall Street:</strong> See and follow top investors' picks.</p>
+                  <p style="margin:0 0 6px 0;color:#166534"><strong>Stable Watchlist:</strong> Lower risk, long-term stocks.</p>
+                  <p style="margin:0 0 6px 0;color:#166534"><strong>Hot Momentum:</strong> Higher risk, low-price stocks with growth potential.</p>
+                  <p style="margin:0;color:#166534"><strong>Whales of Wall Street:</strong> See and follow top investors' picks.</p>
                 </section>
 
-                <section style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px">
+                <section style="background:#f0fdf4;border:1px solid #d1fae5;border-radius:12px;padding:16px">
                   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-                    <button class="tab-btn" data-tab="stable" onclick="switchTab('stable')" style="padding:8px 12px;border:1px solid #cbd5e1;background:#dbeafe;border-radius:8px">Stable Watchlist</button>
-                    <button class="tab-btn" data-tab="momentum" onclick="switchTab('momentum')" style="padding:8px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:8px">Hot Momentum Buys</button>
-                    <button class="tab-btn" data-tab="wells" onclick="switchTab('wells')" style="padding:8px 12px;border:1px solid #cbd5e1;background:#fff;border-radius:8px">Whales of Wall Street</button>
+                    <button class="tab-btn" data-tab="stable" onclick="switchTab('stable')" style="padding:8px 12px;border:1px solid #bbf7d0;background:#dcfce7;border-radius:8px">Stable Watchlist</button>
+                    <button class="tab-btn" data-tab="momentum" onclick="switchTab('momentum')" style="padding:8px 12px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px">Hot Momentum Buys</button>
+                    <button class="tab-btn" data-tab="wells" onclick="switchTab('wells')" style="padding:8px 12px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px">Whales of Wall Street</button>
                   </div>
-                  <div id="tabLoading" style="display:none;align-items:center;gap:10px;margin-bottom:10px;color:#334155;font-weight:600">
-                    <span style="display:inline-block;width:16px;height:16px;border:2px solid #bfdbfe;border-top-color:#2563eb;border-radius:9999px;animation:spin .7s linear infinite"></span>
+                  <div id="tabLoading" style="display:none;align-items:center;gap:10px;margin-bottom:10px;color:#166534;font-weight:600">
+                    <span style="display:inline-block;width:16px;height:16px;border:2px solid #86efac;border-top-color:#16a34a;border-radius:9999px;animation:spin .7s linear infinite"></span>
                     Loading table...
                   </div>
                   <div id="stable" class="tab-panel"></div>
@@ -150,17 +150,17 @@ def create_app() -> Flask:
                   <div id="wells" class="tab-panel" style="display:none"></div>
                 </section>
 
-                <div id="homeTickerModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:50;align-items:center;justify-content:center;padding:14px">
-                  <div style="background:#fff;border-radius:12px;max-width:680px;width:100%;max-height:80vh;overflow:auto;padding:14px">
+                <div id="homeTickerModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:center;justify-content:center;padding:14px">
+                  <div style="background:#f0fdf4;border-radius:12px;max-width:680px;width:100%;max-height:80vh;overflow:auto;padding:14px">
                     <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
                       <h3 id="homeModalTitle" style="margin:0">Company Details</h3>
-                      <button onclick="closeHomeModal()" style="border:none;background:#e2e8f0;border-radius:8px;padding:6px 10px">Close</button>
+                      <button onclick="closeHomeModal()" style="border:none;background:#d1fae5;border-radius:8px;padding:6px 10px">Close</button>
                     </div>
-                    <p id="homeModalSummary" style="color:#334155"></p>
+                    <p id="homeModalSummary" style="color:#166534"></p>
                   </div>
                 </div>
 
-                <p style="color:#64748b">Rule-based guidance; not financial advice.</p>
+                <p style="color:#3f6212">Rule-based guidance; not financial advice.</p>
 
                 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
                 <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
@@ -181,8 +181,8 @@ def create_app() -> Flask:
                   function formatMoney(v){ return typeof v === 'number' ? '$' + v.toLocaleString(undefined,{maximumFractionDigits:2}) : 'n/a'; }
                   function quickRecommendationBadge(recommendation){
                     const rec = String(recommendation || 'HOLD OFF FOR NOW').toUpperCase();
-                    const color = rec === 'STRONG BUY' ? '#22c55e' : (rec === 'BUY' ? '#166534' : '#b91c1c');
-                    return `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${color};color:#fff;font-weight:800;font-size:12px;letter-spacing:.02em">${rec}</span>`;
+                    const color = rec === 'STRONG BUY' ? '#22c55e' : (rec === 'BUY' ? '#166534' : '#4d7c0f');
+                    return `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${color};color:#f0fdf4;font-weight:800;font-size:12px;letter-spacing:.02em">${rec}</span>`;
                   }
                   const marketChartInstances = {};
                   function destroyMarketCharts(){ Object.values(marketChartInstances).forEach(c => c.destroy()); Object.keys(marketChartInstances).forEach(k => delete marketChartInstances[k]); }
@@ -211,7 +211,7 @@ def create_app() -> Flask:
                   }
 
                   function tickerButton(symbol){
-                    return `<button onclick="showCompanyDetails('${symbol}')" style="border:none;background:none;color:#1d4ed8;font-weight:700;cursor:pointer;font-size:14px;padding:0">${symbol}</button>`;
+                    return `<button onclick="showCompanyDetails('${symbol}')" style="border:none;background:none;color:#15803d;font-weight:700;cursor:pointer;font-size:14px;padding:0">${symbol}</button>`;
                   }
                   function openHomeModal(){ document.getElementById('homeTickerModal').style.display='flex'; }
                   function closeHomeModal(){ document.getElementById('homeTickerModal').style.display='none'; }
@@ -243,10 +243,10 @@ def create_app() -> Flask:
                     destroyMarketCharts();
                     grid.innerHTML = items.map((item, idx) => {
                       const up = (item.change_percent || 0) >= 0;
-                      return `<article style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:12px">
+                      return `<article style="background:#000;border:1px solid #166534;border-radius:12px;padding:12px">
                         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
-                          <div><div style="font-weight:700">${item.name}</div><div style="font-size:12px;color:#64748b">${item.symbol}</div></div>
-                          <div style="text-align:right"><div style="font-size:18px">${formatMoney(item.price)}</div><div style="font-size:13px;color:${up ? '#166534' : '#b91c1c'}">${up ? '+' : ''}${Number(item.change_percent || 0).toFixed(2)}%</div></div>
+                          <div><div style="font-weight:700;color:#f0fdf4">${item.name}</div><div style="font-size:12px;color:#d1fae5">${item.symbol}</div></div>
+                          <div style="text-align:right"><div style="font-size:18px;color:#f0fdf4">${formatMoney(item.price)}</div><div style="font-size:13px;color:${up ? '#22c55e' : '#dc2626'}">${up ? '+' : ''}${Number(item.change_percent || 0).toFixed(2)}%</div></div>
                         </div>
                         <div style="margin-top:8px;height:120px"><canvas id="market-chart-${idx}"></canvas></div>
                       </article>`;
@@ -258,22 +258,22 @@ def create_app() -> Flask:
                       if(!ctx) return;
                       marketChartInstances[idx] = new Chart(ctx, {
                         type:'line',
-                        data:{labels:(item.series||[]).map((_,i)=>`${i+1}`),datasets:[{data:item.series||[],borderColor:up?'#16a34a':'#dc2626',borderWidth:2,pointRadius:0,tension:.32,fill:true,backgroundColor:up?'rgba(22,163,74,.14)':'rgba(220,38,38,.12)'}]},
+                        data:{labels:(item.series||[]).map((_,i)=>`${i+1}`),datasets:[{data:item.series||[],borderColor:up?'#16a34a':'#dc2626',borderWidth:2,pointRadius:0,tension:.32,fill:true,backgroundColor:up?'rgba(22,163,74,.18)':'rgba(220,38,38,.16)'}]},
                         options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{enabled:true}},scales:{x:{display:false},y:{display:false}}}
                       });
                     });
                   }
 
                   function renderStable(items){
-                    document.getElementById('stable').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #f1f5f9">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.signal_score}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.transparency || ''}</td></tr>`).join('')}</tbody></table>`;
+                    document.getElementById('stable').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.signal_score}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.transparency || ''}</td></tr>`).join('')}</tbody></table>`;
                   }
 
                   function renderMomentum(items){
-                    document.getElementById('momentum').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #f1f5f9">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.score}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${item.rationale}</td></tr>`).join('')}</tbody></table>`;
+                    document.getElementById('momentum').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.score}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.rationale}</td></tr>`).join('')}</tbody></table>`;
                   }
 
                   function renderWells(items){
-                    document.getElementById('wells').innerHTML = items.map(item=>`<article style="border:1px solid #e2e8f0;border-radius:10px;padding:10px;margin-bottom:10px"><div style="font-weight:700;margin-bottom:8px">${item.investor}</div><table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Performance</th></tr></thead><tbody>${(item.stocks||[]).map(stock=>`<tr><td style="padding:8px;border-bottom:1px solid #f1f5f9">${tickerButton(stock.ticker)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${formatMoney(stock.price)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${Number(stock.performance||0).toFixed(2)}%</td></tr>`).join('')}</tbody></table></article>`).join('');
+                    document.getElementById('wells').innerHTML = items.map(item=>`<article style="border:1px solid #d1fae5;border-radius:10px;padding:10px;margin-bottom:10px"><div style="font-weight:700;margin-bottom:8px">${item.investor}</div><table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Performance</th></tr></thead><tbody>${(item.stocks||[]).map(stock=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(stock.ticker)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(stock.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${Number(stock.performance||0).toFixed(2)}%</td></tr>`).join('')}</tbody></table></article>`).join('');
                   }
 
                   function setTabLoading(isLoading){
@@ -302,7 +302,7 @@ def create_app() -> Flask:
 
                   function switchTab(tab){
                     document.querySelectorAll('.tab-panel').forEach(panel => panel.style.display = panel.id === tab ? 'block' : 'none');
-                    document.querySelectorAll('.tab-btn').forEach(btn => btn.style.background = btn.dataset.tab === tab ? '#dbeafe' : '#fff');
+                    document.querySelectorAll('.tab-btn').forEach(btn => btn.style.background = btn.dataset.tab === tab ? '#bbf7d0' : '#f0fdf4');
                     refreshTab(tab);
                   }
 
@@ -327,20 +327,20 @@ def create_app() -> Flask:
     def login_page():
         return render_template_string(
             """
-            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;display:flex;align-items:center;justify-content:center;background:#f8fafc;padding:24px;box-sizing:border-box">
-              <div style="width:100%;max-width:520px;background:#fff;padding:34px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08)">
+            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;display:flex;align-items:center;justify-content:center;background:#f7fee7;padding:24px;box-sizing:border-box">
+              <div style="width:100%;max-width:520px;background:#f0fdf4;padding:34px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08)">
                 <h2 style="font-size:2.2rem;margin:0 0 18px;text-align:center">Login</h2>
                 <p style="display:flex;justify-content:center;gap:10px;margin:0 0 18px">
-                  <a href="/" style="text-decoration:none;background:#dbeafe;color:#1e3a8a;padding:10px 16px;border-radius:999px;font-size:1.05rem;font-weight:600">Home</a>
-                  <a href="/signup" style="text-decoration:none;background:#e2e8f0;color:#0f172a;padding:10px 16px;border-radius:999px;font-size:1.05rem;font-weight:600">Create account</a>
+                  <a href="/" style="text-decoration:none;background:#dcfce7;color:#14532d;padding:10px 16px;border-radius:999px;font-size:1.05rem;font-weight:600">Home</a>
+                  <a href="/signup" style="text-decoration:none;background:#d1fae5;color:#0f172a;padding:10px 16px;border-radius:999px;font-size:1.05rem;font-weight:600">Create account</a>
                 </p>
                 <form id="loginForm" style="display:flex;flex-direction:column;gap:12px">
-                  <input id="email" placeholder="email" required style="font-size:1.08rem;padding:12px;border:1px solid #cbd5e1;border-radius:10px" />
-                  <input id="password" type="password" placeholder="password" required style="font-size:1.08rem;padding:12px;border:1px solid #cbd5e1;border-radius:10px" />
-                  <button type="button" onclick="forgotPassword()" style="align-self:flex-start;border:none;background:none;color:#1d4ed8;padding:0 2px;font-size:0.95rem;font-weight:600;cursor:pointer;text-decoration:underline">Forgot Password?</button>
-                  <button type="submit" style="font-size:1.08rem;padding:12px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-weight:700;cursor:pointer">Login</button>
+                  <input id="email" placeholder="email" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <input id="password" type="password" placeholder="password" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <button type="button" onclick="forgotPassword()" style="align-self:flex-start;border:none;background:none;color:#15803d;padding:0 2px;font-size:0.95rem;font-weight:600;cursor:pointer;text-decoration:underline">Forgot Password?</button>
+                  <button type="submit" style="font-size:1.08rem;padding:12px;border:none;border-radius:10px;background:#16a34a;color:#f0fdf4;font-weight:700;cursor:pointer">Login</button>
                 </form>
-                <div id="out" style="margin-top:12px;color:#334155;text-align:center;font-size:1.02rem"></div>
+                <div id="out" style="margin-top:12px;color:#166534;text-align:center;font-size:1.02rem"></div>
               </div>
               <script>
               const emailEl = document.getElementById('email');
@@ -376,20 +376,20 @@ def create_app() -> Flask:
     def signup_page():
         return render_template_string(
             """
-            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;display:flex;align-items:center;justify-content:center;background:#f8fafc;padding:24px;box-sizing:border-box">
-              <div style="width:100%;max-width:520px;background:#fff;padding:34px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08)">
+            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;display:flex;align-items:center;justify-content:center;background:#f7fee7;padding:24px;box-sizing:border-box">
+              <div style="width:100%;max-width:520px;background:#f0fdf4;padding:34px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08)">
                 <h2 style="font-size:2.2rem;margin:0 0 18px;text-align:center">Sign Up</h2>
                 <p style="display:flex;justify-content:center;gap:10px;margin:0 0 18px">
-                  <a href="/" style="text-decoration:none;background:#dbeafe;color:#1e3a8a;padding:10px 16px;border-radius:999px;font-size:1.05rem;font-weight:600">Home</a>
-                  <a href="/login" style="text-decoration:none;background:#e2e8f0;color:#0f172a;padding:10px 16px;border-radius:999px;font-size:1.05rem;font-weight:600">Login</a>
+                  <a href="/" style="text-decoration:none;background:#dcfce7;color:#14532d;padding:10px 16px;border-radius:999px;font-size:1.05rem;font-weight:600">Home</a>
+                  <a href="/login" style="text-decoration:none;background:#d1fae5;color:#0f172a;padding:10px 16px;border-radius:999px;font-size:1.05rem;font-weight:600">Login</a>
                 </p>
                 <form id="signupForm" style="display:flex;flex-direction:column;gap:12px">
-                  <input id="email" placeholder="email" required style="font-size:1.08rem;padding:12px;border:1px solid #cbd5e1;border-radius:10px" />
-                  <input id="password" type="password" placeholder="password" required style="font-size:1.08rem;padding:12px;border:1px solid #cbd5e1;border-radius:10px" />
-                  <input id="confirmPassword" type="password" placeholder="confirm password" required style="font-size:1.08rem;padding:12px;border:1px solid #cbd5e1;border-radius:10px" />
-                  <button type="submit" style="font-size:1.08rem;padding:12px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-weight:700;cursor:pointer">Create</button>
+                  <input id="email" placeholder="email" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <input id="password" type="password" placeholder="password" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <input id="confirmPassword" type="password" placeholder="confirm password" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <button type="submit" style="font-size:1.08rem;padding:12px;border:none;border-radius:10px;background:#16a34a;color:#f0fdf4;font-weight:700;cursor:pointer">Create</button>
                 </form>
-                <div id="out" style="margin-top:12px;color:#334155;text-align:center;font-size:1.02rem"></div>
+                <div id="out" style="margin-top:12px;color:#166534;text-align:center;font-size:1.02rem"></div>
               </div>
               <script>
               const emailEl = document.getElementById('email');
@@ -419,46 +419,46 @@ def create_app() -> Flask:
     def portfolio_page():
         return render_template_string(
             """
-            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f8fafc;max-width:1100px;margin:0 auto">
+            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f7fee7;max-width:1100px;margin:0 auto">
               <h2>User Portfolio</h2>
               <p style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-                <a href="/" style="text-decoration:none;background:#dbeafe;color:#1e3a8a;padding:12px 18px;border-radius:999px;font-size:1.08rem;font-weight:700">Home</a>
-                <button onclick="logout()" style="border:none;background:#1e40af;color:#fff;padding:12px 18px;border-radius:999px;font-size:1.08rem;font-weight:700;cursor:pointer">Logout</button>
+                <a href="/" style="text-decoration:none;background:#dcfce7;color:#14532d;padding:12px 18px;border-radius:999px;font-size:1.08rem;font-weight:700">Home</a>
+                <button onclick="logout()" style="border:none;background:#166534;color:#f0fdf4;padding:12px 18px;border-radius:999px;font-size:1.08rem;font-weight:700;cursor:pointer">Logout</button>
               </p>
               <form id="addForm">
                 <input id="symbol" placeholder="AAPL" required />
                 <input id="buy_price" type="number" step="0.01" placeholder="buy price"/>
                 <input id="shares" type="number" step="0.0001" placeholder="shares"/>
-                <button type="submit">Add</button>
+                <button type="submit" style="border:none;background:#16a34a;color:#f0fdf4;padding:9px 14px;border-radius:8px;font-weight:700;cursor:pointer">Add</button>
               </form>
-              <div id="out" style="margin:10px 0;color:#334155"></div>
-              <div id="loadingState" style="display:none;align-items:center;gap:10px;margin:12px 0;color:#1e3a8a;font-weight:600">
-                <span style="width:16px;height:16px;border:2px solid #bfdbfe;border-top-color:#2563eb;border-radius:999px;display:inline-block;animation:spin .8s linear infinite"></span>
+              <div id="out" style="margin:10px 0;color:#166534"></div>
+              <div id="loadingState" style="display:none;align-items:center;gap:10px;margin:12px 0;color:#14532d;font-weight:600">
+                <span style="width:16px;height:16px;border:2px solid #86efac;border-top-color:#16a34a;border-radius:999px;display:inline-block;animation:spin .8s linear infinite"></span>
                 Loading latest portfolio stock data...
               </div>
-              <div style="overflow-x:auto"><table style="width:100%;background:#fff;border-collapse:collapse;min-width:980px">
+              <div style="overflow-x:auto"><table style="width:100%;background:#f0fdf4;border-collapse:collapse;min-width:980px">
                 <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Today's Gain/Loss</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Trend</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Sentiment</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
                 <tbody id="rows"></tbody>
               </table></div>
-              <div id="tickerModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:50;align-items:center;justify-content:center;padding:14px">
-                <div style="background:#fff;border-radius:12px;max-width:680px;width:100%;max-height:80vh;overflow:auto;padding:14px">
+              <div id="tickerModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:center;justify-content:center;padding:14px">
+                <div style="background:#f0fdf4;border-radius:12px;max-width:680px;width:100%;max-height:80vh;overflow:auto;padding:14px">
                   <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
                     <h3 id="modalTitle" style="margin:0">Company Details</h3>
-                    <button onclick="closeModal()" style="border:none;background:#e2e8f0;border-radius:8px;padding:6px 10px">Close</button>
+                    <button onclick="closeModal()" style="border:none;background:#d1fae5;border-radius:8px;padding:6px 10px">Close</button>
                   </div>
-                  <p id="modalSummary" style="color:#334155"></p>
+                  <p id="modalSummary" style="color:#166534"></p>
                   <div id="modalNews" style="display:grid;gap:8px"></div>
                 </div>
               </div>
-              <div id="adviceModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:51;align-items:center;justify-content:center;padding:14px">
-                <div style="background:#fff;border-radius:12px;max-width:520px;width:100%;padding:14px">
+              <div id="adviceModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:51;align-items:center;justify-content:center;padding:14px">
+                <div style="background:#f0fdf4;border-radius:12px;max-width:520px;width:100%;padding:14px">
                   <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
                     <h3 id="adviceTitle" style="margin:0">Advice Reasoning</h3>
-                    <button onclick="closeAdviceModal()" style="border:none;background:#e2e8f0;border-radius:8px;padding:6px 10px">Close</button>
+                    <button onclick="closeAdviceModal()" style="border:none;background:#d1fae5;border-radius:8px;padding:6px 10px">Close</button>
                   </div>
-                  <p id="adviceReason" style="color:#334155;margin-top:10px">No reasoning available.</p>
+                  <p id="adviceReason" style="color:#166534;margin-top:10px">No reasoning available.</p>
                   <div style="margin-top:12px">
-                    <div style="font-size:12px;color:#64748b;font-weight:700;letter-spacing:.02em;text-transform:uppercase">Latest Headlines</div>
+                    <div style="font-size:12px;color:#3f6212;font-weight:700;letter-spacing:.02em;text-transform:uppercase">Latest Headlines</div>
                     <div id="adviceHeadlines" style="display:grid;gap:8px;margin-top:8px"></div>
                   </div>
                 </div>
@@ -489,13 +489,13 @@ def create_app() -> Flask:
               function sentimentBadge(value){
                 const sentiment = String(value || 'Neutral').toLowerCase();
                 if(sentiment === 'bullish' || sentiment === 'positive') return '<span style="color:#166534;font-weight:700;white-space:nowrap">▇ Bullish</span>';
-                if(sentiment === 'bearish' || sentiment === 'negative') return '<span style="color:#b91c1c;font-weight:700;white-space:nowrap">▇ Bearish</span>';
-                return '<span style="color:#475569;font-weight:600;white-space:nowrap">▇ Neutral</span>';
+                if(sentiment === 'bearish' || sentiment === 'negative') return '<span style="color:#4d7c0f;font-weight:700;white-space:nowrap">▇ Bearish</span>';
+                return '<span style="color:#3f3f46;font-weight:600;white-space:nowrap">▇ Neutral</span>';
               }
               function adviceBadge(value){
                 const advice = String(value || 'HOLD').toUpperCase();
-                const color = advice === 'BUY' ? '#166534' : (advice === 'SELL' ? '#b91c1c' : '#475569');
-                return `<span style="display:inline-block;padding:4px 8px;border-radius:999px;background:${color};color:#fff;font-weight:700;font-size:12px">${advice}</span>`;
+                const color = advice === 'BUY' ? '#166534' : (advice === 'SELL' ? '#4d7c0f' : '#3f3f46');
+                return `<span style="display:inline-block;padding:4px 8px;border-radius:999px;background:${color};color:#f0fdf4;font-weight:700;font-size:12px">${advice}</span>`;
               }
               function adviceButton(item, idx){
                 return `<button onclick="showAdvice(${idx})" title="Click to see why this advice was generated" style="border:none;background:none;padding:0;cursor:pointer">${adviceBadge(item.advice)}</button>`;
@@ -510,36 +510,36 @@ def create_app() -> Flask:
                 document.getElementById('adviceTitle').textContent = `${symbol} · ${advice} rationale`;
                 document.getElementById('adviceReason').textContent = `Why this advice was given: ${reason}`;
                 const headlinesEl = document.getElementById('adviceHeadlines');
-                headlinesEl.innerHTML = '<div style="color:#64748b">Loading latest headlines...</div>';
+                headlinesEl.innerHTML = '<div style="color:#3f6212">Loading latest headlines...</div>';
                 openAdviceModal();
                 if(!symbol){
-                  headlinesEl.innerHTML = '<div style="color:#64748b">No recent headlines available.</div>';
+                  headlinesEl.innerHTML = '<div style="color:#3f6212">No recent headlines available.</div>';
                   return;
                 }
                 try {
                   const res = await fetch('/api/company-details?symbol=' + encodeURIComponent(symbol));
                   const payload = await res.json();
                   if(!res.ok){
-                    headlinesEl.innerHTML = '<div style="color:#64748b">No recent headlines available.</div>';
+                    headlinesEl.innerHTML = '<div style="color:#3f6212">No recent headlines available.</div>';
                     return;
                   }
                   const news = (payload.data && payload.data.latest_news) || [];
-                  headlinesEl.innerHTML = news.length ? news.map(n => `<a href="${n.link || '#'}" target="_blank" rel="noopener" style="display:block;padding:8px;border:1px solid #e2e8f0;border-radius:8px;text-decoration:none;color:#0f172a"><div style="font-weight:600">${n.title || 'Story'}</div><div style="font-size:12px;color:#64748b">${n.publisher || 'Source unavailable'}</div></a>`).join('') : '<div style="color:#64748b">No recent headlines available.</div>';
+                  headlinesEl.innerHTML = news.length ? news.map(n => `<a href="${n.link || '#'}" target="_blank" rel="noopener" style="display:block;padding:8px;border:1px solid #d1fae5;border-radius:8px;text-decoration:none;color:#0f172a"><div style="font-weight:600">${n.title || 'Story'}</div><div style="font-size:12px;color:#3f6212">${n.publisher || 'Source unavailable'}</div></a>`).join('') : '<div style="color:#3f6212">No recent headlines available.</div>';
                 } catch (err) {
-                  headlinesEl.innerHTML = '<div style="color:#64748b">Unable to load headlines right now.</div>';
+                  headlinesEl.innerHTML = '<div style="color:#3f6212">Unable to load headlines right now.</div>';
                 }
               }
               function performanceCell(amount, pct){
-                if(typeof amount !== 'number' || typeof pct !== 'number') return '<span style="color:#64748b">n/a</span>';
+                if(typeof amount !== 'number' || typeof pct !== 'number') return '<span style="color:#3f6212">n/a</span>';
                 const up = amount >= 0;
-                const color = up ? '#166534' : '#b91c1c';
+                const color = up ? '#166534' : '#4d7c0f';
                 const sign = up ? '+' : '';
                 return `<div style="color:${color};font-weight:700">${sign}${formatMoney(amount)}</div><div style="color:${color};font-size:12px">(${sign}${pct.toFixed(2)}%)</div>`;
               }
               function amountCell(amount){
-                if(typeof amount !== 'number') return '<span style="color:#64748b">n/a</span>';
+                if(typeof amount !== 'number') return '<span style="color:#3f6212">n/a</span>';
                 const up = amount >= 0;
-                const color = up ? '#166534' : '#b91c1c';
+                const color = up ? '#166534' : '#4d7c0f';
                 const sign = up ? '+' : '';
                 return `<div style="color:${color};font-weight:700">${sign}${formatMoney(amount)}</div>`;
               }
@@ -554,7 +554,7 @@ def create_app() -> Flask:
 
 
               function tickerButton(symbol){
-                return `<button onclick="showCompanyDetails('${symbol}')" style="border:none;background:none;color:#1d4ed8;font-weight:700;cursor:pointer;font-size:15px;padding:0">${symbol}</button>`;
+                return `<button onclick="showCompanyDetails('${symbol}')" style="border:none;background:none;color:#15803d;font-weight:700;cursor:pointer;font-size:15px;padding:0">${symbol}</button>`;
               }
               function openModal(){ document.getElementById('tickerModal').style.display='flex'; }
               function closeModal(){ document.getElementById('tickerModal').style.display='none'; }
@@ -578,7 +578,7 @@ def create_app() -> Flask:
                   titleEl.textContent = `${data.company_name || symbol} (${symbol})`;
                   summaryEl.textContent = data.summary || 'No summary available.';
                   const news = data.latest_news || [];
-                  newsEl.innerHTML = news.length ? news.map(n => `<a href="${n.link || '#'}" target="_blank" rel="noopener" style="display:block;padding:8px;border:1px solid #e2e8f0;border-radius:8px;text-decoration:none;color:#0f172a"><div style="font-weight:600">${n.title || 'Story'}</div><div style="font-size:12px;color:#64748b">${n.publisher || 'Source unavailable'}</div></a>`).join('') : '<div style="color:#64748b">No recent news available.</div>';
+                  newsEl.innerHTML = news.length ? news.map(n => `<a href="${n.link || '#'}" target="_blank" rel="noopener" style="display:block;padding:8px;border:1px solid #d1fae5;border-radius:8px;text-decoration:none;color:#0f172a"><div style="font-weight:600">${n.title || 'Story'}</div><div style="font-size:12px;color:#3f6212">${n.publisher || 'Source unavailable'}</div></a>`).join('') : '<div style="color:#3f6212">No recent news available.</div>';
                 } catch (err) {
                   titleEl.textContent = symbol;
                   summaryEl.textContent = 'Unable to load company details right now.';
@@ -587,7 +587,7 @@ def create_app() -> Flask:
 
               function renderRows(items){
                 if(!items || !items.length){
-                  rowsEl.innerHTML = '<tr><td colspan="11" style="padding:8px;color:#64748b">No watchlist entries yet.</td></tr>';
+                  rowsEl.innerHTML = '<tr><td colspan="11" style="padding:8px;color:#3f6212">No watchlist entries yet.</td></tr>';
                   return;
                 }
                 currentPortfolioItems = items;
@@ -599,8 +599,8 @@ def create_app() -> Flask:
                 const totalTodayChange = items.reduce((sum, item) => sum + (typeof item.today_change_amount === 'number' ? item.today_change_amount : 0), 0);
                 const totalPerformance = items.reduce((sum, item) => sum + (typeof item.performance_amount === 'number' ? item.performance_amount : 0), 0);
 
-                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})">Remove</button></td></tr>`).join('')
-                + `<tr style="background:#f8fafc;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px;color:#475569;font-size:12px">Click advice badges to see why.</td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
+                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Remove</button></td></tr>`).join('')
+                + `<tr style="background:#f7fee7;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px;color:#3f3f46;font-size:12px">Click advice badges to see why.</td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
                 items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || []));
               }
 
@@ -611,7 +611,7 @@ def create_app() -> Flask:
                   const data = await res.json();
                   if(!res.ok){
                     if (res.status === 401) { location.href='/login'; return; }
-                    rowsEl.innerHTML = '<tr><td colspan="11" style="padding:8px;color:#b91c1c">Unable to load watchlist right now.</td></tr>';
+                    rowsEl.innerHTML = '<tr><td colspan="11" style="padding:8px;color:#4d7c0f">Unable to load watchlist right now.</td></tr>';
                     outEl.textContent = data.error || 'Please try again in a moment.';
                     return;
                   }
