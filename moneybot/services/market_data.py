@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 import os
 import time
+from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 import requests
 import yfinance as yf
@@ -43,6 +45,9 @@ class MarketDataService:
         self.quote_cache = TTLCache(ttl_seconds=20)
         self.signal_cache = TTLCache(ttl_seconds=20)
         self.sector_cache = TTLCache(ttl_seconds=3600)
+        self._market_timezone = ZoneInfo("America/New_York")
+        self._daily_lists_last_refreshed_at: datetime | None = None
+        self._daily_lists_cache: dict[str, list[Dict[str, Any]]] = {}
         self._logged_missing_finnhub_key = False
         self._logged_missing_massive_key = False
 
@@ -94,13 +99,8 @@ class MarketDataService:
         return out if len(out) == len(symbols) else self._mock_market_indices()
 
     def get_stable_watchlist(self) -> list[Dict[str, Any]]:
-        return [
-            {"symbol": "MSFT", "company": "Microsoft", "price": 418.2, "signal_score": 7.9, "transparency": "Strong balance sheet and recurring revenue."},
-            {"symbol": "JNJ", "company": "Johnson & Johnson", "price": 154.6, "signal_score": 7.6, "transparency": "Defensive healthcare earnings profile."},
-            {"symbol": "PG", "company": "Procter & Gamble", "price": 168.4, "signal_score": 7.3, "transparency": "Staples demand supports steadier growth."},
-            {"symbol": "KO", "company": "Coca-Cola", "price": 60.2, "signal_score": 7.1, "transparency": "Global cash generation and lower volatility."},
-            {"symbol": "PEP", "company": "PepsiCo", "price": 173.8, "signal_score": 7.0, "transparency": "Diversified beverage/snack resilience."},
-        ]
+        self._maybe_refresh_daily_lists()
+        return [dict(item) for item in self._daily_lists_cache.get("stable", [])]
 
     def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
         return [
@@ -246,13 +246,8 @@ class MarketDataService:
         return out if len(out) == len(symbols) else self._mock_market_indices()
 
     def get_stable_watchlist(self) -> list[Dict[str, Any]]:
-        return [
-            {"symbol": "MSFT", "company": "Microsoft", "price": 418.2, "signal_score": 7.9, "transparency": "Strong balance sheet and recurring revenue."},
-            {"symbol": "JNJ", "company": "Johnson & Johnson", "price": 154.6, "signal_score": 7.6, "transparency": "Defensive healthcare earnings profile."},
-            {"symbol": "PG", "company": "Procter & Gamble", "price": 168.4, "signal_score": 7.3, "transparency": "Staples demand supports steadier growth."},
-            {"symbol": "KO", "company": "Coca-Cola", "price": 60.2, "signal_score": 7.1, "transparency": "Global cash generation and lower volatility."},
-            {"symbol": "PEP", "company": "PepsiCo", "price": 173.8, "signal_score": 7.0, "transparency": "Diversified beverage/snack resilience."},
-        ]
+        self._maybe_refresh_daily_lists()
+        return [dict(item) for item in self._daily_lists_cache.get("stable", [])]
 
     def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
         return [
