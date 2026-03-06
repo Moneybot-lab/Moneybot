@@ -337,6 +337,7 @@ def create_app() -> Flask:
                 <form id="loginForm" style="display:flex;flex-direction:column;gap:12px">
                   <input id="email" placeholder="email" required style="font-size:1.08rem;padding:12px;border:1px solid #cbd5e1;border-radius:10px" />
                   <input id="password" type="password" placeholder="password" required style="font-size:1.08rem;padding:12px;border:1px solid #cbd5e1;border-radius:10px" />
+                  <button type="button" onclick="forgotPassword()" style="align-self:flex-start;border:none;background:none;color:#1d4ed8;padding:0 2px;font-size:0.95rem;font-weight:600;cursor:pointer;text-decoration:underline">Forgot Password?</button>
                   <button type="submit" style="font-size:1.08rem;padding:12px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-weight:700;cursor:pointer">Login</button>
                 </form>
                 <div id="out" style="margin-top:12px;color:#334155;text-align:center;font-size:1.02rem"></div>
@@ -353,6 +354,17 @@ def create_app() -> Flask:
                 const data = await res.json();
                 if(res.ok){ outEl.textContent='Login successful. Redirecting...'; location.href='/portfolio'; }
                 else { outEl.textContent = data.error || 'Login failed. Please verify your credentials.'; }
+              }
+
+              async function forgotPassword(){
+                const email = (emailEl.value || '').trim();
+                if(!email){
+                  outEl.textContent = 'Enter your email first, then click Forgot Password.';
+                  return;
+                }
+                const res = await fetch('/api/auth/forgot-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
+                const data = await res.json();
+                outEl.textContent = data.message || data.error || 'Unable to start password recovery right now.';
               }
               </script>
             </body></html>

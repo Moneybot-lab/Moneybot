@@ -104,3 +104,22 @@ def test_user_watchlist_exposes_quote_source_diagnostics():
     enriched = res.get_json()["enriched_items"][0]
     assert enriched["quote_source"] == "finnhub"
     assert enriched["quote_diagnostics"]["provider"] == "finnhub"
+
+
+def test_forgot_password_returns_generic_success_message():
+    client = _client()
+    signup = client.post("/api/auth/signup", json={"email": "recover@b.com", "password": "pw", "password_confirmation": "pw"})
+    assert signup.status_code == 201
+
+    res = client.post("/api/auth/forgot-password", json={"email": "recover@b.com"})
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["ok"] is True
+    assert "If an account exists" in payload["message"]
+
+
+def test_forgot_password_requires_email():
+    client = _client()
+    res = client.post("/api/auth/forgot-password", json={})
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "email required"

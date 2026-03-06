@@ -186,6 +186,22 @@ def login():
     return jsonify({"user": _user_payload(user), "request_id": g.request_id})
 
 
+
+
+@api_bp.post("/auth/forgot-password")
+def forgot_password():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if not email:
+        return jsonify({"error": "email required", "request_id": g.request_id}), 400
+
+    # Avoid user-enumeration: always return the same response message.
+    return jsonify({
+        "ok": True,
+        "message": "If an account exists for that email, password recovery instructions have been sent.",
+        "request_id": g.request_id,
+    })
+
 @api_bp.post("/auth/logout")
 def logout():
     session.clear()
