@@ -271,22 +271,32 @@ def create_app() -> Flask:
                     document.getElementById('wells').innerHTML = items.map(item=>`<article style="border:1px solid #e2e8f0;border-radius:10px;padding:10px;margin-bottom:10px"><div style="font-weight:700;margin-bottom:8px">${item.investor}</div><table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #e2e8f0">Performance</th></tr></thead><tbody>${(item.stocks||[]).map(stock=>`<tr><td style="padding:8px;border-bottom:1px solid #f1f5f9">${tickerButton(stock.ticker)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${formatMoney(stock.price)}</td><td style="padding:8px;border-bottom:1px solid #f1f5f9">${Number(stock.performance||0).toFixed(2)}%</td></tr>`).join('')}</tbody></table></article>`).join('');
                   }
 
+                  async function refreshTab(tab){
+                    if(tab === 'stable'){
+                      const stable = await fetchWithFallback('/api/stable-watchlist', 'stable');
+                      renderStable(stable);
+                    } else if(tab === 'momentum'){
+                      const momentum = await fetchWithFallback('/api/hot-momentum-buys', 'momentum');
+                      renderMomentum(momentum);
+                    } else if(tab === 'wells'){
+                      const wells = await fetchWithFallback('/api/wells-picks', 'wells');
+                      renderWells(wells);
+                    }
+                  }
+
                   function switchTab(tab){
                     document.querySelectorAll('.tab-panel').forEach(panel => panel.style.display = panel.id === tab ? 'block' : 'none');
                     document.querySelectorAll('.tab-btn').forEach(btn => btn.style.background = btn.dataset.tab === tab ? '#dbeafe' : '#fff');
+                    refreshTab(tab);
                   }
 
                   document.getElementById('quickSymbol').addEventListener('keydown', (event) => { if(event.key==='Enter'){event.preventDefault();quickAsk();} });
                   document.getElementById('homeTickerModal').addEventListener('click', (event) => { if(event.target.id==='homeTickerModal'){ closeHomeModal(); }});
 
                   async function init(){
-                    const [market, stable, momentum, wells] = await Promise.all([
-                      fetchWithFallback('/api/market-overview', 'market'),
-                      fetchWithFallback('/api/stable-watchlist', 'stable'),
-                      fetchWithFallback('/api/hot-momentum-buys', 'momentum'),
-                      fetchWithFallback('/api/wells-picks', 'wells'),
-                    ]);
-                    renderMarket(market); renderStable(stable); renderMomentum(momentum); renderWells(wells);
+                    const market = await fetchWithFallback('/api/market-overview', 'market');
+                    renderMarket(market);
+                    await refreshTab('stable');
                   }
 
                   init();

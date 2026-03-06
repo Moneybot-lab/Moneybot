@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 import os
 import time
+from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 import requests
 import yfinance as yf
@@ -43,6 +45,9 @@ class MarketDataService:
         self.quote_cache = TTLCache(ttl_seconds=20)
         self.signal_cache = TTLCache(ttl_seconds=20)
         self.sector_cache = TTLCache(ttl_seconds=3600)
+        self._market_timezone = ZoneInfo("America/New_York")
+        self._daily_lists_last_refreshed_at: datetime | None = None
+        self._daily_lists_cache: dict[str, list[Dict[str, Any]]] = {}
         self._logged_missing_finnhub_key = False
         self._logged_missing_massive_key = False
 
@@ -94,13 +99,8 @@ class MarketDataService:
         return out if len(out) == len(symbols) else self._mock_market_indices()
 
     def get_stable_watchlist(self) -> list[Dict[str, Any]]:
-        return [
-            {"symbol": "MSFT", "company": "Microsoft", "price": 418.2, "signal_score": 7.9, "transparency": "Strong balance sheet and recurring revenue."},
-            {"symbol": "JNJ", "company": "Johnson & Johnson", "price": 154.6, "signal_score": 7.6, "transparency": "Defensive healthcare earnings profile."},
-            {"symbol": "PG", "company": "Procter & Gamble", "price": 168.4, "signal_score": 7.3, "transparency": "Staples demand supports steadier growth."},
-            {"symbol": "KO", "company": "Coca-Cola", "price": 60.2, "signal_score": 7.1, "transparency": "Global cash generation and lower volatility."},
-            {"symbol": "PEP", "company": "PepsiCo", "price": 173.8, "signal_score": 7.0, "transparency": "Diversified beverage/snack resilience."},
-        ]
+        self._maybe_refresh_daily_lists()
+        return [dict(item) for item in self._daily_lists_cache.get("stable", [])]
 
     def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
         return [
@@ -246,13 +246,8 @@ class MarketDataService:
         return out if len(out) == len(symbols) else self._mock_market_indices()
 
     def get_stable_watchlist(self) -> list[Dict[str, Any]]:
-        return [
-            {"symbol": "MSFT", "company": "Microsoft", "price": 418.2, "signal_score": 7.9, "transparency": "Strong balance sheet and recurring revenue."},
-            {"symbol": "JNJ", "company": "Johnson & Johnson", "price": 154.6, "signal_score": 7.6, "transparency": "Defensive healthcare earnings profile."},
-            {"symbol": "PG", "company": "Procter & Gamble", "price": 168.4, "signal_score": 7.3, "transparency": "Staples demand supports steadier growth."},
-            {"symbol": "KO", "company": "Coca-Cola", "price": 60.2, "signal_score": 7.1, "transparency": "Global cash generation and lower volatility."},
-            {"symbol": "PEP", "company": "PepsiCo", "price": 173.8, "signal_score": 7.0, "transparency": "Diversified beverage/snack resilience."},
-        ]
+        self._maybe_refresh_daily_lists()
+        return [dict(item) for item in self._daily_lists_cache.get("stable", [])]
 
     def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
         return [
@@ -361,13 +356,25 @@ class MarketDataService:
         return out if len(out) == len(symbols) else self._mock_market_indices()
 
     def get_stable_watchlist(self) -> list[Dict[str, Any]]:
-        return [
+        items = [
             {"symbol": "MSFT", "company": "Microsoft", "price": 418.2, "signal_score": 7.9, "transparency": "Strong balance sheet and recurring revenue."},
             {"symbol": "JNJ", "company": "Johnson & Johnson", "price": 154.6, "signal_score": 7.6, "transparency": "Defensive healthcare earnings profile."},
             {"symbol": "PG", "company": "Procter & Gamble", "price": 168.4, "signal_score": 7.3, "transparency": "Staples demand supports steadier growth."},
             {"symbol": "KO", "company": "Coca-Cola", "price": 60.2, "signal_score": 7.1, "transparency": "Global cash generation and lower volatility."},
             {"symbol": "PEP", "company": "PepsiCo", "price": 173.8, "signal_score": 7.0, "transparency": "Diversified beverage/snack resilience."},
         ]
+
+        enriched: list[Dict[str, Any]] = []
+        for item in items:
+            quote = self.get_quote(item["symbol"])
+            merged = dict(item)
+            if isinstance(quote.get("price"), (int, float)):
+                merged["price"] = float(quote["price"])
+            merged["quote_source"] = quote.get("quote_source")
+            merged["live_data_available"] = bool(quote.get("live_data_available"))
+            enriched.append(merged)
+
+        return enriched
 
     def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
         items = [
@@ -386,10 +393,9 @@ class MarketDataService:
         enriched: list[Dict[str, Any]] = []
         for item in items:
             quote = self.get_quote(item["symbol"])
-            live_price = quote.get("price")
             merged = dict(item)
-            if isinstance(live_price, (int, float)):
-                merged["price"] = float(live_price)
+            if isinstance(quote.get("price"), (int, float)):
+                merged["price"] = float(quote["price"])
             merged["change_percent"] = quote.get("change_percent")
             merged["quote_source"] = quote.get("quote_source")
             merged["live_data_available"] = bool(quote.get("live_data_available"))
@@ -398,11 +404,27 @@ class MarketDataService:
         return enriched
 
     def get_wells_picks(self) -> list[Dict[str, Any]]:
-        return [
+        picks = [
             {"investor": "Warren Buffett", "stocks": [{"ticker": "AAPL", "price": 191.2, "performance": 1.42}, {"ticker": "AXP", "price": 227.1, "performance": 0.81}, {"ticker": "KO", "price": 60.2, "performance": 0.33}, {"ticker": "OXY", "price": 62.6, "performance": -0.48}, {"ticker": "BAC", "price": 37.4, "performance": 0.57}]},
             {"investor": "Cathie Wood", "stocks": [{"ticker": "TSLA", "price": 178.4, "performance": 2.38}, {"ticker": "ROKU", "price": 59.6, "performance": 1.02}, {"ticker": "COIN", "price": 223.7, "performance": -1.12}, {"ticker": "SQ", "price": 73.2, "performance": 0.91}, {"ticker": "CRSP", "price": 61.2, "performance": -0.33}]},
             {"investor": "Ray Dalio", "stocks": [{"ticker": "JNJ", "price": 154.6, "performance": 0.28}, {"ticker": "PG", "price": 168.4, "performance": 0.21}, {"ticker": "PEP", "price": 173.8, "performance": 0.36}, {"ticker": "XOM", "price": 113.4, "performance": -0.14}, {"ticker": "PFE", "price": 28.8, "performance": 0.42}]},
         ]
+
+        enriched: list[Dict[str, Any]] = []
+        for investor in picks:
+            investor_copy = {"investor": investor["investor"], "stocks": []}
+            for stock in investor.get("stocks", []):
+                merged_stock = dict(stock)
+                quote = self.get_quote(str(stock.get("ticker") or ""))
+                if isinstance(quote.get("price"), (int, float)):
+                    merged_stock["price"] = float(quote["price"])
+                merged_stock["quote_source"] = quote.get("quote_source")
+                merged_stock["live_data_available"] = bool(quote.get("live_data_available"))
+                investor_copy["stocks"].append(merged_stock)
+            enriched.append(investor_copy)
+
+        return enriched
+
     def _fallback_quote(self, symbol: str, error: str) -> Dict[str, Any]:
         return {
             "symbol": symbol,

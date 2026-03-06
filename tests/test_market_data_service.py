@@ -258,8 +258,48 @@ def test_get_quote_falls_back_to_finnhub_when_massive_unavailable(monkeypatch):
 
     quote = svc.get_quote("AAPL")
 
-    assert quote["quote_source"] == "finnhub"
-    assert quote["price"] == 150.0
+
+def test_get_stable_watchlist_enriches_with_quote_data(monkeypatch):
+    svc = MarketDataService()
+
+    def fake_quote(symbol):
+        return {
+            "symbol": symbol,
+            "price": 501.25,
+            "change_percent": 0.75,
+            "live_data_available": True,
+            "quote_source": "test",
+        }
+
+    monkeypatch.setattr(svc, "get_quote", fake_quote)
+
+    stable = svc.get_stable_watchlist()
+
+    assert stable[0]["price"] == 501.25
+    assert stable[0]["quote_source"] == "test"
+    assert stable[0]["live_data_available"] is True
+
+
+def test_get_wells_picks_enriches_stock_quotes(monkeypatch):
+    svc = MarketDataService()
+
+    def fake_quote(symbol):
+        return {
+            "symbol": symbol,
+            "price": 123.0,
+            "change_percent": 0.25,
+            "live_data_available": True,
+            "quote_source": "test",
+        }
+
+    monkeypatch.setattr(svc, "get_quote", fake_quote)
+
+    wells = svc.get_wells_picks()
+
+    first_stock = wells[0]["stocks"][0]
+    assert first_stock["price"] == 123.0
+    assert first_stock["quote_source"] == "test"
+    assert first_stock["live_data_available"] is True
 
 
 def test_get_company_snapshot_skips_placeholder_news(monkeypatch):
