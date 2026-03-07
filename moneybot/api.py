@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import logging
+import smtplib
 import time
 import uuid
 from datetime import datetime
 from urllib.parse import parse_qs, urlsplit
 from collections import defaultdict, deque
 from decimal import Decimal
+from email.message import EmailMessage
 from functools import wraps
 from typing import Any, Dict, Tuple
 
-from flask import Blueprint, current_app, g, jsonify, request, session
+from flask import Blueprint, current_app, g, jsonify, request, session, url_for
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from advice_engine import compute_user_advice
@@ -20,6 +24,78 @@ from .models import SoldTrade, User, WatchlistItem
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
+
+
+
+def _password_reset_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt="moneybot-password-reset")
+
+
+def _build_password_reset_link(user: User) -> str:
+    token = _password_reset_serializer().dumps({"user_id": user.id})
+    base_url = (current_app.config.get("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    if base_url:
+        return f"{base_url}/reset-password?token={token}"
+    return url_for("reset_password_page", token=token, _external=True)
+
+
+
+
+def _password_reset_email_configured() -> bool:
+    smtp_host = (current_app.config.get("SMTP_HOST") or "").strip()
+    from_email = (current_app.config.get("PASSWORD_RESET_FROM_EMAIL") or current_app.config.get("SMTP_USER") or "").strip()
+    return bool(smtp_host and from_email)
+
+def _send_reset_email(email: str, reset_link: str) -> bool:
+    smtp_host = (current_app.config.get("SMTP_HOST") or "").strip()
+    smtp_port = int(current_app.config.get("SMTP_PORT") or 587)
+    smtp_user = (current_app.config.get("SMTP_USER") or "").strip()
+    smtp_password = current_app.config.get("SMTP_PASSWORD") or ""
+    smtp_use_tls = bool(current_app.config.get("SMTP_USE_TLS", True))
+    smtp_use_ssl = bool(current_app.config.get("SMTP_USE_SSL", False))
+    from_email = (current_app.config.get("PASSWORD_RESET_FROM_EMAIL") or smtp_user or "").strip()
+
+    if not _password_reset_email_configured():
+        logging.warning("Password reset email not sent: SMTP_HOST or sender email is not configured.")
+        return False
+
+    msg = EmailMessage()
+    msg["Subject"] = "Reset your Moneybot password"
+    msg["From"] = from_email
+    msg["To"] = email
+    msg.set_content(
+        "We received a request to reset your Moneybot password.\n\n"
+        f"Reset it here: {reset_link}\n\n"
+        "If you did not request this, you can safely ignore this email."
+    )
+
+    try:
+        if smtp_use_ssl:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=20) as smtp:
+                if smtp_user and smtp_password:
+                    smtp.login(smtp_user, smtp_password)
+                smtp.send_message(msg)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as smtp:
+                if smtp_use_tls:
+                    smtp.starttls()
+                if smtp_user and smtp_password:
+                    smtp.login(smtp_user, smtp_password)
+                smtp.send_message(msg)
+        return True
+    except Exception:
+        logging.exception("Failed to send password reset email.")
+        return False
+
+
+def _decode_password_reset_token(token: str) -> int | None:
+    max_age = int(current_app.config.get("PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS") or 3600)
+    try:
+        payload = _password_reset_serializer().loads(token, max_age=max_age)
+    except (BadSignature, SignatureExpired):
+        return None
+    user_id = payload.get("user_id") if isinstance(payload, dict) else None
+    return int(user_id) if isinstance(user_id, int) else None
 
 def _to_decimal(v: Any) -> Decimal | None:
     if v in (None, ""):
@@ -58,6 +134,12 @@ def login_required(view):
     def wrapped(*args, **kwargs):
         if not session.get("user_id"):
             return jsonify({"error": "authentication required"}), 401
+        if session.get("requires_tab_session"):
+            tab_session_id = session.get("tab_session_id")
+            request_tab_session_id = request.headers.get("X-Tab-Session-Id") or ""
+            if not tab_session_id or tab_session_id != request_tab_session_id:
+                session.clear()
+                return jsonify({"error": "authentication required"}), 401
         return view(*args, **kwargs)
 
     return wrapped
@@ -169,6 +251,7 @@ def signup():
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
     password = data.get("password") or ""
+    tab_session_id = (data.get("tab_session_id") or "").strip()
     password_confirmation = data.get("password_confirmation")
     if not email or not password:
         return jsonify({"error": "email and password required", "request_id": g.request_id}), 400
@@ -183,6 +266,8 @@ def signup():
     db.session.commit()
 
     session["user_id"] = user.id
+    session["tab_session_id"] = tab_session_id
+    session["requires_tab_session"] = bool(tab_session_id)
     return jsonify({"user": _user_payload(user), "request_id": g.request_id}), 201
 
 
@@ -191,12 +276,16 @@ def login():
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
     password = data.get("password") or ""
+    tab_session_id = (data.get("tab_session_id") or "").strip()
+
 
     user = User.query.filter_by(email=email).first()
     if not user or not check_password_hash(user.password_hash, password):
         return jsonify({"error": "invalid credentials", "request_id": g.request_id}), 401
 
     session["user_id"] = user.id
+    session["tab_session_id"] = tab_session_id
+    session["requires_tab_session"] = bool(tab_session_id)
     return jsonify({"user": _user_payload(user), "request_id": g.request_id})
 
 
@@ -209,12 +298,43 @@ def forgot_password():
     if not email:
         return jsonify({"error": "email required", "request_id": g.request_id}), 400
 
+    user = User.query.filter_by(email=email).first()
+    if user:
+        reset_link = _build_password_reset_link(user)
+        _send_reset_email(email, reset_link)
+
+    email_delivery_configured = _password_reset_email_configured()
+
     # Avoid user-enumeration: always return the same response message.
     return jsonify({
         "ok": True,
         "message": "If an account exists for that email, password recovery instructions have been sent.",
+        "email_delivery_configured": email_delivery_configured,
         "request_id": g.request_id,
     })
+
+
+@api_bp.post("/auth/reset-password")
+def reset_password():
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    new_password = data.get("password") or ""
+
+    if not token or not new_password:
+        return jsonify({"error": "token and password required", "request_id": g.request_id}), 400
+
+    user_id = _decode_password_reset_token(token)
+    if user_id is None:
+        return jsonify({"error": "invalid or expired token", "request_id": g.request_id}), 400
+
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"error": "invalid or expired token", "request_id": g.request_id}), 400
+
+    user.password_hash = generate_password_hash(new_password)
+    db.session.commit()
+
+    return jsonify({"ok": True, "request_id": g.request_id})
 
 @api_bp.post("/auth/logout")
 def logout():

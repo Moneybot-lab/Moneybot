@@ -1,6 +1,7 @@
 import os
 
 from moneybot.app_factory import create_app
+from moneybot import api as api_module
 
 
 class StubMarketService:
@@ -32,6 +33,9 @@ class StubMarketService:
 def _client():
     os.environ["MONEYBOT_SECRET_KEY"] = "test-secret"
     os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+    os.environ.pop("SMTP_HOST", None)
+    os.environ.pop("SMTP_USER", None)
+    os.environ.pop("PASSWORD_RESET_FROM_EMAIL", None)
     app = create_app()
     app.extensions["market_data_service"] = StubMarketService()
     return app.test_client()
@@ -116,6 +120,7 @@ def test_forgot_password_returns_generic_success_message():
     payload = res.get_json()
     assert payload["ok"] is True
     assert "If an account exists" in payload["message"]
+    assert payload["email_delivery_configured"] is False
 
 
 def test_forgot_password_requires_email():
@@ -185,3 +190,53 @@ def test_sell_watchlist_item_rejects_selling_more_than_owned():
     sell = client.post(f"/api/user-watchlist/{item_id}/sell", json={"sold_price": 55, "shares_sold": 2})
     assert sell.status_code == 400
     assert sell.get_json()["error"] == "shares_sold cannot exceed current shares"
+
+
+def test_forgot_password_sends_reset_email_for_existing_user(monkeypatch):
+    client = _client()
+    signup = client.post("/api/auth/signup", json={"email": "mailer@b.com", "password": "pw", "password_confirmation": "pw"})
+    assert signup.status_code == 201
+
+    captured = {}
+
+    def fake_send_reset_email(email, reset_link):
+        captured["email"] = email
+        captured["reset_link"] = reset_link
+        return True
+
+    monkeypatch.setattr(api_module, "_send_reset_email", fake_send_reset_email)
+
+    res = client.post("/api/auth/forgot-password", json={"email": "mailer@b.com"})
+    assert res.status_code == 200
+    assert captured["email"] == "mailer@b.com"
+    assert "reset-password" in captured["reset_link"] and "token=" in captured["reset_link"]
+
+
+def test_reset_password_updates_credentials_and_allows_login():
+    client = _client()
+    signup = client.post("/api/auth/signup", json={"email": "reset@b.com", "password": "oldpw", "password_confirmation": "oldpw"})
+    assert signup.status_code == 201
+
+    with client.application.app_context():
+        user = api_module.User.query.filter_by(email="reset@b.com").first()
+        token = api_module._password_reset_serializer().dumps({"user_id": user.id})
+
+    reset = client.post("/api/auth/reset-password", json={"token": token, "password": "newpw"})
+    assert reset.status_code == 200
+
+    old_login = client.post("/api/auth/login", json={"email": "reset@b.com", "password": "oldpw"})
+    assert old_login.status_code == 401
+
+    new_login = client.post("/api/auth/login", json={"email": "reset@b.com", "password": "newpw"})
+    assert new_login.status_code == 200
+
+
+def test_password_reset_email_config_helper_reads_runtime_config():
+    os.environ["MONEYBOT_SECRET_KEY"] = "test-secret"
+    os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+    os.environ["SMTP_HOST"] = "smtp.example.com"
+    os.environ["PASSWORD_RESET_FROM_EMAIL"] = "noreply@example.com"
+    app = create_app()
+
+    with app.app_context():
+        assert api_module._password_reset_email_configured() is True
