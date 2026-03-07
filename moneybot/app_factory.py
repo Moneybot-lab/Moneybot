@@ -79,6 +79,15 @@ def create_app() -> Flask:
         SQLALCHEMY_DATABASE_URI=database_url,
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
         DATA_PROVIDER=os.environ.get("DATA_PROVIDER", "yfinance"),
+        PUBLIC_BASE_URL=os.environ.get("PUBLIC_BASE_URL", ""),
+        SMTP_HOST=os.environ.get("SMTP_HOST", ""),
+        SMTP_PORT=int(os.environ.get("SMTP_PORT", "587")),
+        SMTP_USER=os.environ.get("SMTP_USER", ""),
+        SMTP_PASSWORD=os.environ.get("SMTP_PASSWORD", ""),
+        SMTP_USE_TLS=(os.environ.get("SMTP_USE_TLS", "true").lower() == "true"),
+        SMTP_USE_SSL=(os.environ.get("SMTP_USE_SSL", "false").lower() == "true"),
+        PASSWORD_RESET_FROM_EMAIL=os.environ.get("PASSWORD_RESET_FROM_EMAIL", os.environ.get("SMTP_USER", "")),
+        PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS=int(os.environ.get("PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS", "3600")),
     )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -427,6 +436,44 @@ def create_app() -> Flask:
                 if(res.ok){ outEl.textContent='Account created. Redirecting...'; location.href='/portfolio'; }
                 else { outEl.textContent = data.error || 'Sign-up failed. Please try again.'; }
               }
+              </script>
+            </body></html>
+            """
+        )
+
+
+
+    @app.get("/reset-password")
+    @app.get("/reset-password/")
+    def reset_password_page():
+        return render_template_string(
+            """
+            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;display:flex;align-items:center;justify-content:center;background:#f7fee7;padding:24px;box-sizing:border-box">
+              <div style="width:100%;max-width:520px;background:#f0fdf4;padding:34px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08)">
+                <h2 style="font-size:2rem;margin:0 0 18px;text-align:center">Reset Password</h2>
+                <form id="resetForm" style="display:flex;flex-direction:column;gap:12px">
+                  <input id="password" type="password" placeholder="new password" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <input id="confirmPassword" type="password" placeholder="confirm new password" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <button type="submit" style="font-size:1.08rem;padding:12px;border:none;border-radius:10px;background:#16a34a;color:#f0fdf4;font-weight:700;cursor:pointer">Update Password</button>
+                </form>
+                <div id="out" style="margin-top:12px;color:#166534;text-align:center;font-size:1.02rem"></div>
+                <p style="margin-top:14px;text-align:center"><a href="/login" style="color:#15803d;font-weight:600">Back to login</a></p>
+              </div>
+              <script>
+                const passwordEl = document.getElementById('password');
+                const confirmPasswordEl = document.getElementById('confirmPassword');
+                const outEl = document.getElementById('out');
+                const params = new URLSearchParams(window.location.search);
+                const token = params.get('token') || '';
+                document.getElementById('resetForm').addEventListener('submit', async (event) => {
+                  event.preventDefault();
+                  if(!token){ outEl.textContent='Reset link is invalid.'; return; }
+                  if(passwordEl.value !== confirmPasswordEl.value){ outEl.textContent='Passwords do not match.'; return; }
+                  const res = await fetch('/api/auth/reset-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token, password:passwordEl.value})});
+                  const data = await res.json();
+                  if(res.ok){ outEl.textContent='Password updated. Redirecting to login...'; setTimeout(()=>{ location.href='/login'; }, 900); }
+                  else { outEl.textContent = data.error || 'Unable to reset password.'; }
+                });
               </script>
             </body></html>
             """
