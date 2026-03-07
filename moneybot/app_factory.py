@@ -436,6 +436,14 @@ def create_app() -> Flask:
                 <span style="width:16px;height:16px;border:2px solid #86efac;border-top-color:#16a34a;border-radius:999px;display:inline-block;animation:spin .8s linear infinite"></span>
                 Loading latest portfolio stock data...
               </div>
+              <button id="toggleLifetimeBtn" onclick="toggleLifetime()" style="border:none;background:#14532d;color:#f0fdf4;padding:9px 14px;border-radius:8px;font-weight:700;cursor:pointer;margin-bottom:10px">Show Lifetime Gains/Losses</button>
+              <div id="lifetimePanel" style="display:none;background:#ecfccb;border:1px solid #d9f99d;border-radius:10px;padding:12px;margin-bottom:12px">
+                <div style="font-weight:700;margin-bottom:8px">Lifetime Realized Gains/Losses: <span id="lifetimeTotal">$0.00</span></div>
+                <div style="overflow-x:auto"><table style="width:100%;background:#f0fdf4;border-collapse:collapse;min-width:640px">
+                  <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Sold At</th><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Sold Price</th><th style="border:1px solid #e5e7eb;padding:8px">Shares Sold</th><th style="border:1px solid #e5e7eb;padding:8px">Realized</th></tr></thead>
+                  <tbody id="soldRows"><tr><td colspan="6" style="padding:8px;color:#3f6212">No sold trades yet.</td></tr></tbody>
+                </table></div>
+              </div>
               <div style="overflow-x:auto"><table style="width:100%;background:#f0fdf4;border-collapse:collapse;min-width:980px">
                 <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Today's Gain/Loss</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Trend</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Sentiment</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
                 <tbody id="rows"></tbody>
@@ -470,6 +478,10 @@ def create_app() -> Flask:
               document.head.appendChild(styleTag);
 
               const rowsEl = document.getElementById('rows');
+              const soldRowsEl = document.getElementById('soldRows');
+              const lifetimePanelEl = document.getElementById('lifetimePanel');
+              const lifetimeTotalEl = document.getElementById('lifetimeTotal');
+              const toggleLifetimeBtnEl = document.getElementById('toggleLifetimeBtn');
               const outEl = document.getElementById('out');
               const loadingStateEl = document.getElementById('loadingState');
               const symbolEl = document.getElementById('symbol');
@@ -588,6 +600,7 @@ def create_app() -> Flask:
               function renderRows(items){
                 if(!items || !items.length){
                   rowsEl.innerHTML = '<tr><td colspan="11" style="padding:8px;color:#3f6212">No watchlist entries yet.</td></tr>';
+                  currentPortfolioItems = [];
                   return;
                 }
                 currentPortfolioItems = items;
@@ -599,7 +612,7 @@ def create_app() -> Flask:
                 const totalTodayChange = items.reduce((sum, item) => sum + (typeof item.today_change_amount === 'number' ? item.today_change_amount : 0), 0);
                 const totalPerformance = items.reduce((sum, item) => sum + (typeof item.performance_amount === 'number' ? item.performance_amount : 0), 0);
 
-                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="del(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Remove</button></td></tr>`).join('')
+                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="del(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Remove</button></div></td></tr>`).join('')
                 + `<tr style="background:#f7fee7;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px;color:#3f3f46;font-size:12px">Click advice badges to see why.</td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
                 items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || []));
               }
@@ -616,6 +629,9 @@ def create_app() -> Flask:
                     return;
                   }
                   renderRows(data.enriched_items || data.items || []);
+                  if (lifetimePanelEl.style.display !== 'none') {
+                    await loadSoldTrades();
+                  }
                 } finally {
                   setLoading(false);
                 }
@@ -631,6 +647,93 @@ def create_app() -> Flask:
                   await load();
                 } else {
                   outEl.textContent = data.error || 'Unable to add item.';
+                }
+              }
+
+
+              function amountColor(v){
+                if (typeof v !== 'number') return '#3f3f46';
+                if (v > 0) return '#166534';
+                if (v < 0) return '#b91c1c';
+                return '#3f3f46';
+              }
+
+              function formatDate(iso){
+                if(!iso) return 'n/a';
+                const d = new Date(iso);
+                return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString();
+              }
+
+              function renderSoldTrades(items, totalRealized){
+                lifetimeTotalEl.textContent = formatMoney(totalRealized || 0);
+                lifetimeTotalEl.style.color = amountColor(totalRealized);
+                if(!items || !items.length){
+                  soldRowsEl.innerHTML = '<tr><td colspan="6" style="padding:8px;color:#3f6212">No sold trades yet.</td></tr>';
+                  return;
+                }
+                soldRowsEl.innerHTML = items.map((item)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px">${formatDate(item.sold_at)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(item.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(item.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(item.sold_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(item.shares_sold)}</td><td style="border:1px solid #e5e7eb;padding:8px;color:${amountColor(item.realized_amount)}">${formatMoney(item.realized_amount)}</td></tr>`).join('');
+              }
+
+              async function loadSoldTrades(){
+                const res = await fetch('/api/sold-trades');
+                const data = await res.json();
+                if(!res.ok){
+                  if (res.status === 401) { location.href='/login'; return; }
+                  outEl.textContent = data.error || 'Unable to load sold trades.';
+                  return;
+                }
+                renderSoldTrades(data.items || [], data.total_realized || 0);
+              }
+
+              function toggleLifetime(){
+                const isOpen = lifetimePanelEl.style.display !== 'none';
+                if(isOpen){
+                  lifetimePanelEl.style.display = 'none';
+                  toggleLifetimeBtnEl.textContent = 'Show Lifetime Gains/Losses';
+                } else {
+                  lifetimePanelEl.style.display = 'block';
+                  toggleLifetimeBtnEl.textContent = 'Hide Lifetime Gains/Losses';
+                  loadSoldTrades();
+                }
+              }
+
+              async function markSold(id){
+                const item = currentPortfolioItems.find((entry)=> entry.id === id);
+                if(!item){
+                  outEl.textContent = 'Unable to find portfolio item.';
+                  return;
+                }
+                const soldPriceRaw = prompt(`What price did you sell ${item.symbol} at?`);
+                if(soldPriceRaw === null) return;
+                const soldPrice = Number(soldPriceRaw);
+                if(!Number.isFinite(soldPrice) || soldPrice <= 0){
+                  outEl.textContent = 'Sold price must be a positive number.';
+                  return;
+                }
+
+                const sharesRaw = prompt(`How many shares of ${item.symbol} did you sell? (Current: ${displayValue(item.shares)})`);
+                if(sharesRaw === null) return;
+                const sharesSold = Number(sharesRaw);
+                if(!Number.isFinite(sharesSold) || sharesSold <= 0){
+                  outEl.textContent = 'Shares sold must be a positive number.';
+                  return;
+                }
+
+                const res = await fetch('/api/user-watchlist/' + id + '/sell', {
+                  method:'POST',
+                  headers:{'Content-Type':'application/json'},
+                  body:JSON.stringify({ sold_price:soldPrice, shares_sold:sharesSold })
+                });
+                const data = await res.json();
+                if(!res.ok){
+                  outEl.textContent = data.error || 'Unable to record sold trade.';
+                  return;
+                }
+                const realized = data.sold_trade && typeof data.sold_trade.realized_amount === 'number' ? data.sold_trade.realized_amount : 0;
+                outEl.textContent = `Sold trade recorded (${formatMoney(realized)} realized).`;
+                await load();
+                if (lifetimePanelEl.style.display !== 'none') {
+                  await loadSoldTrades();
                 }
               }
 

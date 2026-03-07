@@ -15,7 +15,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from advice_engine import compute_user_advice
 
 from .extensions import db
-from .models import User, WatchlistItem
+from .models import SoldTrade, User, WatchlistItem
 
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
@@ -105,6 +105,20 @@ def _watchlist_item_payload(item: WatchlistItem) -> Dict[str, Any]:
         "entry_price": float(item.buy_price) if item.buy_price is not None else None,
         "shares": float(item.shares) if item.shares is not None else None,
         "created_at": item.created_at.isoformat(),
+    }
+
+
+
+
+def _sold_trade_payload(item: SoldTrade) -> Dict[str, Any]:
+    return {
+        "id": item.id,
+        "symbol": item.symbol,
+        "shares_sold": float(item.shares_sold),
+        "sold_price": float(item.sold_price),
+        "entry_price": float(item.entry_price),
+        "realized_amount": float(item.realized_amount),
+        "sold_at": item.sold_at.isoformat(),
     }
 
 
@@ -393,6 +407,71 @@ def delete_watchlist_item(item_id: int):
     db.session.delete(item)
     db.session.commit()
     return jsonify({"ok": True, "request_id": g.request_id})
+
+
+@api_bp.post("/user-watchlist/<int:item_id>/sell")
+@login_required
+def sell_watchlist_item(item_id: int):
+    data = request.get_json(silent=True) or {}
+    item = WatchlistItem.query.filter_by(id=item_id, user_id=session["user_id"]).first()
+    if not item:
+        return jsonify({"error": "item not found", "request_id": g.request_id}), 404
+
+    sold_price = _to_decimal(data.get("sold_price"))
+    shares_sold = _to_decimal(data.get("shares_sold"))
+
+    if sold_price is None or sold_price <= 0:
+        return jsonify({"error": "sold_price must be > 0", "request_id": g.request_id}), 400
+    if shares_sold is None or shares_sold <= 0:
+        return jsonify({"error": "shares_sold must be > 0", "request_id": g.request_id}), 400
+    if item.buy_price is None:
+        return jsonify({"error": "entry price is required to calculate gains/losses", "request_id": g.request_id}), 400
+    if item.shares is None or item.shares <= 0:
+        return jsonify({"error": "shares are required to record a sale", "request_id": g.request_id}), 400
+    if shares_sold > item.shares:
+        return jsonify({"error": "shares_sold cannot exceed current shares", "request_id": g.request_id}), 400
+
+    realized_amount = (sold_price - item.buy_price) * shares_sold
+    sold_trade = SoldTrade(
+        user_id=session["user_id"],
+        symbol=item.symbol,
+        shares_sold=shares_sold,
+        sold_price=sold_price,
+        entry_price=item.buy_price,
+        realized_amount=realized_amount,
+    )
+    db.session.add(sold_trade)
+
+    remaining_shares = item.shares - shares_sold
+    if remaining_shares == 0:
+        db.session.delete(item)
+        remaining_item = None
+    else:
+        item.shares = remaining_shares
+        remaining_item = _watchlist_item_payload(item)
+
+    db.session.commit()
+    return jsonify(
+        {
+            "sold_trade": _sold_trade_payload(sold_trade),
+            "remaining_item": remaining_item,
+            "removed": remaining_item is None,
+            "request_id": g.request_id,
+        }
+    )
+
+
+@api_bp.get("/sold-trades")
+@login_required
+def sold_trades():
+    items = (
+        SoldTrade.query.filter_by(user_id=session["user_id"])
+        .order_by(SoldTrade.sold_at.desc())
+        .all()
+    )
+    payload = [_sold_trade_payload(i) for i in items]
+    total_realized = round(sum(i["realized_amount"] for i in payload), 2)
+    return jsonify({"items": payload, "total_realized": total_realized, "request_id": g.request_id})
 
 
 @api_bp.get("/portfolio-summary")

@@ -17,6 +17,12 @@ class User(db.Model):
         cascade="all, delete-orphan",
         lazy=True,
     )
+    sold_trades = db.relationship(
+        "SoldTrade",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy=True,
+    )
 
 
 class WatchlistItem(db.Model):
@@ -35,3 +41,18 @@ class WatchlistItem(db.Model):
     __table_args__ = (
         db.UniqueConstraint("user_id", "symbol", name="uq_watchlist_user_symbol"),
     )
+
+
+class SoldTrade(db.Model):
+    __tablename__ = "sold_trades"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    symbol = db.Column(db.String(16), nullable=False, index=True)
+    shares_sold = db.Column(db.Numeric(16, 6), nullable=False)
+    sold_price = db.Column(db.Numeric(16, 4), nullable=False)
+    entry_price = db.Column(db.Numeric(16, 4), nullable=False)
+    realized_amount = db.Column(db.Numeric(16, 4), nullable=False)
+    sold_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    user = db.relationship("User", back_populates="sold_trades")
