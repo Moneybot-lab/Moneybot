@@ -123,3 +123,65 @@ def test_forgot_password_requires_email():
     res = client.post("/api/auth/forgot-password", json={})
     assert res.status_code == 400
     assert res.get_json()["error"] == "email required"
+
+
+def test_sell_watchlist_item_records_realized_gain_and_reduces_shares():
+    client = _client()
+    signup = client.post("/api/auth/signup", json={"email": "sell@b.com", "password": "pw", "password_confirmation": "pw"})
+    assert signup.status_code == 201
+
+    add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 10})
+    assert add.status_code == 201
+    item_id = add.get_json()["item"]["id"]
+
+    sell = client.post(f"/api/user-watchlist/{item_id}/sell", json={"sold_price": 120, "shares_sold": 4})
+    assert sell.status_code == 200
+    payload = sell.get_json()
+    assert payload["removed"] is False
+    assert payload["remaining_item"]["shares"] == 6.0
+    assert payload["sold_trade"]["realized_amount"] == 80.0
+
+    watchlist = client.get("/api/user-watchlist")
+    assert watchlist.status_code == 200
+    assert watchlist.get_json()["items"][0]["shares"] == 6.0
+
+    sold_trades = client.get("/api/sold-trades")
+    assert sold_trades.status_code == 200
+    sold_payload = sold_trades.get_json()
+    assert sold_payload["total_realized"] == 80.0
+    assert sold_payload["items"][0]["symbol"] == "AAPL"
+
+
+def test_sell_watchlist_item_removes_position_when_all_shares_are_sold():
+    client = _client()
+    signup = client.post("/api/auth/signup", json={"email": "sellall@b.com", "password": "pw", "password_confirmation": "pw"})
+    assert signup.status_code == 201
+
+    add = client.post("/api/user-watchlist", json={"symbol": "TSLA", "buy_price": 200, "shares": 2})
+    assert add.status_code == 201
+    item_id = add.get_json()["item"]["id"]
+
+    sell = client.post(f"/api/user-watchlist/{item_id}/sell", json={"sold_price": 180, "shares_sold": 2})
+    assert sell.status_code == 200
+    payload = sell.get_json()
+    assert payload["removed"] is True
+    assert payload["remaining_item"] is None
+    assert payload["sold_trade"]["realized_amount"] == -40.0
+
+    watchlist = client.get("/api/user-watchlist")
+    assert watchlist.status_code == 200
+    assert watchlist.get_json()["items"] == []
+
+
+def test_sell_watchlist_item_rejects_selling_more_than_owned():
+    client = _client()
+    signup = client.post("/api/auth/signup", json={"email": "over@b.com", "password": "pw", "password_confirmation": "pw"})
+    assert signup.status_code == 201
+
+    add = client.post("/api/user-watchlist", json={"symbol": "MSFT", "buy_price": 50, "shares": 1})
+    assert add.status_code == 201
+    item_id = add.get_json()["item"]["id"]
+
+    sell = client.post(f"/api/user-watchlist/{item_id}/sell", json={"sold_price": 55, "shares_sold": 2})
+    assert sell.status_code == 400
+    assert sell.get_json()["error"] == "shares_sold cannot exceed current shares"
