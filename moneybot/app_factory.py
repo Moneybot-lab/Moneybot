@@ -79,6 +79,15 @@ def create_app() -> Flask:
         SQLALCHEMY_DATABASE_URI=database_url,
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
         DATA_PROVIDER=os.environ.get("DATA_PROVIDER", "yfinance"),
+        PUBLIC_BASE_URL=os.environ.get("PUBLIC_BASE_URL", ""),
+        SMTP_HOST=os.environ.get("SMTP_HOST", ""),
+        SMTP_PORT=int(os.environ.get("SMTP_PORT", "587")),
+        SMTP_USER=os.environ.get("SMTP_USER", ""),
+        SMTP_PASSWORD=os.environ.get("SMTP_PASSWORD", ""),
+        SMTP_USE_TLS=(os.environ.get("SMTP_USE_TLS", "true").lower() == "true"),
+        SMTP_USE_SSL=(os.environ.get("SMTP_USE_SSL", "false").lower() == "true"),
+        PASSWORD_RESET_FROM_EMAIL=os.environ.get("PASSWORD_RESET_FROM_EMAIL", os.environ.get("SMTP_USER", "")),
+        PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS=int(os.environ.get("PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS", "3600")),
     )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -346,11 +355,20 @@ def create_app() -> Flask:
               const emailEl = document.getElementById('email');
               const passwordEl = document.getElementById('password');
               const outEl = document.getElementById('out');
+              const TAB_SESSION_KEY = 'moneybot_tab_session_id';
+              function getOrCreateTabSessionId(){
+                let tabSessionId = sessionStorage.getItem(TAB_SESSION_KEY);
+                if(!tabSessionId){
+                  tabSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
+                  sessionStorage.setItem(TAB_SESSION_KEY, tabSessionId);
+                }
+                return tabSessionId;
+              }
               document.getElementById('loginForm').addEventListener('submit', go);
 
               async function go(event){
                 if (event) event.preventDefault();
-                const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value})});
+                const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,tab_session_id:getOrCreateTabSessionId()})});
                 const data = await res.json();
                 if(res.ok){ outEl.textContent='Login successful. Redirecting...'; location.href='/portfolio'; }
                 else { outEl.textContent = data.error || 'Login failed. Please verify your credentials.'; }
@@ -396,6 +414,15 @@ def create_app() -> Flask:
               const passwordEl = document.getElementById('password');
               const confirmPasswordEl = document.getElementById('confirmPassword');
               const outEl = document.getElementById('out');
+              const TAB_SESSION_KEY = 'moneybot_tab_session_id';
+              function getOrCreateTabSessionId(){
+                let tabSessionId = sessionStorage.getItem(TAB_SESSION_KEY);
+                if(!tabSessionId){
+                  tabSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
+                  sessionStorage.setItem(TAB_SESSION_KEY, tabSessionId);
+                }
+                return tabSessionId;
+              }
               document.getElementById('signupForm').addEventListener('submit', go);
 
               async function go(event){
@@ -404,11 +431,49 @@ def create_app() -> Flask:
                   outEl.textContent = 'Passwords do not match.';
                   return;
                 }
-                const res = await fetch('/api/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,password_confirmation:confirmPasswordEl.value})});
+                const res = await fetch('/api/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,password_confirmation:confirmPasswordEl.value,tab_session_id:getOrCreateTabSessionId()})});
                 const data = await res.json();
                 if(res.ok){ outEl.textContent='Account created. Redirecting...'; location.href='/portfolio'; }
                 else { outEl.textContent = data.error || 'Sign-up failed. Please try again.'; }
               }
+              </script>
+            </body></html>
+            """
+        )
+
+
+
+    @app.get("/reset-password")
+    @app.get("/reset-password/")
+    def reset_password_page():
+        return render_template_string(
+            """
+            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;display:flex;align-items:center;justify-content:center;background:#f7fee7;padding:24px;box-sizing:border-box">
+              <div style="width:100%;max-width:520px;background:#f0fdf4;padding:34px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08)">
+                <h2 style="font-size:2rem;margin:0 0 18px;text-align:center">Reset Password</h2>
+                <form id="resetForm" style="display:flex;flex-direction:column;gap:12px">
+                  <input id="password" type="password" placeholder="new password" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <input id="confirmPassword" type="password" placeholder="confirm new password" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <button type="submit" style="font-size:1.08rem;padding:12px;border:none;border-radius:10px;background:#16a34a;color:#f0fdf4;font-weight:700;cursor:pointer">Update Password</button>
+                </form>
+                <div id="out" style="margin-top:12px;color:#166534;text-align:center;font-size:1.02rem"></div>
+                <p style="margin-top:14px;text-align:center"><a href="/login" style="color:#15803d;font-weight:600">Back to login</a></p>
+              </div>
+              <script>
+                const passwordEl = document.getElementById('password');
+                const confirmPasswordEl = document.getElementById('confirmPassword');
+                const outEl = document.getElementById('out');
+                const params = new URLSearchParams(window.location.search);
+                const token = params.get('token') || '';
+                document.getElementById('resetForm').addEventListener('submit', async (event) => {
+                  event.preventDefault();
+                  if(!token){ outEl.textContent='Reset link is invalid.'; return; }
+                  if(passwordEl.value !== confirmPasswordEl.value){ outEl.textContent='Passwords do not match.'; return; }
+                  const res = await fetch('/api/auth/reset-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token, password:passwordEl.value})});
+                  const data = await res.json();
+                  if(res.ok){ outEl.textContent='Password updated. Redirecting to login...'; setTimeout(()=>{ location.href='/login'; }, 900); }
+                  else { outEl.textContent = data.error || 'Unable to reset password.'; }
+                });
               </script>
             </body></html>
             """
@@ -477,6 +542,25 @@ def create_app() -> Flask:
               styleTag.textContent = '@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }';
               document.head.appendChild(styleTag);
 
+              const TAB_SESSION_KEY = 'moneybot_tab_session_id';
+              function getTabSessionId(){
+                return sessionStorage.getItem(TAB_SESSION_KEY) || '';
+              }
+              async function apiFetch(url, options = {}){
+                const tabSessionId = getTabSessionId();
+                if(!tabSessionId){
+                  location.href = '/login';
+                  throw new Error('missing tab session');
+                }
+                const headers = Object.assign({}, options.headers || {}, {'X-Tab-Session-Id': tabSessionId});
+                const response = await fetch(url, Object.assign({}, options, {headers}));
+                if(response.status === 401){
+                  sessionStorage.removeItem(TAB_SESSION_KEY);
+                  location.href = '/login';
+                }
+                return response;
+              }
+
               const rowsEl = document.getElementById('rows');
               const soldRowsEl = document.getElementById('soldRows');
               const lifetimePanelEl = document.getElementById('lifetimePanel');
@@ -490,7 +574,7 @@ def create_app() -> Flask:
               let currentPortfolioItems = [];
               document.getElementById('addForm').addEventListener('submit', addItem);
 
-              async function logout(){ await fetch('/api/auth/logout',{method:'POST'}); location.href='/'; }
+              async function logout(){ await apiFetch('/api/auth/logout',{method:'POST'}); sessionStorage.removeItem(TAB_SESSION_KEY); location.href='/'; }
               function setLoading(isLoading){ loadingStateEl.style.display = isLoading ? 'flex' : 'none'; }
               function displayValue(value){
                 return (value === null || value === undefined || value === '') ? 'n/a' : value;
@@ -620,7 +704,7 @@ def create_app() -> Flask:
               async function load(){
                 setLoading(true);
                 try {
-                  const res = await fetch('/api/user-watchlist');
+                  const res = await apiFetch('/api/user-watchlist');
                   const data = await res.json();
                   if(!res.ok){
                     if (res.status === 401) { location.href='/login'; return; }
@@ -639,7 +723,7 @@ def create_app() -> Flask:
               async function addItem(event){
                 if (event) event.preventDefault();
                 const payload = { symbol:(symbolEl.value || '').trim().toUpperCase(), buy_price:buyPriceEl.value||null, shares:sharesEl.value||null };
-                const res = await fetch('/api/user-watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+                const res = await apiFetch('/api/user-watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
                 const data = await res.json();
                 if (res.ok) {
                   outEl.textContent = 'Watchlist item added.';
@@ -675,7 +759,7 @@ def create_app() -> Flask:
               }
 
               async function loadSoldTrades(){
-                const res = await fetch('/api/sold-trades');
+                const res = await apiFetch('/api/sold-trades');
                 const data = await res.json();
                 if(!res.ok){
                   if (res.status === 401) { location.href='/login'; return; }
@@ -719,7 +803,7 @@ def create_app() -> Flask:
                   return;
                 }
 
-                const res = await fetch('/api/user-watchlist/' + id + '/sell', {
+                const res = await apiFetch('/api/user-watchlist/' + id + '/sell', {
                   method:'POST',
                   headers:{'Content-Type':'application/json'},
                   body:JSON.stringify({ sold_price:soldPrice, shares_sold:sharesSold })
@@ -737,7 +821,7 @@ def create_app() -> Flask:
                 }
               }
 
-              async function del(id){ await fetch('/api/user-watchlist/'+id,{method:'DELETE'}); await load(); }
+              async function del(id){ await apiFetch('/api/user-watchlist/'+id,{method:'DELETE'}); await load(); }
               document.getElementById('tickerModal').addEventListener('click', (event) => { if(event.target.id==='tickerModal'){ closeModal(); }});
               document.getElementById('adviceModal').addEventListener('click', (event) => { if(event.target.id==='adviceModal'){ closeAdviceModal(); }});
               load();
