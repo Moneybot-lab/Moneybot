@@ -58,6 +58,12 @@ def login_required(view):
     def wrapped(*args, **kwargs):
         if not session.get("user_id"):
             return jsonify({"error": "authentication required"}), 401
+        if session.get("requires_tab_session"):
+            tab_session_id = session.get("tab_session_id")
+            request_tab_session_id = request.headers.get("X-Tab-Session-Id") or ""
+            if not tab_session_id or tab_session_id != request_tab_session_id:
+                session.clear()
+                return jsonify({"error": "authentication required"}), 401
         return view(*args, **kwargs)
 
     return wrapped
@@ -169,6 +175,7 @@ def signup():
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
     password = data.get("password") or ""
+    tab_session_id = (data.get("tab_session_id") or "").strip()
     password_confirmation = data.get("password_confirmation")
     if not email or not password:
         return jsonify({"error": "email and password required", "request_id": g.request_id}), 400
@@ -183,6 +190,8 @@ def signup():
     db.session.commit()
 
     session["user_id"] = user.id
+    session["tab_session_id"] = tab_session_id
+    session["requires_tab_session"] = bool(tab_session_id)
     return jsonify({"user": _user_payload(user), "request_id": g.request_id}), 201
 
 
@@ -191,12 +200,16 @@ def login():
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
     password = data.get("password") or ""
+    tab_session_id = (data.get("tab_session_id") or "").strip()
+
 
     user = User.query.filter_by(email=email).first()
     if not user or not check_password_hash(user.password_hash, password):
         return jsonify({"error": "invalid credentials", "request_id": g.request_id}), 401
 
     session["user_id"] = user.id
+    session["tab_session_id"] = tab_session_id
+    session["requires_tab_session"] = bool(tab_session_id)
     return jsonify({"user": _user_payload(user), "request_id": g.request_id})
 
 

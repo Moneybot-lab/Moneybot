@@ -346,11 +346,20 @@ def create_app() -> Flask:
               const emailEl = document.getElementById('email');
               const passwordEl = document.getElementById('password');
               const outEl = document.getElementById('out');
+              const TAB_SESSION_KEY = 'moneybot_tab_session_id';
+              function getOrCreateTabSessionId(){
+                let tabSessionId = sessionStorage.getItem(TAB_SESSION_KEY);
+                if(!tabSessionId){
+                  tabSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
+                  sessionStorage.setItem(TAB_SESSION_KEY, tabSessionId);
+                }
+                return tabSessionId;
+              }
               document.getElementById('loginForm').addEventListener('submit', go);
 
               async function go(event){
                 if (event) event.preventDefault();
-                const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value})});
+                const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,tab_session_id:getOrCreateTabSessionId()})});
                 const data = await res.json();
                 if(res.ok){ outEl.textContent='Login successful. Redirecting...'; location.href='/portfolio'; }
                 else { outEl.textContent = data.error || 'Login failed. Please verify your credentials.'; }
@@ -396,6 +405,15 @@ def create_app() -> Flask:
               const passwordEl = document.getElementById('password');
               const confirmPasswordEl = document.getElementById('confirmPassword');
               const outEl = document.getElementById('out');
+              const TAB_SESSION_KEY = 'moneybot_tab_session_id';
+              function getOrCreateTabSessionId(){
+                let tabSessionId = sessionStorage.getItem(TAB_SESSION_KEY);
+                if(!tabSessionId){
+                  tabSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
+                  sessionStorage.setItem(TAB_SESSION_KEY, tabSessionId);
+                }
+                return tabSessionId;
+              }
               document.getElementById('signupForm').addEventListener('submit', go);
 
               async function go(event){
@@ -404,7 +422,7 @@ def create_app() -> Flask:
                   outEl.textContent = 'Passwords do not match.';
                   return;
                 }
-                const res = await fetch('/api/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,password_confirmation:confirmPasswordEl.value})});
+                const res = await fetch('/api/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,password_confirmation:confirmPasswordEl.value,tab_session_id:getOrCreateTabSessionId()})});
                 const data = await res.json();
                 if(res.ok){ outEl.textContent='Account created. Redirecting...'; location.href='/portfolio'; }
                 else { outEl.textContent = data.error || 'Sign-up failed. Please try again.'; }
@@ -477,6 +495,25 @@ def create_app() -> Flask:
               styleTag.textContent = '@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }';
               document.head.appendChild(styleTag);
 
+              const TAB_SESSION_KEY = 'moneybot_tab_session_id';
+              function getTabSessionId(){
+                return sessionStorage.getItem(TAB_SESSION_KEY) || '';
+              }
+              async function apiFetch(url, options = {}){
+                const tabSessionId = getTabSessionId();
+                if(!tabSessionId){
+                  location.href = '/login';
+                  throw new Error('missing tab session');
+                }
+                const headers = Object.assign({}, options.headers || {}, {'X-Tab-Session-Id': tabSessionId});
+                const response = await fetch(url, Object.assign({}, options, {headers}));
+                if(response.status === 401){
+                  sessionStorage.removeItem(TAB_SESSION_KEY);
+                  location.href = '/login';
+                }
+                return response;
+              }
+
               const rowsEl = document.getElementById('rows');
               const soldRowsEl = document.getElementById('soldRows');
               const lifetimePanelEl = document.getElementById('lifetimePanel');
@@ -490,7 +527,7 @@ def create_app() -> Flask:
               let currentPortfolioItems = [];
               document.getElementById('addForm').addEventListener('submit', addItem);
 
-              async function logout(){ await fetch('/api/auth/logout',{method:'POST'}); location.href='/'; }
+              async function logout(){ await apiFetch('/api/auth/logout',{method:'POST'}); sessionStorage.removeItem(TAB_SESSION_KEY); location.href='/'; }
               function setLoading(isLoading){ loadingStateEl.style.display = isLoading ? 'flex' : 'none'; }
               function displayValue(value){
                 return (value === null || value === undefined || value === '') ? 'n/a' : value;
@@ -620,7 +657,7 @@ def create_app() -> Flask:
               async function load(){
                 setLoading(true);
                 try {
-                  const res = await fetch('/api/user-watchlist');
+                  const res = await apiFetch('/api/user-watchlist');
                   const data = await res.json();
                   if(!res.ok){
                     if (res.status === 401) { location.href='/login'; return; }
@@ -639,7 +676,7 @@ def create_app() -> Flask:
               async function addItem(event){
                 if (event) event.preventDefault();
                 const payload = { symbol:(symbolEl.value || '').trim().toUpperCase(), buy_price:buyPriceEl.value||null, shares:sharesEl.value||null };
-                const res = await fetch('/api/user-watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+                const res = await apiFetch('/api/user-watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
                 const data = await res.json();
                 if (res.ok) {
                   outEl.textContent = 'Watchlist item added.';
@@ -675,7 +712,7 @@ def create_app() -> Flask:
               }
 
               async function loadSoldTrades(){
-                const res = await fetch('/api/sold-trades');
+                const res = await apiFetch('/api/sold-trades');
                 const data = await res.json();
                 if(!res.ok){
                   if (res.status === 401) { location.href='/login'; return; }
@@ -719,7 +756,7 @@ def create_app() -> Flask:
                   return;
                 }
 
-                const res = await fetch('/api/user-watchlist/' + id + '/sell', {
+                const res = await apiFetch('/api/user-watchlist/' + id + '/sell', {
                   method:'POST',
                   headers:{'Content-Type':'application/json'},
                   body:JSON.stringify({ sold_price:soldPrice, shares_sold:sharesSold })
@@ -737,7 +774,7 @@ def create_app() -> Flask:
                 }
               }
 
-              async function del(id){ await fetch('/api/user-watchlist/'+id,{method:'DELETE'}); await load(); }
+              async function del(id){ await apiFetch('/api/user-watchlist/'+id,{method:'DELETE'}); await load(); }
               document.getElementById('tickerModal').addEventListener('click', (event) => { if(event.target.id==='tickerModal'){ closeModal(); }});
               document.getElementById('adviceModal').addEventListener('click', (event) => { if(event.target.id==='adviceModal'){ closeAdviceModal(); }});
               load();
