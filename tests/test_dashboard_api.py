@@ -33,6 +33,9 @@ class StubMarketService:
 def _client():
     os.environ["MONEYBOT_SECRET_KEY"] = "test-secret"
     os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+    os.environ.pop("SMTP_HOST", None)
+    os.environ.pop("SMTP_USER", None)
+    os.environ.pop("PASSWORD_RESET_FROM_EMAIL", None)
     app = create_app()
     app.extensions["market_data_service"] = StubMarketService()
     return app.test_client()
@@ -117,6 +120,7 @@ def test_forgot_password_returns_generic_success_message():
     payload = res.get_json()
     assert payload["ok"] is True
     assert "If an account exists" in payload["message"]
+    assert payload["email_delivery_configured"] is False
 
 
 def test_forgot_password_requires_email():
@@ -225,3 +229,14 @@ def test_reset_password_updates_credentials_and_allows_login():
 
     new_login = client.post("/api/auth/login", json={"email": "reset@b.com", "password": "newpw"})
     assert new_login.status_code == 200
+
+
+def test_password_reset_email_config_helper_reads_runtime_config():
+    os.environ["MONEYBOT_SECRET_KEY"] = "test-secret"
+    os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+    os.environ["SMTP_HOST"] = "smtp.example.com"
+    os.environ["PASSWORD_RESET_FROM_EMAIL"] = "noreply@example.com"
+    app = create_app()
+
+    with app.app_context():
+        assert api_module._password_reset_email_configured() is True

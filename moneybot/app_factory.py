@@ -382,6 +382,10 @@ def create_app() -> Flask:
                 }
                 const res = await fetch('/api/auth/forgot-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
                 const data = await res.json();
+                if (data && data.email_delivery_configured === false) {
+                  outEl.textContent = 'Password recovery email service is not configured yet. Please contact support or try again later.';
+                  return;
+                }
                 outEl.textContent = data.message || data.error || 'Unable to start password recovery right now.';
               }
               </script>

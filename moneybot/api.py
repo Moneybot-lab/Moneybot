@@ -39,6 +39,13 @@ def _build_password_reset_link(user: User) -> str:
     return url_for("reset_password_page", token=token, _external=True)
 
 
+
+
+def _password_reset_email_configured() -> bool:
+    smtp_host = (current_app.config.get("SMTP_HOST") or "").strip()
+    from_email = (current_app.config.get("PASSWORD_RESET_FROM_EMAIL") or current_app.config.get("SMTP_USER") or "").strip()
+    return bool(smtp_host and from_email)
+
 def _send_reset_email(email: str, reset_link: str) -> bool:
     smtp_host = (current_app.config.get("SMTP_HOST") or "").strip()
     smtp_port = int(current_app.config.get("SMTP_PORT") or 587)
@@ -48,7 +55,7 @@ def _send_reset_email(email: str, reset_link: str) -> bool:
     smtp_use_ssl = bool(current_app.config.get("SMTP_USE_SSL", False))
     from_email = (current_app.config.get("PASSWORD_RESET_FROM_EMAIL") or smtp_user or "").strip()
 
-    if not smtp_host or not from_email:
+    if not _password_reset_email_configured():
         logging.warning("Password reset email not sent: SMTP_HOST or sender email is not configured.")
         return False
 
@@ -296,10 +303,13 @@ def forgot_password():
         reset_link = _build_password_reset_link(user)
         _send_reset_email(email, reset_link)
 
+    email_delivery_configured = _password_reset_email_configured()
+
     # Avoid user-enumeration: always return the same response message.
     return jsonify({
         "ok": True,
         "message": "If an account exists for that email, password recovery instructions have been sent.",
+        "email_delivery_configured": email_delivery_configured,
         "request_id": g.request_id,
     })
 
