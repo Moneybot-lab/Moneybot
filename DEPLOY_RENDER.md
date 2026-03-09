@@ -165,6 +165,7 @@ Interpretation:
 - `ai_status: "fallback"` with `ai_mode: "rule_based"` means AI did not run (disabled/unavailable) and deterministic fallback was used.
 - `ai_status: "fallback"` with `ai_mode: "skipped_low_signal"` means AI was intentionally skipped for very low-signal contexts.
 - If the AI block shows `mode: rule_based`, `provider: none`, and `model: none`, AI did not enhance that response. Check `reason` for why (for example `disabled_or_missing_api_key`, `cooldown_after_failure`, or `provider_error`).
+- `reason: empty_or_unparseable_provider_response` means the provider responded but in an unexpected/empty shape for the parser (or returned empty content).
 
 Also check Render logs:
 - Repeated `WARNING: AI advisor unavailable, using fallback: ...` indicates timeout/auth/provider failures.

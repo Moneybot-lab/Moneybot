@@ -8,6 +8,26 @@ from typing import Any, Dict, Optional
 import requests
 
 
+
+
+def _coerce_text_candidate(candidate: Any) -> Optional[str]:
+    if isinstance(candidate, str) and candidate.strip():
+        return _strip_code_fences(candidate)
+
+    if isinstance(candidate, dict):
+        for key in ("text", "value", "content"):
+            nested = _coerce_text_candidate(candidate.get(key))
+            if nested:
+                return nested
+
+    if isinstance(candidate, list):
+        for item in candidate:
+            nested = _coerce_text_candidate(item)
+            if nested:
+                return nested
+
+    return None
+
 def _strip_code_fences(text: str) -> str:
     raw = (text or "").strip()
     if raw.startswith("```"):
@@ -153,9 +173,13 @@ class AIAdvisorService:
         resp.raise_for_status()
         data = resp.json()
 
-        text = data.get("output_text")
-        if isinstance(text, str) and text.strip():
-            return _strip_code_fences(text)
+        text = _coerce_text_candidate(data.get("output_text"))
+        if text:
+            return text
+
+        output_json = data.get("output_json")
+        if isinstance(output_json, (dict, list)):
+            return json.dumps(output_json)
 
         # Fallback parser for Responses payload variants that do not set output_text.
         output = data.get("output") if isinstance(data.get("output"), list) else []
@@ -168,9 +192,12 @@ class AIAdvisorService:
                     continue
                 block_type = block.get("type")
                 if block_type in {"output_text", "text"}:
-                    candidate = block.get("text")
-                    if isinstance(candidate, str) and candidate.strip():
-                        return _strip_code_fences(candidate)
+                    candidate = _coerce_text_candidate(block.get("text"))
+                    if candidate:
+                        return candidate
+                block_json = block.get("json")
+                if isinstance(block_json, (dict, list)):
+                    return json.dumps(block_json)
         return None
 
     def enhance_quick_decision(

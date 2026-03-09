@@ -191,3 +191,56 @@ def test_enhance_quick_decision_skips_ai_for_low_signal_context(monkeypatch):
     assert out["mode"] == "skipped_low_signal"
     assert out["reason"] == "low_signal"
     assert called["n"] == 0
+
+
+def test_openai_response_handles_text_object_value(monkeypatch):
+    svc = AIAdvisorService(enabled=True, provider="openai", api_key="x-test")
+
+    class StubResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "output": [
+                    {
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": {
+                                    "value": '{"narrative":"N","risk_notes":["r1","r2"],"next_checks":["c1","c2"]}'
+                                },
+                            }
+                        ]
+                    }
+                ]
+            }
+
+    monkeypatch.setattr("moneybot.services.ai_advisor.requests.post", lambda *args, **kwargs: StubResp())
+    out = svc._openai_response("prompt")
+
+    assert out is not None
+    assert '"narrative":"N"' in out
+
+
+def test_openai_response_handles_output_json(monkeypatch):
+    svc = AIAdvisorService(enabled=True, provider="openai", api_key="x-test")
+
+    class StubResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "output_json": {
+                    "narrative": "N",
+                    "risk_notes": ["r1", "r2"],
+                    "next_checks": ["c1", "c2"],
+                }
+            }
+
+    monkeypatch.setattr("moneybot.services.ai_advisor.requests.post", lambda *args, **kwargs: StubResp())
+    out = svc._openai_response("prompt")
+
+    assert out is not None
+    assert '"narrative": "N"' in out
