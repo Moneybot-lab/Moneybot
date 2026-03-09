@@ -226,8 +226,10 @@ def create_app() -> Flask:
                   }
 
                   async function quickAsk(){
-                    const symbol = (document.getElementById('quickSymbol').value || '').trim().toUpperCase();
+                    const inputEl = document.getElementById('quickSymbol');
+                    const symbol = (inputEl.value || '').trim().toUpperCase();
                     const outEl = document.getElementById('quickOut');
+                    inputEl.blur();
                     if(!symbol){ outEl.textContent='Please enter a ticker symbol.'; return; }
                     const res = await fetch('/api/quick-ask?symbol=' + encodeURIComponent(symbol));
                     const payload = await res.json();
@@ -335,6 +337,9 @@ def create_app() -> Flask:
                   }
 
                   document.getElementById('quickSymbol').addEventListener('keydown', (event) => { if(event.key==='Enter'){event.preventDefault();quickAsk();} });
+                  document.getElementById('quickSymbol').addEventListener('focus', (event) => {
+                    if(event.target.value){ event.target.value = ''; }
+                  });
                   document.getElementById('homeTickerModal').addEventListener('click', (event) => { if(event.target.id==='homeTickerModal'){ closeHomeModal(); }});
 
                   async function init(){
