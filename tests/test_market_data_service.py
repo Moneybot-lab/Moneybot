@@ -325,6 +325,27 @@ def test_get_wells_picks_replaces_non_qualifying_stocks(monkeypatch):
     assert all(stock["live_data_available"] is True for stock in wells[0]["stocks"])
 
 
+def test_get_company_snapshot_uses_backoff_after_rate_limit(monkeypatch):
+    svc = MarketDataService()
+
+    calls = {"count": 0}
+
+    class DummyTicker:
+        @property
+        def info(self):
+            calls["count"] += 1
+            raise Exception("Too Many Requests. Rate limited. Try after a while.")
+
+    monkeypatch.setattr("moneybot.services.market_data.yf.Ticker", lambda _symbol: DummyTicker())
+
+    first = svc.get_company_snapshot("AAPL")
+    second = svc.get_company_snapshot("MSFT")
+
+    assert first["summary"] == "Company overview unavailable."
+    assert second["summary"] == "Company overview unavailable."
+    assert calls["count"] == 1
+
+
 def test_get_company_snapshot_skips_placeholder_news(monkeypatch):
     svc = MarketDataService()
 

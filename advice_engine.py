@@ -157,11 +157,15 @@ def compute_user_advice(
 
     headline = headlines[0] if headlines else "No major headline available."
     trigger_text = f"{sentiment_trigger}. " if sentiment_trigger else ""
+    fallback_text = ""
+    if fallback_notes:
+        fallback_text = f"Data missing: {', '.join(fallback_notes)}. "
+
     reason_summary = (
         f"Entry={entry if entry is not None else 'n/a'}, Current={current_price if current_price is not None else 'n/a'}, "
         f"PnL%={round(pnl_percent,2) if pnl_percent is not None else 'n/a'}. "
         f"RSI={rsi if rsi is not None else 'n/a'}, MACD_hist={round(macd_hist,3) if macd_hist is not None else 'n/a'}, "
-        f"Sentiment={sentiment_label}. Rule: {rule}. {trigger_text}Headline: {headline}"
+        f"Sentiment={sentiment_label}. Rule: {rule}. {fallback_text}{trigger_text}Headline: {headline}"
     )
 
     return {

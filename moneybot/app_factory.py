@@ -8,6 +8,7 @@ from flask import Flask, render_template_string
 from flask_cors import CORS
 from .api import api_bp
 from .extensions import db, migrate
+from .services.ai_advisor import AIAdvisorService
 from .services.market_data import MarketDataService
 
 
@@ -88,6 +89,23 @@ def create_app() -> Flask:
         SMTP_USE_SSL=(os.environ.get("SMTP_USE_SSL", "false").lower() == "true"),
         PASSWORD_RESET_FROM_EMAIL=os.environ.get("PASSWORD_RESET_FROM_EMAIL", os.environ.get("SMTP_USER", "")),
         PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS=int(os.environ.get("PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS", "3600")),
+        AI_ENABLED=(os.environ.get("AI_ENABLED", "false").lower() == "true"),
+        AI_PROVIDER=os.environ.get("AI_PROVIDER", "openai"),
+        AI_MODEL=os.environ.get("AI_MODEL", "gpt-5-mini"),
+        AI_API_KEY=os.environ.get("AI_API_KEY", ""),
+        AI_TIMEOUT_SECONDS=float(os.environ.get("AI_TIMEOUT_SECONDS", "2.5")),
+        AI_FAILURE_COOLDOWN_SECONDS=int(os.environ.get("AI_FAILURE_COOLDOWN_SECONDS", "120")),
+        AI_RESPONSE_CACHE_TTL_SECONDS=int(os.environ.get("AI_RESPONSE_CACHE_TTL_SECONDS", "300")),
+    )
+
+    app.extensions["ai_advisor_service"] = AIAdvisorService(
+        enabled=app.config["AI_ENABLED"],
+        provider=app.config["AI_PROVIDER"],
+        model=app.config["AI_MODEL"],
+        api_key=app.config["AI_API_KEY"],
+        timeout_s=app.config["AI_TIMEOUT_SECONDS"],
+        failure_cooldown_s=app.config["AI_FAILURE_COOLDOWN_SECONDS"],
+        cache_ttl_s=app.config["AI_RESPONSE_CACHE_TTL_SECONDS"],
     )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -235,7 +253,8 @@ def create_app() -> Flask:
                       const payload = await res.json();
                       if(!res.ok){
                         titleEl.textContent = symbol;
-                        summaryEl.textContent = payload.error || 'Unable to load company details.';
+                        const err = String(payload.error || '');
+                        summaryEl.textContent = err === 'authentication required' ? 'Please log in to view company details.' : (payload.error || 'Unable to load company details.');
                         return;
                       }
                       const data = payload.data || {};
@@ -617,9 +636,10 @@ def create_app() -> Flask:
                   return;
                 }
                 try {
-                  const res = await fetch('/api/company-details?symbol=' + encodeURIComponent(symbol));
+                  const res = await apiFetch('/api/company-details?symbol=' + encodeURIComponent(symbol));
                   const payload = await res.json();
                   if(!res.ok){
+                    if (res.status === 401) { location.href='/login'; return; }
                     headlinesEl.innerHTML = '<div style="color:#3f6212">No recent headlines available.</div>';
                     return;
                   }
@@ -667,11 +687,13 @@ def create_app() -> Flask:
                 newsEl.innerHTML = '';
                 openModal();
                 try {
-                  const res = await fetch('/api/company-details?symbol=' + encodeURIComponent(symbol));
+                  const res = await apiFetch('/api/company-details?symbol=' + encodeURIComponent(symbol));
                   const payload = await res.json();
                   if(!res.ok){
+                    if (res.status === 401) { location.href='/login'; return; }
                     titleEl.textContent = symbol;
-                    summaryEl.textContent = payload.error || 'Unable to load company details.';
+                    const err = String(payload.error || '');
+                    summaryEl.textContent = err === 'authentication required' ? 'Please log in to view company details.' : (payload.error || 'Unable to load company details.');
                     return;
                   }
                   const data = payload.data || {};

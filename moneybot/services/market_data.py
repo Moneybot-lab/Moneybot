@@ -45,6 +45,8 @@ class MarketDataService:
         self.quote_cache = TTLCache(ttl_seconds=20)
         self.signal_cache = TTLCache(ttl_seconds=20)
         self.sector_cache = TTLCache(ttl_seconds=3600)
+        self.company_snapshot_cache = TTLCache(ttl_seconds=600)
+        self._company_snapshot_backoff_until = 0.0
         self._market_timezone = ZoneInfo("America/New_York")
         self._daily_lists_last_refreshed_at: datetime | None = None
         self._daily_lists_cache: dict[str, list[Dict[str, Any]]] = {}
@@ -125,9 +127,26 @@ class MarketDataService:
 
     def get_company_snapshot(self, symbol: str) -> Dict[str, Any]:
         ticker_symbol = symbol.upper()
+        cache_key = f"company:{ticker_symbol}"
+        cached = self.company_snapshot_cache.get(cache_key)
+        if cached:
+            return cached
+
         default_name = ticker_symbol
         default_summary = "Company overview unavailable."
         latest_news: list[Dict[str, str]] = []
+
+        now = time.time()
+        if now < self._company_snapshot_backoff_until:
+            payload = {
+                "symbol": ticker_symbol,
+                "company_name": default_name,
+                "summary": default_summary,
+                "latest_news": latest_news,
+            }
+            self.company_snapshot_cache.set(cache_key, payload)
+            return payload
+
         try:
             ticker = yf.Ticker(ticker_symbol)
             info = ticker.info or {}
@@ -159,20 +178,26 @@ class MarketDataService:
                 if len(latest_news) == 3:
                     break
 
-            return {
+            payload = {
                 "symbol": ticker_symbol,
                 "company_name": company_name,
                 "summary": summary,
                 "latest_news": latest_news,
             }
+            self.company_snapshot_cache.set(cache_key, payload)
+            return payload
         except Exception as exc:  # noqa: BLE001
+            if "Too Many Requests" in str(exc):
+                self._company_snapshot_backoff_until = now + 300.0
             logging.warning("Company snapshot fetch failed for %s: %s", ticker_symbol, exc)
-            return {
+            payload = {
                 "symbol": ticker_symbol,
                 "company_name": default_name,
                 "summary": default_summary,
                 "latest_news": latest_news,
             }
+            self.company_snapshot_cache.set(cache_key, payload)
+            return payload
 
     def get_price_history(self, symbol: str, days: int = 30) -> list[float]:
         try:
