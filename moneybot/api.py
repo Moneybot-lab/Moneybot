@@ -246,6 +246,24 @@ def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> 
     }
 
 
+def _plain_english_recommendation(recommendation: str, reason: str) -> str:
+    rec = (recommendation or "HOLD").strip().upper()
+    short_reason = (reason or "Signals are mixed right now.").strip()
+
+    if rec == "BUY":
+        action = "It's probably a good time to buy"
+    elif rec == "SELL":
+        action = "It's probably a good time to sell"
+    elif rec == "STRONG BUY":
+        action = "This looks like a strong buying opportunity"
+    elif rec == "HOLD OFF FOR NOW":
+        action = "It may be better to wait before buying"
+    else:
+        action = "The signal is neutral, so caution makes sense"
+
+    return f"{action}. In plain English: {short_reason}"
+
+
 @api_bp.post("/auth/signup")
 def signup():
     data = request.get_json(silent=True) or {}
@@ -735,6 +753,18 @@ def quick_ask():
             "request_id": g.request_id,
         }
     )
+
+
+@api_bp.post("/explain-recommendation")
+def explain_recommendation():
+    data = request.get_json(silent=True) or {}
+    recommendation = str(data.get("recommendation") or "").strip()
+    reason = str(data.get("reason") or "").strip()
+    if not recommendation:
+        return jsonify({"error": "recommendation required", "request_id": g.request_id}), 400
+
+    explanation = _plain_english_recommendation(recommendation, reason)
+    return jsonify({"data": {"explanation": explanation}, "request_id": g.request_id})
 
 
 @api_bp.get("/market-overview")
