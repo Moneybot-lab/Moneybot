@@ -31,6 +31,7 @@ class AIAdvisorService:
         api_key: str = "",
         timeout_s: float = 2.5,
         failure_cooldown_s: int = 120,
+        cache_ttl_s: int = 300,
     ) -> None:
         self.enabled = enabled and bool(api_key.strip())
         self.provider = (provider or "openai").strip().lower()
@@ -38,7 +39,35 @@ class AIAdvisorService:
         self.api_key = (api_key or "").strip()
         self.timeout_s = timeout_s
         self.failure_cooldown_s = max(1, int(failure_cooldown_s))
+        self.cache_ttl_s = max(1, int(cache_ttl_s))
         self._disabled_until = 0.0
+        self._cache: dict[str, dict[str, Any]] = {}
+        self._cache_ts: dict[str, float] = {}
+
+    def _cache_key(self, symbol: str, recommendation: str, rationale: str, signal_score: Any) -> str:
+        return "|".join(
+            [
+                (symbol or "").upper(),
+                recommendation.strip().upper(),
+                rationale.strip(),
+                str(signal_score),
+            ]
+        )
+
+    def _cache_get(self, key: str) -> Optional[Dict[str, Any]]:
+        ts = self._cache_ts.get(key)
+        if ts is None:
+            return None
+        if time.time() - ts > self.cache_ttl_s:
+            self._cache_ts.pop(key, None)
+            self._cache.pop(key, None)
+            return None
+        cached = self._cache.get(key)
+        return dict(cached) if isinstance(cached, dict) else None
+
+    def _cache_set(self, key: str, payload: Dict[str, Any]) -> None:
+        self._cache[key] = dict(payload)
+        self._cache_ts[key] = time.time()
 
     def _fallback(self, recommendation: str, rationale: str) -> Dict[str, Any]:
         return {
@@ -83,6 +112,7 @@ class AIAdvisorService:
         payload = {
             "model": self.model,
             "input": prompt,
+            "max_output_tokens": 220,
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -131,6 +161,12 @@ class AIAdvisorService:
     ) -> Dict[str, Any]:
         recommendation = str(quick_decision.get("recommendation") or "HOLD OFF FOR NOW")
         rationale = str(quick_decision.get("rationale") or "Derived from momentum and signal checks.")
+        signal_score = signal_data.get("score") or signal_data.get("hybrid_score")
+        cache_key = self._cache_key(symbol, recommendation, rationale, signal_score)
+
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
 
         if not self.enabled:
             return self._fallback(recommendation, rationale)
@@ -143,39 +179,25 @@ class AIAdvisorService:
         if now < self._disabled_until:
             return self._fallback(recommendation, rationale)
 
-        prompt_payload = {
-            "task": "Generate aggressive but risk-aware buy/sell suggestion text for a stock quick ask feature.",
-            "output_requirements": {
-                "format": "json",
-                "keys": ["narrative", "risk_notes", "next_checks"],
-                "risk_notes_len": 2,
-                "next_checks_len": 2,
-                "max_narrative_words": 55,
+        compact_context = {
+            "symbol": symbol,
+            "rec": recommendation,
+            "rationale": rationale,
+            "quote": {
+                "price": quote_data.get("price"),
+                "chg": quote_data.get("change_percent"),
+                "source": quote_data.get("quote_source"),
             },
-            "constraints": [
-                "No guaranteed returns language.",
-                "Do not provide legal/compliance claims.",
-                "Keep concise and action-oriented for aggressive profile.",
-            ],
-            "data": {
-                "symbol": symbol,
-                "recommendation": recommendation,
-                "rationale": rationale,
-                "quote": {
-                    "price": quote_data.get("price"),
-                    "change_percent": quote_data.get("change_percent"),
-                    "quote_source": quote_data.get("quote_source"),
-                },
-                "technical": signal_data.get("technical"),
-                "sentiment": signal_data.get("sentiment"),
-                "signal_action": signal_data.get("action"),
-                "signal_score": signal_data.get("score") or signal_data.get("hybrid_score"),
-            },
+            "technical": signal_data.get("technical"),
+            "sentiment": signal_data.get("sentiment"),
+            "action": signal_data.get("action"),
+            "score": signal_score,
         }
-
         prompt = (
-            "You are Moneybot's market assistant. Respond with ONLY valid JSON. "
-            + json.dumps(prompt_payload, default=str)
+            "Return strict JSON with keys narrative,risk_notes,next_checks. "
+            "Aggressive but risk-aware tone. No guarantees. "
+            "narrative <=55 words; risk_notes exactly 2; next_checks exactly 2. "
+            f"Context: {json.dumps(compact_context, default=str)}"
         )
 
         try:
@@ -188,7 +210,7 @@ class AIAdvisorService:
             next_checks = parsed.get("next_checks") if isinstance(parsed.get("next_checks"), list) else []
             if not narrative:
                 return self._fallback(recommendation, rationale)
-            return {
+            result = {
                 "mode": "ai_enhanced",
                 "narrative": narrative,
                 "risk_notes": [str(x) for x in risk_notes][:2],
@@ -196,6 +218,8 @@ class AIAdvisorService:
                 "provider": self.provider,
                 "model": self.model,
             }
+            self._cache_set(cache_key, result)
+            return result
         except Exception as exc:  # noqa: BLE001
             self._disabled_until = time.time() + float(self.failure_cooldown_s)
             logging.warning("AI advisor unavailable, using fallback: %s", exc)

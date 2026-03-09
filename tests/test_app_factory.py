@@ -51,11 +51,14 @@ def test_create_app_reads_ai_timeout_and_cooldown(monkeypatch):
     monkeypatch.setenv("AI_API_KEY", "key")
     monkeypatch.setenv("AI_TIMEOUT_SECONDS", "1.7")
     monkeypatch.setenv("AI_FAILURE_COOLDOWN_SECONDS", "45")
+    monkeypatch.setenv("AI_RESPONSE_CACHE_TTL_SECONDS", "180")
 
     app = create_app()
     svc = app.extensions["ai_advisor_service"]
 
     assert app.config["AI_TIMEOUT_SECONDS"] == 1.7
     assert app.config["AI_FAILURE_COOLDOWN_SECONDS"] == 45
+    assert app.config["AI_RESPONSE_CACHE_TTL_SECONDS"] == 180
     assert svc.timeout_s == 1.7
     assert svc.failure_cooldown_s == 45
+    assert svc.cache_ttl_s == 180

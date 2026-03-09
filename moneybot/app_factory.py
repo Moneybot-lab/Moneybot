@@ -95,6 +95,7 @@ def create_app() -> Flask:
         AI_API_KEY=os.environ.get("AI_API_KEY", ""),
         AI_TIMEOUT_SECONDS=float(os.environ.get("AI_TIMEOUT_SECONDS", "2.5")),
         AI_FAILURE_COOLDOWN_SECONDS=int(os.environ.get("AI_FAILURE_COOLDOWN_SECONDS", "120")),
+        AI_RESPONSE_CACHE_TTL_SECONDS=int(os.environ.get("AI_RESPONSE_CACHE_TTL_SECONDS", "300")),
     )
 
     app.extensions["ai_advisor_service"] = AIAdvisorService(
@@ -104,6 +105,7 @@ def create_app() -> Flask:
         api_key=app.config["AI_API_KEY"],
         timeout_s=app.config["AI_TIMEOUT_SECONDS"],
         failure_cooldown_s=app.config["AI_FAILURE_COOLDOWN_SECONDS"],
+        cache_ttl_s=app.config["AI_RESPONSE_CACHE_TTL_SECONDS"],
     )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

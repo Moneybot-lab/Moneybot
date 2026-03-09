@@ -127,3 +127,33 @@ def test_openai_response_strips_markdown_fences(monkeypatch):
     assert out is not None
     assert not out.startswith("```")
     assert out.startswith("{")
+
+
+def test_enhance_quick_decision_uses_cache_for_same_inputs(monkeypatch):
+    quick, signal, quote = _sample_inputs()
+    svc = AIAdvisorService(enabled=True, provider="openai", api_key="x-test", cache_ttl_s=600)
+
+    calls = {"n": 0}
+
+    def fake_openai_response(_prompt):
+        calls["n"] += 1
+        return '{"narrative":"Cached answer","risk_notes":["r1","r2"],"next_checks":["c1","c2"]}'
+
+    monkeypatch.setattr(svc, "_openai_response", fake_openai_response)
+
+    first = svc.enhance_quick_decision(
+        symbol="AAPL",
+        quick_decision=quick,
+        signal_data=signal,
+        quote_data=quote,
+    )
+    second = svc.enhance_quick_decision(
+        symbol="AAPL",
+        quick_decision=quick,
+        signal_data=signal,
+        quote_data=quote,
+    )
+
+    assert first["mode"] == "ai_enhanced"
+    assert second["mode"] == "ai_enhanced"
+    assert calls["n"] == 1
