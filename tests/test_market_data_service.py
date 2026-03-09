@@ -369,3 +369,67 @@ def test_get_company_snapshot_skips_placeholder_news(monkeypatch):
             "link": "https://example.com/b",
         }
     ]
+
+
+def test_get_quote_uses_twelve_data_when_massive_and_finnhub_unavailable(monkeypatch):
+    svc = MarketDataService()
+
+    monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+    monkeypatch.delenv("POLYGON_API_KEY", raising=False)
+    monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
+    monkeypatch.delenv("FINNHUB_TOKEN", raising=False)
+    monkeypatch.delenv("X_FINNHUB_TOKEN", raising=False)
+    monkeypatch.setenv("TWELVE_DATA_API_KEY", "td-key")
+
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"close": "12.15", "percent_change": "-1.54", "previous_close": "12.34"}
+
+    captured = {}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        captured["url"] = url
+        captured["params"] = params or {}
+        return DummyResponse()
+
+    monkeypatch.setattr("moneybot.services.market_data.requests.get", fake_get)
+
+    quote = svc.get_quote("F")
+
+    assert quote["quote_source"] == "twelve_data"
+    assert quote["price"] == 12.15
+    assert round(quote["change_percent"], 2) == -1.54
+    assert captured["url"] == "https://api.twelvedata.com/quote"
+    assert captured["params"]["apikey"] == "td-key"
+
+
+def test_get_quote_fallback_diagnostics_include_twelve_data_fields(monkeypatch):
+    svc = MarketDataService()
+
+    monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+    monkeypatch.delenv("POLYGON_API_KEY", raising=False)
+    monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
+    monkeypatch.delenv("FINNHUB_TOKEN", raising=False)
+    monkeypatch.delenv("X_FINNHUB_TOKEN", raising=False)
+    monkeypatch.delenv("TWELVE_DATA_API_KEY", raising=False)
+    monkeypatch.delenv("TWELVEDATA_API_KEY", raising=False)
+
+    class DummyTicker:
+        @property
+        def info(self):
+            return {}
+
+        def history(self, period, interval):
+            class Empty:
+                empty = True
+            return Empty()
+
+    monkeypatch.setattr("moneybot.services.market_data.yf.Ticker", lambda _symbol: DummyTicker())
+
+    quote = svc.get_quote("AAPL")
+
+    assert quote["diagnostics"]["twelve_data_attempted"] is False
+    assert quote["diagnostics"]["twelve_data_error"] == "missing_api_key"

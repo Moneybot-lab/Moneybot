@@ -526,6 +526,14 @@ class MarketDataService:
                 return raw.strip(), env_name
         return None, None
 
+    def _get_twelve_data_key(self) -> tuple[str | None, str | None]:
+        key_env_names = ("TWELVE_DATA_API_KEY", "TWELVEDATA_API_KEY")
+        for env_name in key_env_names:
+            raw = os.environ.get(env_name)
+            if raw and raw.strip():
+                return raw.strip(), env_name
+        return None, None
+
     def _get_finnhub_key(self) -> tuple[str | None, str | None]:
         key_env_names = ("FINNHUB_API_KEY", "FINNHUB_TOKEN", "X_FINNHUB_TOKEN")
         for env_name in key_env_names:
@@ -666,9 +674,59 @@ class MarketDataService:
             finnhub_error = "missing_api_key"
             if not self._logged_missing_finnhub_key:
                 logging.info(
-                    "Finnhub key missing; quote requests will use yfinance fallback until FINNHUB_API_KEY/FINNHUB_TOKEN is set."
+                    "Finnhub key missing; quote requests will use Twelve Data/yfinance fallback until FINNHUB_API_KEY/FINNHUB_TOKEN is set."
                 )
                 self._logged_missing_finnhub_key = True
+
+        twelve_data_key, twelve_data_key_source = self._get_twelve_data_key()
+        twelve_data_error: str | None = None
+        if twelve_data_key:
+            try:
+                resp = requests.get(
+                    "https://api.twelvedata.com/quote",
+                    params={"symbol": cache_key, "apikey": twelve_data_key},
+                    timeout=self.timeout_s,
+                )
+                resp.raise_for_status()
+                data = resp.json() or {}
+                if data.get("status") == "error":
+                    raise RuntimeError(str(data.get("message") or data))
+
+                price_raw = data.get("close")
+                prev_close_raw = data.get("previous_close")
+                change_percent_raw = data.get("percent_change")
+
+                price = float(price_raw) if price_raw not in (None, "") else None
+                change_percent = float(change_percent_raw) if change_percent_raw not in (None, "") else None
+
+                if change_percent is None and price is not None and prev_close_raw not in (None, "", 0, "0"):
+                    prev_close = float(prev_close_raw)
+                    if prev_close:
+                        change_percent = ((price - prev_close) / prev_close) * 100
+
+                if price is not None and change_percent is not None:
+                    payload = {
+                        "symbol": cache_key,
+                        "price": float(price),
+                        "change_percent": float(change_percent),
+                        "live_data_available": True,
+                        "quote_source": "twelve_data",
+                        "diagnostics": {
+                            "provider": "twelve_data",
+                            "error": None,
+                            "twelve_data_key_source": twelve_data_key_source,
+                        },
+                    }
+                    self.quote_cache.set(cache_key, payload)
+                    return payload
+
+                twelve_data_error = f"incomplete_response:{data}"
+                logging.warning("Twelve Data returned incomplete quote for %s: %s", cache_key, data)
+            except Exception as exc:  # noqa: BLE001
+                twelve_data_error = str(exc)
+                logging.warning("Twelve Data quote fetch failed for %s: %s", cache_key, exc)
+        else:
+            twelve_data_error = "missing_api_key"
 
         fallback = _yfinance_quote()
         fallback_diagnostics = fallback.get("diagnostics") or {}
@@ -678,6 +736,9 @@ class MarketDataService:
         fallback_diagnostics["finnhub_attempted"] = bool(finnhub_key)
         fallback_diagnostics["finnhub_key_source"] = finnhub_key_source
         fallback_diagnostics["finnhub_error"] = finnhub_error
+        fallback_diagnostics["twelve_data_attempted"] = bool(twelve_data_key)
+        fallback_diagnostics["twelve_data_key_source"] = twelve_data_key_source
+        fallback_diagnostics["twelve_data_error"] = twelve_data_error
         fallback["diagnostics"] = fallback_diagnostics
         self.quote_cache.set(cache_key, fallback)
         return fallback
