@@ -248,20 +248,35 @@ def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> 
 
 def _plain_english_recommendation(recommendation: str, reason: str) -> str:
     rec = (recommendation or "HOLD").strip().upper()
-    short_reason = (reason or "Signals are mixed right now.").strip()
+    raw_reason = (reason or "Signals are mixed right now.").strip()
 
-    if rec == "BUY":
-        action = "It's probably a good time to buy"
+    reason_text = raw_reason
+    replacements = {
+        "MACD": "trend momentum",
+        "RSI": "price pressure",
+        "hist": "trend strength",
+        "pts": "points",
+        "bullish": "positive",
+        "bearish": "negative",
+    }
+    for source, target in replacements.items():
+        reason_text = reason_text.replace(source, target)
+
+    if rec == "STRONG BUY":
+        action = "This looks like a strong buying setup"
+    elif rec == "BUY":
+        action = "This looks reasonable to buy"
     elif rec == "SELL":
-        action = "It's probably a good time to sell"
-    elif rec == "STRONG BUY":
-        action = "This looks like a strong buying opportunity"
+        action = "This looks like a good time to trim or sell"
     elif rec == "HOLD OFF FOR NOW":
-        action = "It may be better to wait before buying"
+        action = "It is better to wait instead of buying right now"
     else:
-        action = "The signal is neutral, so caution makes sense"
+        action = "There is no clear edge right now, so holding is safer"
 
-    return f"{action}. In plain English: {short_reason}"
+    return (
+        f"{action}. Plain English: the system saw {reason_text.lower()}. "
+        "This is guidance only, not financial advice."
+    )
 
 
 @api_bp.post("/auth/signup")

@@ -717,7 +717,18 @@ def create_app() -> Flask:
                 }
               }
 
-              async function explainAdviceInPlainEnglish(){
+              function humanizeReason(reason){
+                const text = String(reason || 'signals are mixed').trim();
+                return text
+                  .replace(/MACD/gi, 'trend momentum')
+                  .replace(/RSI/gi, 'price pressure')
+                  .replace(/hist/gi, 'trend strength')
+                  .replace(/\bpts\b/gi, 'points')
+                  .replace(/bullish/gi, 'positive')
+                  .replace(/bearish/gi, 'negative');
+              }
+
+              function explainAdviceInPlainEnglish(){
                 const loadingEl = document.getElementById('plainEnglishLoading');
                 const explanationEl = document.getElementById('plainEnglishExplanation');
                 if(!currentAdviceContext){
@@ -726,26 +737,17 @@ def create_app() -> Flask:
                   return;
                 }
                 loadingEl.style.display = 'inline';
-                try {
-                  const res = await apiFetch('/api/explain-recommendation', {
-                    method: 'POST',
-                    headers: {'Content-Type':'application/json'},
-                    body: JSON.stringify({
-                      symbol: currentAdviceContext.symbol,
-                      recommendation: currentAdviceContext.advice,
-                      reason: currentAdviceContext.reason,
-                    }),
-                  });
-                  const payload = await res.json();
-                  const explanation = payload?.data?.explanation || 'Could not generate a plain-English explanation right now.';
-                  explanationEl.style.display = 'block';
-                  explanationEl.textContent = explanation;
-                } catch (err) {
-                  explanationEl.style.display = 'block';
-                  explanationEl.textContent = 'Could not generate a plain-English explanation right now.';
-                } finally {
-                  loadingEl.style.display = 'none';
-                }
+                const rec = String(currentAdviceContext.advice || 'HOLD').toUpperCase();
+                const friendlyReason = humanizeReason(currentAdviceContext.reason);
+                let action = 'There is no clear edge right now, so holding is safer';
+                if(rec === 'STRONG BUY') action = 'This looks like a strong buying setup';
+                else if(rec === 'BUY') action = 'This looks reasonable to buy';
+                else if(rec === 'SELL') action = 'This looks like a good time to trim or sell';
+                else if(rec === 'HOLD OFF FOR NOW') action = 'It is better to wait instead of buying right now';
+
+                explanationEl.style.display = 'block';
+                explanationEl.textContent = `${action}. Plain English: the system saw ${friendlyReason.toLowerCase()}. This is guidance only, not financial advice.`;
+                loadingEl.style.display = 'none';
               }
 
               function renderRows(items){
