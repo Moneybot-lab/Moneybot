@@ -129,6 +129,44 @@ def test_quick_ask_uses_ai_extension_when_present():
     assert "TSLA" in data["ai"]["narrative"]
 
 
+def test_explain_recommendation_returns_plain_english_text():
+    client = _client()
+    res = client.post(
+        "/api/explain-recommendation",
+        json={"recommendation": "BUY", "reason": "Momentum and sentiment both look positive."},
+    )
+    assert res.status_code == 200
+    explanation = res.get_json()["data"]["explanation"]
+    assert "reasonable to buy" in explanation.lower()
+    assert "plain english" in explanation.lower()
+
+
+
+
+def test_explain_recommendation_humanizes_jargon_reason():
+    client = _client()
+    res = client.post(
+        "/api/explain-recommendation",
+        json={"recommendation": "HOLD", "reason": "MACD hist positive (+3)"},
+    )
+    assert res.status_code == 200
+    explanation = res.get_json()["data"]["explanation"].lower()
+    assert "trend momentum" in explanation
+    assert "macd" not in explanation
+
+def test_explain_recommendation_humanizes_lowercase_jargon_reason():
+    client = _client()
+    res = client.post(
+        "/api/explain-recommendation",
+        json={"recommendation": "HOLD", "reason": "macd hist positive (+3 pts)"},
+    )
+    assert res.status_code == 200
+    explanation = res.get_json()["data"]["explanation"].lower()
+    assert "trend momentum" in explanation
+    assert "points" in explanation
+    assert "macd" not in explanation
+
+
 def test_company_details_is_accessible_without_authentication():
     client = _client()
     res = client.get("/api/company-details?symbol=AAPL")
