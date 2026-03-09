@@ -8,6 +8,7 @@ from flask import Flask, render_template_string
 from flask_cors import CORS
 from .api import api_bp
 from .extensions import db, migrate
+from .services.ai_advisor import AIAdvisorService
 from .services.market_data import MarketDataService
 
 
@@ -88,6 +89,17 @@ def create_app() -> Flask:
         SMTP_USE_SSL=(os.environ.get("SMTP_USE_SSL", "false").lower() == "true"),
         PASSWORD_RESET_FROM_EMAIL=os.environ.get("PASSWORD_RESET_FROM_EMAIL", os.environ.get("SMTP_USER", "")),
         PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS=int(os.environ.get("PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS", "3600")),
+        AI_ENABLED=(os.environ.get("AI_ENABLED", "false").lower() == "true"),
+        AI_PROVIDER=os.environ.get("AI_PROVIDER", "openai"),
+        AI_MODEL=os.environ.get("AI_MODEL", "gpt-5-mini"),
+        AI_API_KEY=os.environ.get("AI_API_KEY", ""),
+    )
+
+    app.extensions["ai_advisor_service"] = AIAdvisorService(
+        enabled=app.config["AI_ENABLED"],
+        provider=app.config["AI_PROVIDER"],
+        model=app.config["AI_MODEL"],
+        api_key=app.config["AI_API_KEY"],
     )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
