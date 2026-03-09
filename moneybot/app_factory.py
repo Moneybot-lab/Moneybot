@@ -553,6 +553,11 @@ def create_app() -> Flask:
                     <button onclick="closeAdviceModal()" style="border:none;background:#d1fae5;border-radius:8px;padding:6px 10px">Close</button>
                   </div>
                   <p id="adviceReason" style="color:#166534;margin-top:10px">No reasoning available.</p>
+                  <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <button id="plainEnglishBtn" onclick="explainAdviceInPlainEnglish()" style="border:none;background:#16a34a;color:#f0fdf4;padding:7px 10px;border-radius:8px;font-weight:700;cursor:pointer">Explain this recommendation in plain English</button>
+                    <span id="plainEnglishLoading" style="display:none;color:#3f6212;font-size:13px">Explaining...</span>
+                  </div>
+                  <p id="plainEnglishExplanation" style="display:none;color:#14532d;margin-top:10px;background:#ecfccb;border:1px solid #bef264;border-radius:8px;padding:8px"></p>
                   <div style="margin-top:12px">
                     <div style="font-size:12px;color:#3f6212;font-weight:700;letter-spacing:.02em;text-transform:uppercase">Latest Headlines</div>
                     <div id="adviceHeadlines" style="display:grid;gap:8px;margin-top:8px"></div>
@@ -595,6 +600,7 @@ def create_app() -> Flask:
               const buyPriceEl = document.getElementById('buy_price');
               const sharesEl = document.getElementById('shares');
               let currentPortfolioItems = [];
+              let currentAdviceContext = null;
               document.getElementById('addForm').addEventListener('submit', addItem);
 
               async function logout(){ await apiFetch('/api/auth/logout',{method:'POST'}); sessionStorage.removeItem(TAB_SESSION_KEY); location.href='/'; }
@@ -626,8 +632,12 @@ def create_app() -> Flask:
                 const symbol = item.symbol || '';
                 const advice = String(item.advice || 'HOLD').toUpperCase();
                 const reason = item.advice_reason || 'Rule-based recommendation from technical momentum and sentiment checks.';
+                currentAdviceContext = { symbol, advice, reason };
                 document.getElementById('adviceTitle').textContent = `${symbol} · ${advice} rationale`;
                 document.getElementById('adviceReason').textContent = `Why this advice was given: ${reason}`;
+                const plainEnglishEl = document.getElementById('plainEnglishExplanation');
+                plainEnglishEl.style.display = 'none';
+                plainEnglishEl.textContent = '';
                 const headlinesEl = document.getElementById('adviceHeadlines');
                 headlinesEl.innerHTML = '<div style="color:#3f6212">Loading latest headlines...</div>';
                 openAdviceModal();
@@ -705,6 +715,39 @@ def create_app() -> Flask:
                   titleEl.textContent = symbol;
                   summaryEl.textContent = 'Unable to load company details right now.';
                 }
+              }
+
+              function humanizeReason(reason){
+                const text = String(reason || 'signals are mixed').trim();
+                return text
+                  .replace(/MACD/gi, 'trend momentum')
+                  .replace(/RSI/gi, 'price pressure')
+                  .replace(/hist/gi, 'trend strength')
+                  .replace(/\bpts\b/gi, 'points')
+                  .replace(/bullish/gi, 'positive')
+                  .replace(/bearish/gi, 'negative');
+              }
+
+              function explainAdviceInPlainEnglish(){
+                const loadingEl = document.getElementById('plainEnglishLoading');
+                const explanationEl = document.getElementById('plainEnglishExplanation');
+                if(!currentAdviceContext){
+                  explanationEl.style.display = 'block';
+                  explanationEl.textContent = 'Open an advice card first.';
+                  return;
+                }
+                loadingEl.style.display = 'inline';
+                const rec = String(currentAdviceContext.advice || 'HOLD').toUpperCase();
+                const friendlyReason = humanizeReason(currentAdviceContext.reason);
+                let action = 'There is no clear edge right now, so holding is safer';
+                if(rec === 'STRONG BUY') action = 'This looks like a strong buying setup';
+                else if(rec === 'BUY') action = 'This looks reasonable to buy';
+                else if(rec === 'SELL') action = 'This looks like a good time to trim or sell';
+                else if(rec === 'HOLD OFF FOR NOW') action = 'It is better to wait instead of buying right now';
+
+                explanationEl.style.display = 'block';
+                explanationEl.textContent = `${action}. Plain English: the system saw ${friendlyReason.toLowerCase()}. This is guidance only, not financial advice.`;
+                loadingEl.style.display = 'none';
               }
 
               function renderRows(items){
