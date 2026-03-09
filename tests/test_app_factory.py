@@ -62,3 +62,14 @@ def test_create_app_reads_ai_timeout_and_cooldown(monkeypatch):
     assert svc.timeout_s == 1.7
     assert svc.failure_cooldown_s == 45
     assert svc.cache_ttl_s == 180
+
+
+def test_create_app_uses_new_default_ai_timeout(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.delenv("AI_TIMEOUT_SECONDS", raising=False)
+
+    app = create_app()
+
+    assert app.config["AI_TIMEOUT_SECONDS"] == 6.0
+    assert app.extensions["ai_advisor_service"].timeout_s == 6.0
