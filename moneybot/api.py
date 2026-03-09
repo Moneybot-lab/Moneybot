@@ -251,16 +251,18 @@ def _plain_english_recommendation(recommendation: str, reason: str) -> str:
     raw_reason = (reason or "Signals are mixed right now.").strip()
 
     reason_text = raw_reason
-    replacements = {
-        "MACD": "trend momentum",
-        "RSI": "price pressure",
-        "hist": "trend strength",
-        "pts": "points",
-        "bullish": "positive",
-        "bearish": "negative",
-    }
-    for source, target in replacements.items():
-        reason_text = reason_text.replace(source, target)
+    normalized_replacements = [
+        ("macd", "trend momentum"),
+        ("rsi", "price pressure"),
+        ("hist", "trend strength"),
+        ("pts", "points"),
+        ("bullish", "positive"),
+        ("bearish", "negative"),
+    ]
+    lowered = reason_text.lower()
+    for source, target in normalized_replacements:
+        lowered = lowered.replace(source, target)
+    reason_text = lowered
 
     if rec == "STRONG BUY":
         action = "This looks like a strong buying setup"
@@ -274,7 +276,7 @@ def _plain_english_recommendation(recommendation: str, reason: str) -> str:
         action = "There is no clear edge right now, so holding is safer"
 
     return (
-        f"{action}. Plain English: the system saw {reason_text.lower()}. "
+        f"{action}. Plain English: the system saw {reason_text}. "
         "This is guidance only, not financial advice."
     )
 

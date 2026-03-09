@@ -636,8 +636,8 @@ def create_app() -> Flask:
                 document.getElementById('adviceTitle').textContent = `${symbol} · ${advice} rationale`;
                 document.getElementById('adviceReason').textContent = `Why this advice was given: ${reason}`;
                 const plainEnglishEl = document.getElementById('plainEnglishExplanation');
-                plainEnglishEl.style.display = 'none';
-                plainEnglishEl.textContent = '';
+                plainEnglishEl.style.display = 'block';
+                plainEnglishEl.textContent = buildPlainEnglishExplanation(advice, reason);
                 const headlinesEl = document.getElementById('adviceHeadlines');
                 headlinesEl.innerHTML = '<div style="color:#3f6212">Loading latest headlines...</div>';
                 openAdviceModal();
@@ -728,6 +728,17 @@ def create_app() -> Flask:
                   .replace(/bearish/gi, 'negative');
               }
 
+              function buildPlainEnglishExplanation(advice, reason){
+                const rec = String(advice || 'HOLD').toUpperCase();
+                const friendlyReason = humanizeReason(reason).toLowerCase();
+                let action = 'There is no clear edge right now, so holding is safer';
+                if(rec === 'STRONG BUY') action = 'This looks like a strong buying setup';
+                else if(rec === 'BUY') action = 'This looks reasonable to buy';
+                else if(rec === 'SELL') action = 'This looks like a good time to trim or sell';
+                else if(rec === 'HOLD OFF FOR NOW') action = 'It is better to wait instead of buying right now';
+                return `${action}. Plain English: the system saw ${friendlyReason}. This is guidance only, not financial advice.`;
+              }
+
               function explainAdviceInPlainEnglish(){
                 const loadingEl = document.getElementById('plainEnglishLoading');
                 const explanationEl = document.getElementById('plainEnglishExplanation');
@@ -737,16 +748,8 @@ def create_app() -> Flask:
                   return;
                 }
                 loadingEl.style.display = 'inline';
-                const rec = String(currentAdviceContext.advice || 'HOLD').toUpperCase();
-                const friendlyReason = humanizeReason(currentAdviceContext.reason);
-                let action = 'There is no clear edge right now, so holding is safer';
-                if(rec === 'STRONG BUY') action = 'This looks like a strong buying setup';
-                else if(rec === 'BUY') action = 'This looks reasonable to buy';
-                else if(rec === 'SELL') action = 'This looks like a good time to trim or sell';
-                else if(rec === 'HOLD OFF FOR NOW') action = 'It is better to wait instead of buying right now';
-
                 explanationEl.style.display = 'block';
-                explanationEl.textContent = `${action}. Plain English: the system saw ${friendlyReason.toLowerCase()}. This is guidance only, not financial advice.`;
+                explanationEl.textContent = buildPlainEnglishExplanation(currentAdviceContext.advice, currentAdviceContext.reason);
                 loadingEl.style.display = 'none';
               }
 
