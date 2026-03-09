@@ -140,3 +140,20 @@ Expected output:
 ```
 "TSLA"
 ```
+
+
+## 9) How to tell if AI is working (not fallback)
+Use `quick-ask` and inspect the AI fields:
+
+```bash
+curl -s "https://<your-service>.onrender.com/api/quick-ask?symbol=AAPL" | jq .data.ai_status,.data.ai_mode,.data.ai
+```
+
+Interpretation:
+- `ai_status: "working"` and `ai_mode: "ai_enhanced"` means the model call succeeded.
+- `ai_status: "fallback"` with `ai_mode: "rule_based"` means AI did not run (disabled/unavailable) and deterministic fallback was used.
+- `ai_status: "fallback"` with `ai_mode: "skipped_low_signal"` means AI was intentionally skipped for very low-signal contexts.
+
+Also check Render logs:
+- Repeated `WARNING: AI advisor unavailable, using fallback: ...` indicates timeout/auth/provider failures.
+- No warnings plus `ai_status: "working"` on requests indicates healthy AI responses.

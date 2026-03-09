@@ -108,6 +108,8 @@ def test_quick_ask_includes_ai_fallback_payload_when_ai_not_configured():
     assert res.status_code == 200
     data = res.get_json()["data"]
     assert data["ai"]["mode"] == "rule_based"
+    assert data["ai_status"] == "fallback"
+    assert data["ai_mode"] == "rule_based"
     assert "not financial advice" in data["ai"]["risk_notes"][1].lower()
 
 
@@ -119,6 +121,8 @@ def test_quick_ask_uses_ai_extension_when_present():
     assert res.status_code == 200
     data = res.get_json()["data"]
     assert data["ai"]["mode"] == "ai_enhanced"
+    assert data["ai_status"] == "working"
+    assert data["ai_mode"] == "ai_enhanced"
     assert data["ai"]["provider"] == "stub"
     assert "TSLA" in data["ai"]["narrative"]
 

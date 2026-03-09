@@ -93,7 +93,7 @@ def create_app() -> Flask:
         AI_PROVIDER=os.environ.get("AI_PROVIDER", "openai"),
         AI_MODEL=os.environ.get("AI_MODEL", "gpt-5-mini"),
         AI_API_KEY=os.environ.get("AI_API_KEY", ""),
-        AI_TIMEOUT_SECONDS=float(os.environ.get("AI_TIMEOUT_SECONDS", "2.5")),
+        AI_TIMEOUT_SECONDS=float(os.environ.get("AI_TIMEOUT_SECONDS", "6.0")),
         AI_FAILURE_COOLDOWN_SECONDS=int(os.environ.get("AI_FAILURE_COOLDOWN_SECONDS", "120")),
         AI_RESPONSE_CACHE_TTL_SECONDS=int(os.environ.get("AI_RESPONSE_CACHE_TTL_SECONDS", "300")),
     )

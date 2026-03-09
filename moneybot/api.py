@@ -721,12 +721,16 @@ def quick_ask():
             quote_data=quote_data,
         )
 
+    ai_mode = (ai_payload or {}).get("mode")
+
     return jsonify(
         {
             "data": {
                 "symbol": symbol,
                 **decision,
                 "ai": ai_payload,
+                "ai_status": "working" if ai_mode == "ai_enhanced" else "fallback",
+                "ai_mode": ai_mode,
             },
             "request_id": g.request_id,
         }
