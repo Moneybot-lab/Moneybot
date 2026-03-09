@@ -26,6 +26,7 @@ def test_enhance_quick_decision_returns_fallback_when_disabled():
 
     assert out["mode"] == "rule_based"
     assert out["provider"] == "none"
+    assert out["reason"] == "disabled_or_missing_api_key"
 
 
 def test_enhance_quick_decision_parses_openai_json(monkeypatch):
@@ -77,7 +78,9 @@ def test_enhance_quick_decision_uses_cooldown_after_failure(monkeypatch):
     )
 
     assert first["mode"] == "rule_based"
+    assert first["reason"] == "provider_error"
     assert second["mode"] == "rule_based"
+    assert second["reason"] == "cooldown_after_failure"
     assert state["calls"] == 1
 
 
@@ -186,4 +189,5 @@ def test_enhance_quick_decision_skips_ai_for_low_signal_context(monkeypatch):
     )
 
     assert out["mode"] == "skipped_low_signal"
+    assert out["reason"] == "low_signal"
     assert called["n"] == 0

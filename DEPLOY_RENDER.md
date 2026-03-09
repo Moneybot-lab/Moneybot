@@ -143,16 +143,28 @@ Expected output:
 
 
 ## 9) How to tell if AI is working (not fallback)
-Use `quick-ask` and inspect the AI fields:
+Use `quick-ask` and inspect the AI fields.
+
+> Important: run these commands in a terminal (Mac Terminal, Windows PowerShell, VS Code Terminal), **not** in the browser search bar. Pasting `curl ...` into Google will search the web and show “no documents found,” which is expected.
 
 ```bash
+# macOS/Linux (requires jq)
 curl -s "https://<your-service>.onrender.com/api/quick-ask?symbol=AAPL" | jq .data.ai_status,.data.ai_mode,.data.ai
+
+# Windows PowerShell (no jq required)
+$resp = Invoke-RestMethod "https://<your-service>.onrender.com/api/quick-ask?symbol=AAPL"
+$resp.data.ai_status
+$resp.data.ai_mode
+$resp.data.ai
 ```
+
+If PowerShell says `jq` is not recognized, use the PowerShell block above or install jq separately.
 
 Interpretation:
 - `ai_status: "working"` and `ai_mode: "ai_enhanced"` means the model call succeeded.
 - `ai_status: "fallback"` with `ai_mode: "rule_based"` means AI did not run (disabled/unavailable) and deterministic fallback was used.
 - `ai_status: "fallback"` with `ai_mode: "skipped_low_signal"` means AI was intentionally skipped for very low-signal contexts.
+- If the AI block shows `mode: rule_based`, `provider: none`, and `model: none`, AI did not enhance that response. Check `reason` for why (for example `disabled_or_missing_api_key`, `cooldown_after_failure`, or `provider_error`).
 
 Also check Render logs:
 - Repeated `WARNING: AI advisor unavailable, using fallback: ...` indicates timeout/auth/provider failures.

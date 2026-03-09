@@ -69,7 +69,7 @@ class AIAdvisorService:
         self._cache[key] = dict(payload)
         self._cache_ts[key] = time.time()
 
-    def _fallback(self, recommendation: str, rationale: str) -> Dict[str, Any]:
+    def _fallback(self, recommendation: str, rationale: str, reason: str = "disabled_or_unavailable") -> Dict[str, Any]:
         return {
             "mode": "rule_based",
             "narrative": (
@@ -85,6 +85,7 @@ class AIAdvisorService:
             ],
             "provider": "none",
             "model": "none",
+            "reason": reason,
         }
 
     def _should_skip_ai(self, quick_decision: Dict[str, Any], signal_data: Dict[str, Any]) -> bool:
@@ -192,21 +193,21 @@ class AIAdvisorService:
             return cached
 
         if self._should_skip_ai(quick_decision, signal_data):
-            payload = self._fallback(recommendation, rationale)
+            payload = self._fallback(recommendation, rationale, reason="low_signal")
             payload["mode"] = "skipped_low_signal"
             self._cache_set(cache_key, payload)
             return payload
 
         if not self.enabled:
-            return self._fallback(recommendation, rationale)
+            return self._fallback(recommendation, rationale, reason="disabled_or_missing_api_key")
 
         if self.provider != "openai":
             logging.warning("Unsupported AI provider configured: %s", self.provider)
-            return self._fallback(recommendation, rationale)
+            return self._fallback(recommendation, rationale, reason="unsupported_provider")
 
         now = time.time()
         if now < self._disabled_until:
-            return self._fallback(recommendation, rationale)
+            return self._fallback(recommendation, rationale, reason="cooldown_after_failure")
 
         compact_context = {
             "symbol": symbol,
@@ -232,13 +233,13 @@ class AIAdvisorService:
         try:
             raw = self._openai_response(prompt)
             if not raw:
-                return self._fallback(recommendation, rationale)
+                return self._fallback(recommendation, rationale, reason="empty_or_unparseable_provider_response")
             parsed = json.loads(raw)
             narrative = str(parsed.get("narrative") or "").strip()
             risk_notes = parsed.get("risk_notes") if isinstance(parsed.get("risk_notes"), list) else []
             next_checks = parsed.get("next_checks") if isinstance(parsed.get("next_checks"), list) else []
             if not narrative:
-                return self._fallback(recommendation, rationale)
+                return self._fallback(recommendation, rationale, reason="missing_narrative_in_provider_response")
             result = {
                 "mode": "ai_enhanced",
                 "narrative": narrative,
@@ -252,4 +253,4 @@ class AIAdvisorService:
         except Exception as exc:  # noqa: BLE001
             self._disabled_until = time.time() + float(self.failure_cooldown_s)
             logging.warning("AI advisor unavailable, using fallback: %s", exc)
-            return self._fallback(recommendation, rationale)
+            return self._fallback(recommendation, rationale, reason="provider_error")
