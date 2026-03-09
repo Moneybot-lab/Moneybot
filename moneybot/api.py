@@ -667,7 +667,6 @@ def portfolio_summary():
 
 
 @api_bp.get("/company-details")
-@login_required
 def company_details():
     symbol = _normalize_symbol(request.args.get("symbol") or "")
     if not symbol:

@@ -157,3 +157,33 @@ def test_enhance_quick_decision_uses_cache_for_same_inputs(monkeypatch):
     assert first["mode"] == "ai_enhanced"
     assert second["mode"] == "ai_enhanced"
     assert calls["n"] == 1
+
+
+def test_enhance_quick_decision_skips_ai_for_low_signal_context(monkeypatch):
+    svc = AIAdvisorService(enabled=True, provider="openai", api_key="x-test")
+    quick = {"recommendation": "HOLD OFF FOR NOW", "rationale": "Revenue flat (no pts)"}
+    signal = {
+        "action": "SELL",
+        "score": 0.0,
+        "technical": {"rsi": 26.8, "macd_histogram": -0.22},
+        "sentiment": {"score": None, "label": "n/a", "headlines": []},
+    }
+    quote = {"price": 12.15, "change_percent": -1.54, "quote_source": "massive"}
+
+    called = {"n": 0}
+
+    def fake_openai_response(_prompt):
+        called["n"] += 1
+        return "{}"
+
+    monkeypatch.setattr(svc, "_openai_response", fake_openai_response)
+
+    out = svc.enhance_quick_decision(
+        symbol="F",
+        quick_decision=quick,
+        signal_data=signal,
+        quote_data=quote,
+    )
+
+    assert out["mode"] == "skipped_low_signal"
+    assert called["n"] == 0

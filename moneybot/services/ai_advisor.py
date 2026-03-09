@@ -87,6 +87,27 @@ class AIAdvisorService:
             "model": "none",
         }
 
+    def _should_skip_ai(self, quick_decision: Dict[str, Any], signal_data: Dict[str, Any]) -> bool:
+        """Skip provider calls when inputs are too thin to justify extra latency/cost."""
+        recommendation = str(quick_decision.get("recommendation") or "").upper()
+        rationale = str(quick_decision.get("rationale") or "")
+        sentiment = signal_data.get("sentiment") if isinstance(signal_data.get("sentiment"), dict) else {}
+        sentiment_score = sentiment.get("score")
+        headlines = sentiment.get("headlines") if isinstance(sentiment.get("headlines"), list) else []
+        score = signal_data.get("score")
+        if score is None:
+            score = signal_data.get("hybrid_score")
+
+        generic_rationale = (
+            "revenue flat" in rationale.lower()
+            or "no pts" in rationale.lower()
+            or "derived from momentum" in rationale.lower()
+        )
+        weak_signal = isinstance(score, (int, float)) and float(score) <= 2.0
+        missing_sentiment = sentiment_score is None and len(headlines) == 0
+
+        return recommendation == "HOLD OFF FOR NOW" and generic_rationale and weak_signal and missing_sentiment
+
     def _openai_response(self, prompt: str) -> Optional[str]:
         url = "https://api.openai.com/v1/responses"
         schema = {
@@ -161,12 +182,20 @@ class AIAdvisorService:
     ) -> Dict[str, Any]:
         recommendation = str(quick_decision.get("recommendation") or "HOLD OFF FOR NOW")
         rationale = str(quick_decision.get("rationale") or "Derived from momentum and signal checks.")
-        signal_score = signal_data.get("score") or signal_data.get("hybrid_score")
+        signal_score = signal_data.get("score")
+        if signal_score is None:
+            signal_score = signal_data.get("hybrid_score")
         cache_key = self._cache_key(symbol, recommendation, rationale, signal_score)
 
         cached = self._cache_get(cache_key)
         if cached is not None:
             return cached
+
+        if self._should_skip_ai(quick_decision, signal_data):
+            payload = self._fallback(recommendation, rationale)
+            payload["mode"] = "skipped_low_signal"
+            self._cache_set(cache_key, payload)
+            return payload
 
         if not self.enabled:
             return self._fallback(recommendation, rationale)

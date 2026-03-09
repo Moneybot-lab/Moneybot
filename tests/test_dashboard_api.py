@@ -42,6 +42,9 @@ class StubMarketService:
             "quote": self.get_quote(symbol),
         }
 
+    def get_company_snapshot(self, symbol):
+        return {"symbol": symbol, "company_name": f"{symbol} Corp", "summary": "Test summary."}
+
 
 def _client():
     os.environ["MONEYBOT_SECRET_KEY"] = "test-secret"
@@ -118,6 +121,14 @@ def test_quick_ask_uses_ai_extension_when_present():
     assert data["ai"]["mode"] == "ai_enhanced"
     assert data["ai"]["provider"] == "stub"
     assert "TSLA" in data["ai"]["narrative"]
+
+
+def test_company_details_is_accessible_without_authentication():
+    client = _client()
+    res = client.get("/api/company-details?symbol=AAPL")
+    assert res.status_code == 200
+    payload = res.get_json()["data"]
+    assert payload["symbol"] == "AAPL"
 
 
 def test_signup_rejects_mismatched_password_confirmation():
