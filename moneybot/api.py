@@ -246,6 +246,41 @@ def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> 
     }
 
 
+def _plain_english_recommendation(recommendation: str, reason: str) -> str:
+    rec = (recommendation or "HOLD").strip().upper()
+    raw_reason = (reason or "Signals are mixed right now.").strip()
+
+    reason_text = raw_reason
+    normalized_replacements = [
+        ("macd", "trend momentum"),
+        ("rsi", "price pressure"),
+        ("hist", "trend strength"),
+        ("pts", "points"),
+        ("bullish", "positive"),
+        ("bearish", "negative"),
+    ]
+    lowered = reason_text.lower()
+    for source, target in normalized_replacements:
+        lowered = lowered.replace(source, target)
+    reason_text = lowered
+
+    if rec == "STRONG BUY":
+        action = "This looks like a strong buying setup"
+    elif rec == "BUY":
+        action = "This looks reasonable to buy"
+    elif rec == "SELL":
+        action = "This looks like a good time to trim or sell"
+    elif rec == "HOLD OFF FOR NOW":
+        action = "It is better to wait instead of buying right now"
+    else:
+        action = "There is no clear edge right now, so holding is safer"
+
+    return (
+        f"{action}. Plain English: the system saw {reason_text}. "
+        "This is guidance only, not financial advice."
+    )
+
+
 @api_bp.post("/auth/signup")
 def signup():
     data = request.get_json(silent=True) or {}
@@ -735,6 +770,18 @@ def quick_ask():
             "request_id": g.request_id,
         }
     )
+
+
+@api_bp.post("/explain-recommendation")
+def explain_recommendation():
+    data = request.get_json(silent=True) or {}
+    recommendation = str(data.get("recommendation") or "").strip()
+    reason = str(data.get("reason") or "").strip()
+    if not recommendation:
+        return jsonify({"error": "recommendation required", "request_id": g.request_id}), 400
+
+    explanation = _plain_english_recommendation(recommendation, reason)
+    return jsonify({"data": {"explanation": explanation}, "request_id": g.request_id})
 
 
 @api_bp.get("/market-overview")
