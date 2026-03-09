@@ -707,9 +707,31 @@ def quick_ask():
         return jsonify({"error": "symbol required", "request_id": g.request_id}), 400
 
     svc = current_app.extensions["market_data_service"]
+    ai_svc = current_app.extensions.get("ai_advisor_service")
+
     signal_data = svc.get_signal(symbol)
     quote_data = signal_data.get("quote") or svc.get_quote(symbol)
-    return jsonify({"data": {"symbol": symbol, **_quick_decision(signal_data, quote_data)}, "request_id": g.request_id})
+    decision = _quick_decision(signal_data, quote_data)
+
+    ai_payload = None
+    if ai_svc is not None:
+        ai_payload = ai_svc.enhance_quick_decision(
+            symbol=symbol,
+            quick_decision=decision,
+            signal_data=signal_data,
+            quote_data=quote_data,
+        )
+
+    return jsonify(
+        {
+            "data": {
+                "symbol": symbol,
+                **decision,
+                "ai": ai_payload,
+            },
+            "request_id": g.request_id,
+        }
+    )
 
 
 @api_bp.get("/market-overview")

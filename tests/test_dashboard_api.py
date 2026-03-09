@@ -4,6 +4,19 @@ from moneybot.app_factory import create_app
 from moneybot import api as api_module
 
 
+
+
+class StubAIAdvisorService:
+    def enhance_quick_decision(self, *, symbol, quick_decision, signal_data, quote_data):
+        return {
+            "mode": "ai_enhanced",
+            "narrative": f"Aggressive signal for {symbol}: {quick_decision['recommendation']}",
+            "risk_notes": ["Use strict stops.", "Expect high volatility."],
+            "next_checks": ["Watch volume.", "Re-check sentiment."],
+            "provider": "stub",
+            "model": "stub-fast",
+        }
+
 class StubMarketService:
     def get_market_indices(self):
         return [{"name": "Dow Jones", "symbol": "^DJI", "price": 39000.0, "change_percent": 0.4, "series": [1, 2, 3]}]
@@ -84,6 +97,27 @@ def test_quick_ask_normalizes_symbol_from_url_like_input():
     assert res.status_code == 200
     data = res.get_json()["data"]
     assert data["symbol"] == "TSLA"
+
+
+def test_quick_ask_includes_ai_fallback_payload_when_ai_not_configured():
+    client = _client()
+    res = client.get("/api/quick-ask?symbol=AAPL")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["ai"]["mode"] == "rule_based"
+    assert "not financial advice" in data["ai"]["risk_notes"][1].lower()
+
+
+def test_quick_ask_uses_ai_extension_when_present():
+    client = _client()
+    client.application.extensions["ai_advisor_service"] = StubAIAdvisorService()
+
+    res = client.get("/api/quick-ask?symbol=TSLA")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["ai"]["mode"] == "ai_enhanced"
+    assert data["ai"]["provider"] == "stub"
+    assert "TSLA" in data["ai"]["narrative"]
 
 
 def test_signup_rejects_mismatched_password_confirmation():
