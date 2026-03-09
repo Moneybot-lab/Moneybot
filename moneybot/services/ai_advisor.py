@@ -1,0 +1,141 @@
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any, Dict, Optional
+
+import requests
+
+
+class AIAdvisorService:
+    """Optional LLM enhancer for quick buy/sell suggestions.
+
+    Returns deterministic fallback content when AI is disabled/unavailable.
+    """
+
+    def __init__(
+        self,
+        enabled: bool = False,
+        provider: str = "openai",
+        model: str = "gpt-5-mini",
+        api_key: str = "",
+        timeout_s: int = 12,
+    ) -> None:
+        self.enabled = enabled and bool(api_key.strip())
+        self.provider = (provider or "openai").strip().lower()
+        self.model = (model or "gpt-5-mini").strip()
+        self.api_key = (api_key or "").strip()
+        self.timeout_s = timeout_s
+
+    def _fallback(self, recommendation: str, rationale: str) -> Dict[str, Any]:
+        return {
+            "mode": "rule_based",
+            "narrative": (
+                f"{recommendation}: {rationale} Keep position sizing disciplined and monitor volatility closely."
+            ),
+            "risk_notes": [
+                "Aggressive profile selected: expect larger swings and use strict stop-loss rules.",
+                "This is not financial advice; always verify with your own research.",
+            ],
+            "next_checks": [
+                "Re-check momentum and sentiment on the next market session.",
+                "Confirm whether volume supports the move before increasing position size.",
+            ],
+            "provider": "none",
+            "model": "none",
+        }
+
+    def _openai_response(self, prompt: str) -> Optional[str]:
+        url = "https://api.openai.com/v1/responses"
+        payload = {
+            "model": self.model,
+            "input": prompt,
+            "text": {"format": {"type": "text"}},
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout_s)
+        resp.raise_for_status()
+        data = resp.json()
+        text = data.get("output_text")
+        if isinstance(text, str) and text.strip():
+            return text
+        return None
+
+    def enhance_quick_decision(
+        self,
+        *,
+        symbol: str,
+        quick_decision: Dict[str, Any],
+        signal_data: Dict[str, Any],
+        quote_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        recommendation = str(quick_decision.get("recommendation") or "HOLD OFF FOR NOW")
+        rationale = str(quick_decision.get("rationale") or "Derived from momentum and signal checks.")
+
+        if not self.enabled:
+            return self._fallback(recommendation, rationale)
+
+        if self.provider != "openai":
+            logging.warning("Unsupported AI provider configured: %s", self.provider)
+            return self._fallback(recommendation, rationale)
+
+        prompt_payload = {
+            "task": "Generate aggressive but risk-aware buy/sell suggestion text for a stock quick ask feature.",
+            "output_requirements": {
+                "format": "json",
+                "keys": ["narrative", "risk_notes", "next_checks"],
+                "risk_notes_len": 2,
+                "next_checks_len": 2,
+                "max_narrative_words": 55,
+            },
+            "constraints": [
+                "No guaranteed returns language.",
+                "Do not provide legal/compliance claims.",
+                "Keep concise and action-oriented for aggressive profile.",
+            ],
+            "data": {
+                "symbol": symbol,
+                "recommendation": recommendation,
+                "rationale": rationale,
+                "quote": {
+                    "price": quote_data.get("price"),
+                    "change_percent": quote_data.get("change_percent"),
+                    "quote_source": quote_data.get("quote_source"),
+                },
+                "technical": signal_data.get("technical"),
+                "sentiment": signal_data.get("sentiment"),
+                "signal_action": signal_data.get("action"),
+                "signal_score": signal_data.get("score") or signal_data.get("hybrid_score"),
+            },
+        }
+
+        prompt = (
+            "You are Moneybot's market assistant. Respond with ONLY valid JSON. "
+            + json.dumps(prompt_payload, default=str)
+        )
+
+        try:
+            raw = self._openai_response(prompt)
+            if not raw:
+                return self._fallback(recommendation, rationale)
+            parsed = json.loads(raw)
+            narrative = str(parsed.get("narrative") or "").strip()
+            risk_notes = parsed.get("risk_notes") if isinstance(parsed.get("risk_notes"), list) else []
+            next_checks = parsed.get("next_checks") if isinstance(parsed.get("next_checks"), list) else []
+            if not narrative:
+                return self._fallback(recommendation, rationale)
+            return {
+                "mode": "ai_enhanced",
+                "narrative": narrative,
+                "risk_notes": [str(x) for x in risk_notes][:2],
+                "next_checks": [str(x) for x in next_checks][:2],
+                "provider": self.provider,
+                "model": self.model,
+            }
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("AI advisor unavailable, using fallback: %s", exc)
+            return self._fallback(recommendation, rationale)
