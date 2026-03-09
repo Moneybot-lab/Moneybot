@@ -8,6 +8,26 @@ from typing import Any, Dict, Optional
 import requests
 
 
+
+
+def _coerce_text_candidate(candidate: Any) -> Optional[str]:
+    if isinstance(candidate, str) and candidate.strip():
+        return _strip_code_fences(candidate)
+
+    if isinstance(candidate, dict):
+        for key in ("text", "value", "content"):
+            nested = _coerce_text_candidate(candidate.get(key))
+            if nested:
+                return nested
+
+    if isinstance(candidate, list):
+        for item in candidate:
+            nested = _coerce_text_candidate(item)
+            if nested:
+                return nested
+
+    return None
+
 def _strip_code_fences(text: str) -> str:
     raw = (text or "").strip()
     if raw.startswith("```"):
@@ -69,7 +89,7 @@ class AIAdvisorService:
         self._cache[key] = dict(payload)
         self._cache_ts[key] = time.time()
 
-    def _fallback(self, recommendation: str, rationale: str) -> Dict[str, Any]:
+    def _fallback(self, recommendation: str, rationale: str, reason: str = "disabled_or_unavailable") -> Dict[str, Any]:
         return {
             "mode": "rule_based",
             "narrative": (
@@ -85,6 +105,7 @@ class AIAdvisorService:
             ],
             "provider": "none",
             "model": "none",
+            "reason": reason,
         }
 
     def _should_skip_ai(self, quick_decision: Dict[str, Any], signal_data: Dict[str, Any]) -> bool:
@@ -152,9 +173,13 @@ class AIAdvisorService:
         resp.raise_for_status()
         data = resp.json()
 
-        text = data.get("output_text")
-        if isinstance(text, str) and text.strip():
-            return _strip_code_fences(text)
+        text = _coerce_text_candidate(data.get("output_text"))
+        if text:
+            return text
+
+        output_json = data.get("output_json")
+        if isinstance(output_json, (dict, list)):
+            return json.dumps(output_json)
 
         # Fallback parser for Responses payload variants that do not set output_text.
         output = data.get("output") if isinstance(data.get("output"), list) else []
@@ -167,9 +192,12 @@ class AIAdvisorService:
                     continue
                 block_type = block.get("type")
                 if block_type in {"output_text", "text"}:
-                    candidate = block.get("text")
-                    if isinstance(candidate, str) and candidate.strip():
-                        return _strip_code_fences(candidate)
+                    candidate = _coerce_text_candidate(block.get("text"))
+                    if candidate:
+                        return candidate
+                block_json = block.get("json")
+                if isinstance(block_json, (dict, list)):
+                    return json.dumps(block_json)
         return None
 
     def enhance_quick_decision(
@@ -192,21 +220,21 @@ class AIAdvisorService:
             return cached
 
         if self._should_skip_ai(quick_decision, signal_data):
-            payload = self._fallback(recommendation, rationale)
+            payload = self._fallback(recommendation, rationale, reason="low_signal")
             payload["mode"] = "skipped_low_signal"
             self._cache_set(cache_key, payload)
             return payload
 
         if not self.enabled:
-            return self._fallback(recommendation, rationale)
+            return self._fallback(recommendation, rationale, reason="disabled_or_missing_api_key")
 
         if self.provider != "openai":
             logging.warning("Unsupported AI provider configured: %s", self.provider)
-            return self._fallback(recommendation, rationale)
+            return self._fallback(recommendation, rationale, reason="unsupported_provider")
 
         now = time.time()
         if now < self._disabled_until:
-            return self._fallback(recommendation, rationale)
+            return self._fallback(recommendation, rationale, reason="cooldown_after_failure")
 
         compact_context = {
             "symbol": symbol,
@@ -232,13 +260,13 @@ class AIAdvisorService:
         try:
             raw = self._openai_response(prompt)
             if not raw:
-                return self._fallback(recommendation, rationale)
+                return self._fallback(recommendation, rationale, reason="empty_or_unparseable_provider_response")
             parsed = json.loads(raw)
             narrative = str(parsed.get("narrative") or "").strip()
             risk_notes = parsed.get("risk_notes") if isinstance(parsed.get("risk_notes"), list) else []
             next_checks = parsed.get("next_checks") if isinstance(parsed.get("next_checks"), list) else []
             if not narrative:
-                return self._fallback(recommendation, rationale)
+                return self._fallback(recommendation, rationale, reason="missing_narrative_in_provider_response")
             result = {
                 "mode": "ai_enhanced",
                 "narrative": narrative,
@@ -252,4 +280,4 @@ class AIAdvisorService:
         except Exception as exc:  # noqa: BLE001
             self._disabled_until = time.time() + float(self.failure_cooldown_s)
             logging.warning("AI advisor unavailable, using fallback: %s", exc)
-            return self._fallback(recommendation, rationale)
+            return self._fallback(recommendation, rationale, reason="provider_error")
