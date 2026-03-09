@@ -2,9 +2,19 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, Dict, Optional
 
 import requests
+
+
+def _strip_code_fences(text: str) -> str:
+    raw = (text or "").strip()
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if len(lines) >= 3:
+            return "\n".join(lines[1:-1]).strip()
+    return raw
 
 
 class AIAdvisorService:
@@ -19,13 +29,16 @@ class AIAdvisorService:
         provider: str = "openai",
         model: str = "gpt-5-mini",
         api_key: str = "",
-        timeout_s: int = 12,
+        timeout_s: float = 2.5,
+        failure_cooldown_s: int = 120,
     ) -> None:
         self.enabled = enabled and bool(api_key.strip())
         self.provider = (provider or "openai").strip().lower()
         self.model = (model or "gpt-5-mini").strip()
         self.api_key = (api_key or "").strip()
         self.timeout_s = timeout_s
+        self.failure_cooldown_s = max(1, int(failure_cooldown_s))
+        self._disabled_until = 0.0
 
     def _fallback(self, recommendation: str, rationale: str) -> Dict[str, Any]:
         return {
@@ -47,10 +60,37 @@ class AIAdvisorService:
 
     def _openai_response(self, prompt: str) -> Optional[str]:
         url = "https://api.openai.com/v1/responses"
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["narrative", "risk_notes", "next_checks"],
+            "properties": {
+                "narrative": {"type": "string"},
+                "risk_notes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 2,
+                    "maxItems": 2,
+                },
+                "next_checks": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 2,
+                    "maxItems": 2,
+                },
+            },
+        }
         payload = {
             "model": self.model,
             "input": prompt,
-            "text": {"format": {"type": "text"}},
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "moneybot_quick_ask",
+                    "schema": schema,
+                    "strict": True,
+                }
+            },
         }
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -60,9 +100,25 @@ class AIAdvisorService:
         resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout_s)
         resp.raise_for_status()
         data = resp.json()
+
         text = data.get("output_text")
         if isinstance(text, str) and text.strip():
-            return text
+            return _strip_code_fences(text)
+
+        # Fallback parser for Responses payload variants that do not set output_text.
+        output = data.get("output") if isinstance(data.get("output"), list) else []
+        for item in output:
+            content = item.get("content") if isinstance(item, dict) else None
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type in {"output_text", "text"}:
+                    candidate = block.get("text")
+                    if isinstance(candidate, str) and candidate.strip():
+                        return _strip_code_fences(candidate)
         return None
 
     def enhance_quick_decision(
@@ -81,6 +137,10 @@ class AIAdvisorService:
 
         if self.provider != "openai":
             logging.warning("Unsupported AI provider configured: %s", self.provider)
+            return self._fallback(recommendation, rationale)
+
+        now = time.time()
+        if now < self._disabled_until:
             return self._fallback(recommendation, rationale)
 
         prompt_payload = {
@@ -137,5 +197,6 @@ class AIAdvisorService:
                 "model": self.model,
             }
         except Exception as exc:  # noqa: BLE001
+            self._disabled_until = time.time() + float(self.failure_cooldown_s)
             logging.warning("AI advisor unavailable, using fallback: %s", exc)
             return self._fallback(recommendation, rationale)

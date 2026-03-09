@@ -49,3 +49,81 @@ def test_enhance_quick_decision_parses_openai_json(monkeypatch):
     assert out["provider"] == "openai"
     assert out["narrative"] == "Aggressive BUY setup."
     assert len(out["risk_notes"]) == 2
+
+
+def test_enhance_quick_decision_uses_cooldown_after_failure(monkeypatch):
+    quick, signal, quote = _sample_inputs()
+    svc = AIAdvisorService(enabled=True, provider="openai", api_key="x-test", failure_cooldown_s=600)
+
+    state = {"calls": 0}
+
+    def fake_openai_response(_prompt):
+        state["calls"] += 1
+        raise TimeoutError("timeout")
+
+    monkeypatch.setattr(svc, "_openai_response", fake_openai_response)
+
+    first = svc.enhance_quick_decision(
+        symbol="TSLA",
+        quick_decision=quick,
+        signal_data=signal,
+        quote_data=quote,
+    )
+    second = svc.enhance_quick_decision(
+        symbol="TSLA",
+        quick_decision=quick,
+        signal_data=signal,
+        quote_data=quote,
+    )
+
+    assert first["mode"] == "rule_based"
+    assert second["mode"] == "rule_based"
+    assert state["calls"] == 1
+
+
+def test_openai_response_falls_back_to_output_content_text(monkeypatch):
+    svc = AIAdvisorService(enabled=True, provider="openai", api_key="x-test")
+
+    class StubResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "output": [
+                    {
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": '{"narrative":"N","risk_notes":["r1","r2"],"next_checks":["c1","c2"]}',
+                            }
+                        ]
+                    }
+                ]
+            }
+
+    monkeypatch.setattr("moneybot.services.ai_advisor.requests.post", lambda *args, **kwargs: StubResp())
+    out = svc._openai_response("prompt")
+
+    assert out is not None
+    assert '"narrative":"N"' in out
+
+
+def test_openai_response_strips_markdown_fences(monkeypatch):
+    svc = AIAdvisorService(enabled=True, provider="openai", api_key="x-test")
+
+    class StubResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "output_text": "```json\n{\"narrative\":\"N\",\"risk_notes\":[\"r1\",\"r2\"],\"next_checks\":[\"c1\",\"c2\"]}\n```"
+            }
+
+    monkeypatch.setattr("moneybot.services.ai_advisor.requests.post", lambda *args, **kwargs: StubResp())
+    out = svc._openai_response("prompt")
+
+    assert out is not None
+    assert not out.startswith("```")
+    assert out.startswith("{")

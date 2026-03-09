@@ -1,6 +1,6 @@
 import pytest
 
-from moneybot.app_factory import _resolve_database_url
+from moneybot.app_factory import _resolve_database_url, create_app
 
 
 def test_resolve_database_url_uses_postgres_internal_alias(monkeypatch):
@@ -42,3 +42,20 @@ def test_resolve_database_url_rejects_hosted_postgres_without_driver(monkeypatch
 
     with pytest.raises(RuntimeError, match="no PostgreSQL driver is installed"):
         _resolve_database_url()
+
+
+def test_create_app_reads_ai_timeout_and_cooldown(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("AI_ENABLED", "true")
+    monkeypatch.setenv("AI_API_KEY", "key")
+    monkeypatch.setenv("AI_TIMEOUT_SECONDS", "1.7")
+    monkeypatch.setenv("AI_FAILURE_COOLDOWN_SECONDS", "45")
+
+    app = create_app()
+    svc = app.extensions["ai_advisor_service"]
+
+    assert app.config["AI_TIMEOUT_SECONDS"] == 1.7
+    assert app.config["AI_FAILURE_COOLDOWN_SECONDS"] == 45
+    assert svc.timeout_s == 1.7
+    assert svc.failure_cooldown_s == 45

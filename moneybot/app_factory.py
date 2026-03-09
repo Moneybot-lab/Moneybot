@@ -93,6 +93,8 @@ def create_app() -> Flask:
         AI_PROVIDER=os.environ.get("AI_PROVIDER", "openai"),
         AI_MODEL=os.environ.get("AI_MODEL", "gpt-5-mini"),
         AI_API_KEY=os.environ.get("AI_API_KEY", ""),
+        AI_TIMEOUT_SECONDS=float(os.environ.get("AI_TIMEOUT_SECONDS", "2.5")),
+        AI_FAILURE_COOLDOWN_SECONDS=int(os.environ.get("AI_FAILURE_COOLDOWN_SECONDS", "120")),
     )
 
     app.extensions["ai_advisor_service"] = AIAdvisorService(
@@ -100,6 +102,8 @@ def create_app() -> Flask:
         provider=app.config["AI_PROVIDER"],
         model=app.config["AI_MODEL"],
         api_key=app.config["AI_API_KEY"],
+        timeout_s=app.config["AI_TIMEOUT_SECONDS"],
+        failure_cooldown_s=app.config["AI_FAILURE_COOLDOWN_SECONDS"],
     )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
