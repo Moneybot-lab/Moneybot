@@ -76,7 +76,9 @@ INFO_CACHE = {}
 NEWS_CACHE = {}
 HISTORY_CACHE = {}
 TICKER_CACHE = {}
-CACHE_TTL = 300   
+CACHE_TTL = 300
+YF_INFO_RATE_LIMIT_BACKOFF_SECONDS = 300
+YF_INFO_BACKOFF_UNTIL = 0.0
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -191,16 +193,23 @@ def fetch_fundamentals(ticker: str) -> Dict:
     now = time.time()
     cached = INFO_CACHE.get(ticker)
     info_rate_limited = False
+    global YF_INFO_BACKOFF_UNTIL
+
     if cached and now - cached.get("ts", 0) < CACHE_TTL:
         info = cached["data"]
+    elif now < YF_INFO_BACKOFF_UNTIL:
+        info = {}
+        info_rate_limited = True
     else:
         try:
             info = tk.info or {}
             INFO_CACHE[ticker] = {"data": info, "ts": now}
         except Exception as exc:
-            logging.warning(f"yfinance info unavailable for {ticker}: {exc}")
             info = {}
             info_rate_limited = "Too Many Requests" in str(exc)
+            if info_rate_limited:
+                YF_INFO_BACKOFF_UNTIL = now + float(YF_INFO_RATE_LIMIT_BACKOFF_SECONDS)
+            logging.warning(f"yfinance info unavailable for {ticker}: {exc}")
 
     revenue_growth = info.get("revenueGrowth")
     revenue_growth = float(revenue_growth) if revenue_growth is not None else None

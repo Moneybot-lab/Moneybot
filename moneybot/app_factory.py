@@ -253,7 +253,8 @@ def create_app() -> Flask:
                       const payload = await res.json();
                       if(!res.ok){
                         titleEl.textContent = symbol;
-                        summaryEl.textContent = payload.error || 'Unable to load company details.';
+                        const err = String(payload.error || '');
+                        summaryEl.textContent = err === 'authentication required' ? 'Please log in to view company details.' : (payload.error || 'Unable to load company details.');
                         return;
                       }
                       const data = payload.data || {};
@@ -635,9 +636,10 @@ def create_app() -> Flask:
                   return;
                 }
                 try {
-                  const res = await fetch('/api/company-details?symbol=' + encodeURIComponent(symbol));
+                  const res = await apiFetch('/api/company-details?symbol=' + encodeURIComponent(symbol));
                   const payload = await res.json();
                   if(!res.ok){
+                    if (res.status === 401) { location.href='/login'; return; }
                     headlinesEl.innerHTML = '<div style="color:#3f6212">No recent headlines available.</div>';
                     return;
                   }
@@ -685,11 +687,13 @@ def create_app() -> Flask:
                 newsEl.innerHTML = '';
                 openModal();
                 try {
-                  const res = await fetch('/api/company-details?symbol=' + encodeURIComponent(symbol));
+                  const res = await apiFetch('/api/company-details?symbol=' + encodeURIComponent(symbol));
                   const payload = await res.json();
                   if(!res.ok){
+                    if (res.status === 401) { location.href='/login'; return; }
                     titleEl.textContent = symbol;
-                    summaryEl.textContent = payload.error || 'Unable to load company details.';
+                    const err = String(payload.error || '');
+                    summaryEl.textContent = err === 'authentication required' ? 'Please log in to view company details.' : (payload.error || 'Unable to load company details.');
                     return;
                   }
                   const data = payload.data || {};
