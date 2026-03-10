@@ -398,6 +398,7 @@ def user_watchlist():
     base_items = [_watchlist_item_payload(i) for i in items]
 
     svc = current_app.extensions.get("market_data_service")
+    ai_svc = current_app.extensions.get("ai_advisor_service")
     enriched_items: list[Dict[str, Any]] = []
     for item in base_items:
         signal = {}
@@ -468,6 +469,25 @@ def user_watchlist():
         elif isinstance(rationale, str) and rationale.strip():
             advice_reason = rationale.strip()
 
+        ai_portfolio = None
+        if ai_svc is not None:
+            try:
+                ai_portfolio = ai_svc.enhance_portfolio_position(
+                    symbol=item["symbol"],
+                    entry_price=entry_price if isinstance(entry_price, (int, float)) else None,
+                    current_price=current_price if isinstance(current_price, (int, float)) else None,
+                    shares=shares_value,
+                    signal_data=signal,
+                )
+                ai_advice = str((ai_portfolio or {}).get("advice") or "").upper()
+                if ai_advice in {"BUY", "HOLD", "SELL"}:
+                    advice = ai_advice
+                ai_reason = str((ai_portfolio or {}).get("advice_reason") or "").strip()
+                if ai_reason:
+                    advice_reason = ai_reason
+            except Exception:  # noqa: BLE001
+                ai_portfolio = None
+
         enriched_items.append(
             {
                 **item,
@@ -480,6 +500,7 @@ def user_watchlist():
                 "performance_amount": round(performance_amount, 2) if performance_amount is not None else None,
                 "advice": advice,
                 "advice_reason": advice_reason,
+                "ai_portfolio": ai_portfolio,
                 "history30": history30,
                 "quote_source": quote.get("quote_source"),
                 "quote_diagnostics": quote.get("diagnostics"),
