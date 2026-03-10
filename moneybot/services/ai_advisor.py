@@ -28,6 +28,12 @@ def _coerce_text_candidate(candidate: Any) -> Optional[str]:
 
     return None
 
+
+def _coerce_structured_candidate(candidate: Any) -> Optional[str]:
+    if isinstance(candidate, (dict, list)):
+        return json.dumps(candidate)
+    return None
+
 def _strip_code_fences(text: str) -> str:
     raw = (text or "").strip()
     if raw.startswith("```"):
@@ -129,6 +135,42 @@ class AIAdvisorService:
 
         return recommendation == "HOLD OFF FOR NOW" and generic_rationale and weak_signal and missing_sentiment
 
+    def _extract_response_text(self, data: Dict[str, Any]) -> Optional[str]:
+        text = _coerce_text_candidate(data.get("output_text"))
+        if text:
+            return text
+
+        output_json = data.get("output_json")
+        if isinstance(output_json, (dict, list)):
+            return json.dumps(output_json)
+
+        output_parsed = data.get("output_parsed")
+        structured = _coerce_structured_candidate(output_parsed)
+        if structured:
+            return structured
+
+        # Fallback parser for Responses payload variants that do not set output_text.
+        output = data.get("output") if isinstance(data.get("output"), list) else []
+        for item in output:
+            content = item.get("content") if isinstance(item, dict) else None
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type in {"output_text", "text"}:
+                    candidate = _coerce_text_candidate(block.get("text"))
+                    if candidate:
+                        return candidate
+                block_json = block.get("json")
+                if isinstance(block_json, (dict, list)):
+                    return json.dumps(block_json)
+                block_parsed = _coerce_structured_candidate(block.get("parsed"))
+                if block_parsed:
+                    return block_parsed
+        return None
+
     def _openai_response(self, prompt: str) -> Optional[str]:
         url = "https://api.openai.com/v1/responses"
         schema = {
@@ -151,10 +193,9 @@ class AIAdvisorService:
                 },
             },
         }
-        payload = {
+        base_payload = {
             "model": self.model,
             "input": prompt,
-            "max_output_tokens": 220,
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -169,35 +210,36 @@ class AIAdvisorService:
             "Content-Type": "application/json",
         }
 
-        resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout_s)
-        resp.raise_for_status()
-        data = resp.json()
+        payloads = [
+            {
+                **base_payload,
+                "max_output_tokens": 220,
+                "reasoning": {"effort": "low"},
+            },
+            {
+                **base_payload,
+                "max_output_tokens": 420,
+                "reasoning": {"effort": "minimal"},
+            },
+        ]
 
-        text = _coerce_text_candidate(data.get("output_text"))
-        if text:
-            return text
-
-        output_json = data.get("output_json")
-        if isinstance(output_json, (dict, list)):
-            return json.dumps(output_json)
-
-        # Fallback parser for Responses payload variants that do not set output_text.
-        output = data.get("output") if isinstance(data.get("output"), list) else []
-        for item in output:
-            content = item.get("content") if isinstance(item, dict) else None
-            if not isinstance(content, list):
+        for idx, payload in enumerate(payloads):
+            try:
+                resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout_s)
+                resp.raise_for_status()
+                data = resp.json()
+            except requests.Timeout:
+                if idx == len(payloads) - 1:
+                    raise
                 continue
-            for block in content:
-                if not isinstance(block, dict):
-                    continue
-                block_type = block.get("type")
-                if block_type in {"output_text", "text"}:
-                    candidate = _coerce_text_candidate(block.get("text"))
-                    if candidate:
-                        return candidate
-                block_json = block.get("json")
-                if isinstance(block_json, (dict, list)):
-                    return json.dumps(block_json)
+
+            parsed_text = self._extract_response_text(data)
+            if parsed_text:
+                return parsed_text
+
+            if idx == len(payloads) - 1:
+                return None
+
         return None
 
     def enhance_quick_decision(
