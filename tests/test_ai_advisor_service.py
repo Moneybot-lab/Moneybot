@@ -387,3 +387,53 @@ def test_enhance_portfolio_position_upgrades_hold_to_sell_on_overextended_peak(m
 
     assert out["mode"] == "ai_enhanced"
     assert out["advice"] == "SELL"
+
+
+
+def test_openai_response_retries_when_first_payload_is_truncated_json(monkeypatch):
+    svc = AIAdvisorService(enabled=True, provider="openai", api_key="x-test")
+
+    class StubResp:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    responses = iter(
+        [
+            {"output_text": '{"narrative":"AAPL looks vulnerable'},
+            {"output_text": '{"narrative":"N","risk_notes":["r1","r2"],"next_checks":["c1","c2"]}'},
+        ]
+    )
+
+    monkeypatch.setattr(
+        "moneybot.services.ai_advisor.requests.post",
+        lambda *args, **kwargs: StubResp(next(responses)),
+    )
+
+    out = svc._openai_response("prompt")
+
+    assert out is not None
+    assert '"narrative":"N"' in out
+
+
+def test_enhance_quick_decision_does_not_enter_cooldown_on_unparseable_payload(monkeypatch):
+    quick, signal, quote = _sample_inputs()
+    svc = AIAdvisorService(enabled=True, provider="openai", api_key="x-test", failure_cooldown_s=600)
+
+    monkeypatch.setattr(svc, "_openai_response", lambda _prompt: '{"narrative":"unterminated')
+
+    out = svc.enhance_quick_decision(
+        symbol="AAPL",
+        quick_decision=quick,
+        signal_data=signal,
+        quote_data=quote,
+    )
+
+    assert out["mode"] == "rule_based"
+    assert out["reason"] == "empty_or_unparseable_provider_response"
+    assert svc._disabled_until == 0.0

@@ -43,6 +43,14 @@ def _strip_code_fences(text: str) -> str:
     return raw
 
 
+def _is_valid_json_object_text(text: str) -> bool:
+    try:
+        parsed = json.loads(text)
+    except Exception:  # noqa: BLE001
+        return False
+    return isinstance(parsed, dict)
+
+
 class AIAdvisorService:
     """Optional LLM enhancer for quick buy/sell suggestions.
 
@@ -230,11 +238,18 @@ class AIAdvisorService:
                 data = resp.json()
             except requests.Timeout:
                 if idx == len(payloads) - 1:
-                    raise
+                    return None
                 continue
+            except requests.HTTPError as exc:
+                status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                if isinstance(status_code, int) and status_code >= 500:
+                    if idx == len(payloads) - 1:
+                        return None
+                    continue
+                raise
 
             parsed_text = self._extract_response_text(data)
-            if parsed_text:
+            if parsed_text and _is_valid_json_object_text(parsed_text):
                 return parsed_text
 
             if idx == len(payloads) - 1:
@@ -450,7 +465,7 @@ class AIAdvisorService:
                 resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout_s)
                 resp.raise_for_status()
                 raw = self._extract_response_text(resp.json())
-                if not raw:
+                if not raw or not _is_valid_json_object_text(raw):
                     if idx < len(payloads) - 1:
                         continue
                     return self._portfolio_fallback(
@@ -481,7 +496,6 @@ class AIAdvisorService:
                 }
             except requests.Timeout:
                 if idx == len(payloads) - 1:
-                    self._disabled_until = time.time() + float(self.failure_cooldown_s)
                     return self._portfolio_fallback(
                         entry_price=entry_price,
                         current_price=current_price,
@@ -489,13 +503,30 @@ class AIAdvisorService:
                         reason="provider_error",
                     )
                 continue
-            except Exception:  # noqa: BLE001
+            except requests.HTTPError as exc:
+                status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                if isinstance(status_code, int) and status_code >= 500:
+                    if idx == len(payloads) - 1:
+                        return self._portfolio_fallback(
+                            entry_price=entry_price,
+                            current_price=current_price,
+                            signal_score=score,
+                            reason="provider_error",
+                        )
+                    continue
                 self._disabled_until = time.time() + float(self.failure_cooldown_s)
                 return self._portfolio_fallback(
                     entry_price=entry_price,
                     current_price=current_price,
                     signal_score=score,
                     reason="provider_error",
+                )
+            except Exception:  # noqa: BLE001
+                return self._portfolio_fallback(
+                    entry_price=entry_price,
+                    current_price=current_price,
+                    signal_score=score,
+                    reason="empty_or_unparseable_provider_response",
                 )
 
         return self._portfolio_fallback(
@@ -581,7 +612,18 @@ class AIAdvisorService:
             }
             self._cache_set(cache_key, result)
             return result
-        except Exception as exc:  # noqa: BLE001
+        except (requests.Timeout, TimeoutError) as exc:
             self._disabled_until = time.time() + float(self.failure_cooldown_s)
             logging.warning("AI advisor unavailable, using fallback: %s", exc)
             return self._fallback(recommendation, rationale, reason="provider_error")
+        except requests.HTTPError as exc:
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            if isinstance(status_code, int) and status_code >= 500:
+                logging.warning("AI advisor unavailable (transient provider error), using fallback: %s", exc)
+                return self._fallback(recommendation, rationale, reason="provider_error")
+            self._disabled_until = time.time() + float(self.failure_cooldown_s)
+            logging.warning("AI advisor unavailable, using fallback: %s", exc)
+            return self._fallback(recommendation, rationale, reason="provider_error")
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("AI advisor returned unparseable payload, using fallback: %s", exc)
+            return self._fallback(recommendation, rationale, reason="empty_or_unparseable_provider_response")

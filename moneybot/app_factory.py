@@ -796,7 +796,7 @@ def create_app() -> Flask:
                 else if(rec === 'BUY') action = 'This looks reasonable to buy';
                 else if(rec === 'SELL') action = 'This looks like a good time to trim or sell';
                 else if(rec === 'HOLD OFF FOR NOW') action = 'It is better to wait instead of buying right now';
-                return `${action}. Plain English: the system saw ${friendlyReason}. This is guidance only, not financial advice.`;
+                return `${action}. The system saw ${friendlyReason}. This is guidance only, not financial advice.`;
               }
 
               function explainAdviceInPlainEnglish(){
