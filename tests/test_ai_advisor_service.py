@@ -329,3 +329,61 @@ def test_openai_response_retries_once_after_timeout(monkeypatch):
     assert calls["n"] == 2
     assert out is not None
     assert '"narrative":"N"' in out
+
+
+def test_enhance_portfolio_position_downgrades_buy_when_recovery_is_weak(monkeypatch):
+    svc = AIAdvisorService(enabled=True, provider="openai", api_key="x-test")
+
+    class StubResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "output_text": '{"advice":"BUY","advice_reason":"Buy dip","risk_notes":["r1","r2"],"next_checks":["c1","c2"]}'
+            }
+
+    monkeypatch.setattr("moneybot.services.ai_advisor.requests.post", lambda *args, **kwargs: StubResp())
+    out = svc.enhance_portfolio_position(
+        symbol="AAPL",
+        entry_price=200.0,
+        current_price=170.0,
+        shares=1.0,
+        signal_data={
+            "score": 1.5,
+            "technical": {"rsi": 41},
+            "sentiment": {"score": -0.5},
+        },
+    )
+
+    assert out["mode"] == "ai_enhanced"
+    assert out["advice"] == "HOLD"
+
+
+def test_enhance_portfolio_position_upgrades_hold_to_sell_on_overextended_peak(monkeypatch):
+    svc = AIAdvisorService(enabled=True, provider="openai", api_key="x-test")
+
+    class StubResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "output_text": '{"advice":"HOLD","advice_reason":"Hold for now","risk_notes":["r1","r2"],"next_checks":["c1","c2"]}'
+            }
+
+    monkeypatch.setattr("moneybot.services.ai_advisor.requests.post", lambda *args, **kwargs: StubResp())
+    out = svc.enhance_portfolio_position(
+        symbol="AAPL",
+        entry_price=100.0,
+        current_price=118.0,
+        shares=1.0,
+        signal_data={
+            "score": 6.0,
+            "technical": {"rsi": 76},
+            "sentiment": {"score": 0.2},
+        },
+    )
+
+    assert out["mode"] == "ai_enhanced"
+    assert out["advice"] == "SELL"

@@ -149,6 +149,7 @@ def create_app() -> Flask:
                         <input id="quickSymbol" placeholder="Ticker (e.g. AAPL)" style="padding:10px 12px;border:1px solid #166534;border-radius:10px;min-width:210px;background:#000;color:#f7fee7"/>
                         <button id="quickAskBtn" onclick="quickAsk()" style="padding:10px 16px;border:none;background:#16a34a;color:#f0fdf4;border-radius:10px;font-weight:700;font-size:1.08rem">Analyze</button>
                       </div>
+                      <div id="quickOut" style="margin-top:10px;color:#bbf7d0">Type a ticker to get an instant STRONG BUY / BUY / HOLD OFF FOR NOW call.</div>
                       <div id="quickLoading" style="display:none;align-items:center;gap:8px;margin-top:10px;color:#86efac;font-weight:600">
                         <span style="display:inline-block;width:14px;height:14px;border:2px solid #86efac;border-top-color:#22c55e;border-radius:9999px;animation:spin .7s linear infinite"></span>
                         Analyzing signal...
@@ -159,7 +160,6 @@ def create_app() -> Flask:
                       <span style="color:#86efac">Advice will appear here after you analyze a ticker.</span>
                     </div>
                   </div>
-                  <div id="quickOut" style="margin-top:10px;color:#bbf7d0">Type a ticker to get an instant STRONG BUY / BUY / HOLD OFF FOR NOW call.</div>
                 </section>
 
                 <section style="margin-bottom:18px">
