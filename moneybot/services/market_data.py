@@ -464,8 +464,8 @@ class MarketDataService:
             enriched.append(merged)
 
         qualified = [item for item in enriched if item["qualified"]]
-        pool = qualified if len(qualified) >= 10 else sorted(enriched, key=lambda x: x["score"], reverse=True)
-        selected = sorted(pool, key=lambda x: (x["score"], float(x.get("change_percent") or 0.0)), reverse=True)[:10]
+        pool = qualified if len(qualified) >= 5 else sorted(enriched, key=lambda x: x["score"], reverse=True)
+        selected = sorted(pool, key=lambda x: (x["score"], float(x.get("change_percent") or 0.0)), reverse=True)[:5]
         for item in selected:
             item.pop("qualified", None)
         return selected
