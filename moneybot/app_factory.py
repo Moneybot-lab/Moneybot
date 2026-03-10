@@ -143,13 +143,21 @@ def create_app() -> Flask:
 
                 <section style="background:#000;color:#d1fae5;border-radius:14px;padding:16px;margin-bottom:18px;box-shadow:0 10px 24px rgba(2,6,23,.18)">
                   <h3 style="margin:0 0 10px 0;color:#f0fdf4">Quick Ask · What should I do now?</h3>
-                  <div style="display:flex;gap:8px;flex-wrap:wrap">
-                    <input id="quickSymbol" placeholder="Ticker (e.g. AAPL)" style="padding:10px 12px;border:1px solid #166534;border-radius:10px;min-width:210px;background:#000;color:#f7fee7"/>
-                    <button id="quickAskBtn" onclick="quickAsk()" style="padding:10px 16px;border:none;background:#16a34a;color:#f0fdf4;border-radius:10px;font-weight:700;font-size:1.08rem">Analyze</button>
-                  </div>
-                  <div id="quickLoading" style="display:none;align-items:center;gap:8px;margin-top:10px;color:#86efac;font-weight:600">
-                    <span style="display:inline-block;width:14px;height:14px;border:2px solid #86efac;border-top-color:#22c55e;border-radius:9999px;animation:spin .7s linear infinite"></span>
-                    Analyzing signal...
+                  <div style="display:grid;grid-template-columns:minmax(300px,430px) minmax(300px,1fr);gap:12px;align-items:start">
+                    <div>
+                      <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <input id="quickSymbol" placeholder="Ticker (e.g. AAPL)" style="padding:10px 12px;border:1px solid #166534;border-radius:10px;min-width:210px;background:#000;color:#f7fee7"/>
+                        <button id="quickAskBtn" onclick="quickAsk()" style="padding:10px 16px;border:none;background:#16a34a;color:#f0fdf4;border-radius:10px;font-weight:700;font-size:1.08rem">Analyze</button>
+                      </div>
+                      <div id="quickLoading" style="display:none;align-items:center;gap:8px;margin-top:10px;color:#86efac;font-weight:600">
+                        <span style="display:inline-block;width:14px;height:14px;border:2px solid #86efac;border-top-color:#22c55e;border-radius:9999px;animation:spin .7s linear infinite"></span>
+                        Analyzing signal...
+                      </div>
+                    </div>
+                    <div id="quickAdvice" style="min-height:72px;background:#052e16;border:1px solid #14532d;border-radius:10px;padding:10px 12px;color:#dcfce7">
+                      <strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong>
+                      <span style="color:#86efac">Advice will appear here after you analyze a ticker.</span>
+                    </div>
                   </div>
                   <div id="quickOut" style="margin-top:10px;color:#bbf7d0">Type a ticker to get an instant STRONG BUY / BUY / HOLD OFF FOR NOW call.</div>
                 </section>
@@ -210,6 +218,9 @@ def create_app() -> Flask:
                   };
 
                   function formatMoney(v){ return typeof v === 'number' ? '$' + v.toLocaleString(undefined,{maximumFractionDigits:2}) : 'n/a'; }
+                  function escapeHtml(value){
+                    return String(value || '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] || ch));
+                  }
                   function quickRecommendationBadge(recommendation){
                     const rec = String(recommendation || 'HOLD OFF FOR NOW').toUpperCase();
                     const color = rec === 'STRONG BUY' ? '#22c55e' : (rec === 'BUY' ? '#166534' : '#dc2626');
@@ -233,6 +244,7 @@ def create_app() -> Flask:
                     const inputEl = document.getElementById('quickSymbol');
                     const symbol = (inputEl.value || '').trim().toUpperCase();
                     const outEl = document.getElementById('quickOut');
+                    const adviceEl = document.getElementById('quickAdvice');
                     const loadingEl = document.getElementById('quickLoading');
                     const quickAskBtn = document.getElementById('quickAskBtn');
                     inputEl.blur();
@@ -243,16 +255,36 @@ def create_app() -> Flask:
                     quickAskBtn.disabled = true;
                     quickAskBtn.style.opacity = '.75';
                     quickAskBtn.style.cursor = 'wait';
+                    adviceEl.innerHTML = `<strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong><span style="color:#86efac">Analyzing ${escapeHtml(symbol)}...</span>`;
 
                     try {
                       const res = await fetch('/api/quick-ask?symbol=' + encodeURIComponent(symbol));
                       const payload = await res.json();
-                      if(!res.ok){ outEl.textContent = payload.error || 'Unable to analyze this ticker.'; return; }
+                      if(!res.ok){
+                        outEl.textContent = payload.error || 'Unable to analyze this ticker.';
+                        adviceEl.innerHTML = `<strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong><span style="color:#fca5a5">Unable to load assistant notes right now.</span>`;
+                        return;
+                      }
                       const data = payload.data || {};
                       const recommendation = String(data.recommendation || 'HOLD OFF FOR NOW').toUpperCase();
                       outEl.innerHTML = `${quickRecommendationBadge(recommendation)} <span style="margin-left:8px">· ${formatMoney(data.current_price)} · ${data.rationale || 'Signal generated from current indicators.'}</span>`;
+
+                      const ai = data.ai || {};
+                      const narrative = ai.narrative || data.rationale || 'No AI narrative available.';
+                      const riskNotes = Array.isArray(ai.risk_notes) ? ai.risk_notes : [];
+                      const nextChecks = Array.isArray(ai.next_checks) ? ai.next_checks : [];
+                      const topRisk = riskNotes[0] || 'Keep strict risk controls and position sizing.';
+                      const topCheck = nextChecks[0] || 'Recheck momentum and volume before changing size.';
+                      adviceEl.innerHTML = `
+                        <strong style="display:block;color:#bbf7d0;margin-bottom:6px">${escapeHtml(symbol)} · ${escapeHtml((ai.mode || data.ai_mode || 'rule_based').replaceAll('_',' '))}</strong>
+                        <ul style="margin:0;padding-left:18px;display:grid;gap:4px;color:#dcfce7">
+                          <li>${escapeHtml(narrative)}</li>
+                          <li><strong>Risk:</strong> ${escapeHtml(topRisk)}</li>
+                          <li><strong>Next:</strong> ${escapeHtml(topCheck)}</li>
+                        </ul>`;
                     } catch (err) {
                       outEl.textContent = 'Unable to analyze this ticker.';
+                      adviceEl.innerHTML = `<strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong><span style="color:#fca5a5">Network issue while loading assistant notes.</span>`;
                     } finally {
                       loadingEl.style.display = 'none';
                       outEl.style.display = 'block';
