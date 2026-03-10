@@ -244,3 +244,26 @@ def test_openai_response_handles_output_json(monkeypatch):
 
     assert out is not None
     assert '"narrative": "N"' in out
+
+
+def test_openai_response_handles_output_parsed(monkeypatch):
+    svc = AIAdvisorService(enabled=True, provider="openai", api_key="x-test")
+
+    class StubResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "output_parsed": {
+                    "narrative": "N",
+                    "risk_notes": ["r1", "r2"],
+                    "next_checks": ["c1", "c2"],
+                }
+            }
+
+    monkeypatch.setattr("moneybot.services.ai_advisor.requests.post", lambda *args, **kwargs: StubResp())
+    out = svc._openai_response("prompt")
+
+    assert out is not None
+    assert '"narrative": "N"' in out
