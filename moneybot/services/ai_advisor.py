@@ -135,50 +135,7 @@ class AIAdvisorService:
 
         return recommendation == "HOLD OFF FOR NOW" and generic_rationale and weak_signal and missing_sentiment
 
-    def _openai_response(self, prompt: str) -> Optional[str]:
-        url = "https://api.openai.com/v1/responses"
-        schema = {
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["narrative", "risk_notes", "next_checks"],
-            "properties": {
-                "narrative": {"type": "string"},
-                "risk_notes": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "minItems": 2,
-                    "maxItems": 2,
-                },
-                "next_checks": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "minItems": 2,
-                    "maxItems": 2,
-                },
-            },
-        }
-        payload = {
-            "model": self.model,
-            "input": prompt,
-            "max_output_tokens": 220,
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": "moneybot_quick_ask",
-                    "schema": schema,
-                    "strict": True,
-                }
-            },
-        }
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout_s)
-        resp.raise_for_status()
-        data = resp.json()
-
+    def _extract_response_text(self, data: Dict[str, Any]) -> Optional[str]:
         text = _coerce_text_candidate(data.get("output_text"))
         if text:
             return text
@@ -212,6 +169,77 @@ class AIAdvisorService:
                 block_parsed = _coerce_structured_candidate(block.get("parsed"))
                 if block_parsed:
                     return block_parsed
+        return None
+
+    def _openai_response(self, prompt: str) -> Optional[str]:
+        url = "https://api.openai.com/v1/responses"
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["narrative", "risk_notes", "next_checks"],
+            "properties": {
+                "narrative": {"type": "string"},
+                "risk_notes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 2,
+                    "maxItems": 2,
+                },
+                "next_checks": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 2,
+                    "maxItems": 2,
+                },
+            },
+        }
+        base_payload = {
+            "model": self.model,
+            "input": prompt,
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "moneybot_quick_ask",
+                    "schema": schema,
+                    "strict": True,
+                }
+            },
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payloads = [
+            {
+                **base_payload,
+                "max_output_tokens": 220,
+                "reasoning": {"effort": "low"},
+            },
+            {
+                **base_payload,
+                "max_output_tokens": 420,
+                "reasoning": {"effort": "minimal"},
+            },
+        ]
+
+        for idx, payload in enumerate(payloads):
+            try:
+                resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout_s)
+                resp.raise_for_status()
+                data = resp.json()
+            except requests.Timeout:
+                if idx == len(payloads) - 1:
+                    raise
+                continue
+
+            parsed_text = self._extract_response_text(data)
+            if parsed_text:
+                return parsed_text
+
+            if idx == len(payloads) - 1:
+                return None
+
         return None
 
     def enhance_quick_decision(

@@ -1,3 +1,5 @@
+import requests
+
 from moneybot.services.ai_advisor import AIAdvisorService
 
 
@@ -267,3 +269,63 @@ def test_openai_response_handles_output_parsed(monkeypatch):
 
     assert out is not None
     assert '"narrative": "N"' in out
+
+
+def test_openai_response_retries_with_relaxed_reasoning_when_first_attempt_empty(monkeypatch):
+    svc = AIAdvisorService(enabled=True, provider="openai", api_key="x-test")
+
+    class StubResp:
+        def __init__(self, data):
+            self._data = data
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._data
+
+    responses = iter(
+        [
+            {"output": [{"type": "reasoning", "content": []}]},
+            {
+                "output_text": '{"narrative":"N","risk_notes":["r1","r2"],"next_checks":["c1","c2"]}'
+            },
+        ]
+    )
+
+    def fake_post(*_args, **_kwargs):
+        return StubResp(next(responses))
+
+    monkeypatch.setattr("moneybot.services.ai_advisor.requests.post", fake_post)
+    out = svc._openai_response("prompt")
+
+    assert out is not None
+    assert '"narrative":"N"' in out
+
+
+def test_openai_response_retries_once_after_timeout(monkeypatch):
+    svc = AIAdvisorService(enabled=True, provider="openai", api_key="x-test")
+
+    class StubResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "output_text": '{"narrative":"N","risk_notes":["r1","r2"],"next_checks":["c1","c2"]}'
+            }
+
+    calls = {"n": 0}
+
+    def fake_post(*_args, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise requests.Timeout("timed out")
+        return StubResp()
+
+    monkeypatch.setattr("moneybot.services.ai_advisor.requests.post", fake_post)
+    out = svc._openai_response("prompt")
+
+    assert calls["n"] == 2
+    assert out is not None
+    assert '"narrative":"N"' in out
