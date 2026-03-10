@@ -28,6 +28,12 @@ def _coerce_text_candidate(candidate: Any) -> Optional[str]:
 
     return None
 
+
+def _coerce_structured_candidate(candidate: Any) -> Optional[str]:
+    if isinstance(candidate, (dict, list)):
+        return json.dumps(candidate)
+    return None
+
 def _strip_code_fences(text: str) -> str:
     raw = (text or "").strip()
     if raw.startswith("```"):
@@ -181,6 +187,11 @@ class AIAdvisorService:
         if isinstance(output_json, (dict, list)):
             return json.dumps(output_json)
 
+        output_parsed = data.get("output_parsed")
+        structured = _coerce_structured_candidate(output_parsed)
+        if structured:
+            return structured
+
         # Fallback parser for Responses payload variants that do not set output_text.
         output = data.get("output") if isinstance(data.get("output"), list) else []
         for item in output:
@@ -198,6 +209,9 @@ class AIAdvisorService:
                 block_json = block.get("json")
                 if isinstance(block_json, (dict, list)):
                     return json.dumps(block_json)
+                block_parsed = _coerce_structured_candidate(block.get("parsed"))
+                if block_parsed:
+                    return block_parsed
         return None
 
     def enhance_quick_decision(
