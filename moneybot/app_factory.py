@@ -145,7 +145,11 @@ def create_app() -> Flask:
                   <h3 style="margin:0 0 10px 0;color:#f0fdf4">Quick Ask · What should I do now?</h3>
                   <div style="display:flex;gap:8px;flex-wrap:wrap">
                     <input id="quickSymbol" placeholder="Ticker (e.g. AAPL)" style="padding:10px 12px;border:1px solid #166534;border-radius:10px;min-width:210px;background:#000;color:#f7fee7"/>
-                    <button onclick="quickAsk()" style="padding:10px 16px;border:none;background:#16a34a;color:#f0fdf4;border-radius:10px;font-weight:700;font-size:1.08rem">Analyze</button>
+                    <button id="quickAskBtn" onclick="quickAsk()" style="padding:10px 16px;border:none;background:#16a34a;color:#f0fdf4;border-radius:10px;font-weight:700;font-size:1.08rem">Analyze</button>
+                  </div>
+                  <div id="quickLoading" style="display:none;align-items:center;gap:8px;margin-top:10px;color:#86efac;font-weight:600">
+                    <span style="display:inline-block;width:14px;height:14px;border:2px solid #86efac;border-top-color:#22c55e;border-radius:9999px;animation:spin .7s linear infinite"></span>
+                    Analyzing signal...
                   </div>
                   <div id="quickOut" style="margin-top:10px;color:#bbf7d0">Type a ticker to get an instant STRONG BUY / BUY / HOLD OFF FOR NOW call.</div>
                 </section>
@@ -229,14 +233,33 @@ def create_app() -> Flask:
                     const inputEl = document.getElementById('quickSymbol');
                     const symbol = (inputEl.value || '').trim().toUpperCase();
                     const outEl = document.getElementById('quickOut');
+                    const loadingEl = document.getElementById('quickLoading');
+                    const quickAskBtn = document.getElementById('quickAskBtn');
                     inputEl.blur();
                     if(!symbol){ outEl.textContent='Please enter a ticker symbol.'; return; }
-                    const res = await fetch('/api/quick-ask?symbol=' + encodeURIComponent(symbol));
-                    const payload = await res.json();
-                    if(!res.ok){ outEl.textContent = payload.error || 'Unable to analyze this ticker.'; return; }
-                    const data = payload.data || {};
-                    const recommendation = String(data.recommendation || 'HOLD OFF FOR NOW').toUpperCase();
-                    outEl.innerHTML = `${quickRecommendationBadge(recommendation)} <span style="margin-left:8px">· ${formatMoney(data.current_price)} · ${data.rationale || 'Signal generated from current indicators.'}</span>`;
+
+                    loadingEl.style.display = 'flex';
+                    outEl.style.display = 'none';
+                    quickAskBtn.disabled = true;
+                    quickAskBtn.style.opacity = '.75';
+                    quickAskBtn.style.cursor = 'wait';
+
+                    try {
+                      const res = await fetch('/api/quick-ask?symbol=' + encodeURIComponent(symbol));
+                      const payload = await res.json();
+                      if(!res.ok){ outEl.textContent = payload.error || 'Unable to analyze this ticker.'; return; }
+                      const data = payload.data || {};
+                      const recommendation = String(data.recommendation || 'HOLD OFF FOR NOW').toUpperCase();
+                      outEl.innerHTML = `${quickRecommendationBadge(recommendation)} <span style="margin-left:8px">· ${formatMoney(data.current_price)} · ${data.rationale || 'Signal generated from current indicators.'}</span>`;
+                    } catch (err) {
+                      outEl.textContent = 'Unable to analyze this ticker.';
+                    } finally {
+                      loadingEl.style.display = 'none';
+                      outEl.style.display = 'block';
+                      quickAskBtn.disabled = false;
+                      quickAskBtn.style.opacity = '1';
+                      quickAskBtn.style.cursor = 'pointer';
+                    }
                   }
 
                   function tickerButton(symbol){
