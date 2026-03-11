@@ -612,7 +612,12 @@ def create_app() -> Flask:
                     <h3 id="adviceTitle" style="margin:0">Advice Reasoning</h3>
                     <button onclick="closeAdviceModal()" style="border:none;background:#d1fae5;border-radius:8px;padding:6px 10px">Close</button>
                   </div>
-                  <p id="adviceReason" style="color:#166534;margin-top:10px">No reasoning available.</p>
+                  <div id="adviceReason" style="color:#dcfce7;margin-top:10px;background:#14532d;border:1px solid #166534;border-radius:10px;padding:10px">
+                    <strong style="display:block;color:#bbf7d0;margin-bottom:6px">AI key points</strong>
+                    <ul style="margin:0;padding-left:18px;display:grid;gap:4px">
+                      <li style="color:#dcfce7">No reasoning available.</li>
+                    </ul>
+                  </div>
                   <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                     <button id="plainEnglishBtn" onclick="explainAdviceInPlainEnglish()" style="border:none;background:#16a34a;color:#f0fdf4;padding:7px 10px;border-radius:8px;font-weight:700;cursor:pointer">Explain this recommendation in plain English</button>
                     <span id="plainEnglishLoading" style="display:none;color:#3f6212;font-size:13px">Explaining...</span>
@@ -685,6 +690,9 @@ def create_app() -> Flask:
               function adviceButton(item, idx){
                 return `<button onclick="showAdvice(${idx})" title="Click to see why this advice was generated" style="border:none;background:none;padding:0;cursor:pointer">${adviceBadge(item.advice)}</button>`;
               }
+              function escapeHtml(value){
+                return String(value || '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] || ch));
+              }
               function openAdviceModal(){ document.getElementById('adviceModal').style.display='flex'; }
               function closeAdviceModal(){ document.getElementById('adviceModal').style.display='none'; }
               async function showAdvice(idx){
@@ -692,9 +700,21 @@ def create_app() -> Flask:
                 const symbol = item.symbol || '';
                 const advice = String(item.advice || 'HOLD').toUpperCase();
                 const reason = item.advice_reason || 'Rule-based recommendation from technical momentum and sentiment checks.';
+                const aiPortfolio = (item && typeof item.ai_portfolio === 'object' && item.ai_portfolio) ? item.ai_portfolio : {};
+                const mode = String(aiPortfolio.mode || 'rule_based').replaceAll('_', ' ');
+                const riskNotes = Array.isArray(aiPortfolio.risk_notes) ? aiPortfolio.risk_notes : [];
+                const nextChecks = Array.isArray(aiPortfolio.next_checks) ? aiPortfolio.next_checks : [];
+                const topRisk = riskNotes[0] || 'Keep strict risk controls and position sizing.';
+                const topCheck = nextChecks[0] || 'Recheck trend and sentiment before changing your position size.';
                 currentAdviceContext = { symbol, advice, reason };
                 document.getElementById('adviceTitle').textContent = `${symbol} · ${advice} rationale`;
-                document.getElementById('adviceReason').textContent = `Why this advice was given: ${reason}`;
+                document.getElementById('adviceReason').innerHTML = `
+                  <strong style="display:block;color:#bbf7d0;margin-bottom:6px">${escapeHtml(symbol)} · ${escapeHtml(mode)}</strong>
+                  <ul style="margin:0;padding-left:18px;display:grid;gap:4px;color:#dcfce7">
+                    <li>${escapeHtml(reason)}</li>
+                    <li><strong>Risk:</strong> ${escapeHtml(topRisk)}</li>
+                    <li><strong>Next:</strong> ${escapeHtml(topCheck)}</li>
+                  </ul>`;
                 const plainEnglishEl = document.getElementById('plainEnglishExplanation');
                 plainEnglishEl.style.display = 'block';
                 plainEnglishEl.textContent = buildPlainEnglishExplanation(advice, reason);
