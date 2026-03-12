@@ -243,6 +243,7 @@ def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> 
         "change_percent": quote_data.get("change_percent"),
         "quote_source": quote_data.get("quote_source"),
         "quote_diagnostics": quote_data.get("diagnostics"),
+        "decision_source": "rule_based",
     }
 
 
@@ -399,6 +400,7 @@ def user_watchlist():
 
     svc = current_app.extensions.get("market_data_service")
     ai_svc = current_app.extensions.get("ai_advisor_service")
+    deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
     enriched_items: list[Dict[str, Any]] = []
     for item in base_items:
         signal = {}
@@ -469,6 +471,26 @@ def user_watchlist():
         elif isinstance(rationale, str) and rationale.strip():
             advice_reason = rationale.strip()
 
+        deterministic_portfolio = None
+        if deterministic_svc is not None:
+            try:
+                deterministic_portfolio = deterministic_svc.predict_portfolio_position(
+                    symbol=item["symbol"],
+                    entry_price=entry_price if isinstance(entry_price, (int, float)) else None,
+                    current_price=current_price if isinstance(current_price, (int, float)) else None,
+                    shares=shares_value,
+                    signal_data=signal,
+                    quote_data=quote,
+                )
+                deterministic_advice = str((deterministic_portfolio or {}).get("advice") or "").upper()
+                if deterministic_advice in {"BUY", "HOLD", "SELL"}:
+                    advice = deterministic_advice
+                deterministic_reason = str((deterministic_portfolio or {}).get("advice_reason") or "").strip()
+                if deterministic_reason:
+                    advice_reason = deterministic_reason
+            except Exception:  # noqa: BLE001
+                deterministic_portfolio = None
+
         ai_portfolio = None
         if ai_svc is not None:
             try:
@@ -500,6 +522,7 @@ def user_watchlist():
                 "performance_amount": round(performance_amount, 2) if performance_amount is not None else None,
                 "advice": advice,
                 "advice_reason": advice_reason,
+                "deterministic_portfolio": deterministic_portfolio,
                 "ai_portfolio": ai_portfolio,
                 "history30": history30,
                 "quote_source": quote.get("quote_source"),
@@ -763,10 +786,15 @@ def quick_ask():
 
     svc = current_app.extensions["market_data_service"]
     ai_svc = current_app.extensions.get("ai_advisor_service")
+    deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
 
     signal_data = svc.get_signal(symbol)
     quote_data = signal_data.get("quote") or svc.get_quote(symbol)
-    decision = _quick_decision(signal_data, quote_data)
+    decision = None
+    if deterministic_svc is not None:
+        decision = deterministic_svc.predict_quick_decision(signal_data=signal_data, quote_data=quote_data)
+    if decision is None:
+        decision = _quick_decision(signal_data, quote_data)
 
     ai_payload = None
     if ai_svc is not None:
