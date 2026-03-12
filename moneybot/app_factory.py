@@ -99,6 +99,7 @@ def create_app() -> Flask:
         AI_RESPONSE_CACHE_TTL_SECONDS=int(os.environ.get("AI_RESPONSE_CACHE_TTL_SECONDS", "300")),
         DETERMINISTIC_QUICK_ENABLED=(os.environ.get("DETERMINISTIC_QUICK_ENABLED", "true").lower() == "true"),
         DETERMINISTIC_MODEL_PATH=os.environ.get("DETERMINISTIC_MODEL_PATH", "data/day1_baseline_model.json"),
+        DETERMINISTIC_MOMENTUM_ENABLED=(os.environ.get("DETERMINISTIC_MOMENTUM_ENABLED", "true").lower() == "true"),
     )
 
     app.extensions["ai_advisor_service"] = AIAdvisorService(
@@ -124,7 +125,10 @@ def create_app() -> Flask:
     from . import models  # noqa: F401
 
     app.register_blueprint(api_bp)
-    app.extensions["market_data_service"] = MarketDataService()
+    app.extensions["market_data_service"] = MarketDataService(
+        deterministic_quick_advisor=app.extensions["deterministic_quick_advisor"],
+        deterministic_momentum_enabled=app.config["DETERMINISTIC_MOMENTUM_ENABLED"],
+    )
 
     with app.app_context():
         db.create_all()

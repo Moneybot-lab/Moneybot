@@ -31,6 +31,19 @@ What it does:
 - Model artifact format is simple and can be loaded in API services.
 - This creates the foundation for Day-2+ integration into quick ask, hot momentum, and portfolio endpoints.
 
+## Day-3 usage (hot momentum ranking)
+
+The backend can now use this same artifact to rank `/api/hot-momentum-buys`.
+
+Optional env vars:
+
+```bash
+DETERMINISTIC_MOMENTUM_ENABLED=true
+DETERMINISTIC_MODEL_PATH=data/day1_baseline_model.json
+```
+
+If model loading fails, hot momentum automatically falls back to existing rule-based ranking.
+
 
 ### Troubleshooting
 

@@ -88,3 +88,15 @@ def test_create_app_reads_deterministic_quick_settings(monkeypatch):
     assert app.config["DETERMINISTIC_MODEL_PATH"] == "data/custom_day1.json"
     assert svc.enabled is False
     assert svc.artifact_path == "data/custom_day1.json"
+
+
+def test_create_app_reads_deterministic_momentum_setting(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("DETERMINISTIC_MOMENTUM_ENABLED", "false")
+
+    app = create_app()
+    svc = app.extensions["market_data_service"]
+
+    assert app.config["DETERMINISTIC_MOMENTUM_ENABLED"] is False
+    assert svc.deterministic_momentum_enabled is False
