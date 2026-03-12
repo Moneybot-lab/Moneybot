@@ -5,7 +5,7 @@ This Day-1 foundation adds deterministic data + model tooling so Moneybot can mo
 ## 1) Build a training snapshot
 
 ```bash
-python scripts/day1_generate_training_data.py --output data/day1_training_snapshot.csv
+python3 scripts/day1_generate_training_data.py --output data/day1_training_snapshot.csv
 ```
 
 What it does:
@@ -16,7 +16,7 @@ What it does:
 ## 2) Train deterministic baseline model
 
 ```bash
-python scripts/day1_train_baseline_model.py --input data/day1_training_snapshot.csv --output-model data/day1_baseline_model.json
+python3 scripts/day1_train_baseline_model.py --input data/day1_training_snapshot.csv --output-model data/day1_baseline_model.json
 ```
 
 What it does:
@@ -30,3 +30,9 @@ What it does:
 - Deterministic behavior means reproducible outputs for the same data snapshot.
 - Model artifact format is simple and can be loaded in API services.
 - This creates the foundation for Day-2+ integration into quick ask, hot momentum, and portfolio endpoints.
+
+
+### Troubleshooting
+
+- If your shell reports `command not found: python`, use `python3` as shown above.
+- If you run scripts directly and see `ModuleNotFoundError: No module named moneybot`, ensure you are executing from the repository root (`Moneybot/`).
