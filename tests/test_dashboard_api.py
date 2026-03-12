@@ -46,6 +46,20 @@ class StubDeterministicQuickAdvisor:
             "imputed_features": [],
         }
 
+    def predict_portfolio_position(self, *, symbol, entry_price, current_price, shares, signal_data, quote_data):
+        return {
+            "mode": "deterministic_model",
+            "symbol": symbol,
+            "advice": "BUY",
+            "advice_reason": f"Deterministic portfolio signal for {symbol}.",
+            "decision_source": "deterministic_model",
+            "model_version": "day1-logreg-v1",
+            "probability_up": 0.71,
+            "confidence": 71.0,
+            "position_shares": float(shares),
+            "pnl_percent": -7.2,
+        }
+
 class StubMarketService:
     def get_market_indices(self):
         return [{"name": "Dow Jones", "symbol": "^DJI", "price": 39000.0, "change_percent": 0.4, "series": [1, 2, 3]}]
@@ -161,6 +175,7 @@ def test_quick_ask_uses_ai_extension_when_present():
 def test_quick_ask_uses_deterministic_model_extension_when_present():
     client = _client()
     client.application.extensions["deterministic_quick_advisor"] = StubDeterministicQuickAdvisor()
+    client.application.extensions["ai_advisor_service"] = None
 
     res = client.get("/api/quick-ask?symbol=AAPL")
     assert res.status_code == 200
@@ -389,3 +404,21 @@ def test_user_watchlist_uses_ai_portfolio_advice_when_available():
     assert "buy-in" in enriched["advice_reason"].lower()
     assert enriched["ai_portfolio"]["mode"] == "ai_enhanced"
     assert enriched["ai_portfolio"]["provider"] == "stub"
+
+
+def test_user_watchlist_includes_deterministic_portfolio_advice_when_available():
+    client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = StubDeterministicQuickAdvisor()
+    client.application.extensions["ai_advisor_service"] = None
+
+    signup = client.post("/api/auth/signup", json={"email": "portfolio-det@b.com", "password": "pw", "password_confirmation": "pw"})
+    assert signup.status_code == 201
+    add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 1})
+    assert add.status_code == 201
+
+    res = client.get("/api/user-watchlist")
+    assert res.status_code == 200
+    enriched = res.get_json()["enriched_items"][0]
+    assert enriched["advice"] == "BUY"
+    assert enriched["deterministic_portfolio"]["mode"] == "deterministic_model"
+    assert enriched["deterministic_portfolio"]["decision_source"] == "deterministic_model"

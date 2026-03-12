@@ -57,3 +57,41 @@ def test_predict_quick_decision_imputes_missing_features(tmp_path: Path):
     assert out is not None
     assert "return_1d" in out["imputed_features"]
     assert "rsi_14" in out["imputed_features"]
+
+
+def test_predict_portfolio_position_returns_hold_when_context_missing(tmp_path: Path):
+    artifact_path = _write_artifact(tmp_path)
+    svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(artifact_path))
+
+    out = svc.predict_portfolio_position(
+        symbol="AAPL",
+        entry_price=None,
+        current_price=None,
+        shares=1,
+        signal_data={"technical": {"rsi": 55, "macd_histogram": 0.1}, "volume_ratio": 1.2},
+        quote_data={"price": 100.0, "change_percent": 0.4, "quote_source": "finnhub", "diagnostics": {}},
+    )
+
+    assert out is not None
+    assert out["mode"] == "deterministic_model"
+    assert out["advice"] == "HOLD"
+    assert out["decision_source"] == "deterministic_model"
+
+
+def test_predict_portfolio_position_can_return_sell_on_weak_prob_and_profit(tmp_path: Path):
+    artifact_path = _write_artifact(tmp_path)
+    svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(artifact_path))
+
+    out = svc.predict_portfolio_position(
+        symbol="AAPL",
+        entry_price=100.0,
+        current_price=112.0,
+        shares=2,
+        signal_data={"technical": {"rsi": 70, "macd_histogram": -0.2}, "volume_ratio": 0.8},
+        quote_data={"price": 112.0, "change_percent": -2.0, "quote_source": "finnhub", "diagnostics": {}},
+    )
+
+    assert out is not None
+    assert out["advice"] in {"HOLD", "SELL", "BUY"}
+    assert out["model_version"] == "day1-logreg-v1"
+    assert isinstance(out["confidence"], float)

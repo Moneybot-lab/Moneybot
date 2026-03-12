@@ -44,6 +44,14 @@ DETERMINISTIC_MODEL_PATH=data/day1_baseline_model.json
 
 If model loading fails, hot momentum automatically falls back to existing rule-based ranking.
 
+## Day-4 usage (portfolio/watchlist advice)
+
+`/api/user-watchlist` now attempts deterministic portfolio advice before AI narrative enhancement.
+
+- deterministic output is exposed in `deterministic_portfolio`
+- final `advice` may still be overridden by AI advisor when AI is enabled
+- if deterministic model is unavailable, watchlist advice safely falls back to rule-based logic
+
 
 ### Troubleshooting
 

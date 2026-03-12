@@ -114,3 +114,50 @@ class DeterministicQuickAdvisor:
             "imputed_features": imputed,
         }
 
+    def predict_portfolio_position(
+        self,
+        *,
+        symbol: str,
+        entry_price: float | None,
+        current_price: float | None,
+        shares: float,
+        signal_data: Dict[str, Any],
+        quote_data: Dict[str, Any],
+    ) -> Dict[str, Any] | None:
+        quick = self.predict_quick_decision(signal_data=signal_data, quote_data=quote_data)
+        if quick is None:
+            return None
+
+        prob_up = float(quick.get("probability_up") or 0.0)
+        confidence = float(quick.get("confidence") or 50.0)
+
+        pnl_percent = None
+        if isinstance(entry_price, (int, float)) and isinstance(current_price, (int, float)) and float(entry_price) > 0:
+            pnl_percent = ((float(current_price) - float(entry_price)) / float(entry_price)) * 100.0
+
+        advice = "HOLD"
+        if pnl_percent is not None:
+            if prob_up >= 0.62 and pnl_percent <= -4.0:
+                advice = "BUY"
+            elif prob_up <= 0.45 and pnl_percent >= 6.0:
+                advice = "SELL"
+
+        reason = (
+            f"Deterministic portfolio rule ({quick.get('model_version')}) using probability_up={prob_up:.2f}"
+            f" and pnl_percent={pnl_percent:.2f}."
+            if pnl_percent is not None
+            else f"Deterministic portfolio rule ({quick.get('model_version')}) holding due to missing entry/current price context."
+        )
+
+        return {
+            "mode": "deterministic_model",
+            "symbol": symbol,
+            "advice": advice,
+            "advice_reason": reason,
+            "decision_source": "deterministic_model",
+            "model_version": quick.get("model_version"),
+            "probability_up": round(prob_up, 4),
+            "confidence": confidence,
+            "position_shares": float(shares),
+            "pnl_percent": round(pnl_percent, 2) if pnl_percent is not None else None,
+        }
