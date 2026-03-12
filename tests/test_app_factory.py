@@ -73,3 +73,18 @@ def test_create_app_uses_new_default_ai_timeout(monkeypatch):
 
     assert app.config["AI_TIMEOUT_SECONDS"] == 6.0
     assert app.extensions["ai_advisor_service"].timeout_s == 6.0
+
+
+def test_create_app_reads_deterministic_quick_settings(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("DETERMINISTIC_QUICK_ENABLED", "false")
+    monkeypatch.setenv("DETERMINISTIC_MODEL_PATH", "data/custom_day1.json")
+
+    app = create_app()
+    svc = app.extensions["deterministic_quick_advisor"]
+
+    assert app.config["DETERMINISTIC_QUICK_ENABLED"] is False
+    assert app.config["DETERMINISTIC_MODEL_PATH"] == "data/custom_day1.json"
+    assert svc.enabled is False
+    assert svc.artifact_path == "data/custom_day1.json"

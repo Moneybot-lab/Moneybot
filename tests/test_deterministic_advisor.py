@@ -1,0 +1,59 @@
+from pathlib import Path
+
+from moneybot.services.deterministic_advisor import DeterministicQuickAdvisor
+from moneybot.services.deterministic_model import BaselineModelArtifact, save_artifact
+
+
+def _write_artifact(tmp_path: Path) -> Path:
+    artifact = BaselineModelArtifact(
+        version="day1-logreg-v1",
+        feature_columns=["return_1d", "return_5d", "rsi_14", "macd_hist", "vol_ratio_20d"],
+        means=[0.0, 0.0, 50.0, 0.0, 1.0],
+        stds=[1.0, 1.0, 10.0, 1.0, 1.0],
+        weights=[0.3, 0.2, -0.1, 0.5, 0.1],
+        bias=0.1,
+        decision_threshold=0.55,
+    )
+    out = tmp_path / "model.json"
+    save_artifact(artifact, out)
+    return out
+
+
+def test_predict_quick_decision_returns_none_when_artifact_missing(tmp_path: Path):
+    svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(tmp_path / "missing.json"))
+    out = svc.predict_quick_decision(signal_data={}, quote_data={})
+    assert out is None
+
+
+def test_predict_quick_decision_returns_structured_payload(tmp_path: Path):
+    artifact_path = _write_artifact(tmp_path)
+    svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(artifact_path))
+
+    signal_data = {
+        "technical": {"rsi": 45.0, "macd_histogram": 0.2},
+        "volume_ratio": 1.4,
+    }
+    quote_data = {"price": 101.2, "change_percent": 1.6, "quote_source": "finnhub", "diagnostics": {"provider": "finnhub"}}
+
+    out = svc.predict_quick_decision(signal_data=signal_data, quote_data=quote_data)
+
+    assert out is not None
+    assert out["recommendation"] in {"STRONG BUY", "BUY", "HOLD OFF FOR NOW"}
+    assert out["decision_source"] == "deterministic_model"
+    assert out["model_version"] == "day1-logreg-v1"
+    assert 0.0 <= out["probability_up"] <= 1.0
+    assert out["quote_source"] == "finnhub"
+
+
+def test_predict_quick_decision_imputes_missing_features(tmp_path: Path):
+    artifact_path = _write_artifact(tmp_path)
+    svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(artifact_path))
+
+    out = svc.predict_quick_decision(
+        signal_data={"technical": {}},
+        quote_data={"price": 99.0, "change_percent": None, "quote_source": "yfinance", "diagnostics": {}},
+    )
+
+    assert out is not None
+    assert "return_1d" in out["imputed_features"]
+    assert "rsi_14" in out["imputed_features"]
