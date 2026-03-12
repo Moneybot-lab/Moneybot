@@ -28,6 +28,24 @@ class StubAIAdvisorService:
             "model": "stub-fast",
         }
 
+
+class StubDeterministicQuickAdvisor:
+    def predict_quick_decision(self, *, signal_data, quote_data):
+        return {
+            "recommendation": "STRONG BUY",
+            "rationale": "Deterministic model says upside probability is high.",
+            "current_price": quote_data.get("price"),
+            "change_percent": quote_data.get("change_percent"),
+            "quote_source": quote_data.get("quote_source"),
+            "quote_diagnostics": quote_data.get("diagnostics"),
+            "decision_source": "deterministic_model",
+            "model_version": "day1-logreg-v1",
+            "probability_up": 0.78,
+            "decision_threshold": 0.55,
+            "confidence": 78.0,
+            "imputed_features": [],
+        }
+
 class StubMarketService:
     def get_market_indices(self):
         return [{"name": "Dow Jones", "symbol": "^DJI", "price": 39000.0, "change_percent": 0.4, "series": [1, 2, 3]}]
@@ -138,6 +156,19 @@ def test_quick_ask_uses_ai_extension_when_present():
     assert "reason" not in data["ai"]
     assert data["ai"]["provider"] == "stub"
     assert "TSLA" in data["ai"]["narrative"]
+
+
+def test_quick_ask_uses_deterministic_model_extension_when_present():
+    client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = StubDeterministicQuickAdvisor()
+
+    res = client.get("/api/quick-ask?symbol=AAPL")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["recommendation"] == "STRONG BUY"
+    assert data["decision_source"] == "deterministic_model"
+    assert data["model_version"] == "day1-logreg-v1"
+    assert data["confidence"] == 78.0
 
 
 def test_explain_recommendation_returns_plain_english_text():

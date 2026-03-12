@@ -9,6 +9,7 @@ from flask_cors import CORS
 from .api import api_bp
 from .extensions import db, migrate
 from .services.ai_advisor import AIAdvisorService
+from .services.deterministic_advisor import DeterministicQuickAdvisor
 from .services.market_data import MarketDataService
 
 
@@ -96,6 +97,8 @@ def create_app() -> Flask:
         AI_TIMEOUT_SECONDS=float(os.environ.get("AI_TIMEOUT_SECONDS", "6.0")),
         AI_FAILURE_COOLDOWN_SECONDS=int(os.environ.get("AI_FAILURE_COOLDOWN_SECONDS", "120")),
         AI_RESPONSE_CACHE_TTL_SECONDS=int(os.environ.get("AI_RESPONSE_CACHE_TTL_SECONDS", "300")),
+        DETERMINISTIC_QUICK_ENABLED=(os.environ.get("DETERMINISTIC_QUICK_ENABLED", "true").lower() == "true"),
+        DETERMINISTIC_MODEL_PATH=os.environ.get("DETERMINISTIC_MODEL_PATH", "data/day1_baseline_model.json"),
     )
 
     app.extensions["ai_advisor_service"] = AIAdvisorService(
@@ -106,6 +109,10 @@ def create_app() -> Flask:
         timeout_s=app.config["AI_TIMEOUT_SECONDS"],
         failure_cooldown_s=app.config["AI_FAILURE_COOLDOWN_SECONDS"],
         cache_ttl_s=app.config["AI_RESPONSE_CACHE_TTL_SECONDS"],
+    )
+    app.extensions["deterministic_quick_advisor"] = DeterministicQuickAdvisor(
+        enabled=app.config["DETERMINISTIC_QUICK_ENABLED"],
+        artifact_path=app.config["DETERMINISTIC_MODEL_PATH"],
     )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
