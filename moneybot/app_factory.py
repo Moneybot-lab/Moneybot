@@ -9,6 +9,7 @@ from flask_cors import CORS
 from .api import api_bp
 from .extensions import db, migrate
 from .services.ai_advisor import AIAdvisorService
+from .services.deterministic_advisor import DeterministicQuickAdvisor
 from .services.market_data import MarketDataService
 
 
@@ -96,6 +97,9 @@ def create_app() -> Flask:
         AI_TIMEOUT_SECONDS=float(os.environ.get("AI_TIMEOUT_SECONDS", "6.0")),
         AI_FAILURE_COOLDOWN_SECONDS=int(os.environ.get("AI_FAILURE_COOLDOWN_SECONDS", "120")),
         AI_RESPONSE_CACHE_TTL_SECONDS=int(os.environ.get("AI_RESPONSE_CACHE_TTL_SECONDS", "300")),
+        DETERMINISTIC_QUICK_ENABLED=(os.environ.get("DETERMINISTIC_QUICK_ENABLED", "true").lower() == "true"),
+        DETERMINISTIC_MODEL_PATH=os.environ.get("DETERMINISTIC_MODEL_PATH", "data/day1_baseline_model.json"),
+        DETERMINISTIC_MOMENTUM_ENABLED=(os.environ.get("DETERMINISTIC_MOMENTUM_ENABLED", "true").lower() == "true"),
     )
 
     app.extensions["ai_advisor_service"] = AIAdvisorService(
@@ -107,6 +111,10 @@ def create_app() -> Flask:
         failure_cooldown_s=app.config["AI_FAILURE_COOLDOWN_SECONDS"],
         cache_ttl_s=app.config["AI_RESPONSE_CACHE_TTL_SECONDS"],
     )
+    app.extensions["deterministic_quick_advisor"] = DeterministicQuickAdvisor(
+        enabled=app.config["DETERMINISTIC_QUICK_ENABLED"],
+        artifact_path=app.config["DETERMINISTIC_MODEL_PATH"],
+    )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -117,7 +125,10 @@ def create_app() -> Flask:
     from . import models  # noqa: F401
 
     app.register_blueprint(api_bp)
-    app.extensions["market_data_service"] = MarketDataService()
+    app.extensions["market_data_service"] = MarketDataService(
+        deterministic_quick_advisor=app.extensions["deterministic_quick_advisor"],
+        deterministic_momentum_enabled=app.config["DETERMINISTIC_MOMENTUM_ENABLED"],
+    )
 
     with app.app_context():
         db.create_all()

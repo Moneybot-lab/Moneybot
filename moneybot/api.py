@@ -243,6 +243,7 @@ def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> 
         "change_percent": quote_data.get("change_percent"),
         "quote_source": quote_data.get("quote_source"),
         "quote_diagnostics": quote_data.get("diagnostics"),
+        "decision_source": "rule_based",
     }
 
 
@@ -763,10 +764,15 @@ def quick_ask():
 
     svc = current_app.extensions["market_data_service"]
     ai_svc = current_app.extensions.get("ai_advisor_service")
+    deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
 
     signal_data = svc.get_signal(symbol)
     quote_data = signal_data.get("quote") or svc.get_quote(symbol)
-    decision = _quick_decision(signal_data, quote_data)
+    decision = None
+    if deterministic_svc is not None:
+        decision = deterministic_svc.predict_quick_decision(signal_data=signal_data, quote_data=quote_data)
+    if decision is None:
+        decision = _quick_decision(signal_data, quote_data)
 
     ai_payload = None
     if ai_svc is not None:
