@@ -23,8 +23,15 @@ class DeterministicQuickAdvisor:
             self._load_artifact()
 
     def _load_artifact(self) -> None:
+        candidate_paths = self._artifact_candidates(self.artifact_path)
         try:
-            self.artifact = load_artifact(self.artifact_path)
+            resolved = next((path for path in candidate_paths if path.exists()), None)
+            if resolved is None:
+                searched = ", ".join(str(path) for path in candidate_paths)
+                raise FileNotFoundError(f"artifact not found; searched: {searched}")
+
+            self.artifact = load_artifact(resolved)
+            self.artifact_path = str(resolved)
             self.load_error = None
         except Exception as exc:  # noqa: BLE001
             self.artifact = None
@@ -34,6 +41,25 @@ class DeterministicQuickAdvisor:
                 self.artifact_path,
                 exc,
             )
+
+    @staticmethod
+    def _artifact_candidates(configured_path: str) -> list[Path]:
+        raw = Path(configured_path)
+        if raw.is_absolute():
+            return [raw]
+
+        project_root = Path(__file__).resolve().parents[2]
+        candidates = [raw, project_root / raw]
+
+        deduped: list[Path] = []
+        seen: set[str] = set()
+        for path in candidates:
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(path)
+        return deduped
 
     @staticmethod
     def _num(value: Any) -> float | None:

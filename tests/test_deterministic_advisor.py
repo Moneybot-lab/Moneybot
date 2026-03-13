@@ -95,3 +95,10 @@ def test_predict_portfolio_position_can_return_sell_on_weak_prob_and_profit(tmp_
     assert out["advice"] in {"HOLD", "SELL", "BUY"}
     assert out["model_version"] == "day1-logreg-v1"
     assert isinstance(out["confidence"], float)
+
+
+def test_artifact_candidates_include_project_root_path_for_relative_config():
+    candidates = DeterministicQuickAdvisor._artifact_candidates("data/day1_baseline_model.json")
+
+    assert len(candidates) >= 2
+    assert any(path.exists() for path in candidates)

@@ -365,7 +365,15 @@ def create_app() -> Flask:
                   }
 
                   function renderMomentum(items){
-                    document.getElementById('momentum').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Source</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.score}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.decision_source || 'rule_based'}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.rationale}</td></tr>`).join('')}</tbody></table>`;
+                    const formatDecisionSource = (item) => {
+                      const source = item.decision_source || 'rule_based';
+                      const reason = item.decision_fallback_reason;
+                      if(source === 'rule_based' && reason){
+                        return `${source} (${reason.replaceAll('_',' ')})`;
+                      }
+                      return source;
+                    };
+                    document.getElementById('momentum').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Source</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.score}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatDecisionSource(item)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.rationale}</td></tr>`).join('')}</tbody></table>`;
                   }
 
                   function renderWells(items){
