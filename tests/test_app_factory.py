@@ -100,3 +100,16 @@ def test_create_app_reads_deterministic_momentum_setting(monkeypatch):
 
     assert app.config["DETERMINISTIC_MOMENTUM_ENABLED"] is False
     assert svc.deterministic_momentum_enabled is False
+
+
+def test_create_app_loads_default_deterministic_artifact(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.delenv("DETERMINISTIC_MODEL_PATH", raising=False)
+    monkeypatch.setenv("DETERMINISTIC_QUICK_ENABLED", "true")
+
+    app = create_app()
+    svc = app.extensions["deterministic_quick_advisor"]
+
+    assert svc.artifact is not None
+    assert svc.load_error is None
