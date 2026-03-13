@@ -157,7 +157,7 @@ def create_app() -> Flask:
                   <div style="display:grid;grid-template-columns:minmax(300px,430px) minmax(300px,1fr);gap:12px;align-items:start">
                     <div>
                       <div style="display:flex;gap:8px;flex-wrap:wrap">
-                        <input id="quickSymbol" placeholder="Ticker (e.g. AAPL)" style="padding:10px 12px;border:1px solid #166534;border-radius:10px;min-width:210px;background:#000;color:#f7fee7"/>
+                        <input id="quickSymbol" placeholder="Ticker (e.g. AAPL)" style="padding:10px 12px;border:1px solid #166534;border-radius:10px;min-width:210px;background:#000;color:#f7fee7;font-size:1.15rem;font-weight:700;letter-spacing:.01em"/>
                         <button id="quickAskBtn" onclick="quickAsk()" style="padding:10px 16px;border:none;background:#16a34a;color:#f0fdf4;border-radius:10px;font-weight:700;font-size:1.08rem">Analyze</button>
                       </div>
                       <div id="quickOut" style="margin-top:10px;color:#bbf7d0">Type a ticker to get an instant STRONG BUY / BUY / HOLD OFF FOR NOW call.</div>
@@ -187,9 +187,9 @@ def create_app() -> Flask:
 
                 <section style="background:#f0fdf4;border:1px solid #d1fae5;border-radius:12px;padding:16px">
                   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-                    <button class="tab-btn" data-tab="stable" onclick="switchTab('stable')" style="padding:8px 12px;border:1px solid #bbf7d0;background:#dcfce7;border-radius:8px">Stable Watchlist</button>
-                    <button class="tab-btn" data-tab="momentum" onclick="switchTab('momentum')" style="padding:8px 12px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px">Hot Momentum Buys</button>
-                    <button class="tab-btn" data-tab="wells" onclick="switchTab('wells')" style="padding:8px 12px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px">Whales of Wall Street</button>
+                    <button class="tab-btn" data-tab="stable" onclick="switchTab('stable')" style="padding:9px 14px;border:1px solid #bbf7d0;background:#dcfce7;border-radius:8px;font-size:1.06rem;font-weight:700">Stable Watchlist</button>
+                    <button class="tab-btn" data-tab="momentum" onclick="switchTab('momentum')" style="padding:9px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px;font-size:1.06rem;font-weight:700">Hot Momentum Buys</button>
+                    <button class="tab-btn" data-tab="wells" onclick="switchTab('wells')" style="padding:9px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px;font-size:1.06rem;font-weight:700">Whales of Wall Street</button>
                   </div>
                   <div id="tabLoading" style="display:none;align-items:center;gap:10px;margin-bottom:10px;color:#166534;font-weight:600">
                     <span style="display:inline-block;width:16px;height:16px;border:2px solid #86efac;border-top-color:#16a34a;border-radius:9999px;animation:spin .7s linear infinite"></span>
@@ -365,7 +365,7 @@ def create_app() -> Flask:
                   }
 
                   function renderMomentum(items){
-                    document.getElementById('momentum').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.score}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.rationale}</td></tr>`).join('')}</tbody></table>`;
+                    document.getElementById('momentum').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Source</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.score}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.decision_source || 'rule_based'}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.rationale}</td></tr>`).join('')}</tbody></table>`;
                   }
 
                   function renderWells(items){
