@@ -433,3 +433,94 @@ def test_get_quote_fallback_diagnostics_include_twelve_data_fields(monkeypatch):
 
     assert quote["diagnostics"]["twelve_data_attempted"] is False
     assert quote["diagnostics"]["twelve_data_error"] == "missing_api_key"
+
+
+def test_get_hot_momentum_buys_uses_deterministic_scores_when_enabled(monkeypatch):
+    class StubDeterministicAdvisor:
+        def predict_quick_decision(self, *, signal_data, quote_data):
+            symbol = signal_data["symbol"]
+            if symbol == "SOFI":
+                prob = 0.91
+            elif symbol == "PLUG":
+                prob = 0.86
+            elif symbol == "LCID":
+                prob = 0.61
+            else:
+                prob = 0.52
+            recommendation = "BUY" if prob >= 0.55 else "HOLD OFF FOR NOW"
+            return {
+                "decision_source": "deterministic_model",
+                "model_version": "day1-logreg-v1",
+                "probability_up": prob,
+                "confidence": round(max(prob, 1 - prob) * 100, 1),
+                "recommendation": recommendation,
+                "rationale": f"deterministic score for {symbol}",
+            }
+
+    svc = MarketDataService(
+        deterministic_quick_advisor=StubDeterministicAdvisor(),
+        deterministic_momentum_enabled=True,
+    )
+
+    def fake_quote(symbol):
+        return {
+            "symbol": symbol,
+            "price": 10.0,
+            "change_percent": 1.2,
+            "live_data_available": True,
+            "quote_source": "test",
+        }
+
+    def fake_signal(symbol):
+        return {
+            "symbol": symbol,
+            "action": "BUY",
+            "score": 8.0,
+            "technical": {"rsi": 48, "macd_histogram": 0.2},
+            "volume_ratio": 1.3,
+            "reasons": [f"{symbol} signal"],
+        }
+
+    monkeypatch.setattr(svc, "get_quote", fake_quote)
+    monkeypatch.setattr(svc, "get_signal", fake_signal)
+
+    out = svc.get_hot_momentum_buys()
+
+    assert len(out) == 5
+    assert out[0]["symbol"] == "SOFI"
+    assert out[0]["decision_source"] == "deterministic_model"
+    assert out[0]["model_version"] == "day1-logreg-v1"
+    assert out[0]["score"] == 9.1
+    assert out[0]["probability_up"] == 0.91
+
+
+def test_get_hot_momentum_buys_falls_back_when_deterministic_disabled(monkeypatch):
+    svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
+
+    def fake_quote(symbol):
+        return {
+            "symbol": symbol,
+            "price": 10.0,
+            "change_percent": 1.2,
+            "live_data_available": True,
+            "quote_source": "test",
+        }
+
+    def fake_signal(symbol):
+        return {
+            "symbol": symbol,
+            "action": "BUY",
+            "score": 8.2,
+            "technical": {"rsi": 48, "macd_histogram": 0.2},
+            "volume_ratio": 1.3,
+            "reasons": [f"{symbol} signal"],
+        }
+
+    monkeypatch.setattr(svc, "get_quote", fake_quote)
+    monkeypatch.setattr(svc, "get_signal", fake_signal)
+
+    out = svc.get_hot_momentum_buys()
+
+    assert len(out) == 5
+    assert out[0]["decision_source"] == "rule_based"
+    assert "model_version" not in out[0]
