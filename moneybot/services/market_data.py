@@ -395,6 +395,13 @@ class MarketDataService:
             return round(float(raw_score), 2)
         return round(float(default_score), 2)
 
+    @staticmethod
+    def _change_percent_sort_value(value: Any) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
     def _reason_from_signal(self, signal: Dict[str, Any], fallback: str) -> str:
         reasons = signal.get("reasons") or signal.get("rationale") or []
         if isinstance(reasons, list) and reasons:
@@ -436,7 +443,11 @@ class MarketDataService:
 
         qualified = [item for item in enriched if item["qualified"]]
         pool = qualified if len(qualified) >= 5 else sorted(enriched, key=lambda x: x["signal_score"], reverse=True)
-        selected = sorted(pool, key=lambda x: (x["signal_score"], float(x.get("change_percent") or 0.0)), reverse=True)[:5]
+        selected = sorted(
+            pool,
+            key=lambda x: (x["signal_score"], self._change_percent_sort_value(x.get("change_percent"))),
+            reverse=True,
+        )[:5]
         for item in selected:
             item.pop("qualified", None)
         return selected
@@ -471,6 +482,7 @@ class MarketDataService:
             merged["live_data_available"] = bool(quote.get("live_data_available"))
 
             deterministic_decision = None
+            deterministic_fallback_reason = None
             if self.deterministic_momentum_enabled and self.deterministic_quick_advisor is not None:
                 deterministic_decision = self.deterministic_quick_advisor.predict_quick_decision(
                     signal_data=signal,
@@ -491,13 +503,31 @@ class MarketDataService:
                 )
             else:
                 merged["decision_source"] = "rule_based"
+                if self.deterministic_momentum_enabled:
+                    advisor = self.deterministic_quick_advisor
+                    if advisor is None:
+                        deterministic_fallback_reason = "deterministic_not_configured"
+                    elif getattr(advisor, "enabled", True) is False:
+                        deterministic_fallback_reason = "deterministic_disabled"
+                    elif getattr(advisor, "artifact", object()) is None:
+                        deterministic_fallback_reason = "deterministic_artifact_unavailable"
+                    else:
+                        deterministic_fallback_reason = "deterministic_no_decision"
+                else:
+                    deterministic_fallback_reason = "deterministic_momentum_disabled"
+
+                merged["decision_fallback_reason"] = deterministic_fallback_reason
                 merged["qualified"] = bool(merged["live_data_available"] and merged["score"] >= 7.0 and self._is_buy_like(signal))
 
             enriched.append(merged)
 
         qualified = [item for item in enriched if item["qualified"]]
         pool = qualified if len(qualified) >= 5 else sorted(enriched, key=lambda x: x["score"], reverse=True)
-        selected = sorted(pool, key=lambda x: (x["score"], float(x.get("change_percent") or 0.0)), reverse=True)[:5]
+        selected = sorted(
+            pool,
+            key=lambda x: (x["score"], self._change_percent_sort_value(x.get("change_percent"))),
+            reverse=True,
+        )[:5]
         for item in selected:
             item.pop("qualified", None)
         return selected
