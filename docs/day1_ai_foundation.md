@@ -52,6 +52,23 @@ If model loading fails, hot momentum automatically falls back to existing rule-b
 - final `advice` may still be overridden by AI advisor when AI is enabled
 - if deterministic model is unavailable, watchlist advice safely falls back to rule-based logic
 
+## Day-5 usage (model health + decision logging)
+
+New endpoint:
+
+```bash
+GET /api/model-health
+```
+
+This reports deterministic model load status plus decision source counters.
+
+Optional env vars:
+
+```bash
+DECISION_LOGGING_ENABLED=true
+DECISION_LOG_PATH=data/decision_events.jsonl
+```
+
 
 ### Troubleshooting
 

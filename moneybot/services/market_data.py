@@ -482,7 +482,6 @@ class MarketDataService:
             merged["live_data_available"] = bool(quote.get("live_data_available"))
 
             deterministic_decision = None
-            deterministic_fallback_reason = None
             if self.deterministic_momentum_enabled and self.deterministic_quick_advisor is not None:
                 deterministic_decision = self.deterministic_quick_advisor.predict_quick_decision(
                     signal_data=signal,
@@ -503,20 +502,6 @@ class MarketDataService:
                 )
             else:
                 merged["decision_source"] = "rule_based"
-                if self.deterministic_momentum_enabled:
-                    advisor = self.deterministic_quick_advisor
-                    if advisor is None:
-                        deterministic_fallback_reason = "deterministic_not_configured"
-                    elif getattr(advisor, "enabled", True) is False:
-                        deterministic_fallback_reason = "deterministic_disabled"
-                    elif getattr(advisor, "artifact", object()) is None:
-                        deterministic_fallback_reason = "deterministic_artifact_unavailable"
-                    else:
-                        deterministic_fallback_reason = "deterministic_no_decision"
-                else:
-                    deterministic_fallback_reason = "deterministic_momentum_disabled"
-
-                merged["decision_fallback_reason"] = deterministic_fallback_reason
                 merged["qualified"] = bool(merged["live_data_available"] and merged["score"] >= 7.0 and self._is_buy_like(signal))
 
             enriched.append(merged)

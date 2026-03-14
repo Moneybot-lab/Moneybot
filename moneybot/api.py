@@ -401,6 +401,7 @@ def user_watchlist():
     svc = current_app.extensions.get("market_data_service")
     ai_svc = current_app.extensions.get("ai_advisor_service")
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
+    decision_logger = current_app.extensions.get("decision_logger")
     enriched_items: list[Dict[str, Any]] = []
     for item in base_items:
         signal = {}
@@ -529,6 +530,19 @@ def user_watchlist():
                 "quote_diagnostics": quote.get("diagnostics"),
             }
         )
+        if decision_logger is not None:
+            decision_logger.log(
+                endpoint="user_watchlist",
+                symbol=item.get("symbol"),
+                decision_source=(deterministic_portfolio or {}).get("decision_source")
+                or (ai_portfolio or {}).get("mode")
+                or "rule_based",
+                payload={
+                    "advice": advice,
+                    "model_version": (deterministic_portfolio or {}).get("model_version"),
+                    "confidence": (deterministic_portfolio or {}).get("confidence"),
+                },
+            )
 
     return jsonify({"items": base_items, "enriched_items": enriched_items, "request_id": g.request_id})
 
@@ -787,6 +801,7 @@ def quick_ask():
     svc = current_app.extensions["market_data_service"]
     ai_svc = current_app.extensions.get("ai_advisor_service")
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
+    decision_logger = current_app.extensions.get("decision_logger")
 
     signal_data = svc.get_signal(symbol)
     quote_data = signal_data.get("quote") or svc.get_quote(symbol)
@@ -806,6 +821,20 @@ def quick_ask():
         )
 
     ai_mode = (ai_payload or {}).get("mode")
+
+    if decision_logger is not None:
+        decision_logger.log(
+            endpoint="quick_ask",
+            symbol=symbol,
+            decision_source=decision.get("decision_source"),
+            payload={
+                "recommendation": decision.get("recommendation"),
+                "model_version": decision.get("model_version"),
+                "probability_up": decision.get("probability_up"),
+                "confidence": decision.get("confidence"),
+                "ai_mode": ai_mode,
+            },
+        )
 
     return jsonify(
         {
@@ -848,7 +877,43 @@ def stable_watchlist():
 @api_bp.get("/hot-momentum-buys")
 def hot_momentum_buys():
     svc = current_app.extensions["market_data_service"]
-    return jsonify({"items": svc.get_hot_momentum_buys(), "request_id": g.request_id})
+    decision_logger = current_app.extensions.get("decision_logger")
+    items = svc.get_hot_momentum_buys()
+    if decision_logger is not None:
+        for item in items:
+            decision_logger.log(
+                endpoint="hot_momentum_buys",
+                symbol=item.get("symbol"),
+                decision_source=item.get("decision_source") or "rule_based",
+                payload={
+                    "score": item.get("score"),
+                    "model_version": item.get("model_version"),
+                    "probability_up": item.get("probability_up"),
+                    "confidence": item.get("confidence"),
+                },
+            )
+    return jsonify({"items": items, "request_id": g.request_id})
+
+
+@api_bp.get("/model-health")
+def model_health():
+    deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
+    decision_logger = current_app.extensions.get("decision_logger")
+
+    return jsonify(
+        {
+            "data": {
+                "deterministic_quick_enabled": bool(current_app.config.get("DETERMINISTIC_QUICK_ENABLED")),
+                "deterministic_momentum_enabled": bool(current_app.config.get("DETERMINISTIC_MOMENTUM_ENABLED")),
+                "deterministic_model_path": current_app.config.get("DETERMINISTIC_MODEL_PATH"),
+                "model_loaded": bool(getattr(deterministic_svc, "artifact", None) is not None),
+                "model_version": getattr(getattr(deterministic_svc, "artifact", None), "version", None),
+                "model_load_error": getattr(deterministic_svc, "load_error", None),
+                "decision_logging": decision_logger.health() if decision_logger is not None else None,
+            },
+            "request_id": g.request_id,
+        }
+    )
 
 
 @api_bp.get("/wells-picks")

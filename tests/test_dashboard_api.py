@@ -186,6 +186,19 @@ def test_quick_ask_uses_deterministic_model_extension_when_present():
     assert data["confidence"] == 78.0
 
 
+def test_model_health_reports_deterministic_and_logging_status():
+    client = _client()
+
+    res = client.get("/api/model-health")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert "deterministic_quick_enabled" in data
+    assert "deterministic_momentum_enabled" in data
+    assert "model_loaded" in data
+    assert "decision_logging" in data
+    assert "source_counts" in data["decision_logging"]
+
+
 def test_explain_recommendation_returns_plain_english_text():
     client = _client()
     res = client.post(

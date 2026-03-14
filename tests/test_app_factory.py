@@ -102,14 +102,16 @@ def test_create_app_reads_deterministic_momentum_setting(monkeypatch):
     assert svc.deterministic_momentum_enabled is False
 
 
-def test_create_app_loads_default_deterministic_artifact(monkeypatch):
+def test_create_app_reads_decision_logging_settings(monkeypatch):
     monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
-    monkeypatch.delenv("DETERMINISTIC_MODEL_PATH", raising=False)
-    monkeypatch.setenv("DETERMINISTIC_QUICK_ENABLED", "true")
+    monkeypatch.setenv("DECISION_LOGGING_ENABLED", "false")
+    monkeypatch.setenv("DECISION_LOG_PATH", "data/custom_events.jsonl")
 
     app = create_app()
-    svc = app.extensions["deterministic_quick_advisor"]
+    logger = app.extensions["decision_logger"]
 
-    assert svc.artifact is not None
-    assert svc.load_error is None
+    assert app.config["DECISION_LOGGING_ENABLED"] is False
+    assert app.config["DECISION_LOG_PATH"] == "data/custom_events.jsonl"
+    assert logger.enabled is False
+    assert logger.output_path == "data/custom_events.jsonl"
