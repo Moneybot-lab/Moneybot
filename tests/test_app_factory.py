@@ -73,3 +73,45 @@ def test_create_app_uses_new_default_ai_timeout(monkeypatch):
 
     assert app.config["AI_TIMEOUT_SECONDS"] == 6.0
     assert app.extensions["ai_advisor_service"].timeout_s == 6.0
+
+
+def test_create_app_reads_deterministic_quick_settings(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("DETERMINISTIC_QUICK_ENABLED", "false")
+    monkeypatch.setenv("DETERMINISTIC_MODEL_PATH", "data/custom_day1.json")
+
+    app = create_app()
+    svc = app.extensions["deterministic_quick_advisor"]
+
+    assert app.config["DETERMINISTIC_QUICK_ENABLED"] is False
+    assert app.config["DETERMINISTIC_MODEL_PATH"] == "data/custom_day1.json"
+    assert svc.enabled is False
+    assert svc.artifact_path == "data/custom_day1.json"
+
+
+def test_create_app_reads_deterministic_momentum_setting(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("DETERMINISTIC_MOMENTUM_ENABLED", "false")
+
+    app = create_app()
+    svc = app.extensions["market_data_service"]
+
+    assert app.config["DETERMINISTIC_MOMENTUM_ENABLED"] is False
+    assert svc.deterministic_momentum_enabled is False
+
+
+def test_create_app_reads_decision_logging_settings(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("DECISION_LOGGING_ENABLED", "false")
+    monkeypatch.setenv("DECISION_LOG_PATH", "data/custom_events.jsonl")
+
+    app = create_app()
+    logger = app.extensions["decision_logger"]
+
+    assert app.config["DECISION_LOGGING_ENABLED"] is False
+    assert app.config["DECISION_LOG_PATH"] == "data/custom_events.jsonl"
+    assert logger.enabled is False
+    assert logger.output_path == "data/custom_events.jsonl"
