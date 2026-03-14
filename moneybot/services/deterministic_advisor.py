@@ -13,11 +13,29 @@ from .deterministic_model import BaselineModelArtifact, load_artifact, predict_p
 class DeterministicQuickAdvisor:
     """Serve quick-ask predictions from the Day-1 deterministic model artifact."""
 
-    def __init__(self, *, enabled: bool, artifact_path: str):
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        artifact_path: str,
+        quick_buy_threshold: float | None = None,
+        quick_strong_buy_threshold: float = 0.70,
+        portfolio_buy_prob_threshold: float = 0.62,
+        portfolio_sell_prob_threshold: float = 0.45,
+        portfolio_buy_dip_threshold_pct: float = -4.0,
+        portfolio_sell_profit_threshold_pct: float = 6.0,
+    ):
         self.enabled = bool(enabled)
         self.artifact_path = artifact_path
         self.artifact: BaselineModelArtifact | None = None
         self.load_error: str | None = None
+
+        self.quick_buy_threshold = quick_buy_threshold
+        self.quick_strong_buy_threshold = float(quick_strong_buy_threshold)
+        self.portfolio_buy_prob_threshold = float(portfolio_buy_prob_threshold)
+        self.portfolio_sell_prob_threshold = float(portfolio_sell_prob_threshold)
+        self.portfolio_buy_dip_threshold_pct = float(portfolio_buy_dip_threshold_pct)
+        self.portfolio_sell_profit_threshold_pct = float(portfolio_sell_profit_threshold_pct)
 
         if self.enabled:
             self._load_artifact()
@@ -82,9 +100,10 @@ class DeterministicQuickAdvisor:
 
         row, imputed = self._build_feature_row(signal_data, quote_data)
         prob_up = float(predict_proba(self.artifact, row)[0])
-        threshold = float(self.artifact.decision_threshold)
+        threshold = float(self.quick_buy_threshold if self.quick_buy_threshold is not None else self.artifact.decision_threshold)
+        strong_threshold = max(threshold + 0.15, self.quick_strong_buy_threshold)
 
-        if prob_up >= max(threshold + 0.15, 0.70):
+        if prob_up >= strong_threshold:
             recommendation = "STRONG BUY"
         elif prob_up >= threshold:
             recommendation = "BUY"
@@ -137,9 +156,9 @@ class DeterministicQuickAdvisor:
 
         advice = "HOLD"
         if pnl_percent is not None:
-            if prob_up >= 0.62 and pnl_percent <= -4.0:
+            if prob_up >= self.portfolio_buy_prob_threshold and pnl_percent <= self.portfolio_buy_dip_threshold_pct:
                 advice = "BUY"
-            elif prob_up <= 0.45 and pnl_percent >= 6.0:
+            elif prob_up <= self.portfolio_sell_prob_threshold and pnl_percent >= self.portfolio_sell_profit_threshold_pct:
                 advice = "SELL"
 
         reason = (

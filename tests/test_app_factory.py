@@ -115,3 +115,30 @@ def test_create_app_reads_decision_logging_settings(monkeypatch):
     assert app.config["DECISION_LOG_PATH"] == "data/custom_events.jsonl"
     assert logger.enabled is False
     assert logger.output_path == "data/custom_events.jsonl"
+
+
+def test_create_app_reads_deterministic_threshold_settings(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("DETERMINISTIC_QUICK_BUY_THRESHOLD", "0.61")
+    monkeypatch.setenv("DETERMINISTIC_QUICK_STRONG_BUY_THRESHOLD", "0.78")
+    monkeypatch.setenv("DETERMINISTIC_PORTFOLIO_BUY_PROB_THRESHOLD", "0.65")
+    monkeypatch.setenv("DETERMINISTIC_PORTFOLIO_SELL_PROB_THRESHOLD", "0.42")
+    monkeypatch.setenv("DETERMINISTIC_PORTFOLIO_BUY_DIP_THRESHOLD_PCT", "-5.5")
+    monkeypatch.setenv("DETERMINISTIC_PORTFOLIO_SELL_PROFIT_THRESHOLD_PCT", "8.0")
+
+    app = create_app()
+    svc = app.extensions["deterministic_quick_advisor"]
+
+    assert app.config["DETERMINISTIC_QUICK_BUY_THRESHOLD"] == 0.61
+    assert app.config["DETERMINISTIC_QUICK_STRONG_BUY_THRESHOLD"] == 0.78
+    assert app.config["DETERMINISTIC_PORTFOLIO_BUY_PROB_THRESHOLD"] == 0.65
+    assert app.config["DETERMINISTIC_PORTFOLIO_SELL_PROB_THRESHOLD"] == 0.42
+    assert app.config["DETERMINISTIC_PORTFOLIO_BUY_DIP_THRESHOLD_PCT"] == -5.5
+    assert app.config["DETERMINISTIC_PORTFOLIO_SELL_PROFIT_THRESHOLD_PCT"] == 8.0
+    assert svc.quick_buy_threshold == 0.61
+    assert svc.quick_strong_buy_threshold == 0.78
+    assert svc.portfolio_buy_prob_threshold == 0.65
+    assert svc.portfolio_sell_prob_threshold == 0.42
+    assert svc.portfolio_buy_dip_threshold_pct == -5.5
+    assert svc.portfolio_sell_profit_threshold_pct == 8.0

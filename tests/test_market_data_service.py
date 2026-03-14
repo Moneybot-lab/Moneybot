@@ -524,3 +524,36 @@ def test_get_hot_momentum_buys_falls_back_when_deterministic_disabled(monkeypatc
     assert len(out) == 5
     assert out[0]["decision_source"] == "rule_based"
     assert "model_version" not in out[0]
+
+
+def test_get_hot_momentum_buys_strips_deterministic_boilerplate_rationale(monkeypatch):
+    class StubDeterministicAdvisor:
+        def predict_quick_decision(self, *, signal_data, quote_data):
+            return {
+                "decision_source": "deterministic_model",
+                "model_version": "day1-logreg-v1",
+                "probability_up": 0.88,
+                "confidence": 88.0,
+                "recommendation": "BUY",
+                "rationale": "Deterministic model (day1-logreg-v1) probability-up=0.88 based on threshold 0.55.",
+            }
+
+    svc = MarketDataService(deterministic_quick_advisor=StubDeterministicAdvisor(), deterministic_momentum_enabled=True)
+
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda symbol: {"symbol": symbol, "price": 10.0, "change_percent": 1.2, "live_data_available": True, "quote_source": "test"},
+    )
+    monkeypatch.setattr(
+        svc,
+        "get_signal",
+        lambda symbol: {"symbol": symbol, "action": "BUY", "score": 8.0, "technical": {"rsi": 48, "macd_histogram": 0.2}, "volume_ratio": 1.3, "reasons": [f"{symbol} signal"]},
+    )
+
+    out = svc.get_hot_momentum_buys()
+
+    assert len(out) == 5
+    assert out[0]["decision_source"] == "deterministic_model"
+    assert out[0]["rationale"].startswith("Based on threshold")
+    assert "Deterministic model (day1-logreg-v1)" not in out[0]["rationale"]

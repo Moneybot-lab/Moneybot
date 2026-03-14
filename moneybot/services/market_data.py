@@ -113,6 +113,18 @@ class MarketDataService:
         self._maybe_refresh_daily_lists()
         return [dict(item) for item in self._daily_lists_cache.get("stable", [])]
 
+
+    @staticmethod
+    def _clean_deterministic_rationale(rationale: str) -> str:
+        text = (rationale or "").strip()
+        lowered = text.lower()
+        if lowered.startswith("deterministic model"):
+            marker = "based on threshold"
+            marker_index = lowered.find(marker)
+            if marker_index != -1:
+                return text[marker_index:].strip().capitalize()
+        return text
+
     def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
         return [
             {"symbol": "SOFI", "price": 9.84, "score": 9.4, "rationale": "Member growth trend and improving margins."},
@@ -283,6 +295,18 @@ class MarketDataService:
         self._maybe_refresh_daily_lists()
         return [dict(item) for item in self._daily_lists_cache.get("stable", [])]
 
+
+    @staticmethod
+    def _clean_deterministic_rationale(rationale: str) -> str:
+        text = (rationale or "").strip()
+        lowered = text.lower()
+        if lowered.startswith("deterministic model"):
+            marker = "based on threshold"
+            marker_index = lowered.find(marker)
+            if marker_index != -1:
+                return text[marker_index:].strip().capitalize()
+        return text
+
     def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
         return [
             {"symbol": "SOFI", "price": 9.84, "score": 9.4, "rationale": "Member growth trend and improving margins."},
@@ -452,6 +476,18 @@ class MarketDataService:
             item.pop("qualified", None)
         return selected
 
+
+    @staticmethod
+    def _clean_deterministic_rationale(rationale: str) -> str:
+        text = (rationale or "").strip()
+        lowered = text.lower()
+        if lowered.startswith("deterministic model"):
+            marker = "based on threshold"
+            marker_index = lowered.find(marker)
+            if marker_index != -1:
+                return text[marker_index:].strip().capitalize()
+        return text
+
     def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
         candidates = [
             {"symbol": "SOFI", "price": 9.84, "score": 9.4, "rationale": "Member growth trend and improving margins."},
@@ -491,7 +527,7 @@ class MarketDataService:
             if deterministic_decision is not None:
                 prob_up = float(deterministic_decision.get("probability_up") or 0.0)
                 merged["score"] = round(prob_up * 10.0, 2)
-                merged["rationale"] = str(deterministic_decision.get("rationale") or merged["rationale"])
+                merged["rationale"] = self._clean_deterministic_rationale(str(deterministic_decision.get("rationale") or merged["rationale"]))
                 merged["decision_source"] = str(deterministic_decision.get("decision_source") or "deterministic_model")
                 merged["model_version"] = deterministic_decision.get("model_version")
                 merged["probability_up"] = deterministic_decision.get("probability_up")

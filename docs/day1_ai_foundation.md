@@ -74,3 +74,21 @@ DECISION_LOG_PATH=data/decision_events.jsonl
 
 - If your shell reports `command not found: python`, use `python3` as shown above.
 - If you run scripts directly and see `ModuleNotFoundError: No module named moneybot`, ensure you are executing from the repository root (`Moneybot/`).
+
+
+## Day-6 usage (threshold tuning + cleaner momentum transparency)
+
+You can now tune deterministic cutoffs with env vars (no code changes required):
+
+```bash
+DETERMINISTIC_QUICK_BUY_THRESHOLD=0.58
+DETERMINISTIC_QUICK_STRONG_BUY_THRESHOLD=0.74
+DETERMINISTIC_PORTFOLIO_BUY_PROB_THRESHOLD=0.64
+DETERMINISTIC_PORTFOLIO_SELL_PROB_THRESHOLD=0.44
+DETERMINISTIC_PORTFOLIO_BUY_DIP_THRESHOLD_PCT=-5.0
+DETERMINISTIC_PORTFOLIO_SELL_PROFIT_THRESHOLD_PCT=7.0
+```
+
+Notes:
+- Leave `DETERMINISTIC_QUICK_BUY_THRESHOLD` unset (or `0`) to keep using artifact threshold.
+- `Hot Momentum Buys` now keeps deterministic transparency concise by removing duplicated model/version boilerplate when the source column already says `deterministic_model`.
