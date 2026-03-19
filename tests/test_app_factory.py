@@ -142,3 +142,19 @@ def test_create_app_reads_deterministic_threshold_settings(monkeypatch):
     assert svc.portfolio_sell_prob_threshold == 0.42
     assert svc.portfolio_buy_dip_threshold_pct == -5.5
     assert svc.portfolio_sell_profit_threshold_pct == 8.0
+
+
+def test_home_page_includes_model_ops_snapshot(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+
+    app = create_app()
+    client = app.test_client()
+
+    res = client.get("/")
+
+    assert res.status_code == 200
+    html = res.get_data(as_text=True)
+    assert "Model Ops Snapshot" in html
+    assert "/api/decision-log-summary?limit=50" in html
+    assert "Refresh Ops" in html

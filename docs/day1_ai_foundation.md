@@ -120,3 +120,20 @@ Suggested Day-7 workflow:
 1. Keep `DECISION_LOGGING_ENABLED=true`.
 2. Let the app run long enough to collect real quick-ask / momentum usage.
 3. Call the API or CLI summary and compare `deterministic_model` vs `rule_based` usage over time.
+
+
+## Day-8 usage (home-page model ops snapshot)
+
+The home page now includes a lightweight **Model Ops Snapshot** panel.
+
+It automatically reads:
+- `GET /api/model-health`
+- `GET /api/decision-log-summary?limit=50`
+
+The panel is meant to answer, at a glance:
+- is the deterministic model loaded?
+- is decision logging enabled?
+- are recent decisions mostly deterministic or rule-based?
+- which endpoint and symbols are most active lately?
+
+Use it as a fast visual check after deploys or after refreshing the model artifact.

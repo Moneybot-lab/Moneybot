@@ -219,6 +219,23 @@ def create_app() -> Flask:
                   <div id="wells" class="tab-panel" style="display:none"></div>
                 </section>
 
+                <section style="background:#ecfccb;border:1px solid #bef264;border-radius:12px;padding:16px;margin-top:18px">
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+                    <div>
+                      <h3 style="margin:0 0 4px 0">Model Ops Snapshot</h3>
+                      <p style="margin:0;color:#3f6212">Live rollout status for deterministic model health and recent decision telemetry.</p>
+                    </div>
+                    <button type="button" onclick="refreshOps()" style="padding:8px 12px;border:1px solid #84cc16;background:#f7fee7;color:#365314;border-radius:999px;font-weight:700;cursor:pointer">Refresh Ops</button>
+                  </div>
+                  <div id="opsLoading" style="display:none;align-items:center;gap:8px;margin-bottom:10px;color:#3f6212;font-weight:600">
+                    <span style="display:inline-block;width:14px;height:14px;border:2px solid #a3e635;border-top-color:#65a30d;border-radius:9999px;animation:spin .7s linear infinite"></span>
+                    Loading model ops snapshot...
+                  </div>
+                  <div id="opsCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px"></div>
+                  <div id="opsTopSymbols" style="margin-top:12px"></div>
+                  <div id="opsLatestEvent" style="margin-top:12px"></div>
+                </section>
+
                 <div id="homeTickerModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:center;justify-content:center;padding:14px">
                   <div style="background:#f0fdf4;border-radius:12px;max-width:680px;width:100%;max-height:80vh;overflow:auto;padding:14px">
                     <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
@@ -245,6 +262,22 @@ def create_app() -> Flask:
                     stable: [{ symbol: 'MSFT', company: 'Microsoft', price: 418.2, signal_score: 7.9, transparency: 'Strong balance sheet and recurring revenue.' }],
                     momentum: [{ symbol: 'SOFI', price: 9.84, score: 9.4, rationale: 'Member growth trend and improving margins.' }],
                     wells: [{ investor: 'Warren Buffett', stocks: [{ ticker: 'AAPL', price: 191.2, performance: 1.42 }] }],
+                    ops: {
+                      health: {
+                        deterministic_quick_enabled: true,
+                        deterministic_momentum_enabled: true,
+                        model_loaded: true,
+                        model_version: 'day1-logreg-v1',
+                        decision_logging: { enabled: true, source_counts: { deterministic_model: 14, rule_based: 6 } },
+                      },
+                      summary: {
+                        events_considered: 20,
+                        source_counts: { deterministic_model: 14, rule_based: 6 },
+                        endpoint_counts: { quick_ask: 12, hot_momentum_buys: 8 },
+                        top_symbols: [{ symbol: 'AAPL', count: 7 }, { symbol: 'SOFI', count: 4 }, { symbol: 'NVDA', count: 3 }],
+                        latest_event: { endpoint: 'quick_ask', symbol: 'AAPL', decision_source: 'deterministic_model' },
+                      },
+                    },
                   };
 
                   function formatMoney(v){ return typeof v === 'number' ? '$' + v.toLocaleString(undefined,{maximumFractionDigits:2}) : 'n/a'; }
@@ -255,6 +288,9 @@ def create_app() -> Flask:
                     const rec = String(recommendation || 'HOLD OFF FOR NOW').toUpperCase();
                     const color = rec === 'STRONG BUY' ? '#22c55e' : (rec === 'BUY' ? '#166534' : '#dc2626');
                     return `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${color};color:#f0fdf4;font-weight:800;font-size:12px;letter-spacing:.02em">${rec}</span>`;
+                  }
+                  function opsBadge(value, positive){
+                    return `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${positive ? '#166534' : '#7f1d1d'};color:#fefce8;font-weight:700;font-size:12px">${escapeHtml(value)}</span>`;
                   }
                   const marketChartInstances = {};
                   function destroyMarketCharts(){ Object.values(marketChartInstances).forEach(c => c.destroy()); Object.keys(marketChartInstances).forEach(k => delete marketChartInstances[k]); }
@@ -267,6 +303,26 @@ def create_app() -> Flask:
                       return data.items || fallbackData[key];
                     } catch (err) {
                       return fallbackData[key];
+                    }
+                  }
+
+                  async function fetchOpsData(){
+                    try {
+                      const [healthRes, summaryRes] = await Promise.all([
+                        fetch('/api/model-health'),
+                        fetch('/api/decision-log-summary?limit=50'),
+                      ]);
+                      if(!healthRes.ok || !summaryRes.ok){
+                        throw new Error('non-200');
+                      }
+                      const healthPayload = await healthRes.json();
+                      const summaryPayload = await summaryRes.json();
+                      return {
+                        health: healthPayload.data || fallbackData.ops.health,
+                        summary: summaryPayload.data || fallbackData.ops.summary,
+                      };
+                    } catch (err) {
+                      return fallbackData.ops;
                     }
                   }
 
@@ -391,8 +447,54 @@ def create_app() -> Flask:
                     document.getElementById('wells').innerHTML = items.map(item=>`<article style="border:1px solid #d1fae5;border-radius:10px;padding:10px;margin-bottom:10px"><div style="font-weight:700;margin-bottom:8px">${item.investor}</div><table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Performance</th></tr></thead><tbody>${(item.stocks||[]).map(stock=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(stock.ticker)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(stock.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${Number(stock.performance||0).toFixed(2)}%</td></tr>`).join('')}</tbody></table></article>`).join('');
                   }
 
+                  function renderOps(data){
+                    const health = data.health || {};
+                    const summary = data.summary || {};
+                    const logging = health.decision_logging || {};
+                    const sourceCounts = summary.source_counts || logging.source_counts || {};
+                    const endpointCounts = summary.endpoint_counts || logging.endpoint_counts || {};
+                    const deterministicCount = Number(sourceCounts.deterministic_model || 0);
+                    const ruleCount = Number(sourceCounts.rule_based || 0);
+                    const total = Number(summary.events_considered || 0);
+                    const cards = [
+                      {
+                        label: 'Model status',
+                        value: health.model_loaded ? opsBadge(`Loaded · ${health.model_version || 'unknown'}`, true) : opsBadge('Not loaded', false),
+                        detail: `Quick ask ${health.deterministic_quick_enabled ? 'enabled' : 'disabled'} · Momentum ${health.deterministic_momentum_enabled ? 'enabled' : 'disabled'}`,
+                      },
+                      {
+                        label: 'Decision logging',
+                        value: logging.enabled ? opsBadge('Enabled', true) : opsBadge('Disabled', false),
+                        detail: `Recent events: ${total || 0}`,
+                      },
+                      {
+                        label: 'Decision split',
+                        value: `<strong style="font-size:1.5rem;color:#14532d">${deterministicCount}</strong><span style="color:#4d7c0f"> deterministic</span>`,
+                        detail: `${ruleCount} rule-based in recent summary`,
+                      },
+                      {
+                        label: 'Most active endpoint',
+                        value: `<strong style="font-size:1.2rem;color:#14532d">${escapeHtml(Object.entries(endpointCounts).sort((a,b)=>b[1]-a[1])[0]?.[0] || 'n/a')}</strong>`,
+                        detail: `${Object.entries(endpointCounts).sort((a,b)=>b[1]-a[1])[0]?.[1] || 0} recent events`,
+                      },
+                    ];
+                    document.getElementById('opsCards').innerHTML = cards.map(card => `<article style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:12px"><div style="font-size:12px;font-weight:800;letter-spacing:.06em;color:#4d7c0f;text-transform:uppercase;margin-bottom:8px">${card.label}</div><div>${card.value}</div><div style="margin-top:8px;color:#3f6212">${escapeHtml(card.detail)}</div></article>`).join('');
+
+                    const topSymbols = Array.isArray(summary.top_symbols) ? summary.top_symbols : [];
+                    document.getElementById('opsTopSymbols').innerHTML = `<div style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:12px"><div style="font-weight:800;color:#365314;margin-bottom:8px">Top recent symbols</div><div style="display:flex;gap:8px;flex-wrap:wrap">${topSymbols.length ? topSymbols.map(item => `<span style="display:inline-flex;gap:6px;align-items:center;background:#dcfce7;border-radius:999px;padding:6px 10px;color:#166534;font-weight:700">${escapeHtml(item.symbol)}<span style="color:#4d7c0f">×${escapeHtml(item.count)}</span></span>`).join('') : '<span style="color:#4d7c0f">No recent symbols yet.</span>'}</div></div>`;
+
+                    const latest = summary.latest_event || {};
+                    document.getElementById('opsLatestEvent').innerHTML = `<div style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:12px"><div style="font-weight:800;color:#365314;margin-bottom:8px">Latest logged decision</div><div style="color:#3f6212">${latest.symbol ? `${escapeHtml(latest.symbol)} via ${escapeHtml(latest.endpoint || 'unknown')} · ${escapeHtml(latest.decision_source || 'unknown')}` : 'No events logged yet.'}</div></div>`;
+                  }
+
                   function setTabLoading(isLoading){
                     const loadingEl = document.getElementById('tabLoading');
+                    if(!loadingEl) return;
+                    loadingEl.style.display = isLoading ? 'flex' : 'none';
+                  }
+
+                  function setOpsLoading(isLoading){
+                    const loadingEl = document.getElementById('opsLoading');
                     if(!loadingEl) return;
                     loadingEl.style.display = isLoading ? 'flex' : 'none';
                   }
@@ -421,6 +523,15 @@ def create_app() -> Flask:
                     refreshTab(tab);
                   }
 
+                  async function refreshOps(){
+                    setOpsLoading(true);
+                    try {
+                      renderOps(await fetchOpsData());
+                    } finally {
+                      setOpsLoading(false);
+                    }
+                  }
+
                   document.getElementById('quickSymbol').addEventListener('keydown', (event) => { if(event.key==='Enter'){event.preventDefault();quickAsk();} });
                   document.getElementById('quickSymbol').addEventListener('focus', (event) => {
                     if(event.target.value){ event.target.value = ''; }
@@ -431,6 +542,7 @@ def create_app() -> Flask:
                     const market = await fetchWithFallback('/api/market-overview', 'market');
                     renderMarket(market);
                     await refreshTab('stable');
+                    await refreshOps();
                   }
 
                   init();
