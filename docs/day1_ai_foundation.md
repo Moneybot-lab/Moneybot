@@ -4,7 +4,10 @@ This Day-1 foundation adds deterministic data + model tooling so Moneybot can mo
 
 ## 1) Build a training snapshot
 
+**Important:** run these commands from the repository root (`Moneybot/`), not from your home directory.
+
 ```bash
+cd /path/to/Moneybot
 python3 scripts/day1_generate_training_data.py --output data/day1_training_snapshot.csv
 ```
 
@@ -16,6 +19,7 @@ What it does:
 ## 2) Train deterministic baseline model
 
 ```bash
+cd /path/to/Moneybot
 python3 scripts/day1_train_baseline_model.py --input data/day1_training_snapshot.csv --output-model data/day1_baseline_model.json
 ```
 
@@ -24,6 +28,20 @@ What it does:
 - Trains deterministic logistic regression with full-batch gradient descent.
 - Saves a model artifact (means/stds/weights/bias/threshold) to JSON.
 - Prints simple holdout metrics.
+
+## Faster Day-1 refresh command
+
+If you want one command instead of two, use:
+
+```bash
+cd /path/to/Moneybot
+python3 scripts/day1_refresh_artifact.py
+```
+
+This wrapper:
+- rebuilds `data/day1_training_snapshot.csv`
+- retrains `data/day1_baseline_model.json`
+- works even if your current shell is not already at the repo root, because it resolves the internal script paths for you
 
 ## Why this is useful now
 
@@ -72,6 +90,7 @@ DECISION_LOG_PATH=data/decision_events.jsonl
 
 ### Troubleshooting
 
+- If you see `can't open file '/Users/yourname/scripts/day1_generate_training_data.py'`, you ran the command from the wrong directory. `scripts/...` is a relative path, so first `cd` into the Moneybot repo root.
 - If your shell reports `command not found: python`, use `python3` as shown above.
 - If you run scripts directly and see `ModuleNotFoundError: No module named moneybot`, ensure you are executing from the repository root (`Moneybot/`).
 
