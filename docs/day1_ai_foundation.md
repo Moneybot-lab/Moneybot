@@ -92,3 +92,31 @@ DETERMINISTIC_PORTFOLIO_SELL_PROFIT_THRESHOLD_PCT=7.0
 Notes:
 - Leave `DETERMINISTIC_QUICK_BUY_THRESHOLD` unset (or `0`) to keep using artifact threshold.
 - `Hot Momentum Buys` now keeps deterministic transparency concise by removing duplicated model/version boilerplate when the source column already says `deterministic_model`.
+
+
+## Day-7 usage (decision-log summary workflow)
+
+You can now summarize recent decision telemetry without opening the JSONL file manually.
+
+API endpoint:
+
+```bash
+GET /api/decision-log-summary?limit=200
+```
+
+CLI command:
+
+```bash
+python3 scripts/day7_decision_log_summary.py --input data/decision_events.jsonl --limit 200
+```
+
+What this gives you:
+- counts by `decision_source`
+- counts by endpoint
+- top requested symbols
+- the latest logged event for quick sanity checks
+
+Suggested Day-7 workflow:
+1. Keep `DECISION_LOGGING_ENABLED=true`.
+2. Let the app run long enough to collect real quick-ask / momentum usage.
+3. Call the API or CLI summary and compare `deterministic_model` vs `rule_based` usage over time.

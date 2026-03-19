@@ -20,6 +20,7 @@ from advice_engine import compute_user_advice
 
 from .extensions import db
 from .models import SoldTrade, User, WatchlistItem
+from .services.decision_log import summarize_decision_events
 
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
@@ -914,6 +915,26 @@ def model_health():
             "request_id": g.request_id,
         }
     )
+
+
+@api_bp.get("/decision-log-summary")
+def decision_log_summary():
+    decision_logger = current_app.extensions.get("decision_logger")
+    raw_limit = request.args.get("limit") or "200"
+    try:
+        limit = max(1, min(int(raw_limit), 1000))
+    except ValueError:
+        return jsonify({"error": "limit must be an integer", "request_id": g.request_id}), 400
+
+    output_path = (
+        getattr(decision_logger, "output_path", None)
+        or current_app.config.get("DECISION_LOG_PATH")
+        or "data/decision_events.jsonl"
+    )
+    summary = summarize_decision_events(str(output_path), limit=limit)
+    summary["logging_enabled"] = bool(getattr(decision_logger, "enabled", False))
+
+    return jsonify({"data": summary, "request_id": g.request_id})
 
 
 @api_bp.get("/wells-picks")

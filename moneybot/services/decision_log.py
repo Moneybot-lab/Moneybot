@@ -2,9 +2,63 @@ from __future__ import annotations
 
 import json
 import time
+from collections import Counter
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict
+
+
+def read_decision_events(path: str, *, limit: int | None = None) -> list[Dict[str, Any]]:
+    file_path = Path(path)
+    if not file_path.exists():
+        return []
+
+    with file_path.open("r", encoding="utf-8") as fh:
+        if limit is None:
+            lines = fh.readlines()
+        else:
+            from collections import deque
+
+            lines = list(deque(fh, maxlen=max(0, int(limit))))
+
+    events: list[Dict[str, Any]] = []
+    for line in lines:
+        raw = line.strip()
+        if not raw:
+            continue
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            events.append(record)
+    return events
+
+
+def summarize_decision_events(path: str, *, limit: int = 200) -> Dict[str, Any]:
+    events = read_decision_events(path, limit=limit)
+    source_counts = Counter()
+    endpoint_counts = Counter()
+    symbol_counts = Counter()
+
+    for event in events:
+        source_counts[str(event.get("decision_source") or "unknown")] += 1
+        endpoint_counts[str(event.get("endpoint") or "unknown")] += 1
+        symbol = str(event.get("symbol") or "").strip().upper()
+        if symbol:
+            symbol_counts[symbol] += 1
+
+    return {
+        "path": path,
+        "events_considered": len(events),
+        "source_counts": dict(source_counts),
+        "endpoint_counts": dict(endpoint_counts),
+        "top_symbols": [
+            {"symbol": symbol, "count": count}
+            for symbol, count in symbol_counts.most_common(5)
+        ],
+        "latest_event": events[-1] if events else None,
+    }
 
 
 class DecisionLogger:
@@ -52,3 +106,6 @@ class DecisionLogger:
                 "source_counts": dict(self._source_counts),
                 "endpoint_counts": dict(self._endpoint_counts),
             }
+
+    def summary(self, *, limit: int = 200) -> Dict[str, Any]:
+        return summarize_decision_events(self.output_path, limit=limit)

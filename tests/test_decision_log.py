@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from moneybot.services.decision_log import DecisionLogger
+from moneybot.services.decision_log import DecisionLogger, summarize_decision_events
 
 
 def test_decision_logger_tracks_counts_and_writes_file(tmp_path: Path):
@@ -28,3 +28,19 @@ def test_decision_logger_disabled_does_not_write(tmp_path: Path):
     assert health["enabled"] is False
     assert health["source_counts"] == {}
     assert not path.exists()
+
+
+def test_summarize_decision_events_reports_recent_activity(tmp_path: Path):
+    path = tmp_path / "events.jsonl"
+    logger = DecisionLogger(enabled=True, output_path=str(path))
+    logger.log(endpoint="quick_ask", symbol="AAPL", decision_source="deterministic_model", payload={"recommendation": "BUY"})
+    logger.log(endpoint="hot_momentum_buys", symbol="SOFI", decision_source="deterministic_model", payload={"score": 9.1})
+    logger.log(endpoint="quick_ask", symbol="TSLA", decision_source="rule_based", payload={"recommendation": "HOLD"})
+
+    summary = summarize_decision_events(str(path), limit=2)
+
+    assert summary["events_considered"] == 2
+    assert summary["source_counts"] == {"deterministic_model": 1, "rule_based": 1}
+    assert summary["endpoint_counts"] == {"hot_momentum_buys": 1, "quick_ask": 1}
+    assert summary["top_symbols"] == [{"symbol": "SOFI", "count": 1}, {"symbol": "TSLA", "count": 1}]
+    assert summary["latest_event"]["symbol"] == "TSLA"

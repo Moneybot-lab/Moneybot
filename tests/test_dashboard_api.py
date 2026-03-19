@@ -199,6 +199,34 @@ def test_model_health_reports_deterministic_and_logging_status():
     assert "source_counts" in data["decision_logging"]
 
 
+def test_decision_log_summary_reports_recent_counts(tmp_path, monkeypatch):
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+    logger.log(endpoint="quick_ask", symbol="AAPL", decision_source="deterministic_model", payload={"recommendation": "BUY"})
+    logger.log(endpoint="hot_momentum_buys", symbol="SOFI", decision_source="rule_based", payload={"score": 7.8})
+
+    res = client.get("/api/decision-log-summary?limit=10")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["events_considered"] == 2
+    assert data["source_counts"]["deterministic_model"] == 1
+    assert data["source_counts"]["rule_based"] == 1
+    assert data["endpoint_counts"]["quick_ask"] == 1
+    assert data["endpoint_counts"]["hot_momentum_buys"] == 1
+    assert data["latest_event"]["symbol"] == "SOFI"
+
+
+def test_decision_log_summary_rejects_invalid_limit():
+    client = _client()
+
+    res = client.get("/api/decision-log-summary?limit=bad")
+
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "limit must be an integer"
+
+
 def test_explain_recommendation_returns_plain_english_text():
     client = _client()
     res = client.post(
