@@ -21,6 +21,7 @@ from advice_engine import compute_user_advice
 from .extensions import db
 from .models import SoldTrade, User, WatchlistItem
 from .services.decision_log import summarize_decision_events
+from .services.model_metadata import load_artifact_history, load_artifact_metadata
 
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
@@ -900,16 +901,19 @@ def hot_momentum_buys():
 def model_health():
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
     decision_logger = current_app.extensions.get("decision_logger")
+    model_path = current_app.config.get("DETERMINISTIC_MODEL_PATH")
 
     return jsonify(
         {
             "data": {
                 "deterministic_quick_enabled": bool(current_app.config.get("DETERMINISTIC_QUICK_ENABLED")),
                 "deterministic_momentum_enabled": bool(current_app.config.get("DETERMINISTIC_MOMENTUM_ENABLED")),
-                "deterministic_model_path": current_app.config.get("DETERMINISTIC_MODEL_PATH"),
+                "deterministic_model_path": model_path,
                 "model_loaded": bool(getattr(deterministic_svc, "artifact", None) is not None),
                 "model_version": getattr(getattr(deterministic_svc, "artifact", None), "version", None),
                 "model_load_error": getattr(deterministic_svc, "load_error", None),
+                "artifact_metadata": load_artifact_metadata(str(model_path)) if model_path else None,
+                "artifact_history": load_artifact_history(str(model_path)) if model_path else [],
                 "decision_logging": decision_logger.health() if decision_logger is not None else None,
             },
             "request_id": g.request_id,

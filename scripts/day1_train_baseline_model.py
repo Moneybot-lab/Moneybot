@@ -21,6 +21,11 @@ from moneybot.services.deterministic_model import (
     summarize_binary_predictions,
     train_logistic_baseline,
 )
+from moneybot.services.model_metadata import (
+    append_artifact_history,
+    build_artifact_metadata,
+    save_artifact_metadata,
+)
 
 
 def main() -> None:
@@ -48,8 +53,23 @@ def main() -> None:
     metrics = summarize_binary_predictions(y_test, y_pred)
 
     save_artifact(artifact, args.output_model)
+    metadata = build_artifact_metadata(
+        model_path=args.output_model,
+        model_version=artifact.version,
+        input_path=args.input,
+        train_rows=len(train_df),
+        test_rows=len(test_df),
+        metrics=metrics,
+        train_ratio=args.train_ratio,
+        horizon_days=args.horizon_days,
+        target_return=args.target_return,
+    )
+    metadata_path = save_artifact_metadata(args.output_model, metadata)
+    history_path = append_artifact_history(args.output_model, metadata)
 
     print(f"Saved model -> {args.output_model}")
+    print(f"Saved metadata -> {metadata_path}")
+    print(f"Updated history -> {history_path}")
     print(f"Metrics: accuracy={metrics['accuracy']}, positive_rate={metrics['positive_rate']}, rows={int(metrics['rows'])}")
 
 

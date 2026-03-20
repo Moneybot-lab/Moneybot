@@ -156,3 +156,34 @@ The panel is meant to answer, at a glance:
 - which endpoint and symbols are most active lately?
 
 Use it as a fast visual check after deploys or after refreshing the model artifact.
+
+
+## Day-9 usage (outcome tracking)
+
+You can now evaluate logged decisions against later price moves with:
+
+```bash
+python3 scripts/day9_evaluate_decision_outcomes.py --input data/decision_events.jsonl --limit 200
+```
+
+This is meant to answer:
+- was a recent `BUY` / `STRONG BUY` directionally correct 1 day later?
+- was it correct 5 trading days later?
+- how often are logged decisions being evaluated as correct vs incorrect?
+
+
+## Day-11 usage (artifact metadata and version history)
+
+Training now writes sidecar metadata files next to the model artifact:
+
+- `data/day1_baseline_model.json.meta.json`
+- `data/day1_baseline_model.json.history.json`
+
+These track:
+- when the artifact was recorded
+- input snapshot path
+- train/test row counts
+- simple holdout metrics
+- recent artifact history entries
+
+`GET /api/model-health` now includes `artifact_metadata` and `artifact_history` so you can inspect model lineage without opening files manually.

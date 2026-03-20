@@ -1,4 +1,5 @@
 import os
+import json
 
 from moneybot.app_factory import create_app
 from moneybot import api as api_module
@@ -195,8 +196,28 @@ def test_model_health_reports_deterministic_and_logging_status():
     assert "deterministic_quick_enabled" in data
     assert "deterministic_momentum_enabled" in data
     assert "model_loaded" in data
+    assert "artifact_metadata" in data
+    assert "artifact_history" in data
     assert "decision_logging" in data
     assert "source_counts" in data["decision_logging"]
+
+
+def test_model_health_includes_artifact_metadata_history(tmp_path, monkeypatch):
+    model_path = tmp_path / "day1_baseline_model.json"
+    metadata_path = tmp_path / "day1_baseline_model.json.meta.json"
+    history_path = tmp_path / "day1_baseline_model.json.history.json"
+    metadata = {"model_version": "day1-logreg-v1", "train_rows": 100}
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    history_path.write_text(json.dumps([metadata]), encoding="utf-8")
+    monkeypatch.setenv("DETERMINISTIC_MODEL_PATH", str(model_path))
+
+    client = _client()
+    res = client.get("/api/model-health")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["artifact_metadata"]["model_version"] == "day1-logreg-v1"
+    assert data["artifact_history"][0]["train_rows"] == 100
 
 
 def test_decision_log_summary_reports_recent_counts(tmp_path, monkeypatch):
