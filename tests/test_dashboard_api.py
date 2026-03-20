@@ -1,4 +1,5 @@
 import os
+import json
 
 from moneybot.app_factory import create_app
 from moneybot import api as api_module
@@ -26,6 +27,38 @@ class StubAIAdvisorService:
             "next_checks": ["Watch RSI and volume.", "Reassess after earnings."],
             "provider": "stub",
             "model": "stub-fast",
+        }
+
+
+class StubDeterministicQuickAdvisor:
+    def predict_quick_decision(self, *, signal_data, quote_data):
+        return {
+            "recommendation": "STRONG BUY",
+            "rationale": "Deterministic model says upside probability is high.",
+            "current_price": quote_data.get("price"),
+            "change_percent": quote_data.get("change_percent"),
+            "quote_source": quote_data.get("quote_source"),
+            "quote_diagnostics": quote_data.get("diagnostics"),
+            "decision_source": "deterministic_model",
+            "model_version": "day1-logreg-v1",
+            "probability_up": 0.78,
+            "decision_threshold": 0.55,
+            "confidence": 78.0,
+            "imputed_features": [],
+        }
+
+    def predict_portfolio_position(self, *, symbol, entry_price, current_price, shares, signal_data, quote_data):
+        return {
+            "mode": "deterministic_model",
+            "symbol": symbol,
+            "advice": "BUY",
+            "advice_reason": f"Deterministic portfolio signal for {symbol}.",
+            "decision_source": "deterministic_model",
+            "model_version": "day1-logreg-v1",
+            "probability_up": 0.71,
+            "confidence": 71.0,
+            "position_shares": float(shares),
+            "pnl_percent": -7.2,
         }
 
 class StubMarketService:
@@ -138,6 +171,81 @@ def test_quick_ask_uses_ai_extension_when_present():
     assert "reason" not in data["ai"]
     assert data["ai"]["provider"] == "stub"
     assert "TSLA" in data["ai"]["narrative"]
+
+
+def test_quick_ask_uses_deterministic_model_extension_when_present():
+    client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = StubDeterministicQuickAdvisor()
+    client.application.extensions["ai_advisor_service"] = None
+
+    res = client.get("/api/quick-ask?symbol=AAPL")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["recommendation"] == "STRONG BUY"
+    assert data["decision_source"] == "deterministic_model"
+    assert data["model_version"] == "day1-logreg-v1"
+    assert data["confidence"] == 78.0
+
+
+def test_model_health_reports_deterministic_and_logging_status():
+    client = _client()
+
+    res = client.get("/api/model-health")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert "deterministic_quick_enabled" in data
+    assert "deterministic_momentum_enabled" in data
+    assert "model_loaded" in data
+    assert "artifact_metadata" in data
+    assert "artifact_history" in data
+    assert "decision_logging" in data
+    assert "source_counts" in data["decision_logging"]
+
+
+def test_model_health_includes_artifact_metadata_history(tmp_path, monkeypatch):
+    model_path = tmp_path / "day1_baseline_model.json"
+    metadata_path = tmp_path / "day1_baseline_model.json.meta.json"
+    history_path = tmp_path / "day1_baseline_model.json.history.json"
+    metadata = {"model_version": "day1-logreg-v1", "train_rows": 100}
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    history_path.write_text(json.dumps([metadata]), encoding="utf-8")
+    monkeypatch.setenv("DETERMINISTIC_MODEL_PATH", str(model_path))
+
+    client = _client()
+    res = client.get("/api/model-health")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["artifact_metadata"]["model_version"] == "day1-logreg-v1"
+    assert data["artifact_history"][0]["train_rows"] == 100
+
+
+def test_decision_log_summary_reports_recent_counts(tmp_path, monkeypatch):
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+    logger.log(endpoint="quick_ask", symbol="AAPL", decision_source="deterministic_model", payload={"recommendation": "BUY"})
+    logger.log(endpoint="hot_momentum_buys", symbol="SOFI", decision_source="rule_based", payload={"score": 7.8})
+
+    res = client.get("/api/decision-log-summary?limit=10")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["events_considered"] == 2
+    assert data["source_counts"]["deterministic_model"] == 1
+    assert data["source_counts"]["rule_based"] == 1
+    assert data["endpoint_counts"]["quick_ask"] == 1
+    assert data["endpoint_counts"]["hot_momentum_buys"] == 1
+    assert data["latest_event"]["symbol"] == "SOFI"
+
+
+def test_decision_log_summary_rejects_invalid_limit():
+    client = _client()
+
+    res = client.get("/api/decision-log-summary?limit=bad")
+
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "limit must be an integer"
 
 
 def test_explain_recommendation_returns_plain_english_text():
@@ -358,3 +466,21 @@ def test_user_watchlist_uses_ai_portfolio_advice_when_available():
     assert "buy-in" in enriched["advice_reason"].lower()
     assert enriched["ai_portfolio"]["mode"] == "ai_enhanced"
     assert enriched["ai_portfolio"]["provider"] == "stub"
+
+
+def test_user_watchlist_includes_deterministic_portfolio_advice_when_available():
+    client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = StubDeterministicQuickAdvisor()
+    client.application.extensions["ai_advisor_service"] = None
+
+    signup = client.post("/api/auth/signup", json={"email": "portfolio-det@b.com", "password": "pw", "password_confirmation": "pw"})
+    assert signup.status_code == 201
+    add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 1})
+    assert add.status_code == 201
+
+    res = client.get("/api/user-watchlist")
+    assert res.status_code == 200
+    enriched = res.get_json()["enriched_items"][0]
+    assert enriched["advice"] == "BUY"
+    assert enriched["deterministic_portfolio"]["mode"] == "deterministic_model"
+    assert enriched["deterministic_portfolio"]["decision_source"] == "deterministic_model"
