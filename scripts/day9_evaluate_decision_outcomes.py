@@ -17,6 +17,24 @@ from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import classify_outcome, normalize_action, summarize_outcome_rows
 
 
+def _close_values(history) -> list[float]:
+    if history is None or getattr(history, "empty", False):
+        return []
+    if "Close" not in history:
+        return []
+
+    close_data = history["Close"]
+    if hasattr(close_data, "columns"):
+        if getattr(close_data, "empty", False):
+            return []
+        close_data = close_data.iloc[:, 0]
+
+    if not hasattr(close_data, "dropna"):
+        return []
+
+    return [float(value) for value in close_data.dropna().tolist()]
+
+
 def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
     start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
     end_dt = start_dt + timedelta(days=max(days + 3, 7))
@@ -28,10 +46,7 @@ def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
         progress=False,
         auto_adjust=False,
     )
-    if history is None or history.empty or "Close" not in history:
-        return None
-
-    closes = history["Close"].dropna().tolist()
+    closes = _close_values(history)
     if len(closes) <= days:
         return None
     start_price = float(closes[0])

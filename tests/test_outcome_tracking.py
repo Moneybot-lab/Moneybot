@@ -1,4 +1,7 @@
+import pandas as pd
+
 from moneybot.services.outcome_tracking import classify_outcome, normalize_action, summarize_outcome_rows
+from scripts.day9_evaluate_decision_outcomes import _close_values
 
 
 def test_normalize_action_reads_recommendation_and_advice():
@@ -29,3 +32,14 @@ def test_summarize_outcome_rows_reports_accuracy_and_average_returns():
     assert summary["counts"]["incorrect"] == 1
     assert summary["counts"]["neutral"] == 1
     assert summary["accuracy"] == 0.5
+
+
+def test_close_values_handles_dataframe_close_column():
+    history = pd.DataFrame(
+        {
+            ("Close", "AAPL"): [100.0, 101.0, 102.0],
+            ("Volume", "AAPL"): [10, 11, 12],
+        }
+    )
+
+    assert _close_values(history) == [100.0, 101.0, 102.0]
