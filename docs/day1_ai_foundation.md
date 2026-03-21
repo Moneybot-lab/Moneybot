@@ -187,3 +187,20 @@ These track:
 - recent artifact history entries
 
 `GET /api/model-health` now includes `artifact_metadata` and `artifact_history` so you can inspect model lineage without opening files manually.
+
+
+## Day-10 usage (recent decisions + outcomes table)
+
+The home page now includes a **Recent Decisions & Outcomes** table.
+
+It reads:
+- `GET /api/decision-outcomes?limit=20`
+
+The table is designed to show:
+- symbol
+- endpoint
+- decision source
+- action
+- artifact/model version
+- 1-day return + outcome
+- 5-day return + outcome

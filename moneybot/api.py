@@ -4,7 +4,7 @@ import logging
 import smtplib
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import parse_qs, urlsplit
 from collections import defaultdict, deque
 from decimal import Decimal
@@ -12,6 +12,7 @@ from email.message import EmailMessage
 from functools import wraps
 from typing import Any, Dict, Tuple
 
+import yfinance as yf
 from flask import Blueprint, current_app, g, jsonify, request, session, url_for
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -20,8 +21,9 @@ from advice_engine import compute_user_advice
 
 from .extensions import db
 from .models import SoldTrade, User, WatchlistItem
-from .services.decision_log import summarize_decision_events
+from .services.decision_log import read_decision_events, summarize_decision_events
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
+from .services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
 
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
@@ -941,7 +943,57 @@ def decision_log_summary():
     return jsonify({"data": summary, "request_id": g.request_id})
 
 
+@api_bp.get("/decision-outcomes")
+def decision_outcomes():
+    decision_logger = current_app.extensions.get("decision_logger")
+    raw_limit = request.args.get("limit") or "20"
+    try:
+        limit = max(1, min(int(raw_limit), 100))
+    except ValueError:
+        return jsonify({"error": "limit must be an integer", "request_id": g.request_id}), 400
+
+    output_path = (
+        getattr(decision_logger, "output_path", None)
+        or current_app.config.get("DECISION_LOG_PATH")
+        or "data/decision_events.jsonl"
+    )
+    events = read_decision_events(str(output_path), limit=limit)
+    rows = evaluate_decision_events(events, future_return_lookup=_future_return_for_outcomes)
+    summary_1d = summarize_outcome_rows(rows)
+    summary_5d = summarize_outcome_rows([{**row, "return_1d": row.get("return_5d")} for row in rows])
+
+    return jsonify(
+        {
+            "data": {
+                "rows": rows,
+                "summary_1d": summary_1d,
+                "summary_5d": summary_5d,
+            },
+            "request_id": g.request_id,
+        }
+    )
+
+
 @api_bp.get("/wells-picks")
 def wells_picks():
     svc = current_app.extensions["market_data_service"]
     return jsonify({"items": svc.get_wells_picks(), "request_id": g.request_id})
+def _future_return_for_outcomes(symbol: str, start_ts: int, days: int) -> float | None:
+    start_dt = datetime.fromtimestamp(int(start_ts))
+    end_dt = start_dt + timedelta(days=max(days + 3, 7))
+    history = yf.download(
+        symbol,
+        start=start_dt.strftime("%Y-%m-%d"),
+        end=end_dt.strftime("%Y-%m-%d"),
+        interval="1d",
+        progress=False,
+        auto_adjust=False,
+    )
+    closes = close_values(history)
+    if len(closes) <= days:
+        return None
+    start_price = float(closes[0])
+    end_price = float(closes[days])
+    if start_price == 0:
+        return None
+    return round((end_price - start_price) / start_price, 4)

@@ -158,3 +158,5 @@ def test_home_page_includes_model_ops_snapshot(monkeypatch):
     assert "Model Ops Snapshot" in html
     assert "/api/decision-log-summary?limit=50" in html
     assert "Refresh Ops" in html
+    assert "Recent Decisions & Outcomes" in html
+    assert "/api/decision-outcomes?limit=20" in html

@@ -14,25 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import yfinance as yf
 
 from moneybot.services.decision_log import read_decision_events
-from moneybot.services.outcome_tracking import classify_outcome, normalize_action, summarize_outcome_rows
-
-
-def _close_values(history) -> list[float]:
-    if history is None or getattr(history, "empty", False):
-        return []
-    if "Close" not in history:
-        return []
-
-    close_data = history["Close"]
-    if hasattr(close_data, "columns"):
-        if getattr(close_data, "empty", False):
-            return []
-        close_data = close_data.iloc[:, 0]
-
-    if not hasattr(close_data, "dropna"):
-        return []
-
-    return [float(value) for value in close_data.dropna().tolist()]
+from moneybot.services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
 
 
 def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
@@ -46,7 +28,7 @@ def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
         progress=False,
         auto_adjust=False,
     )
-    closes = _close_values(history)
+    closes = close_values(history)
     if len(closes) <= days:
         return None
     start_price = float(closes[0])
@@ -64,25 +46,7 @@ def main() -> None:
     args = parser.parse_args()
 
     events = read_decision_events(args.input, limit=max(1, args.limit))
-    rows = []
-    for event in events:
-        symbol = str(event.get("symbol") or "").strip().upper()
-        action = normalize_action(event)
-        ts = event.get("ts")
-        if not symbol or action is None or not isinstance(ts, int):
-            continue
-        row = {
-            "symbol": symbol,
-            "endpoint": event.get("endpoint"),
-            "decision_source": event.get("decision_source"),
-            "action": action,
-            "ts": ts,
-        }
-        row["return_1d"] = _future_return(symbol, ts, 1)
-        row["return_5d"] = _future_return(symbol, ts, 5)
-        row["outcome_1d"] = classify_outcome(action, row["return_1d"])
-        row["outcome_5d"] = classify_outcome(action, row["return_5d"])
-        rows.append(row)
+    rows = evaluate_decision_events(events, future_return_lookup=_future_return)
 
     output = {
         "summary_1d": summarize_outcome_rows(

@@ -236,6 +236,22 @@ def create_app() -> Flask:
                   <div id="opsLatestEvent" style="margin-top:12px"></div>
                 </section>
 
+                <section style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:16px;margin-top:18px">
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+                    <div>
+                      <h3 style="margin:0 0 4px 0">Recent Decisions & Outcomes</h3>
+                      <p style="margin:0;color:#166534">Day 10 table showing the latest logged actions, sources, artifact versions, and 1D / 5D outcomes.</p>
+                    </div>
+                    <button type="button" onclick="refreshOutcomes()" style="padding:8px 12px;border:1px solid #16a34a;background:#dcfce7;color:#14532d;border-radius:999px;font-weight:700;cursor:pointer">Refresh Outcomes</button>
+                  </div>
+                  <div id="outcomesLoading" style="display:none;align-items:center;gap:8px;margin-bottom:10px;color:#166534;font-weight:600">
+                    <span style="display:inline-block;width:14px;height:14px;border:2px solid #86efac;border-top-color:#16a34a;border-radius:9999px;animation:spin .7s linear infinite"></span>
+                    Loading recent decision outcomes...
+                  </div>
+                  <div id="outcomesSummary" style="margin-bottom:12px"></div>
+                  <div id="outcomesTable"></div>
+                </section>
+
                 <div id="homeTickerModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:center;justify-content:center;padding:14px">
                   <div style="background:#f0fdf4;border-radius:12px;max-width:680px;width:100%;max-height:80vh;overflow:auto;padding:14px">
                     <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
@@ -277,6 +293,14 @@ def create_app() -> Flask:
                         top_symbols: [{ symbol: 'AAPL', count: 7 }, { symbol: 'SOFI', count: 4 }, { symbol: 'NVDA', count: 3 }],
                         latest_event: { endpoint: 'quick_ask', symbol: 'AAPL', decision_source: 'deterministic_model' },
                       },
+                    },
+                    outcomes: {
+                      summary_1d: { accuracy: 0.62, evaluated_rows: 13 },
+                      summary_5d: { accuracy: 0.67, evaluated_rows: 12 },
+                      rows: [
+                        { symbol: 'AAPL', endpoint: 'quick_ask', decision_source: 'deterministic_model', action: 'BUY', model_version: 'day1-logreg-v1', return_1d: 0.021, return_5d: 0.048, outcome_1d: 'correct', outcome_5d: 'correct' },
+                        { symbol: 'SOFI', endpoint: 'hot_momentum_buys', decision_source: 'rule_based', action: 'HOLD OFF FOR NOW', model_version: null, return_1d: -0.013, return_5d: -0.028, outcome_1d: 'correct', outcome_5d: 'correct' },
+                      ],
                     },
                   };
 
@@ -323,6 +347,17 @@ def create_app() -> Flask:
                       };
                     } catch (err) {
                       return fallbackData.ops;
+                    }
+                  }
+
+                  async function fetchOutcomesData(){
+                    try {
+                      const res = await fetch('/api/decision-outcomes?limit=20');
+                      if(!res.ok) throw new Error('non-200');
+                      const payload = await res.json();
+                      return payload.data || fallbackData.outcomes;
+                    } catch (err) {
+                      return fallbackData.outcomes;
                     }
                   }
 
@@ -487,6 +522,25 @@ def create_app() -> Flask:
                     document.getElementById('opsLatestEvent').innerHTML = `<div style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:12px"><div style="font-weight:800;color:#365314;margin-bottom:8px">Latest logged decision</div><div style="color:#3f6212">${latest.symbol ? `${escapeHtml(latest.symbol)} via ${escapeHtml(latest.endpoint || 'unknown')} · ${escapeHtml(latest.decision_source || 'unknown')}` : 'No events logged yet.'}</div></div>`;
                   }
 
+                  function formatPercent(v){
+                    return typeof v === 'number' ? `${(v * 100).toFixed(2)}%` : 'n/a';
+                  }
+
+                  function outcomeBadge(outcome){
+                    const value = String(outcome || 'skipped').toLowerCase();
+                    const color = value === 'correct' ? '#166534' : (value === 'incorrect' ? '#991b1b' : '#475569');
+                    return `<span style="display:inline-block;padding:4px 8px;border-radius:999px;background:${color};color:#f8fafc;font-weight:700;font-size:12px">${escapeHtml(value)}</span>`;
+                  }
+
+                  function renderOutcomes(data){
+                    const summary1d = data.summary_1d || {};
+                    const summary5d = data.summary_5d || {};
+                    document.getElementById('outcomesSummary').innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px"><article style="background:#ecfdf5;border:1px solid #bbf7d0;border-radius:12px;padding:12px"><div style="font-size:12px;font-weight:800;letter-spacing:.06em;color:#166534;text-transform:uppercase;margin-bottom:6px">1D accuracy</div><div style="font-size:1.5rem;font-weight:800;color:#14532d">${summary1d.accuracy != null ? `${(summary1d.accuracy * 100).toFixed(1)}%` : 'n/a'}</div><div style="color:#166534">${summary1d.evaluated_rows || 0} evaluated rows</div></article><article style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:12px"><div style="font-size:12px;font-weight:800;letter-spacing:.06em;color:#1d4ed8;text-transform:uppercase;margin-bottom:6px">5D accuracy</div><div style="font-size:1.5rem;font-weight:800;color:#1e3a8a">${summary5d.accuracy != null ? `${(summary5d.accuracy * 100).toFixed(1)}%` : 'n/a'}</div><div style="color:#1d4ed8">${summary5d.evaluated_rows || 0} evaluated rows</div></article></div>`;
+
+                    const rows = Array.isArray(data.rows) ? data.rows : [];
+                    document.getElementById('outcomesTable').innerHTML = rows.length ? `<div style="overflow:auto"><table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Symbol</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Endpoint</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Source</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Action</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Model</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">1D Return</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">1D Outcome</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">5D Return</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">5D Outcome</th></tr></thead><tbody>${rows.map(row => `<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(row.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${escapeHtml(row.endpoint || 'n/a')}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${escapeHtml(row.decision_source || 'n/a')}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${escapeHtml(row.action || 'n/a')}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${escapeHtml(row.model_version || 'n/a')}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatPercent(row.return_1d)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${outcomeBadge(row.outcome_1d)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatPercent(row.return_5d)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${outcomeBadge(row.outcome_5d)}</td></tr>`).join('')}</tbody></table></div>` : `<div style="background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;padding:16px;color:#475569">No evaluated decision outcomes yet. Run the Day 9 evaluator and let more logs accumulate.</div>`;
+                  }
+
                   function setTabLoading(isLoading){
                     const loadingEl = document.getElementById('tabLoading');
                     if(!loadingEl) return;
@@ -495,6 +549,12 @@ def create_app() -> Flask:
 
                   function setOpsLoading(isLoading){
                     const loadingEl = document.getElementById('opsLoading');
+                    if(!loadingEl) return;
+                    loadingEl.style.display = isLoading ? 'flex' : 'none';
+                  }
+
+                  function setOutcomesLoading(isLoading){
+                    const loadingEl = document.getElementById('outcomesLoading');
                     if(!loadingEl) return;
                     loadingEl.style.display = isLoading ? 'flex' : 'none';
                   }
@@ -532,6 +592,15 @@ def create_app() -> Flask:
                     }
                   }
 
+                  async function refreshOutcomes(){
+                    setOutcomesLoading(true);
+                    try {
+                      renderOutcomes(await fetchOutcomesData());
+                    } finally {
+                      setOutcomesLoading(false);
+                    }
+                  }
+
                   document.getElementById('quickSymbol').addEventListener('keydown', (event) => { if(event.key==='Enter'){event.preventDefault();quickAsk();} });
                   document.getElementById('quickSymbol').addEventListener('focus', (event) => {
                     if(event.target.value){ event.target.value = ''; }
@@ -543,6 +612,7 @@ def create_app() -> Flask:
                     renderMarket(market);
                     await refreshTab('stable');
                     await refreshOps();
+                    await refreshOutcomes();
                   }
 
                   init();

@@ -248,6 +248,38 @@ def test_decision_log_summary_rejects_invalid_limit():
     assert res.get_json()["error"] == "limit must be an integer"
 
 
+def test_decision_outcomes_returns_rows_and_summaries(tmp_path, monkeypatch):
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+    logger.log(endpoint="quick_ask", symbol="AAPL", decision_source="deterministic_model", payload={"recommendation": "BUY", "model_version": "day1-logreg-v1"})
+    logger.log(endpoint="user_watchlist", symbol="TSLA", decision_source="rule_based", payload={"advice": "SELL"})
+
+    monkeypatch.setattr(
+        api_module,
+        "_future_return_for_outcomes",
+        lambda symbol, ts, days: {("AAPL", 1): 0.02, ("AAPL", 5): 0.04, ("TSLA", 1): -0.01, ("TSLA", 5): -0.03}[(symbol, days)],
+    )
+
+    res = client.get("/api/decision-outcomes?limit=10")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["summary_1d"]["rows"] == 2
+    assert data["summary_1d"]["accuracy"] == 1.0
+    assert data["rows"][0]["outcome_1d"] == "correct"
+    assert data["rows"][0]["model_version"] == "day1-logreg-v1"
+
+
+def test_decision_outcomes_rejects_invalid_limit():
+    client = _client()
+
+    res = client.get("/api/decision-outcomes?limit=bad")
+
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "limit must be an integer"
+
+
 def test_explain_recommendation_returns_plain_english_text():
     client = _client()
     res = client.post(

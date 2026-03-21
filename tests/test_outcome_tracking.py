@@ -1,7 +1,6 @@
 import pandas as pd
 
-from moneybot.services.outcome_tracking import classify_outcome, normalize_action, summarize_outcome_rows
-from scripts.day9_evaluate_decision_outcomes import _close_values
+from moneybot.services.outcome_tracking import classify_outcome, close_values, evaluate_decision_events, normalize_action, summarize_outcome_rows
 
 
 def test_normalize_action_reads_recommendation_and_advice():
@@ -42,4 +41,20 @@ def test_close_values_handles_dataframe_close_column():
         }
     )
 
-    assert _close_values(history) == [100.0, 101.0, 102.0]
+    assert close_values(history) == [100.0, 101.0, 102.0]
+
+
+def test_evaluate_decision_events_builds_rows_with_outcomes():
+    events = [
+        {"symbol": "AAPL", "endpoint": "quick_ask", "decision_source": "deterministic_model", "ts": 1, "payload": {"recommendation": "BUY", "model_version": "day1-logreg-v1"}},
+        {"symbol": "TSLA", "endpoint": "user_watchlist", "decision_source": "rule_based", "ts": 2, "payload": {"advice": "SELL"}},
+    ]
+
+    rows = evaluate_decision_events(
+        events,
+        future_return_lookup=lambda symbol, ts, days: {("AAPL", 1): 0.02, ("AAPL", 5): 0.04, ("TSLA", 1): -0.03, ("TSLA", 5): -0.05}[(symbol, days)],
+    )
+
+    assert rows[0]["outcome_1d"] == "correct"
+    assert rows[0]["model_version"] == "day1-logreg-v1"
+    assert rows[1]["outcome_5d"] == "correct"
