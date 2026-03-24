@@ -58,3 +58,19 @@ def test_evaluate_decision_events_builds_rows_with_outcomes():
     assert rows[0]["outcome_1d"] == "correct"
     assert rows[0]["model_version"] == "day1-logreg-v1"
     assert rows[1]["outcome_5d"] == "correct"
+
+
+def test_evaluate_decision_events_handles_lookup_errors_as_skipped():
+    events = [
+        {"symbol": "AAPL", "endpoint": "quick_ask", "decision_source": "deterministic_model", "ts": 1, "payload": {"recommendation": "BUY"}},
+    ]
+
+    def flaky_lookup(symbol, ts, days):
+        if days == 1:
+            raise ValueError("provider error")
+        return 0.02
+
+    rows = evaluate_decision_events(events, future_return_lookup=flaky_lookup)
+    assert rows[0]["return_1d"] is None
+    assert rows[0]["outcome_1d"] == "skipped"
+    assert rows[0]["return_5d"] == 0.02

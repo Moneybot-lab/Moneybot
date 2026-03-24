@@ -97,8 +97,14 @@ def evaluate_decision_events(
             "ts": ts,
             "model_version": (event.get("payload") or {}).get("model_version") if isinstance(event.get("payload"), dict) else None,
         }
-        row["return_1d"] = future_return_lookup(symbol, ts, 1)
-        row["return_5d"] = future_return_lookup(symbol, ts, 5)
+        try:
+            row["return_1d"] = future_return_lookup(symbol, ts, 1)
+        except Exception:  # noqa: BLE001
+            row["return_1d"] = None
+        try:
+            row["return_5d"] = future_return_lookup(symbol, ts, 5)
+        except Exception:  # noqa: BLE001
+            row["return_5d"] = None
         row["outcome_1d"] = classify_outcome(action, row["return_1d"])
         row["outcome_5d"] = classify_outcome(action, row["return_5d"])
         rows.append(row)

@@ -324,6 +324,22 @@ def test_decision_outcomes_expands_scan_window_to_find_older_evaluated_rows(tmp_
     assert data["rows_scanned"] == 260
 
 
+def test_decision_outcomes_returns_200_when_lookup_raises(tmp_path, monkeypatch):
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+    logger.log(endpoint="quick_ask", symbol="MSFT", decision_source="deterministic_model", payload={"recommendation": "BUY"})
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda symbol, ts, days: (_ for _ in ()).throw(ValueError("No objects to concatenate")))
+
+    res = client.get("/api/decision-outcomes?limit=10&include_skipped=true")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert len(data["rows"]) == 1
+    assert data["rows"][0]["outcome_1d"] == "skipped"
+    assert data["rows"][0]["outcome_5d"] == "skipped"
+
+
 def test_decision_outcomes_rejects_invalid_limit():
     client = _client()
 

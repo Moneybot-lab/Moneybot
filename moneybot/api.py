@@ -4,7 +4,7 @@ import logging
 import smtplib
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlsplit
 from collections import defaultdict, deque
 from decimal import Decimal
@@ -1046,16 +1046,27 @@ def wells_picks():
     svc = current_app.extensions["market_data_service"]
     return jsonify({"items": svc.get_wells_picks(), "request_id": g.request_id})
 def _future_return_for_outcomes(symbol: str, start_ts: int, days: int) -> float | None:
-    start_dt = datetime.fromtimestamp(int(start_ts))
+    start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
+    now_utc = datetime.now(timezone.utc)
+    # Skip network calls when event time is too recent (or future) to have realized horizon returns.
+    if start_dt >= now_utc:
+        return None
+    if start_dt + timedelta(days=days) > now_utc:
+        return None
+
     end_dt = start_dt + timedelta(days=max(days + 3, 7))
-    history = yf.download(
-        symbol,
-        start=start_dt.strftime("%Y-%m-%d"),
-        end=end_dt.strftime("%Y-%m-%d"),
-        interval="1d",
-        progress=False,
-        auto_adjust=False,
-    )
+    safe_end_dt = min(end_dt, now_utc + timedelta(days=1))
+    try:
+        history = yf.download(
+            symbol,
+            start=start_dt.strftime("%Y-%m-%d"),
+            end=safe_end_dt.strftime("%Y-%m-%d"),
+            interval="1d",
+            progress=False,
+            auto_adjust=False,
+        )
+    except Exception:  # noqa: BLE001
+        return None
     closes = close_values(history)
     if len(closes) <= days:
         return None
