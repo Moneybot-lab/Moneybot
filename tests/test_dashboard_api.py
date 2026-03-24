@@ -269,6 +269,36 @@ def test_decision_outcomes_returns_rows_and_summaries(tmp_path, monkeypatch):
     assert data["summary_1d"]["accuracy"] == 1.0
     assert data["rows"][0]["outcome_1d"] == "correct"
     assert data["rows"][0]["model_version"] == "day1-logreg-v1"
+    assert data["include_skipped"] is False
+    assert data["rows_scanned"] >= 2
+    assert data["evaluated_rows_available"] == 2
+
+
+def test_decision_outcomes_filters_skipped_rows_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+    logger.log(endpoint="quick_ask", symbol="AAPL", decision_source="deterministic_model", payload={"recommendation": "BUY"})
+    logger.log(endpoint="quick_ask", symbol="TSLA", decision_source="rule_based", payload={"recommendation": "BUY"})
+
+    monkeypatch.setattr(
+        api_module,
+        "_future_return_for_outcomes",
+        lambda symbol, ts, days: {("AAPL", 1): None, ("AAPL", 5): None, ("TSLA", 1): 0.03, ("TSLA", 5): None}[(symbol, days)],
+    )
+
+    filtered = client.get("/api/decision-outcomes?limit=10")
+    assert filtered.status_code == 200
+    filtered_data = filtered.get_json()["data"]
+    assert len(filtered_data["rows"]) == 1
+    assert filtered_data["rows"][0]["symbol"] == "TSLA"
+    assert filtered_data["summary_1d"]["rows"] == 1
+
+    include_skipped = client.get("/api/decision-outcomes?limit=10&include_skipped=true")
+    assert include_skipped.status_code == 200
+    include_skipped_data = include_skipped.get_json()["data"]
+    assert len(include_skipped_data["rows"]) == 2
+    assert include_skipped_data["include_skipped"] is True
 
 
 def test_decision_outcomes_rejects_invalid_limit():
@@ -430,6 +460,41 @@ def test_sell_watchlist_item_rejects_selling_more_than_owned():
     sell = client.post(f"/api/user-watchlist/{item_id}/sell", json={"sold_price": 55, "shares_sold": 2})
     assert sell.status_code == 400
     assert sell.get_json()["error"] == "shares_sold cannot exceed current shares"
+
+
+def test_buy_watchlist_item_increases_shares_and_recalculates_entry_price():
+    client = _client()
+    signup = client.post("/api/auth/signup", json={"email": "buy@b.com", "password": "pw", "password_confirmation": "pw"})
+    assert signup.status_code == 201
+
+    add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 10})
+    assert add.status_code == 201
+    item_id = add.get_json()["item"]["id"]
+
+    buy = client.post(f"/api/user-watchlist/{item_id}/buy", json={"bought_price": 130, "shares_bought": 5})
+    assert buy.status_code == 200
+    payload = buy.get_json()
+    assert payload["item"]["shares"] == 15.0
+    assert payload["item"]["entry_price"] == 110.0
+    assert payload["added"]["new_entry_price"] == 110.0
+
+
+def test_buy_watchlist_item_validates_positive_inputs():
+    client = _client()
+    signup = client.post("/api/auth/signup", json={"email": "buy-invalid@b.com", "password": "pw", "password_confirmation": "pw"})
+    assert signup.status_code == 201
+
+    add = client.post("/api/user-watchlist", json={"symbol": "TSLA", "buy_price": 200, "shares": 2})
+    assert add.status_code == 201
+    item_id = add.get_json()["item"]["id"]
+
+    bad_price = client.post(f"/api/user-watchlist/{item_id}/buy", json={"bought_price": 0, "shares_bought": 1})
+    assert bad_price.status_code == 400
+    assert bad_price.get_json()["error"] == "bought_price must be > 0"
+
+    bad_shares = client.post(f"/api/user-watchlist/{item_id}/buy", json={"bought_price": 210, "shares_bought": 0})
+    assert bad_shares.status_code == 400
+    assert bad_shares.get_json()["error"] == "shares_bought must be > 0"
 
 
 def test_forgot_password_sends_reset_email_for_existing_user(monkeypatch):

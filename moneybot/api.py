@@ -678,6 +678,51 @@ def sell_watchlist_item(item_id: int):
     )
 
 
+@api_bp.post("/user-watchlist/<int:item_id>/buy")
+@login_required
+def buy_watchlist_item(item_id: int):
+    data = request.get_json(silent=True) or {}
+    item = WatchlistItem.query.filter_by(id=item_id, user_id=session["user_id"]).first()
+    if not item:
+        return jsonify({"error": "item not found", "request_id": g.request_id}), 404
+
+    bought_price = _to_decimal(data.get("bought_price"))
+    shares_bought = _to_decimal(data.get("shares_bought"))
+
+    if bought_price is None or bought_price <= 0:
+        return jsonify({"error": "bought_price must be > 0", "request_id": g.request_id}), 400
+    if shares_bought is None or shares_bought <= 0:
+        return jsonify({"error": "shares_bought must be > 0", "request_id": g.request_id}), 400
+
+    existing_shares = item.shares if item.shares is not None and item.shares > 0 else Decimal("0")
+    new_total_shares = existing_shares + shares_bought
+    if new_total_shares <= 0:
+        return jsonify({"error": "resulting shares must be > 0", "request_id": g.request_id}), 400
+
+    if item.buy_price is None or existing_shares == 0:
+        new_entry_price = bought_price
+    else:
+        prior_cost = item.buy_price * existing_shares
+        bought_cost = bought_price * shares_bought
+        new_entry_price = (prior_cost + bought_cost) / new_total_shares
+
+    item.shares = new_total_shares
+    item.buy_price = new_entry_price
+    db.session.commit()
+
+    return jsonify(
+        {
+            "item": _watchlist_item_payload(item),
+            "added": {
+                "shares_bought": float(shares_bought),
+                "bought_price": float(bought_price),
+                "new_entry_price": float(new_entry_price),
+            },
+            "request_id": g.request_id,
+        }
+    )
+
+
 @api_bp.get("/sold-trades")
 @login_required
 def sold_trades():
@@ -947,6 +992,7 @@ def decision_log_summary():
 def decision_outcomes():
     decision_logger = current_app.extensions.get("decision_logger")
     raw_limit = request.args.get("limit") or "20"
+    include_skipped = (request.args.get("include_skipped") or "").strip().lower() == "true"
     try:
         limit = max(1, min(int(raw_limit), 100))
     except ValueError:
@@ -957,17 +1003,31 @@ def decision_outcomes():
         or current_app.config.get("DECISION_LOG_PATH")
         or "data/decision_events.jsonl"
     )
-    events = read_decision_events(str(output_path), limit=limit)
+    # Read a wider slice so the UI can still show up to `limit` evaluated rows even when
+    # the most recent events have not aged enough for 1D / 5D outcomes yet.
+    read_limit = max(limit, min(limit * 10, 1000))
+    events = read_decision_events(str(output_path), limit=read_limit)
     rows = evaluate_decision_events(events, future_return_lookup=_future_return_for_outcomes)
-    summary_1d = summarize_outcome_rows(rows)
-    summary_5d = summarize_outcome_rows([{**row, "return_1d": row.get("return_5d")} for row in rows])
+    evaluated_rows = [
+        row
+        for row in rows
+        if isinstance(row.get("return_1d"), (int, float)) or isinstance(row.get("return_5d"), (int, float))
+    ]
+    visible_rows = rows if include_skipped else evaluated_rows
+    visible_rows = visible_rows[-limit:]
+
+    summary_1d = summarize_outcome_rows(visible_rows)
+    summary_5d = summarize_outcome_rows([{**row, "return_1d": row.get("return_5d")} for row in visible_rows])
 
     return jsonify(
         {
             "data": {
-                "rows": rows,
+                "rows": visible_rows,
                 "summary_1d": summary_1d,
                 "summary_5d": summary_5d,
+                "include_skipped": include_skipped,
+                "rows_scanned": len(rows),
+                "evaluated_rows_available": len(evaluated_rows),
             },
             "request_id": g.request_id,
         }
