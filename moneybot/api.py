@@ -1003,16 +1003,23 @@ def decision_outcomes():
         or current_app.config.get("DECISION_LOG_PATH")
         or "data/decision_events.jsonl"
     )
-    # Read a wider slice so the UI can still show up to `limit` evaluated rows even when
-    # the most recent events have not aged enough for 1D / 5D outcomes yet.
-    read_limit = max(limit, min(limit * 10, 1000))
-    events = read_decision_events(str(output_path), limit=read_limit)
-    rows = evaluate_decision_events(events, future_return_lookup=_future_return_for_outcomes)
-    evaluated_rows = [
-        row
-        for row in rows
-        if isinstance(row.get("return_1d"), (int, float)) or isinstance(row.get("return_5d"), (int, float))
-    ]
+    # Read progressively wider windows so the endpoint can still find older evaluated rows
+    # when very recent logs are mostly too fresh for 1D / 5D outcomes.
+    read_cap = 5000
+    read_limit = min(max(limit * 10, 200), read_cap)
+    rows: list[dict[str, Any]] = []
+    evaluated_rows: list[dict[str, Any]] = []
+    while True:
+        events = read_decision_events(str(output_path), limit=read_limit)
+        rows = evaluate_decision_events(events, future_return_lookup=_future_return_for_outcomes)
+        evaluated_rows = [
+            row
+            for row in rows
+            if isinstance(row.get("return_1d"), (int, float)) or isinstance(row.get("return_5d"), (int, float))
+        ]
+        if include_skipped or len(evaluated_rows) >= limit or read_limit >= read_cap:
+            break
+        read_limit = min(read_limit * 2, read_cap)
     visible_rows = rows if include_skipped else evaluated_rows
     visible_rows = visible_rows[-limit:]
 

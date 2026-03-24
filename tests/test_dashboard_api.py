@@ -301,6 +301,29 @@ def test_decision_outcomes_filters_skipped_rows_by_default(tmp_path, monkeypatch
     assert include_skipped_data["include_skipped"] is True
 
 
+def test_decision_outcomes_expands_scan_window_to_find_older_evaluated_rows(tmp_path, monkeypatch):
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+
+    for idx in range(260):
+        symbol = f"SYM{idx}"
+        logger.log(endpoint="quick_ask", symbol=symbol, decision_source="deterministic_model", payload={"recommendation": "BUY"})
+
+    monkeypatch.setattr(
+        api_module,
+        "_future_return_for_outcomes",
+        lambda symbol, ts, days: 0.02 if (symbol == "SYM0" and days == 1) else None,
+    )
+
+    res = client.get("/api/decision-outcomes?limit=1")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert len(data["rows"]) == 1
+    assert data["rows"][0]["symbol"] == "SYM0"
+    assert data["rows_scanned"] == 260
+
+
 def test_decision_outcomes_rejects_invalid_limit():
     client = _client()
 
