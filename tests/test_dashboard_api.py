@@ -293,12 +293,30 @@ def test_decision_outcomes_filters_skipped_rows_by_default(tmp_path, monkeypatch
     assert len(filtered_data["rows"]) == 1
     assert filtered_data["rows"][0]["symbol"] == "TSLA"
     assert filtered_data["summary_1d"]["rows"] == 1
+    assert filtered_data["used_unevaluated_fallback"] is False
 
     include_skipped = client.get("/api/decision-outcomes?limit=10&include_skipped=true")
     assert include_skipped.status_code == 200
     include_skipped_data = include_skipped.get_json()["data"]
     assert len(include_skipped_data["rows"]) == 2
     assert include_skipped_data["include_skipped"] is True
+
+
+def test_decision_outcomes_falls_back_to_recent_rows_when_nothing_is_evaluable(tmp_path, monkeypatch):
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+    logger.log(endpoint="quick_ask", symbol="AAPL", decision_source="deterministic_model", payload={"recommendation": "BUY"})
+    logger.log(endpoint="quick_ask", symbol="TSLA", decision_source="rule_based", payload={"recommendation": "SELL"})
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda symbol, ts, days: None)
+
+    res = client.get("/api/decision-outcomes?limit=10")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert len(data["rows"]) == 2
+    assert data["summary_1d"]["evaluated_rows"] == 0
+    assert data["used_unevaluated_fallback"] is True
 
 
 def test_decision_outcomes_expands_scan_window_to_find_older_evaluated_rows(tmp_path, monkeypatch):

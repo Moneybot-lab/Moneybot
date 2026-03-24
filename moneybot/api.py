@@ -1020,7 +1020,13 @@ def decision_outcomes():
         if include_skipped or len(evaluated_rows) >= limit or read_limit >= read_cap:
             break
         read_limit = min(read_limit * 2, read_cap)
+    used_unevaluated_fallback = False
     visible_rows = rows if include_skipped else evaluated_rows
+    if not include_skipped and not visible_rows and rows:
+        # If nothing is evaluable yet, return the most recent rows so the UI still shows
+        # live decision activity instead of an empty panel.
+        visible_rows = rows
+        used_unevaluated_fallback = True
     visible_rows = visible_rows[-limit:]
 
     summary_1d = summarize_outcome_rows(visible_rows)
@@ -1035,6 +1041,7 @@ def decision_outcomes():
                 "include_skipped": include_skipped,
                 "rows_scanned": len(rows),
                 "evaluated_rows_available": len(evaluated_rows),
+                "used_unevaluated_fallback": used_unevaluated_fallback,
             },
             "request_id": g.request_id,
         }
