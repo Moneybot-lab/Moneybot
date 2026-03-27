@@ -20,6 +20,7 @@ class DeterministicQuickAdvisor:
         artifact_path: str,
         quick_buy_threshold: float | None = None,
         quick_strong_buy_threshold: float = 0.70,
+        quick_abstain_margin: float = 0.05,
         portfolio_buy_prob_threshold: float = 0.62,
         portfolio_sell_prob_threshold: float = 0.45,
         portfolio_buy_dip_threshold_pct: float = -4.0,
@@ -32,6 +33,7 @@ class DeterministicQuickAdvisor:
 
         self.quick_buy_threshold = quick_buy_threshold
         self.quick_strong_buy_threshold = float(quick_strong_buy_threshold)
+        self.quick_abstain_margin = max(0.0, min(float(quick_abstain_margin), 0.49))
         self.portfolio_buy_prob_threshold = float(portfolio_buy_prob_threshold)
         self.portfolio_sell_prob_threshold = float(portfolio_sell_prob_threshold)
         self.portfolio_buy_dip_threshold_pct = float(portfolio_buy_dip_threshold_pct)
@@ -102,19 +104,29 @@ class DeterministicQuickAdvisor:
         prob_up = float(predict_proba(self.artifact, row)[0])
         threshold = float(self.quick_buy_threshold if self.quick_buy_threshold is not None else self.artifact.decision_threshold)
         strong_threshold = max(threshold + 0.15, self.quick_strong_buy_threshold)
+        abstain_low = max(0.0, threshold - self.quick_abstain_margin)
+        abstain_high = min(1.0, threshold + self.quick_abstain_margin)
 
         if prob_up >= strong_threshold:
             recommendation = "STRONG BUY"
-        elif prob_up >= threshold:
+            abstained = False
+        elif prob_up >= abstain_high:
             recommendation = "BUY"
-        else:
+            abstained = False
+        elif prob_up <= abstain_low:
             recommendation = "HOLD OFF FOR NOW"
+            abstained = False
+        else:
+            recommendation = "HOLD"
+            abstained = True
 
         confidence = round(max(prob_up, 1.0 - prob_up) * 100.0, 1)
         rationale = (
             f"Deterministic model ({self.artifact.version}) probability-up={prob_up:.2f} "
-            f"vs threshold={threshold:.2f}."
+            f"vs threshold={threshold:.2f} with abstain band [{abstain_low:.2f}, {abstain_high:.2f}]."
         )
+        if abstained:
+            rationale += " Signal is close to threshold, so recommendation is neutral HOLD."
         if imputed:
             rationale += f" Missing live features were imputed: {', '.join(imputed)}."
 
@@ -129,6 +141,9 @@ class DeterministicQuickAdvisor:
             "model_version": self.artifact.version,
             "probability_up": round(prob_up, 4),
             "decision_threshold": threshold,
+            "decision_band_low": round(abstain_low, 4),
+            "decision_band_high": round(abstain_high, 4),
+            "abstained": abstained,
             "confidence": confidence,
             "imputed_features": imputed,
         }
