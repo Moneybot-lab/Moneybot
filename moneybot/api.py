@@ -1003,6 +1003,27 @@ def decision_outcomes():
         or current_app.config.get("DECISION_LOG_PATH")
         or "data/decision_events.jsonl"
     )
+    lookup_cache: dict[tuple[str, int, int], float | None] = {}
+    cache_hits = 0
+    cache_misses = 0
+    lookup_errors = 0
+
+    def cached_future_return_lookup(symbol: str, ts: int, days: int) -> float | None:
+        nonlocal cache_hits, cache_misses, lookup_errors
+        key = (str(symbol).upper(), int(ts), int(days))
+        if key in lookup_cache:
+            cache_hits += 1
+            return lookup_cache[key]
+
+        cache_misses += 1
+        try:
+            value = _future_return_for_outcomes(symbol, ts, days)
+        except Exception:  # noqa: BLE001
+            lookup_errors += 1
+            value = None
+        lookup_cache[key] = value
+        return value
+
     # Read progressively wider windows so the endpoint can still find older evaluated rows
     # when very recent logs are mostly too fresh for 1D / 5D outcomes.
     read_cap = 5000
@@ -1011,7 +1032,7 @@ def decision_outcomes():
     evaluated_rows: list[dict[str, Any]] = []
     while True:
         events = read_decision_events(str(output_path), limit=read_limit)
-        rows = evaluate_decision_events(events, future_return_lookup=_future_return_for_outcomes)
+        rows = evaluate_decision_events(events, future_return_lookup=cached_future_return_lookup)
         evaluated_rows = [
             row
             for row in rows
@@ -1042,6 +1063,10 @@ def decision_outcomes():
                 "rows_scanned": len(rows),
                 "evaluated_rows_available": len(evaluated_rows),
                 "used_unevaluated_fallback": used_unevaluated_fallback,
+                "lookup_cache_hits": cache_hits,
+                "lookup_cache_misses": cache_misses,
+                "lookup_cache_size": len(lookup_cache),
+                "lookup_errors": lookup_errors,
             },
             "request_id": g.request_id,
         }

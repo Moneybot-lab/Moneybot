@@ -357,6 +357,37 @@ def test_decision_outcomes_returns_200_when_lookup_raises(tmp_path, monkeypatch)
     assert data["rows"][0]["outcome_5d"] == "skipped"
 
 
+def test_decision_outcomes_uses_lookup_cache_for_duplicate_events(tmp_path, monkeypatch):
+    events_path = tmp_path / "decision_events.jsonl"
+    event = {
+        "ts": 1700000000,
+        "endpoint": "quick_ask",
+        "symbol": "AAPL",
+        "decision_source": "deterministic_model",
+        "payload": {"recommendation": "BUY"},
+    }
+    events_path.write_text("\n".join(json.dumps(event) for _ in range(3)) + "\n", encoding="utf-8")
+    monkeypatch.setenv("DECISION_LOG_PATH", str(events_path))
+
+    client = _client()
+    calls = {"count": 0}
+
+    def fake_lookup(symbol, ts, days):
+        calls["count"] += 1
+        return 0.02 if days == 1 else 0.04
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", fake_lookup)
+
+    res = client.get("/api/decision-outcomes?limit=10&include_skipped=true")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert len(data["rows"]) == 3
+    assert calls["count"] == 2
+    assert data["lookup_cache_misses"] == 2
+    assert data["lookup_cache_hits"] >= 4
+    assert data["lookup_cache_size"] == 2
+
+
 def test_decision_outcomes_rejects_invalid_limit():
     client = _client()
 
