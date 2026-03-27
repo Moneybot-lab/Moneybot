@@ -59,6 +59,34 @@ def summarize_outcome_rows(rows: list[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def summarize_outcome_groups(rows: list[Dict[str, Any]], *, group_field: str) -> list[Dict[str, Any]]:
+    grouped: dict[str, list[Dict[str, Any]]] = {}
+    for row in rows:
+        raw = row.get(group_field)
+        key = str(raw).strip() if raw not in (None, "") else "unknown"
+        grouped.setdefault(key, []).append(row)
+
+    summary: list[Dict[str, Any]] = []
+    for key, group_rows in grouped.items():
+        group_summary = summarize_outcome_rows(group_rows)
+        summary.append(
+            {
+                "group": key,
+                **group_summary,
+            }
+        )
+
+    return sorted(
+        summary,
+        key=lambda item: (
+            int(item.get("evaluated_rows") or 0),
+            int(item.get("rows") or 0),
+            str(item.get("group") or ""),
+        ),
+        reverse=True,
+    )
+
+
 def close_values(history) -> list[float]:
     if history is None or getattr(history, "empty", False):
         return []

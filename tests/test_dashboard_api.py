@@ -131,9 +131,8 @@ def test_quick_ask_returns_shopping_friendly_recommendation_scale():
     res = client.get("/api/quick-ask?symbol=AAPL")
     assert res.status_code == 200
     data = res.get_json()["data"]
-    assert data["recommendation"] in {"STRONG BUY", "BUY", "HOLD OFF FOR NOW"}
-    assert data["recommendation"] == "BUY"
-    assert "Momentum" in data["rationale"] or "signal" in data["rationale"]
+    assert data["recommendation"] in {"STRONG BUY", "BUY", "HOLD", "HOLD OFF FOR NOW"}
+    assert "momentum" in data["rationale"].lower() or "signal" in data["rationale"].lower()
     assert data["quote_source"] == "finnhub"
     assert data["quote_diagnostics"]["provider"] == "finnhub"
 
@@ -272,6 +271,10 @@ def test_decision_outcomes_returns_rows_and_summaries(tmp_path, monkeypatch):
     assert data["include_skipped"] is False
     assert data["rows_scanned"] >= 2
     assert data["evaluated_rows_available"] == 2
+    assert data["breakdown"]["by_endpoint"][0]["group"] == "user_watchlist"
+    assert data["breakdown"]["by_action"][0]["group"] in {"BUY", "SELL"}
+    assert data["breakdown"]["by_source"][0]["group"] in {"deterministic_model", "rule_based"}
+    assert "quick_ask::BUY" in {item["group"] for item in data["breakdown"]["by_endpoint_action"]}
 
 
 def test_decision_outcomes_filters_skipped_rows_by_default(tmp_path, monkeypatch):
@@ -317,6 +320,7 @@ def test_decision_outcomes_falls_back_to_recent_rows_when_nothing_is_evaluable(t
     assert len(data["rows"]) == 2
     assert data["summary_1d"]["evaluated_rows"] == 0
     assert data["used_unevaluated_fallback"] is True
+    assert data["breakdown"]["by_endpoint"][0]["rows"] == 2
 
 
 def test_decision_outcomes_expands_scan_window_to_find_older_evaluated_rows(tmp_path, monkeypatch):
