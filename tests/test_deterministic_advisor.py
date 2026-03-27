@@ -38,7 +38,7 @@ def test_predict_quick_decision_returns_structured_payload(tmp_path: Path):
     out = svc.predict_quick_decision(signal_data=signal_data, quote_data=quote_data)
 
     assert out is not None
-    assert out["recommendation"] in {"STRONG BUY", "BUY", "HOLD", "HOLD OFF FOR NOW"}
+    assert out["recommendation"] in {"STRONG BUY", "BUY", "HOLD OFF FOR NOW"}
     assert out["decision_source"] == "deterministic_model"
     assert out["model_version"] == "day1-logreg-v1"
     assert 0.0 <= out["probability_up"] <= 1.0
@@ -112,28 +112,7 @@ def test_predict_quick_decision_supports_threshold_overrides(tmp_path: Path):
     )
 
     assert out is not None
-    assert out["recommendation"] in {"HOLD", "HOLD OFF FOR NOW"}
-
-
-def test_predict_quick_decision_can_abstain_to_neutral_hold(tmp_path: Path):
-    artifact_path = _write_artifact(tmp_path)
-    svc = DeterministicQuickAdvisor(
-        enabled=True,
-        artifact_path=str(artifact_path),
-        quick_buy_threshold=0.55,
-        quick_abstain_margin=0.08,
-    )
-
-    out = svc.predict_quick_decision(
-        signal_data={"technical": {"rsi": 49.0, "macd_histogram": 0.0}, "volume_ratio": 1.0},
-        quote_data={"price": 100.0, "change_percent": 0.0, "quote_source": "finnhub", "diagnostics": {}},
-    )
-
-    assert out is not None
-    assert out["recommendation"] == "HOLD"
-    assert out["abstained"] is True
-    assert out["decision_band_low"] == 0.47
-    assert out["decision_band_high"] == 0.63
+    assert out["recommendation"] == "HOLD OFF FOR NOW"
 
 
 def test_predict_portfolio_position_supports_threshold_overrides(tmp_path: Path):

@@ -23,12 +23,7 @@ from .extensions import db
 from .models import SoldTrade, User, WatchlistItem
 from .services.decision_log import read_decision_events, summarize_decision_events
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
-from .services.outcome_tracking import (
-    close_values,
-    evaluate_decision_events,
-    summarize_outcome_groups,
-    summarize_outcome_rows,
-)
+from .services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
 
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
@@ -372,7 +367,7 @@ def reset_password():
     if user_id is None:
         return jsonify({"error": "invalid or expired token", "request_id": g.request_id}), 400
 
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     if not user:
         return jsonify({"error": "invalid or expired token", "request_id": g.request_id}), 400
 
@@ -390,7 +385,7 @@ def logout():
 @api_bp.get("/me")
 @login_required
 def me():
-    user = User.query.get(session["user_id"])
+    user = db.session.get(User, session["user_id"])
     if not user:
         session.clear()
         return jsonify({"error": "user not found", "request_id": g.request_id}), 404
@@ -1036,13 +1031,6 @@ def decision_outcomes():
 
     summary_1d = summarize_outcome_rows(visible_rows)
     summary_5d = summarize_outcome_rows([{**row, "return_1d": row.get("return_5d")} for row in visible_rows])
-    endpoint_action_rows = [
-        {
-            **row,
-            "endpoint_action": f"{str(row.get('endpoint') or 'unknown')}::{str(row.get('action') or 'unknown')}",
-        }
-        for row in visible_rows
-    ]
 
     return jsonify(
         {
@@ -1050,12 +1038,6 @@ def decision_outcomes():
                 "rows": visible_rows,
                 "summary_1d": summary_1d,
                 "summary_5d": summary_5d,
-                "breakdown": {
-                    "by_endpoint": summarize_outcome_groups(visible_rows, group_field="endpoint"),
-                    "by_action": summarize_outcome_groups(visible_rows, group_field="action"),
-                    "by_source": summarize_outcome_groups(visible_rows, group_field="decision_source"),
-                    "by_endpoint_action": summarize_outcome_groups(endpoint_action_rows, group_field="endpoint_action"),
-                },
                 "include_skipped": include_skipped,
                 "rows_scanned": len(rows),
                 "evaluated_rows_available": len(evaluated_rows),
