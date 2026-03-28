@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import logging
 import smtplib
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from collections import defaultdict, deque
 from decimal import Decimal
@@ -27,6 +29,34 @@ from .services.outcome_tracking import close_values, evaluate_decision_events, s
 
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
+
+
+def _load_materialized_outcomes_snapshot(path: str, *, max_age_seconds: int) -> dict[str, Any] | None:
+    file_path = Path(path)
+    if not file_path.exists():
+        return None
+    try:
+        payload = json.loads(file_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data")
+    computed_at = payload.get("computed_at_utc")
+    if not isinstance(data, dict) or not isinstance(computed_at, str):
+        return None
+    try:
+        computed_dt = datetime.fromisoformat(computed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    age_seconds = (datetime.now(timezone.utc) - computed_dt.astimezone(timezone.utc)).total_seconds()
+    if age_seconds < 0 or age_seconds > max(1, int(max_age_seconds)):
+        return None
+    return {
+        "data": data,
+        "computed_at_utc": computed_dt.astimezone(timezone.utc).isoformat(),
+        "age_seconds": int(age_seconds),
+    }
 
 
 
@@ -993,10 +1023,31 @@ def decision_outcomes():
     decision_logger = current_app.extensions.get("decision_logger")
     raw_limit = request.args.get("limit") or "20"
     include_skipped = (request.args.get("include_skipped") or "").strip().lower() == "true"
+    force_live = (request.args.get("force_live") or "").strip().lower() == "true"
     try:
         limit = max(1, min(int(raw_limit), 100))
     except ValueError:
         return jsonify({"error": "limit must be an integer", "request_id": g.request_id}), 400
+
+    snapshot_path = current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_PATH") or "data/decision_outcomes_snapshot.json"
+    snapshot_max_age_seconds = int(current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS") or 900)
+    if not force_live:
+        snapshot = _load_materialized_outcomes_snapshot(
+            str(snapshot_path),
+            max_age_seconds=snapshot_max_age_seconds,
+        )
+        if snapshot is not None:
+            return jsonify(
+                {
+                    "data": {
+                        **snapshot["data"],
+                        "snapshot_source": "materialized",
+                        "snapshot_computed_at_utc": snapshot["computed_at_utc"],
+                        "snapshot_age_seconds": snapshot["age_seconds"],
+                    },
+                    "request_id": g.request_id,
+                }
+            )
 
     output_path = (
         getattr(decision_logger, "output_path", None)
@@ -1067,6 +1118,9 @@ def decision_outcomes():
                 "lookup_cache_misses": cache_misses,
                 "lookup_cache_size": len(lookup_cache),
                 "lookup_errors": lookup_errors,
+                "snapshot_source": "live",
+                "snapshot_computed_at_utc": None,
+                "snapshot_age_seconds": None,
             },
             "request_id": g.request_id,
         }

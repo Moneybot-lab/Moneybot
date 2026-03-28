@@ -144,6 +144,18 @@ def test_create_app_reads_deterministic_threshold_settings(monkeypatch):
     assert svc.portfolio_sell_profit_threshold_pct == 8.0
 
 
+def test_create_app_reads_outcomes_snapshot_settings(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_PATH", "data/custom_outcomes_snapshot.json")
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "120")
+
+    app = create_app()
+
+    assert app.config["DECISION_OUTCOMES_SNAPSHOT_PATH"] == "data/custom_outcomes_snapshot.json"
+    assert app.config["DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS"] == 120
+
+
 def test_home_page_includes_model_ops_snapshot(monkeypatch):
     monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")

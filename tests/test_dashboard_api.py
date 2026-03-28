@@ -1,5 +1,6 @@
 import os
 import json
+from datetime import datetime, timezone
 
 from moneybot.app_factory import create_app
 from moneybot import api as api_module
@@ -386,6 +387,56 @@ def test_decision_outcomes_uses_lookup_cache_for_duplicate_events(tmp_path, monk
     assert data["lookup_cache_misses"] == 2
     assert data["lookup_cache_hits"] >= 4
     assert data["lookup_cache_size"] == 2
+
+
+def test_decision_outcomes_uses_materialized_snapshot_when_fresh(tmp_path, monkeypatch):
+    snapshot_path = tmp_path / "decision_outcomes_snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "computed_at_utc": datetime.now(timezone.utc).isoformat(),
+                "data": {
+                    "rows": [{"symbol": "AAPL", "action": "BUY", "return_1d": 0.02, "return_5d": 0.04}],
+                    "summary_1d": {"rows": 1, "evaluated_rows": 1, "accuracy": 1.0, "counts": {"correct": 1, "incorrect": 0, "neutral": 0, "skipped": 0}, "avg_return_1d": 0.02, "avg_return_5d": 0.04},
+                    "summary_5d": {"rows": 1, "evaluated_rows": 1, "accuracy": 1.0, "counts": {"correct": 1, "incorrect": 0, "neutral": 0, "skipped": 0}, "avg_return_1d": 0.04, "avg_return_5d": 0.04},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_PATH", str(snapshot_path))
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")
+    client = _client()
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not run live lookup")))
+
+    res = client.get("/api/decision-outcomes?limit=10")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["snapshot_source"] == "materialized"
+    assert data["rows"][0]["symbol"] == "AAPL"
+    assert data["snapshot_age_seconds"] >= 0
+
+
+def test_decision_outcomes_force_live_bypasses_materialized_snapshot(tmp_path, monkeypatch):
+    snapshot_path = tmp_path / "decision_outcomes_snapshot.json"
+    snapshot_path.write_text(
+        json.dumps({"computed_at_utc": datetime.now(timezone.utc).isoformat(), "data": {"rows": [{"symbol": "OLD"}], "summary_1d": {}, "summary_5d": {}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_PATH", str(snapshot_path))
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+    logger.log(endpoint="quick_ask", symbol="MSFT", decision_source="deterministic_model", payload={"recommendation": "BUY"})
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda symbol, ts, days: 0.01)
+
+    res = client.get("/api/decision-outcomes?limit=10&force_live=true")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["snapshot_source"] == "live"
+    assert data["rows"][0]["symbol"] == "MSFT"
 
 
 def test_decision_outcomes_rejects_invalid_limit():

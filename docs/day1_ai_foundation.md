@@ -204,3 +204,27 @@ The table is designed to show:
 - artifact/model version
 - 1-day return + outcome
 - 5-day return + outcome
+
+
+## Day-12 usage (materialized outcomes snapshot)
+
+To reduce live API work, you can precompute outcomes to a snapshot file:
+
+```bash
+python3 scripts/day12_materialize_outcomes.py --input data/decision_events.jsonl --output data/decision_outcomes_snapshot.json --limit 2000 --rows-limit 20
+```
+
+Then `/api/decision-outcomes` will serve that materialized snapshot when it is fresh enough.
+
+Optional env vars:
+
+```bash
+DECISION_OUTCOMES_SNAPSHOT_PATH=data/decision_outcomes_snapshot.json
+DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS=900
+```
+
+To bypass the snapshot and force live computation for debugging:
+
+```bash
+GET /api/decision-outcomes?limit=20&force_live=true
+```
