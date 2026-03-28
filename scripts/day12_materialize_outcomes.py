@@ -17,6 +17,11 @@ from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
 
 
+def select_visible_rows(rows: list[dict], evaluated_rows: list[dict], rows_limit: int) -> list[dict]:
+    limit = max(1, int(rows_limit))
+    return evaluated_rows[-limit:] if evaluated_rows else rows[-limit:]
+
+
 def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
     start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
     now_utc = datetime.now(timezone.utc)
@@ -63,7 +68,7 @@ def main() -> None:
         for row in rows
         if isinstance(row.get("return_1d"), (int, float)) or isinstance(row.get("return_5d"), (int, float))
     ]
-    visible_rows = evaluated_rows[-max(1, args.rows_limit)] if evaluated_rows else rows[-max(1, args.rows_limit):]
+    visible_rows = select_visible_rows(rows, evaluated_rows, args.rows_limit)
 
     payload = {
         "computed_at_utc": datetime.now(timezone.utc).isoformat(),
