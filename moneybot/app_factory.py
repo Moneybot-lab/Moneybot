@@ -9,6 +9,8 @@ from flask_cors import CORS
 from .api import api_bp
 from .extensions import db, migrate
 from .services.ai_advisor import AIAdvisorService
+from .services.decision_log import DecisionLogger
+from .services.deterministic_advisor import DeterministicQuickAdvisor
 from .services.market_data import MarketDataService
 
 
@@ -96,6 +98,19 @@ def create_app() -> Flask:
         AI_TIMEOUT_SECONDS=float(os.environ.get("AI_TIMEOUT_SECONDS", "6.0")),
         AI_FAILURE_COOLDOWN_SECONDS=int(os.environ.get("AI_FAILURE_COOLDOWN_SECONDS", "120")),
         AI_RESPONSE_CACHE_TTL_SECONDS=int(os.environ.get("AI_RESPONSE_CACHE_TTL_SECONDS", "300")),
+        DETERMINISTIC_QUICK_ENABLED=(os.environ.get("DETERMINISTIC_QUICK_ENABLED", "true").lower() == "true"),
+        DETERMINISTIC_MODEL_PATH=os.environ.get("DETERMINISTIC_MODEL_PATH", "data/day1_baseline_model.json"),
+        DETERMINISTIC_MOMENTUM_ENABLED=(os.environ.get("DETERMINISTIC_MOMENTUM_ENABLED", "true").lower() == "true"),
+        DETERMINISTIC_QUICK_BUY_THRESHOLD=(float(os.environ.get("DETERMINISTIC_QUICK_BUY_THRESHOLD", "0.0")) or None),
+        DETERMINISTIC_QUICK_STRONG_BUY_THRESHOLD=float(os.environ.get("DETERMINISTIC_QUICK_STRONG_BUY_THRESHOLD", "0.70")),
+        DETERMINISTIC_PORTFOLIO_BUY_PROB_THRESHOLD=float(os.environ.get("DETERMINISTIC_PORTFOLIO_BUY_PROB_THRESHOLD", "0.62")),
+        DETERMINISTIC_PORTFOLIO_SELL_PROB_THRESHOLD=float(os.environ.get("DETERMINISTIC_PORTFOLIO_SELL_PROB_THRESHOLD", "0.45")),
+        DETERMINISTIC_PORTFOLIO_BUY_DIP_THRESHOLD_PCT=float(os.environ.get("DETERMINISTIC_PORTFOLIO_BUY_DIP_THRESHOLD_PCT", "-4.0")),
+        DETERMINISTIC_PORTFOLIO_SELL_PROFIT_THRESHOLD_PCT=float(os.environ.get("DETERMINISTIC_PORTFOLIO_SELL_PROFIT_THRESHOLD_PCT", "6.0")),
+        DECISION_LOGGING_ENABLED=(os.environ.get("DECISION_LOGGING_ENABLED", "true").lower() == "true"),
+        DECISION_LOG_PATH=os.environ.get("DECISION_LOG_PATH", "data/decision_events.jsonl"),
+        DECISION_OUTCOMES_SNAPSHOT_PATH=os.environ.get("DECISION_OUTCOMES_SNAPSHOT_PATH", "data/decision_outcomes_snapshot.json"),
+        DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS=int(os.environ.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")),
     )
 
     app.extensions["ai_advisor_service"] = AIAdvisorService(
@@ -107,6 +122,20 @@ def create_app() -> Flask:
         failure_cooldown_s=app.config["AI_FAILURE_COOLDOWN_SECONDS"],
         cache_ttl_s=app.config["AI_RESPONSE_CACHE_TTL_SECONDS"],
     )
+    app.extensions["deterministic_quick_advisor"] = DeterministicQuickAdvisor(
+        enabled=app.config["DETERMINISTIC_QUICK_ENABLED"],
+        artifact_path=app.config["DETERMINISTIC_MODEL_PATH"],
+        quick_buy_threshold=app.config["DETERMINISTIC_QUICK_BUY_THRESHOLD"],
+        quick_strong_buy_threshold=app.config["DETERMINISTIC_QUICK_STRONG_BUY_THRESHOLD"],
+        portfolio_buy_prob_threshold=app.config["DETERMINISTIC_PORTFOLIO_BUY_PROB_THRESHOLD"],
+        portfolio_sell_prob_threshold=app.config["DETERMINISTIC_PORTFOLIO_SELL_PROB_THRESHOLD"],
+        portfolio_buy_dip_threshold_pct=app.config["DETERMINISTIC_PORTFOLIO_BUY_DIP_THRESHOLD_PCT"],
+        portfolio_sell_profit_threshold_pct=app.config["DETERMINISTIC_PORTFOLIO_SELL_PROFIT_THRESHOLD_PCT"],
+    )
+    app.extensions["decision_logger"] = DecisionLogger(
+        enabled=app.config["DECISION_LOGGING_ENABLED"],
+        output_path=app.config["DECISION_LOG_PATH"],
+    )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -117,7 +146,10 @@ def create_app() -> Flask:
     from . import models  # noqa: F401
 
     app.register_blueprint(api_bp)
-    app.extensions["market_data_service"] = MarketDataService()
+    app.extensions["market_data_service"] = MarketDataService(
+        deterministic_quick_advisor=app.extensions["deterministic_quick_advisor"],
+        deterministic_momentum_enabled=app.config["DETERMINISTIC_MOMENTUM_ENABLED"],
+    )
 
     with app.app_context():
         db.create_all()
@@ -146,7 +178,7 @@ def create_app() -> Flask:
                   <div style="display:grid;grid-template-columns:minmax(300px,430px) minmax(300px,1fr);gap:12px;align-items:start">
                     <div>
                       <div style="display:flex;gap:8px;flex-wrap:wrap">
-                        <input id="quickSymbol" placeholder="Ticker (e.g. AAPL)" style="padding:10px 12px;border:1px solid #166534;border-radius:10px;min-width:210px;background:#000;color:#f7fee7"/>
+                        <input id="quickSymbol" placeholder="Ticker (e.g. AAPL)" style="padding:10px 12px;border:1px solid #166534;border-radius:10px;min-width:210px;background:#000;color:#f7fee7;font-size:1.15rem;font-weight:700;letter-spacing:.01em"/>
                         <button id="quickAskBtn" onclick="quickAsk()" style="padding:10px 16px;border:none;background:#16a34a;color:#f0fdf4;border-radius:10px;font-weight:700;font-size:1.08rem">Analyze</button>
                       </div>
                       <div id="quickOut" style="margin-top:10px;color:#bbf7d0">Type a ticker to get an instant STRONG BUY / BUY / HOLD OFF FOR NOW call.</div>
@@ -176,9 +208,9 @@ def create_app() -> Flask:
 
                 <section style="background:#f0fdf4;border:1px solid #d1fae5;border-radius:12px;padding:16px">
                   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-                    <button class="tab-btn" data-tab="stable" onclick="switchTab('stable')" style="padding:8px 12px;border:1px solid #bbf7d0;background:#dcfce7;border-radius:8px">Stable Watchlist</button>
-                    <button class="tab-btn" data-tab="momentum" onclick="switchTab('momentum')" style="padding:8px 12px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px">Hot Momentum Buys</button>
-                    <button class="tab-btn" data-tab="wells" onclick="switchTab('wells')" style="padding:8px 12px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px">Whales of Wall Street</button>
+                    <button class="tab-btn" data-tab="stable" onclick="switchTab('stable')" style="padding:9px 14px;border:1px solid #bbf7d0;background:#dcfce7;border-radius:8px;font-size:1.06rem;font-weight:700">Stable Watchlist</button>
+                    <button class="tab-btn" data-tab="momentum" onclick="switchTab('momentum')" style="padding:9px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px;font-size:1.06rem;font-weight:700">Hot Momentum Buys</button>
+                    <button class="tab-btn" data-tab="wells" onclick="switchTab('wells')" style="padding:9px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px;font-size:1.06rem;font-weight:700">Whales of Wall Street</button>
                   </div>
                   <div id="tabLoading" style="display:none;align-items:center;gap:10px;margin-bottom:10px;color:#166534;font-weight:600">
                     <span style="display:inline-block;width:16px;height:16px;border:2px solid #86efac;border-top-color:#16a34a;border-radius:9999px;animation:spin .7s linear infinite"></span>
@@ -187,6 +219,39 @@ def create_app() -> Flask:
                   <div id="stable" class="tab-panel"></div>
                   <div id="momentum" class="tab-panel" style="display:none"></div>
                   <div id="wells" class="tab-panel" style="display:none"></div>
+                </section>
+
+                <section style="background:#ecfccb;border:1px solid #bef264;border-radius:12px;padding:16px;margin-top:18px">
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+                    <div>
+                      <h3 style="margin:0 0 4px 0">Model Ops Snapshot</h3>
+                      <p style="margin:0;color:#3f6212">Live rollout status for deterministic model health and recent decision telemetry.</p>
+                    </div>
+                    <button type="button" onclick="refreshOps()" style="padding:8px 12px;border:1px solid #84cc16;background:#f7fee7;color:#365314;border-radius:999px;font-weight:700;cursor:pointer">Refresh Ops</button>
+                  </div>
+                  <div id="opsLoading" style="display:none;align-items:center;gap:8px;margin-bottom:10px;color:#3f6212;font-weight:600">
+                    <span style="display:inline-block;width:14px;height:14px;border:2px solid #a3e635;border-top-color:#65a30d;border-radius:9999px;animation:spin .7s linear infinite"></span>
+                    Loading model ops snapshot...
+                  </div>
+                  <div id="opsCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px"></div>
+                  <div id="opsTopSymbols" style="margin-top:12px"></div>
+                  <div id="opsLatestEvent" style="margin-top:12px"></div>
+                </section>
+
+                <section style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:16px;margin-top:18px">
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+                    <div>
+                      <h3 style="margin:0 0 4px 0">Recent Decisions & Outcomes</h3>
+                      <p style="margin:0;color:#166534">Day 10 table showing the latest logged actions, sources, artifact versions, and 1D / 5D outcomes.</p>
+                    </div>
+                    <button type="button" onclick="refreshOutcomes()" style="padding:8px 12px;border:1px solid #16a34a;background:#dcfce7;color:#14532d;border-radius:999px;font-weight:700;cursor:pointer">Refresh Outcomes</button>
+                  </div>
+                  <div id="outcomesLoading" style="display:none;align-items:center;gap:8px;margin-bottom:10px;color:#166534;font-weight:600">
+                    <span style="display:inline-block;width:14px;height:14px;border:2px solid #86efac;border-top-color:#16a34a;border-radius:9999px;animation:spin .7s linear infinite"></span>
+                    Loading recent decision outcomes...
+                  </div>
+                  <div id="outcomesSummary" style="margin-bottom:12px"></div>
+                  <div id="outcomesTable"></div>
                 </section>
 
                 <div id="homeTickerModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:center;justify-content:center;padding:14px">
@@ -215,6 +280,30 @@ def create_app() -> Flask:
                     stable: [{ symbol: 'MSFT', company: 'Microsoft', price: 418.2, signal_score: 7.9, transparency: 'Strong balance sheet and recurring revenue.' }],
                     momentum: [{ symbol: 'SOFI', price: 9.84, score: 9.4, rationale: 'Member growth trend and improving margins.' }],
                     wells: [{ investor: 'Warren Buffett', stocks: [{ ticker: 'AAPL', price: 191.2, performance: 1.42 }] }],
+                    ops: {
+                      health: {
+                        deterministic_quick_enabled: true,
+                        deterministic_momentum_enabled: true,
+                        model_loaded: true,
+                        model_version: 'day1-logreg-v1',
+                        decision_logging: { enabled: true, source_counts: { deterministic_model: 14, rule_based: 6 } },
+                      },
+                      summary: {
+                        events_considered: 20,
+                        source_counts: { deterministic_model: 14, rule_based: 6 },
+                        endpoint_counts: { quick_ask: 12, hot_momentum_buys: 8 },
+                        top_symbols: [{ symbol: 'AAPL', count: 7 }, { symbol: 'SOFI', count: 4 }, { symbol: 'NVDA', count: 3 }],
+                        latest_event: { endpoint: 'quick_ask', symbol: 'AAPL', decision_source: 'deterministic_model' },
+                      },
+                    },
+                    outcomes: {
+                      summary_1d: { accuracy: 0.62, evaluated_rows: 13 },
+                      summary_5d: { accuracy: 0.67, evaluated_rows: 12 },
+                      rows: [
+                        { symbol: 'AAPL', endpoint: 'quick_ask', decision_source: 'deterministic_model', action: 'BUY', model_version: 'day1-logreg-v1', return_1d: 0.021, return_5d: 0.048, outcome_1d: 'correct', outcome_5d: 'correct' },
+                        { symbol: 'SOFI', endpoint: 'hot_momentum_buys', decision_source: 'rule_based', action: 'HOLD OFF FOR NOW', model_version: null, return_1d: -0.013, return_5d: -0.028, outcome_1d: 'correct', outcome_5d: 'correct' },
+                      ],
+                    },
                   };
 
                   function formatMoney(v){ return typeof v === 'number' ? '$' + v.toLocaleString(undefined,{maximumFractionDigits:2}) : 'n/a'; }
@@ -225,6 +314,9 @@ def create_app() -> Flask:
                     const rec = String(recommendation || 'HOLD OFF FOR NOW').toUpperCase();
                     const color = rec === 'STRONG BUY' ? '#22c55e' : (rec === 'BUY' ? '#166534' : '#dc2626');
                     return `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${color};color:#f0fdf4;font-weight:800;font-size:12px;letter-spacing:.02em">${rec}</span>`;
+                  }
+                  function opsBadge(value, positive){
+                    return `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${positive ? '#166534' : '#7f1d1d'};color:#fefce8;font-weight:700;font-size:12px">${escapeHtml(value)}</span>`;
                   }
                   const marketChartInstances = {};
                   function destroyMarketCharts(){ Object.values(marketChartInstances).forEach(c => c.destroy()); Object.keys(marketChartInstances).forEach(k => delete marketChartInstances[k]); }
@@ -237,6 +329,37 @@ def create_app() -> Flask:
                       return data.items || fallbackData[key];
                     } catch (err) {
                       return fallbackData[key];
+                    }
+                  }
+
+                  async function fetchOpsData(){
+                    try {
+                      const [healthRes, summaryRes] = await Promise.all([
+                        fetch('/api/model-health'),
+                        fetch('/api/decision-log-summary?limit=50'),
+                      ]);
+                      if(!healthRes.ok || !summaryRes.ok){
+                        throw new Error('non-200');
+                      }
+                      const healthPayload = await healthRes.json();
+                      const summaryPayload = await summaryRes.json();
+                      return {
+                        health: healthPayload.data || fallbackData.ops.health,
+                        summary: summaryPayload.data || fallbackData.ops.summary,
+                      };
+                    } catch (err) {
+                      return fallbackData.ops;
+                    }
+                  }
+
+                  async function fetchOutcomesData(){
+                    try {
+                      const res = await fetch('/api/decision-outcomes?limit=20');
+                      if(!res.ok) throw new Error('non-200');
+                      const payload = await res.json();
+                      return payload.data || fallbackData.outcomes;
+                    } catch (err) {
+                      return fallbackData.outcomes;
                     }
                   }
 
@@ -354,15 +477,86 @@ def create_app() -> Flask:
                   }
 
                   function renderMomentum(items){
-                    document.getElementById('momentum').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.score}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.rationale}</td></tr>`).join('')}</tbody></table>`;
+                    document.getElementById('momentum').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Source</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.score}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.decision_source || 'rule_based'}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.rationale}</td></tr>`).join('')}</tbody></table>`;
                   }
 
                   function renderWells(items){
                     document.getElementById('wells').innerHTML = items.map(item=>`<article style="border:1px solid #d1fae5;border-radius:10px;padding:10px;margin-bottom:10px"><div style="font-weight:700;margin-bottom:8px">${item.investor}</div><table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Performance</th></tr></thead><tbody>${(item.stocks||[]).map(stock=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(stock.ticker)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(stock.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${Number(stock.performance||0).toFixed(2)}%</td></tr>`).join('')}</tbody></table></article>`).join('');
                   }
 
+                  function renderOps(data){
+                    const health = data.health || {};
+                    const summary = data.summary || {};
+                    const logging = health.decision_logging || {};
+                    const sourceCounts = summary.source_counts || logging.source_counts || {};
+                    const endpointCounts = summary.endpoint_counts || logging.endpoint_counts || {};
+                    const deterministicCount = Number(sourceCounts.deterministic_model || 0);
+                    const ruleCount = Number(sourceCounts.rule_based || 0);
+                    const total = Number(summary.events_considered || 0);
+                    const cards = [
+                      {
+                        label: 'Model status',
+                        value: health.model_loaded ? opsBadge(`Loaded · ${health.model_version || 'unknown'}`, true) : opsBadge('Not loaded', false),
+                        detail: `Quick ask ${health.deterministic_quick_enabled ? 'enabled' : 'disabled'} · Momentum ${health.deterministic_momentum_enabled ? 'enabled' : 'disabled'}`,
+                      },
+                      {
+                        label: 'Decision logging',
+                        value: logging.enabled ? opsBadge('Enabled', true) : opsBadge('Disabled', false),
+                        detail: `Recent events: ${total || 0}`,
+                      },
+                      {
+                        label: 'Decision split',
+                        value: `<strong style="font-size:1.5rem;color:#14532d">${deterministicCount}</strong><span style="color:#4d7c0f"> deterministic</span>`,
+                        detail: `${ruleCount} rule-based in recent summary`,
+                      },
+                      {
+                        label: 'Most active endpoint',
+                        value: `<strong style="font-size:1.2rem;color:#14532d">${escapeHtml(Object.entries(endpointCounts).sort((a,b)=>b[1]-a[1])[0]?.[0] || 'n/a')}</strong>`,
+                        detail: `${Object.entries(endpointCounts).sort((a,b)=>b[1]-a[1])[0]?.[1] || 0} recent events`,
+                      },
+                    ];
+                    document.getElementById('opsCards').innerHTML = cards.map(card => `<article style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:12px"><div style="font-size:12px;font-weight:800;letter-spacing:.06em;color:#4d7c0f;text-transform:uppercase;margin-bottom:8px">${card.label}</div><div>${card.value}</div><div style="margin-top:8px;color:#3f6212">${escapeHtml(card.detail)}</div></article>`).join('');
+
+                    const topSymbols = Array.isArray(summary.top_symbols) ? summary.top_symbols : [];
+                    document.getElementById('opsTopSymbols').innerHTML = `<div style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:12px"><div style="font-weight:800;color:#365314;margin-bottom:8px">Top recent symbols</div><div style="display:flex;gap:8px;flex-wrap:wrap">${topSymbols.length ? topSymbols.map(item => `<span style="display:inline-flex;gap:6px;align-items:center;background:#dcfce7;border-radius:999px;padding:6px 10px;color:#166534;font-weight:700">${escapeHtml(item.symbol)}<span style="color:#4d7c0f">×${escapeHtml(item.count)}</span></span>`).join('') : '<span style="color:#4d7c0f">No recent symbols yet.</span>'}</div></div>`;
+
+                    const latest = summary.latest_event || {};
+                    document.getElementById('opsLatestEvent').innerHTML = `<div style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:12px"><div style="font-weight:800;color:#365314;margin-bottom:8px">Latest logged decision</div><div style="color:#3f6212">${latest.symbol ? `${escapeHtml(latest.symbol)} via ${escapeHtml(latest.endpoint || 'unknown')} · ${escapeHtml(latest.decision_source || 'unknown')}` : 'No events logged yet.'}</div></div>`;
+                  }
+
+                  function formatPercent(v){
+                    return typeof v === 'number' ? `${(v * 100).toFixed(2)}%` : 'n/a';
+                  }
+
+                  function outcomeBadge(outcome){
+                    const value = String(outcome || 'skipped').toLowerCase();
+                    const color = value === 'correct' ? '#166534' : (value === 'incorrect' ? '#991b1b' : '#475569');
+                    return `<span style="display:inline-block;padding:4px 8px;border-radius:999px;background:${color};color:#f8fafc;font-weight:700;font-size:12px">${escapeHtml(value)}</span>`;
+                  }
+
+                  function renderOutcomes(data){
+                    const summary1d = data.summary_1d || {};
+                    const summary5d = data.summary_5d || {};
+                    document.getElementById('outcomesSummary').innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px"><article style="background:#ecfdf5;border:1px solid #bbf7d0;border-radius:12px;padding:12px"><div style="font-size:12px;font-weight:800;letter-spacing:.06em;color:#166534;text-transform:uppercase;margin-bottom:6px">1D accuracy</div><div style="font-size:1.5rem;font-weight:800;color:#14532d">${summary1d.accuracy != null ? `${(summary1d.accuracy * 100).toFixed(1)}%` : 'n/a'}</div><div style="color:#166534">${summary1d.evaluated_rows || 0} evaluated rows</div></article><article style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:12px"><div style="font-size:12px;font-weight:800;letter-spacing:.06em;color:#1d4ed8;text-transform:uppercase;margin-bottom:6px">5D accuracy</div><div style="font-size:1.5rem;font-weight:800;color:#1e3a8a">${summary5d.accuracy != null ? `${(summary5d.accuracy * 100).toFixed(1)}%` : 'n/a'}</div><div style="color:#1d4ed8">${summary5d.evaluated_rows || 0} evaluated rows</div></article></div>`;
+
+                    const rows = Array.isArray(data.rows) ? data.rows : [];
+                    document.getElementById('outcomesTable').innerHTML = rows.length ? `<div style="overflow:auto"><table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Symbol</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Endpoint</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Source</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Action</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Model</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">1D Return</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">1D Outcome</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">5D Return</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">5D Outcome</th></tr></thead><tbody>${rows.map(row => `<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(row.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${escapeHtml(row.endpoint || 'n/a')}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${escapeHtml(row.decision_source || 'n/a')}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${escapeHtml(row.action || 'n/a')}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${escapeHtml(row.model_version || 'n/a')}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatPercent(row.return_1d)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${outcomeBadge(row.outcome_1d)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatPercent(row.return_5d)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${outcomeBadge(row.outcome_5d)}</td></tr>`).join('')}</tbody></table></div>` : `<div style="background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;padding:16px;color:#475569">No evaluated decision outcomes yet. Run the Day 9 evaluator and let more logs accumulate.</div>`;
+                  }
+
                   function setTabLoading(isLoading){
                     const loadingEl = document.getElementById('tabLoading');
+                    if(!loadingEl) return;
+                    loadingEl.style.display = isLoading ? 'flex' : 'none';
+                  }
+
+                  function setOpsLoading(isLoading){
+                    const loadingEl = document.getElementById('opsLoading');
+                    if(!loadingEl) return;
+                    loadingEl.style.display = isLoading ? 'flex' : 'none';
+                  }
+
+                  function setOutcomesLoading(isLoading){
+                    const loadingEl = document.getElementById('outcomesLoading');
                     if(!loadingEl) return;
                     loadingEl.style.display = isLoading ? 'flex' : 'none';
                   }
@@ -391,6 +585,24 @@ def create_app() -> Flask:
                     refreshTab(tab);
                   }
 
+                  async function refreshOps(){
+                    setOpsLoading(true);
+                    try {
+                      renderOps(await fetchOpsData());
+                    } finally {
+                      setOpsLoading(false);
+                    }
+                  }
+
+                  async function refreshOutcomes(){
+                    setOutcomesLoading(true);
+                    try {
+                      renderOutcomes(await fetchOutcomesData());
+                    } finally {
+                      setOutcomesLoading(false);
+                    }
+                  }
+
                   document.getElementById('quickSymbol').addEventListener('keydown', (event) => { if(event.key==='Enter'){event.preventDefault();quickAsk();} });
                   document.getElementById('quickSymbol').addEventListener('focus', (event) => {
                     if(event.target.value){ event.target.value = ''; }
@@ -401,6 +613,8 @@ def create_app() -> Flask:
                     const market = await fetchWithFallback('/api/market-overview', 'market');
                     renderMarket(market);
                     await refreshTab('stable');
+                    await refreshOps();
+                    await refreshOutcomes();
                   }
 
                   init();
@@ -848,7 +1062,7 @@ def create_app() -> Flask:
                 const totalTodayChange = items.reduce((sum, item) => sum + (typeof item.today_change_amount === 'number' ? item.today_change_amount : 0), 0);
                 const totalPerformance = items.reduce((sum, item) => sum + (typeof item.performance_amount === 'number' ? item.performance_amount : 0), 0);
 
-                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="del(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Remove</button></div></td></tr>`).join('')
+                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="del(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Remove</button></div></td></tr>`).join('')
                 + `<tr style="background:#f7fee7;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px;color:#3f3f46;font-size:12px">Click advice badges to see why.</td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
                 items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || []));
               }
@@ -971,6 +1185,45 @@ def create_app() -> Flask:
                 if (lifetimePanelEl.style.display !== 'none') {
                   await loadSoldTrades();
                 }
+              }
+
+              async function markBought(id){
+                const item = currentPortfolioItems.find((entry)=> entry.id === id);
+                if(!item){
+                  outEl.textContent = 'Unable to find portfolio item.';
+                  return;
+                }
+                const boughtPriceRaw = prompt(`What price did you buy more ${item.symbol} at?`);
+                if(boughtPriceRaw === null) return;
+                const boughtPrice = Number(boughtPriceRaw);
+                if(!Number.isFinite(boughtPrice) || boughtPrice <= 0){
+                  outEl.textContent = 'Bought price must be a positive number.';
+                  return;
+                }
+
+                const sharesRaw = prompt(`How many shares of ${item.symbol} did you buy? (Current: ${displayValue(item.shares)})`);
+                if(sharesRaw === null) return;
+                const sharesBought = Number(sharesRaw);
+                if(!Number.isFinite(sharesBought) || sharesBought <= 0){
+                  outEl.textContent = 'Shares bought must be a positive number.';
+                  return;
+                }
+
+                const res = await apiFetch('/api/user-watchlist/' + id + '/buy', {
+                  method:'POST',
+                  headers:{'Content-Type':'application/json'},
+                  body:JSON.stringify({ bought_price:boughtPrice, shares_bought:sharesBought })
+                });
+                const data = await res.json();
+                if(!res.ok){
+                  outEl.textContent = data.error || 'Unable to record buy trade.';
+                  return;
+                }
+                const newEntry = data.added && typeof data.added.new_entry_price === 'number' ? data.added.new_entry_price : null;
+                outEl.textContent = newEntry === null
+                  ? 'Buy trade recorded.'
+                  : `Buy trade recorded (new avg entry ${formatMoney(newEntry)}).`;
+                await load();
               }
 
               async function del(id){ await apiFetch('/api/user-watchlist/'+id,{method:'DELETE'}); await load(); }
