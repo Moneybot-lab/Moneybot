@@ -4,12 +4,18 @@ import importlib.util
 import logging
 import os
 
-from flask import Flask, render_template_string
+from flask import Flask, render_template, render_template_string
 from flask_cors import CORS
 from .api import api_bp
 from .extensions import db, migrate
 from .services.ai_advisor import AIAdvisorService
+from .services.decision_log import DecisionLogger
+from .services.deterministic_advisor import DeterministicQuickAdvisor
 from .services.market_data import MarketDataService
+
+
+def _parse_symbol_set(raw: str | None) -> set[str]:
+    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
 
 
 def _resolve_database_url() -> str:
@@ -96,6 +102,26 @@ def create_app() -> Flask:
         AI_TIMEOUT_SECONDS=float(os.environ.get("AI_TIMEOUT_SECONDS", "6.0")),
         AI_FAILURE_COOLDOWN_SECONDS=int(os.environ.get("AI_FAILURE_COOLDOWN_SECONDS", "120")),
         AI_RESPONSE_CACHE_TTL_SECONDS=int(os.environ.get("AI_RESPONSE_CACHE_TTL_SECONDS", "300")),
+        DETERMINISTIC_QUICK_ENABLED=(os.environ.get("DETERMINISTIC_QUICK_ENABLED", "true").lower() == "true"),
+        DETERMINISTIC_MODEL_PATH=os.environ.get("DETERMINISTIC_MODEL_PATH", "data/day1_baseline_model.json"),
+        DETERMINISTIC_MOMENTUM_ENABLED=(os.environ.get("DETERMINISTIC_MOMENTUM_ENABLED", "true").lower() == "true"),
+        DETERMINISTIC_QUICK_BUY_THRESHOLD=(float(os.environ.get("DETERMINISTIC_QUICK_BUY_THRESHOLD", "0.0")) or None),
+        DETERMINISTIC_QUICK_STRONG_BUY_THRESHOLD=float(os.environ.get("DETERMINISTIC_QUICK_STRONG_BUY_THRESHOLD", "0.70")),
+        DETERMINISTIC_PORTFOLIO_BUY_PROB_THRESHOLD=float(os.environ.get("DETERMINISTIC_PORTFOLIO_BUY_PROB_THRESHOLD", "0.62")),
+        DETERMINISTIC_PORTFOLIO_SELL_PROB_THRESHOLD=float(os.environ.get("DETERMINISTIC_PORTFOLIO_SELL_PROB_THRESHOLD", "0.45")),
+        DETERMINISTIC_PORTFOLIO_BUY_DIP_THRESHOLD_PCT=float(os.environ.get("DETERMINISTIC_PORTFOLIO_BUY_DIP_THRESHOLD_PCT", "-4.0")),
+        DETERMINISTIC_PORTFOLIO_SELL_PROFIT_THRESHOLD_PCT=float(os.environ.get("DETERMINISTIC_PORTFOLIO_SELL_PROFIT_THRESHOLD_PCT", "6.0")),
+        DETERMINISTIC_CALIBRATION_ENABLED=(os.environ.get("DETERMINISTIC_CALIBRATION_ENABLED", "false").lower() == "true"),
+        DETERMINISTIC_CALIBRATION_SLOPE=float(os.environ.get("DETERMINISTIC_CALIBRATION_SLOPE", "1.0")),
+        DETERMINISTIC_CALIBRATION_INTERCEPT=float(os.environ.get("DETERMINISTIC_CALIBRATION_INTERCEPT", "0.0")),
+        DETERMINISTIC_ROLLOUT_PERCENTAGE=float(os.environ.get("DETERMINISTIC_ROLLOUT_PERCENTAGE", "100.0")),
+        DETERMINISTIC_ROLLOUT_SEED=os.environ.get("DETERMINISTIC_ROLLOUT_SEED", "moneybot"),
+        DETERMINISTIC_ROLLOUT_ALLOWLIST=_parse_symbol_set(os.environ.get("DETERMINISTIC_ROLLOUT_ALLOWLIST", "")),
+        DETERMINISTIC_ROLLOUT_BLOCKLIST=_parse_symbol_set(os.environ.get("DETERMINISTIC_ROLLOUT_BLOCKLIST", "")),
+        DECISION_LOGGING_ENABLED=(os.environ.get("DECISION_LOGGING_ENABLED", "true").lower() == "true"),
+        DECISION_LOG_PATH=os.environ.get("DECISION_LOG_PATH", "data/decision_events.jsonl"),
+        DECISION_OUTCOMES_SNAPSHOT_PATH=os.environ.get("DECISION_OUTCOMES_SNAPSHOT_PATH", "data/decision_outcomes_snapshot.json"),
+        DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS=int(os.environ.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")),
     )
 
     app.extensions["ai_advisor_service"] = AIAdvisorService(
@@ -107,6 +133,27 @@ def create_app() -> Flask:
         failure_cooldown_s=app.config["AI_FAILURE_COOLDOWN_SECONDS"],
         cache_ttl_s=app.config["AI_RESPONSE_CACHE_TTL_SECONDS"],
     )
+    app.extensions["deterministic_quick_advisor"] = DeterministicQuickAdvisor(
+        enabled=app.config["DETERMINISTIC_QUICK_ENABLED"],
+        artifact_path=app.config["DETERMINISTIC_MODEL_PATH"],
+        quick_buy_threshold=app.config["DETERMINISTIC_QUICK_BUY_THRESHOLD"],
+        quick_strong_buy_threshold=app.config["DETERMINISTIC_QUICK_STRONG_BUY_THRESHOLD"],
+        portfolio_buy_prob_threshold=app.config["DETERMINISTIC_PORTFOLIO_BUY_PROB_THRESHOLD"],
+        portfolio_sell_prob_threshold=app.config["DETERMINISTIC_PORTFOLIO_SELL_PROB_THRESHOLD"],
+        portfolio_buy_dip_threshold_pct=app.config["DETERMINISTIC_PORTFOLIO_BUY_DIP_THRESHOLD_PCT"],
+        portfolio_sell_profit_threshold_pct=app.config["DETERMINISTIC_PORTFOLIO_SELL_PROFIT_THRESHOLD_PCT"],
+        calibration_enabled=app.config["DETERMINISTIC_CALIBRATION_ENABLED"],
+        calibration_slope=app.config["DETERMINISTIC_CALIBRATION_SLOPE"],
+        calibration_intercept=app.config["DETERMINISTIC_CALIBRATION_INTERCEPT"],
+        rollout_percentage=app.config["DETERMINISTIC_ROLLOUT_PERCENTAGE"],
+        rollout_seed=app.config["DETERMINISTIC_ROLLOUT_SEED"],
+        rollout_allowlist=app.config["DETERMINISTIC_ROLLOUT_ALLOWLIST"],
+        rollout_blocklist=app.config["DETERMINISTIC_ROLLOUT_BLOCKLIST"],
+    )
+    app.extensions["decision_logger"] = DecisionLogger(
+        enabled=app.config["DECISION_LOGGING_ENABLED"],
+        output_path=app.config["DECISION_LOG_PATH"],
+    )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -117,7 +164,10 @@ def create_app() -> Flask:
     from . import models  # noqa: F401
 
     app.register_blueprint(api_bp)
-    app.extensions["market_data_service"] = MarketDataService()
+    app.extensions["market_data_service"] = MarketDataService(
+        deterministic_quick_advisor=app.extensions["deterministic_quick_advisor"],
+        deterministic_momentum_enabled=app.config["DETERMINISTIC_MOMENTUM_ENABLED"],
+    )
 
     with app.app_context():
         db.create_all()
@@ -126,289 +176,7 @@ def create_app() -> Flask:
     @app.get("/index.html")
     @app.get("/home")
     def home():
-        return render_template_string(
-            """
-            <html>
-              <body style="font-family:Inter,Segoe UI,system-ui,sans-serif;padding:24px;background:linear-gradient(180deg,#f7fee7,#ecfdf3);max-width:1120px;margin:0 auto;color:#0f172a">
-                <header style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px">
-                  <div style="flex:1;min-width:280px">
-                    <img src="/static/moneybot-pro-logo.svg" alt="MoneyBot Pro logo" style="display:block;width:100%;max-width:860px;height:auto"/>
-                  </div>
-                  <div style="display:flex;gap:10px;flex-wrap:wrap">
-                    <a href="/login" style="padding:8px 12px;background:#dcfce7;color:#000;border-radius:999px;text-decoration:none;font-weight:600">Login</a>
-                    <a href="/signup" style="padding:8px 12px;background:#dcfce7;color:#000;border-radius:999px;text-decoration:none;font-weight:600">Sign up</a>
-                    <a href="/portfolio" style="padding:8px 12px;background:#166534;color:#f0fdf4;border-radius:999px;text-decoration:none;font-weight:700">User Portfolio</a>
-                  </div>
-                </header>
-
-                <section style="background:#000;color:#d1fae5;border-radius:14px;padding:16px;margin-bottom:18px;box-shadow:0 10px 24px rgba(2,6,23,.18)">
-                  <h3 style="margin:0 0 10px 0;color:#f0fdf4">Quick Ask · What should I do now?</h3>
-                  <div style="display:grid;grid-template-columns:minmax(300px,430px) minmax(300px,1fr);gap:12px;align-items:start">
-                    <div>
-                      <div style="display:flex;gap:8px;flex-wrap:wrap">
-                        <input id="quickSymbol" placeholder="Ticker (e.g. AAPL)" style="padding:10px 12px;border:1px solid #166534;border-radius:10px;min-width:210px;background:#000;color:#f7fee7"/>
-                        <button id="quickAskBtn" onclick="quickAsk()" style="padding:10px 16px;border:none;background:#16a34a;color:#f0fdf4;border-radius:10px;font-weight:700;font-size:1.08rem">Analyze</button>
-                      </div>
-                      <div id="quickOut" style="margin-top:10px;color:#bbf7d0">Type a ticker to get an instant STRONG BUY / BUY / HOLD OFF FOR NOW call.</div>
-                      <div id="quickLoading" style="display:none;align-items:center;gap:8px;margin-top:10px;color:#86efac;font-weight:600">
-                        <span style="display:inline-block;width:14px;height:14px;border:2px solid #86efac;border-top-color:#22c55e;border-radius:9999px;animation:spin .7s linear infinite"></span>
-                        Analyzing signal...
-                      </div>
-                    </div>
-                    <div id="quickAdvice" style="min-height:72px;background:#052e16;border:1px solid #14532d;border-radius:10px;padding:10px 12px;color:#dcfce7">
-                      <strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong>
-                      <span style="color:#86efac">Advice will appear here after you analyze a ticker.</span>
-                    </div>
-                  </div>
-                </section>
-
-                <section style="margin-bottom:18px">
-                  <h3 style="margin-bottom:8px">Market Indices</h3>
-                  <div id="market-charts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px"></div>
-                </section>
-
-                <section style="background:#f7fee7;border:1px solid #bbf7d0;border-radius:12px;padding:14px;margin-bottom:12px">
-                  <h3 style="margin:0 0 8px 0">Buyer's Guide</h3>
-                  <p style="margin:0 0 6px 0;color:#166534"><strong>Stable Watchlist:</strong> Lower risk, long-term stocks.</p>
-                  <p style="margin:0 0 6px 0;color:#166534"><strong>Hot Momentum:</strong> Higher risk, low-price stocks with growth potential.</p>
-                  <p style="margin:0;color:#166534"><strong>Whales of Wall Street:</strong> See and follow top investors' picks.</p>
-                </section>
-
-                <section style="background:#f0fdf4;border:1px solid #d1fae5;border-radius:12px;padding:16px">
-                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
-                    <button class="tab-btn" data-tab="stable" onclick="switchTab('stable')" style="padding:8px 12px;border:1px solid #bbf7d0;background:#dcfce7;border-radius:8px">Stable Watchlist</button>
-                    <button class="tab-btn" data-tab="momentum" onclick="switchTab('momentum')" style="padding:8px 12px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px">Hot Momentum Buys</button>
-                    <button class="tab-btn" data-tab="wells" onclick="switchTab('wells')" style="padding:8px 12px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px">Whales of Wall Street</button>
-                  </div>
-                  <div id="tabLoading" style="display:none;align-items:center;gap:10px;margin-bottom:10px;color:#166534;font-weight:600">
-                    <span style="display:inline-block;width:16px;height:16px;border:2px solid #86efac;border-top-color:#16a34a;border-radius:9999px;animation:spin .7s linear infinite"></span>
-                    Loading table...
-                  </div>
-                  <div id="stable" class="tab-panel"></div>
-                  <div id="momentum" class="tab-panel" style="display:none"></div>
-                  <div id="wells" class="tab-panel" style="display:none"></div>
-                </section>
-
-                <div id="homeTickerModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:center;justify-content:center;padding:14px">
-                  <div style="background:#f0fdf4;border-radius:12px;max-width:680px;width:100%;max-height:80vh;overflow:auto;padding:14px">
-                    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
-                      <h3 id="homeModalTitle" style="margin:0">Company Details</h3>
-                      <button onclick="closeHomeModal()" style="border:none;background:#d1fae5;border-radius:8px;padding:6px 10px">Close</button>
-                    </div>
-                    <p id="homeModalSummary" style="color:#166534"></p>
-                  </div>
-                </div>
-
-                <p style="color:#3f6212">Rule-based guidance; not financial advice.</p>
-
-                <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-                <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
-                <script>
-                  const fallbackData = {
-                    market: [
-                      { name: 'Dow', symbol: '^DJI', price: 39210.4, change_percent: 0.52, series: [38800,38940,39020,39105,39210] },
-                      { name: 'S&P 500', symbol: '^GSPC', price: 5245.1, change_percent: 0.44, series: [5188,5204,5218,5231,5245] },
-                      { name: 'Nasdaq', symbol: '^IXIC', price: 16592.3, change_percent: 0.71, series: [16280,16355,16430,16501,16592] },
-                      { name: 'Gold', symbol: 'GC=F', price: 2340.8, change_percent: -0.18, series: [2356,2351,2348,2344,2340] },
-                      { name: 'Bitcoin', symbol: 'BTC-USD', price: 61110.2, change_percent: -0.93, series: [62400,62020,61680,61390,61110] },
-                    ],
-                    stable: [{ symbol: 'MSFT', company: 'Microsoft', price: 418.2, signal_score: 7.9, transparency: 'Strong balance sheet and recurring revenue.' }],
-                    momentum: [{ symbol: 'SOFI', price: 9.84, score: 9.4, rationale: 'Member growth trend and improving margins.' }],
-                    wells: [{ investor: 'Warren Buffett', stocks: [{ ticker: 'AAPL', price: 191.2, performance: 1.42 }] }],
-                  };
-
-                  function formatMoney(v){ return typeof v === 'number' ? '$' + v.toLocaleString(undefined,{maximumFractionDigits:2}) : 'n/a'; }
-                  function escapeHtml(value){
-                    return String(value || '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] || ch));
-                  }
-                  function quickRecommendationBadge(recommendation){
-                    const rec = String(recommendation || 'HOLD OFF FOR NOW').toUpperCase();
-                    const color = rec === 'STRONG BUY' ? '#22c55e' : (rec === 'BUY' ? '#166534' : '#dc2626');
-                    return `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${color};color:#f0fdf4;font-weight:800;font-size:12px;letter-spacing:.02em">${rec}</span>`;
-                  }
-                  const marketChartInstances = {};
-                  function destroyMarketCharts(){ Object.values(marketChartInstances).forEach(c => c.destroy()); Object.keys(marketChartInstances).forEach(k => delete marketChartInstances[k]); }
-
-                  async function fetchWithFallback(url, key){
-                    try {
-                      const res = await fetch(url);
-                      if(!res.ok) throw new Error('non-200');
-                      const data = await res.json();
-                      return data.items || fallbackData[key];
-                    } catch (err) {
-                      return fallbackData[key];
-                    }
-                  }
-
-                  async function quickAsk(){
-                    const inputEl = document.getElementById('quickSymbol');
-                    const symbol = (inputEl.value || '').trim().toUpperCase();
-                    const outEl = document.getElementById('quickOut');
-                    const adviceEl = document.getElementById('quickAdvice');
-                    const loadingEl = document.getElementById('quickLoading');
-                    const quickAskBtn = document.getElementById('quickAskBtn');
-                    inputEl.blur();
-                    if(!symbol){ outEl.textContent='Please enter a ticker symbol.'; return; }
-
-                    loadingEl.style.display = 'flex';
-                    outEl.style.display = 'none';
-                    quickAskBtn.disabled = true;
-                    quickAskBtn.style.opacity = '.75';
-                    quickAskBtn.style.cursor = 'wait';
-                    adviceEl.innerHTML = `<strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong><span style="color:#86efac">Analyzing ${escapeHtml(symbol)}...</span>`;
-
-                    try {
-                      const res = await fetch('/api/quick-ask?symbol=' + encodeURIComponent(symbol));
-                      const payload = await res.json();
-                      if(!res.ok){
-                        outEl.textContent = payload.error || 'Unable to analyze this ticker.';
-                        adviceEl.innerHTML = `<strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong><span style="color:#fca5a5">Unable to load assistant notes right now.</span>`;
-                        return;
-                      }
-                      const data = payload.data || {};
-                      const recommendation = String(data.recommendation || 'HOLD OFF FOR NOW').toUpperCase();
-                      outEl.innerHTML = `${quickRecommendationBadge(recommendation)} <span style="margin-left:8px">· ${formatMoney(data.current_price)} · ${data.rationale || 'Signal generated from current indicators.'}</span>`;
-
-                      const ai = data.ai || {};
-                      const narrative = ai.narrative || data.rationale || 'No AI narrative available.';
-                      const riskNotes = Array.isArray(ai.risk_notes) ? ai.risk_notes : [];
-                      const nextChecks = Array.isArray(ai.next_checks) ? ai.next_checks : [];
-                      const topRisk = riskNotes[0] || 'Keep strict risk controls and position sizing.';
-                      const topCheck = nextChecks[0] || 'Recheck momentum and volume before changing size.';
-                      adviceEl.innerHTML = `
-                        <strong style="display:block;color:#bbf7d0;margin-bottom:6px">${escapeHtml(symbol)} · ${escapeHtml((ai.mode || data.ai_mode || 'rule_based').replaceAll('_',' '))}</strong>
-                        <ul style="margin:0;padding-left:18px;display:grid;gap:4px;color:#dcfce7">
-                          <li>${escapeHtml(narrative)}</li>
-                          <li><strong>Risk:</strong> ${escapeHtml(topRisk)}</li>
-                          <li><strong>Next:</strong> ${escapeHtml(topCheck)}</li>
-                        </ul>`;
-                    } catch (err) {
-                      outEl.textContent = 'Unable to analyze this ticker.';
-                      adviceEl.innerHTML = `<strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong><span style="color:#fca5a5">Network issue while loading assistant notes.</span>`;
-                    } finally {
-                      loadingEl.style.display = 'none';
-                      outEl.style.display = 'block';
-                      quickAskBtn.disabled = false;
-                      quickAskBtn.style.opacity = '1';
-                      quickAskBtn.style.cursor = 'pointer';
-                    }
-                  }
-
-                  function tickerButton(symbol){
-                    return `<button onclick="showCompanyDetails('${symbol}')" style="border:none;background:none;color:#15803d;font-weight:700;cursor:pointer;font-size:14px;padding:0">${symbol}</button>`;
-                  }
-                  function openHomeModal(){ document.getElementById('homeTickerModal').style.display='flex'; }
-                  function closeHomeModal(){ document.getElementById('homeTickerModal').style.display='none'; }
-                  async function showCompanyDetails(symbol){
-                    const titleEl = document.getElementById('homeModalTitle');
-                    const summaryEl = document.getElementById('homeModalSummary');
-                    titleEl.textContent = `${symbol} · Loading...`;
-                    summaryEl.textContent = 'Fetching company profile...';
-                    openHomeModal();
-                    try {
-                      const res = await fetch('/api/company-details?symbol=' + encodeURIComponent(symbol));
-                      const payload = await res.json();
-                      if(!res.ok){
-                        titleEl.textContent = symbol;
-                        const err = String(payload.error || '');
-                        summaryEl.textContent = err === 'authentication required' ? 'Please log in to view company details.' : (payload.error || 'Unable to load company details.');
-                        return;
-                      }
-                      const data = payload.data || {};
-                      titleEl.textContent = `${data.company_name || symbol} (${symbol})`;
-                      summaryEl.textContent = data.summary || 'No summary available.';
-                    } catch (err) {
-                      titleEl.textContent = symbol;
-                      summaryEl.textContent = 'Unable to load company details right now.';
-                    }
-                  }
-
-                  function renderMarket(items){
-                    const grid = document.getElementById('market-charts');
-                    destroyMarketCharts();
-                    grid.innerHTML = items.map((item, idx) => {
-                      const up = (item.change_percent || 0) >= 0;
-                      return `<article style="background:#000;border:1px solid #166534;border-radius:12px;padding:12px">
-                        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
-                          <div><div style="font-weight:700;color:#f0fdf4">${item.name}</div><div style="font-size:12px;color:#d1fae5">${item.symbol}</div></div>
-                          <div style="text-align:right"><div style="font-size:18px;color:#f0fdf4">${formatMoney(item.price)}</div><div style="font-size:13px;color:${up ? '#22c55e' : '#dc2626'}">${up ? '+' : ''}${Number(item.change_percent || 0).toFixed(2)}%</div></div>
-                        </div>
-                        <div style="margin-top:8px;height:120px"><canvas id="market-chart-${idx}"></canvas></div>
-                      </article>`;
-                    }).join('');
-                    if(!window.Chart) return;
-                    items.forEach((item, idx)=>{
-                      const up = (item.change_percent || 0) >= 0;
-                      const ctx = document.getElementById(`market-chart-${idx}`);
-                      if(!ctx) return;
-                      marketChartInstances[idx] = new Chart(ctx, {
-                        type:'line',
-                        data:{labels:(item.series||[]).map((_,i)=>`${i+1}`),datasets:[{data:item.series||[],borderColor:up?'#16a34a':'#dc2626',borderWidth:2,pointRadius:0,tension:.32,fill:true,backgroundColor:up?'rgba(22,163,74,.18)':'rgba(220,38,38,.16)'}]},
-                        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{enabled:true}},scales:{x:{display:false},y:{display:false}}}
-                      });
-                    });
-                  }
-
-                  function renderStable(items){
-                    document.getElementById('stable').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.signal_score}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.transparency || ''}</td></tr>`).join('')}</tbody></table>`;
-                  }
-
-                  function renderMomentum(items){
-                    document.getElementById('momentum').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.score}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.rationale}</td></tr>`).join('')}</tbody></table>`;
-                  }
-
-                  function renderWells(items){
-                    document.getElementById('wells').innerHTML = items.map(item=>`<article style="border:1px solid #d1fae5;border-radius:10px;padding:10px;margin-bottom:10px"><div style="font-weight:700;margin-bottom:8px">${item.investor}</div><table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Performance</th></tr></thead><tbody>${(item.stocks||[]).map(stock=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(stock.ticker)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(stock.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${Number(stock.performance||0).toFixed(2)}%</td></tr>`).join('')}</tbody></table></article>`).join('');
-                  }
-
-                  function setTabLoading(isLoading){
-                    const loadingEl = document.getElementById('tabLoading');
-                    if(!loadingEl) return;
-                    loadingEl.style.display = isLoading ? 'flex' : 'none';
-                  }
-
-                  async function refreshTab(tab){
-                    setTabLoading(true);
-                    try {
-                      if(tab === 'stable'){
-                        const stable = await fetchWithFallback('/api/stable-watchlist', 'stable');
-                        renderStable(stable);
-                      } else if(tab === 'momentum'){
-                        const momentum = await fetchWithFallback('/api/hot-momentum-buys', 'momentum');
-                        renderMomentum(momentum);
-                      } else if(tab === 'wells'){
-                        const wells = await fetchWithFallback('/api/wells-picks', 'wells');
-                        renderWells(wells);
-                      }
-                    } finally {
-                      setTabLoading(false);
-                    }
-                  }
-
-                  function switchTab(tab){
-                    document.querySelectorAll('.tab-panel').forEach(panel => panel.style.display = panel.id === tab ? 'block' : 'none');
-                    document.querySelectorAll('.tab-btn').forEach(btn => btn.style.background = btn.dataset.tab === tab ? '#bbf7d0' : '#f0fdf4');
-                    refreshTab(tab);
-                  }
-
-                  document.getElementById('quickSymbol').addEventListener('keydown', (event) => { if(event.key==='Enter'){event.preventDefault();quickAsk();} });
-                  document.getElementById('quickSymbol').addEventListener('focus', (event) => {
-                    if(event.target.value){ event.target.value = ''; }
-                  });
-                  document.getElementById('homeTickerModal').addEventListener('click', (event) => { if(event.target.id==='homeTickerModal'){ closeHomeModal(); }});
-
-                  async function init(){
-                    const market = await fetchWithFallback('/api/market-overview', 'market');
-                    renderMarket(market);
-                    await refreshTab('stable');
-                  }
-
-                  init();
-                </script>
-              </body>
-            </html>
-            """
-        )
+        return render_template("home.html")
 
     @app.get("/login")
     @app.get("/login/")
@@ -848,7 +616,7 @@ def create_app() -> Flask:
                 const totalTodayChange = items.reduce((sum, item) => sum + (typeof item.today_change_amount === 'number' ? item.today_change_amount : 0), 0);
                 const totalPerformance = items.reduce((sum, item) => sum + (typeof item.performance_amount === 'number' ? item.performance_amount : 0), 0);
 
-                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="del(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Remove</button></div></td></tr>`).join('')
+                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="del(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Remove</button></div></td></tr>`).join('')
                 + `<tr style="background:#f7fee7;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px;color:#3f3f46;font-size:12px">Click advice badges to see why.</td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
                 items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || []));
               }
@@ -971,6 +739,45 @@ def create_app() -> Flask:
                 if (lifetimePanelEl.style.display !== 'none') {
                   await loadSoldTrades();
                 }
+              }
+
+              async function markBought(id){
+                const item = currentPortfolioItems.find((entry)=> entry.id === id);
+                if(!item){
+                  outEl.textContent = 'Unable to find portfolio item.';
+                  return;
+                }
+                const boughtPriceRaw = prompt(`What price did you buy more ${item.symbol} at?`);
+                if(boughtPriceRaw === null) return;
+                const boughtPrice = Number(boughtPriceRaw);
+                if(!Number.isFinite(boughtPrice) || boughtPrice <= 0){
+                  outEl.textContent = 'Bought price must be a positive number.';
+                  return;
+                }
+
+                const sharesRaw = prompt(`How many shares of ${item.symbol} did you buy? (Current: ${displayValue(item.shares)})`);
+                if(sharesRaw === null) return;
+                const sharesBought = Number(sharesRaw);
+                if(!Number.isFinite(sharesBought) || sharesBought <= 0){
+                  outEl.textContent = 'Shares bought must be a positive number.';
+                  return;
+                }
+
+                const res = await apiFetch('/api/user-watchlist/' + id + '/buy', {
+                  method:'POST',
+                  headers:{'Content-Type':'application/json'},
+                  body:JSON.stringify({ bought_price:boughtPrice, shares_bought:sharesBought })
+                });
+                const data = await res.json();
+                if(!res.ok){
+                  outEl.textContent = data.error || 'Unable to record buy trade.';
+                  return;
+                }
+                const newEntry = data.added && typeof data.added.new_entry_price === 'number' ? data.added.new_entry_price : null;
+                outEl.textContent = newEntry === null
+                  ? 'Buy trade recorded.'
+                  : `Buy trade recorded (new avg entry ${formatMoney(newEntry)}).`;
+                await load();
               }
 
               async function del(id){ await apiFetch('/api/user-watchlist/'+id,{method:'DELETE'}); await load(); }
