@@ -193,13 +193,16 @@ def test_model_health_reports_deterministic_and_logging_status():
     res = client.get("/api/model-health")
     assert res.status_code == 200
     data = res.get_json()["data"]
+    assert data["schema_version"] == "model_health.v1"
     assert "deterministic_quick_enabled" in data
     assert "deterministic_momentum_enabled" in data
     assert "model_loaded" in data
     assert "artifact_metadata" in data
     assert "artifact_history" in data
     assert "decision_logging" in data
+    assert "enabled" in data["decision_logging"]
     assert "source_counts" in data["decision_logging"]
+    assert "endpoint_counts" in data["decision_logging"]
 
 
 def test_model_health_includes_artifact_metadata_history(tmp_path, monkeypatch):
@@ -231,12 +234,14 @@ def test_decision_log_summary_reports_recent_counts(tmp_path, monkeypatch):
 
     assert res.status_code == 200
     data = res.get_json()["data"]
+    assert data["schema_version"] == "decision_log_summary.v1"
     assert data["events_considered"] == 2
     assert data["source_counts"]["deterministic_model"] == 1
     assert data["source_counts"]["rule_based"] == 1
     assert data["endpoint_counts"]["quick_ask"] == 1
     assert data["endpoint_counts"]["hot_momentum_buys"] == 1
     assert data["latest_event"]["symbol"] == "SOFI"
+    assert data["logging_enabled"] is True
 
 
 def test_decision_log_summary_rejects_invalid_limit():
@@ -265,6 +270,7 @@ def test_decision_outcomes_returns_rows_and_summaries(tmp_path, monkeypatch):
 
     assert res.status_code == 200
     data = res.get_json()["data"]
+    assert data["schema_version"] == "decision_outcomes.v1"
     assert data["summary_1d"]["rows"] == 2
     assert data["summary_1d"]["accuracy"] == 1.0
     assert data["rows"][0]["outcome_1d"] == "correct"

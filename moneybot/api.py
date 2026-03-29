@@ -59,6 +59,31 @@ def _load_materialized_outcomes_snapshot(path: str, *, max_age_seconds: int) -> 
     }
 
 
+def _normalized_decision_logging_health(decision_logger) -> dict[str, Any]:
+    health = decision_logger.health() if decision_logger is not None else {}
+    if not isinstance(health, dict):
+        health = {}
+    return {
+        "enabled": bool(health.get("enabled", False)),
+        "output_path": str(health.get("output_path") or ""),
+        "source_counts": health.get("source_counts") if isinstance(health.get("source_counts"), dict) else {},
+        "endpoint_counts": health.get("endpoint_counts") if isinstance(health.get("endpoint_counts"), dict) else {},
+    }
+
+
+def _normalized_decision_summary(summary: dict[str, Any], *, logging_enabled: bool) -> dict[str, Any]:
+    return {
+        "schema_version": "decision_log_summary.v1",
+        "path": str(summary.get("path") or ""),
+        "events_considered": int(summary.get("events_considered") or 0),
+        "source_counts": summary.get("source_counts") if isinstance(summary.get("source_counts"), dict) else {},
+        "endpoint_counts": summary.get("endpoint_counts") if isinstance(summary.get("endpoint_counts"), dict) else {},
+        "top_symbols": summary.get("top_symbols") if isinstance(summary.get("top_symbols"), list) else [],
+        "latest_event": summary.get("latest_event") if isinstance(summary.get("latest_event"), dict) else None,
+        "logging_enabled": bool(logging_enabled),
+    }
+
+
 
 
 def _password_reset_serializer() -> URLSafeTimedSerializer:
@@ -983,6 +1008,7 @@ def model_health():
     return jsonify(
         {
             "data": {
+                "schema_version": "model_health.v1",
                 "deterministic_quick_enabled": bool(current_app.config.get("DETERMINISTIC_QUICK_ENABLED")),
                 "deterministic_momentum_enabled": bool(current_app.config.get("DETERMINISTIC_MOMENTUM_ENABLED")),
                 "deterministic_model_path": model_path,
@@ -991,7 +1017,7 @@ def model_health():
                 "model_load_error": getattr(deterministic_svc, "load_error", None),
                 "artifact_metadata": load_artifact_metadata(str(model_path)) if model_path else None,
                 "artifact_history": load_artifact_history(str(model_path)) if model_path else [],
-                "decision_logging": decision_logger.health() if decision_logger is not None else None,
+                "decision_logging": _normalized_decision_logging_health(decision_logger),
             },
             "request_id": g.request_id,
         }
@@ -1013,9 +1039,12 @@ def decision_log_summary():
         or "data/decision_events.jsonl"
     )
     summary = summarize_decision_events(str(output_path), limit=limit)
-    summary["logging_enabled"] = bool(getattr(decision_logger, "enabled", False))
+    normalized_summary = _normalized_decision_summary(
+        summary,
+        logging_enabled=bool(getattr(decision_logger, "enabled", False)),
+    )
 
-    return jsonify({"data": summary, "request_id": g.request_id})
+    return jsonify({"data": normalized_summary, "request_id": g.request_id})
 
 
 @api_bp.get("/decision-outcomes")
@@ -1040,6 +1069,7 @@ def decision_outcomes():
             return jsonify(
                 {
                     "data": {
+                        "schema_version": "decision_outcomes.v1",
                         **snapshot["data"],
                         "snapshot_source": "materialized",
                         "snapshot_computed_at_utc": snapshot["computed_at_utc"],
@@ -1107,6 +1137,7 @@ def decision_outcomes():
     return jsonify(
         {
             "data": {
+                "schema_version": "decision_outcomes.v1",
                 "rows": visible_rows,
                 "summary_1d": summary_1d,
                 "summary_5d": summary_5d,
