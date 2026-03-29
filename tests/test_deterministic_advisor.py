@@ -135,3 +135,47 @@ def test_predict_portfolio_position_supports_threshold_overrides(tmp_path: Path)
 
     assert out is not None
     assert out["advice"] == "SELL"
+
+
+def test_predict_quick_decision_applies_probability_calibration(tmp_path: Path):
+    artifact_path = _write_artifact(tmp_path)
+    baseline_svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(artifact_path))
+    calibrated_svc = DeterministicQuickAdvisor(
+        enabled=True,
+        artifact_path=str(artifact_path),
+        calibration_enabled=True,
+        calibration_slope=0.8,
+        calibration_intercept=-0.2,
+    )
+    signal_data = {"technical": {"rsi": 45.0, "macd_histogram": 0.2}, "volume_ratio": 1.4}
+    quote_data = {"price": 101.2, "change_percent": 1.6, "quote_source": "finnhub", "diagnostics": {}}
+
+    baseline = baseline_svc.predict_quick_decision(signal_data=signal_data, quote_data=quote_data)
+    calibrated = calibrated_svc.predict_quick_decision(signal_data=signal_data, quote_data=quote_data)
+
+    assert baseline is not None
+    assert calibrated is not None
+    assert baseline["probability_up"] != calibrated["probability_up"]
+    assert "raw_probability_up" in calibrated
+    assert calibrated["calibration_enabled"] is True
+
+
+def test_predict_quick_decision_respects_rollout_controls(tmp_path: Path):
+    artifact_path = _write_artifact(tmp_path)
+    svc = DeterministicQuickAdvisor(
+        enabled=True,
+        artifact_path=str(artifact_path),
+        rollout_percentage=0.0,
+        rollout_allowlist={"AAPL"},
+        rollout_blocklist={"MSFT"},
+    )
+    signal_data = {"technical": {"rsi": 45.0, "macd_histogram": 0.2}, "volume_ratio": 1.4}
+    quote_data = {"price": 101.2, "change_percent": 1.6, "quote_source": "finnhub", "diagnostics": {}}
+
+    allowed = svc.predict_quick_decision(signal_data=signal_data, quote_data=quote_data, symbol="AAPL")
+    blocked = svc.predict_quick_decision(signal_data=signal_data, quote_data=quote_data, symbol="MSFT")
+    default_blocked = svc.predict_quick_decision(signal_data=signal_data, quote_data=quote_data, symbol="TSLA")
+
+    assert allowed is not None
+    assert blocked is None
+    assert default_blocked is None

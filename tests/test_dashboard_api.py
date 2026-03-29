@@ -32,7 +32,7 @@ class StubAIAdvisorService:
 
 
 class StubDeterministicQuickAdvisor:
-    def predict_quick_decision(self, *, signal_data, quote_data):
+    def predict_quick_decision(self, *, signal_data, quote_data, symbol=None):
         return {
             "recommendation": "STRONG BUY",
             "rationale": "Deterministic model says upside probability is high.",
@@ -200,6 +200,8 @@ def test_model_health_reports_deterministic_and_logging_status():
     assert "artifact_metadata" in data
     assert "artifact_history" in data
     assert "decision_logging" in data
+    assert "rollout_percentage" in data
+    assert "calibration_enabled" in data
     assert "enabled" in data["decision_logging"]
     assert "source_counts" in data["decision_logging"]
     assert "endpoint_counts" in data["decision_logging"]

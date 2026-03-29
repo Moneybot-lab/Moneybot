@@ -14,6 +14,10 @@ from .services.deterministic_advisor import DeterministicQuickAdvisor
 from .services.market_data import MarketDataService
 
 
+def _parse_symbol_set(raw: str | None) -> set[str]:
+    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
+
+
 def _resolve_database_url() -> str:
     # Prefer explicit DATABASE_URL, but support common provider aliases used on hosted platforms.
     raw_database_url = (
@@ -107,6 +111,13 @@ def create_app() -> Flask:
         DETERMINISTIC_PORTFOLIO_SELL_PROB_THRESHOLD=float(os.environ.get("DETERMINISTIC_PORTFOLIO_SELL_PROB_THRESHOLD", "0.45")),
         DETERMINISTIC_PORTFOLIO_BUY_DIP_THRESHOLD_PCT=float(os.environ.get("DETERMINISTIC_PORTFOLIO_BUY_DIP_THRESHOLD_PCT", "-4.0")),
         DETERMINISTIC_PORTFOLIO_SELL_PROFIT_THRESHOLD_PCT=float(os.environ.get("DETERMINISTIC_PORTFOLIO_SELL_PROFIT_THRESHOLD_PCT", "6.0")),
+        DETERMINISTIC_CALIBRATION_ENABLED=(os.environ.get("DETERMINISTIC_CALIBRATION_ENABLED", "false").lower() == "true"),
+        DETERMINISTIC_CALIBRATION_SLOPE=float(os.environ.get("DETERMINISTIC_CALIBRATION_SLOPE", "1.0")),
+        DETERMINISTIC_CALIBRATION_INTERCEPT=float(os.environ.get("DETERMINISTIC_CALIBRATION_INTERCEPT", "0.0")),
+        DETERMINISTIC_ROLLOUT_PERCENTAGE=float(os.environ.get("DETERMINISTIC_ROLLOUT_PERCENTAGE", "100.0")),
+        DETERMINISTIC_ROLLOUT_SEED=os.environ.get("DETERMINISTIC_ROLLOUT_SEED", "moneybot"),
+        DETERMINISTIC_ROLLOUT_ALLOWLIST=_parse_symbol_set(os.environ.get("DETERMINISTIC_ROLLOUT_ALLOWLIST", "")),
+        DETERMINISTIC_ROLLOUT_BLOCKLIST=_parse_symbol_set(os.environ.get("DETERMINISTIC_ROLLOUT_BLOCKLIST", "")),
         DECISION_LOGGING_ENABLED=(os.environ.get("DECISION_LOGGING_ENABLED", "true").lower() == "true"),
         DECISION_LOG_PATH=os.environ.get("DECISION_LOG_PATH", "data/decision_events.jsonl"),
         DECISION_OUTCOMES_SNAPSHOT_PATH=os.environ.get("DECISION_OUTCOMES_SNAPSHOT_PATH", "data/decision_outcomes_snapshot.json"),
@@ -131,6 +142,13 @@ def create_app() -> Flask:
         portfolio_sell_prob_threshold=app.config["DETERMINISTIC_PORTFOLIO_SELL_PROB_THRESHOLD"],
         portfolio_buy_dip_threshold_pct=app.config["DETERMINISTIC_PORTFOLIO_BUY_DIP_THRESHOLD_PCT"],
         portfolio_sell_profit_threshold_pct=app.config["DETERMINISTIC_PORTFOLIO_SELL_PROFIT_THRESHOLD_PCT"],
+        calibration_enabled=app.config["DETERMINISTIC_CALIBRATION_ENABLED"],
+        calibration_slope=app.config["DETERMINISTIC_CALIBRATION_SLOPE"],
+        calibration_intercept=app.config["DETERMINISTIC_CALIBRATION_INTERCEPT"],
+        rollout_percentage=app.config["DETERMINISTIC_ROLLOUT_PERCENTAGE"],
+        rollout_seed=app.config["DETERMINISTIC_ROLLOUT_SEED"],
+        rollout_allowlist=app.config["DETERMINISTIC_ROLLOUT_ALLOWLIST"],
+        rollout_blocklist=app.config["DETERMINISTIC_ROLLOUT_BLOCKLIST"],
     )
     app.extensions["decision_logger"] = DecisionLogger(
         enabled=app.config["DECISION_LOGGING_ENABLED"],

@@ -437,7 +437,7 @@ def test_get_quote_fallback_diagnostics_include_twelve_data_fields(monkeypatch):
 
 def test_get_hot_momentum_buys_uses_deterministic_scores_when_enabled(monkeypatch):
     class StubDeterministicAdvisor:
-        def predict_quick_decision(self, *, signal_data, quote_data):
+        def predict_quick_decision(self, *, signal_data, quote_data, symbol=None):
             symbol = signal_data["symbol"]
             if symbol == "SOFI":
                 prob = 0.91
@@ -528,7 +528,7 @@ def test_get_hot_momentum_buys_falls_back_when_deterministic_disabled(monkeypatc
 
 def test_get_hot_momentum_buys_strips_deterministic_boilerplate_rationale(monkeypatch):
     class StubDeterministicAdvisor:
-        def predict_quick_decision(self, *, signal_data, quote_data):
+        def predict_quick_decision(self, *, signal_data, quote_data, symbol=None):
             return {
                 "decision_source": "deterministic_model",
                 "model_version": "day1-logreg-v1",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import hashlib
 from pathlib import Path
 from typing import Any, Dict
 
@@ -24,6 +25,13 @@ class DeterministicQuickAdvisor:
         portfolio_sell_prob_threshold: float = 0.45,
         portfolio_buy_dip_threshold_pct: float = -4.0,
         portfolio_sell_profit_threshold_pct: float = 6.0,
+        calibration_enabled: bool = False,
+        calibration_slope: float = 1.0,
+        calibration_intercept: float = 0.0,
+        rollout_percentage: float = 100.0,
+        rollout_seed: str = "moneybot",
+        rollout_allowlist: set[str] | None = None,
+        rollout_blocklist: set[str] | None = None,
     ):
         self.enabled = bool(enabled)
         self.artifact_path = artifact_path
@@ -36,6 +44,13 @@ class DeterministicQuickAdvisor:
         self.portfolio_sell_prob_threshold = float(portfolio_sell_prob_threshold)
         self.portfolio_buy_dip_threshold_pct = float(portfolio_buy_dip_threshold_pct)
         self.portfolio_sell_profit_threshold_pct = float(portfolio_sell_profit_threshold_pct)
+        self.calibration_enabled = bool(calibration_enabled)
+        self.calibration_slope = float(calibration_slope)
+        self.calibration_intercept = float(calibration_intercept)
+        self.rollout_percentage = max(0.0, min(100.0, float(rollout_percentage)))
+        self.rollout_seed = str(rollout_seed or "moneybot")
+        self.rollout_allowlist = {s.strip().upper() for s in (rollout_allowlist or set()) if str(s).strip()}
+        self.rollout_blocklist = {s.strip().upper() for s in (rollout_blocklist or set()) if str(s).strip()}
 
         if self.enabled:
             self._load_artifact()
@@ -92,14 +107,50 @@ class DeterministicQuickAdvisor:
 
         return row, imputed
 
-    def predict_quick_decision(self, *, signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> Dict[str, Any] | None:
+    def _is_in_rollout(self, symbol: str | None) -> bool:
+        normalized = str(symbol or "").strip().upper()
+        if normalized and normalized in self.rollout_allowlist:
+            return True
+        if normalized and normalized in self.rollout_blocklist:
+            return False
+        if self.rollout_percentage >= 100.0:
+            return True
+        if self.rollout_percentage <= 0.0:
+            return False
+        key = f"{self.rollout_seed}:{normalized or '*'}".encode("utf-8")
+        bucket = int(hashlib.sha256(key).hexdigest()[:8], 16) / 0xFFFFFFFF
+        return bucket < (self.rollout_percentage / 100.0)
+
+    @staticmethod
+    def _sigmoid(value: float) -> float:
+        clipped = max(min(value, 35.0), -35.0)
+        return 1.0 / (1.0 + math.exp(-clipped))
+
+    def _calibrate_probability(self, prob_up: float) -> float:
+        if not self.calibration_enabled:
+            return prob_up
+        p = min(max(float(prob_up), 1e-6), 1.0 - 1e-6)
+        logit = math.log(p / (1.0 - p))
+        calibrated_logit = (self.calibration_slope * logit) + self.calibration_intercept
+        return self._sigmoid(calibrated_logit)
+
+    def predict_quick_decision(
+        self,
+        *,
+        signal_data: Dict[str, Any],
+        quote_data: Dict[str, Any],
+        symbol: str | None = None,
+    ) -> Dict[str, Any] | None:
         if not self.enabled:
             return None
         if self.artifact is None:
             return None
+        if not self._is_in_rollout(symbol):
+            return None
 
         row, imputed = self._build_feature_row(signal_data, quote_data)
-        prob_up = float(predict_proba(self.artifact, row)[0])
+        raw_prob_up = float(predict_proba(self.artifact, row)[0])
+        prob_up = self._calibrate_probability(raw_prob_up)
         threshold = float(self.quick_buy_threshold if self.quick_buy_threshold is not None else self.artifact.decision_threshold)
         strong_threshold = max(threshold + 0.15, self.quick_strong_buy_threshold)
 
@@ -115,6 +166,11 @@ class DeterministicQuickAdvisor:
             f"Deterministic model ({self.artifact.version}) probability-up={prob_up:.2f} "
             f"vs threshold={threshold:.2f}."
         )
+        if self.calibration_enabled:
+            rationale += (
+                f" Calibrated from raw={raw_prob_up:.2f} with slope={self.calibration_slope:.2f}"
+                f" intercept={self.calibration_intercept:.2f}."
+            )
         if imputed:
             rationale += f" Missing live features were imputed: {', '.join(imputed)}."
 
@@ -127,10 +183,13 @@ class DeterministicQuickAdvisor:
             "quote_diagnostics": quote_data.get("diagnostics"),
             "decision_source": "deterministic_model",
             "model_version": self.artifact.version,
+            "raw_probability_up": round(raw_prob_up, 4),
             "probability_up": round(prob_up, 4),
             "decision_threshold": threshold,
             "confidence": confidence,
             "imputed_features": imputed,
+            "rollout_percentage": self.rollout_percentage,
+            "calibration_enabled": self.calibration_enabled,
         }
 
     def predict_portfolio_position(
@@ -143,7 +202,7 @@ class DeterministicQuickAdvisor:
         signal_data: Dict[str, Any],
         quote_data: Dict[str, Any],
     ) -> Dict[str, Any] | None:
-        quick = self.predict_quick_decision(signal_data=signal_data, quote_data=quote_data)
+        quick = self.predict_quick_decision(signal_data=signal_data, quote_data=quote_data, symbol=symbol)
         if quick is None:
             return None
 

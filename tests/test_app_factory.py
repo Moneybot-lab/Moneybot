@@ -144,6 +144,33 @@ def test_create_app_reads_deterministic_threshold_settings(monkeypatch):
     assert svc.portfolio_sell_profit_threshold_pct == 8.0
 
 
+def test_create_app_reads_deterministic_calibration_and_rollout_settings(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("DETERMINISTIC_CALIBRATION_ENABLED", "true")
+    monkeypatch.setenv("DETERMINISTIC_CALIBRATION_SLOPE", "0.9")
+    monkeypatch.setenv("DETERMINISTIC_CALIBRATION_INTERCEPT", "-0.15")
+    monkeypatch.setenv("DETERMINISTIC_ROLLOUT_PERCENTAGE", "35")
+    monkeypatch.setenv("DETERMINISTIC_ROLLOUT_SEED", "day12")
+    monkeypatch.setenv("DETERMINISTIC_ROLLOUT_ALLOWLIST", "AAPL, msft")
+    monkeypatch.setenv("DETERMINISTIC_ROLLOUT_BLOCKLIST", "TSLA")
+
+    app = create_app()
+    svc = app.extensions["deterministic_quick_advisor"]
+
+    assert app.config["DETERMINISTIC_CALIBRATION_ENABLED"] is True
+    assert app.config["DETERMINISTIC_CALIBRATION_SLOPE"] == 0.9
+    assert app.config["DETERMINISTIC_CALIBRATION_INTERCEPT"] == -0.15
+    assert app.config["DETERMINISTIC_ROLLOUT_PERCENTAGE"] == 35.0
+    assert app.config["DETERMINISTIC_ROLLOUT_SEED"] == "day12"
+    assert app.config["DETERMINISTIC_ROLLOUT_ALLOWLIST"] == {"AAPL", "MSFT"}
+    assert app.config["DETERMINISTIC_ROLLOUT_BLOCKLIST"] == {"TSLA"}
+    assert svc.calibration_enabled is True
+    assert svc.rollout_percentage == 35.0
+    assert svc.rollout_allowlist == {"AAPL", "MSFT"}
+    assert svc.rollout_blocklist == {"TSLA"}
+
+
 def test_create_app_reads_outcomes_snapshot_settings(monkeypatch):
     monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")

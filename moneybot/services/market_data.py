@@ -522,6 +522,7 @@ class MarketDataService:
                 deterministic_decision = self.deterministic_quick_advisor.predict_quick_decision(
                     signal_data=signal,
                     quote_data=quote,
+                    symbol=item["symbol"],
                 )
 
             if deterministic_decision is not None:

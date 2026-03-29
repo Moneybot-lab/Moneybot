@@ -911,7 +911,11 @@ def quick_ask():
     quote_data = signal_data.get("quote") or svc.get_quote(symbol)
     decision = None
     if deterministic_svc is not None:
-        decision = deterministic_svc.predict_quick_decision(signal_data=signal_data, quote_data=quote_data)
+        decision = deterministic_svc.predict_quick_decision(
+            signal_data=signal_data,
+            quote_data=quote_data,
+            symbol=symbol,
+        )
     if decision is None:
         decision = _quick_decision(signal_data, quote_data)
 
@@ -1015,6 +1019,12 @@ def model_health():
                 "model_loaded": bool(getattr(deterministic_svc, "artifact", None) is not None),
                 "model_version": getattr(getattr(deterministic_svc, "artifact", None), "version", None),
                 "model_load_error": getattr(deterministic_svc, "load_error", None),
+                "rollout_percentage": getattr(deterministic_svc, "rollout_percentage", None),
+                "rollout_allowlist_size": len(getattr(deterministic_svc, "rollout_allowlist", set()) or set()),
+                "rollout_blocklist_size": len(getattr(deterministic_svc, "rollout_blocklist", set()) or set()),
+                "calibration_enabled": bool(getattr(deterministic_svc, "calibration_enabled", False)),
+                "calibration_slope": getattr(deterministic_svc, "calibration_slope", None),
+                "calibration_intercept": getattr(deterministic_svc, "calibration_intercept", None),
                 "artifact_metadata": load_artifact_metadata(str(model_path)) if model_path else None,
                 "artifact_history": load_artifact_history(str(model_path)) if model_path else [],
                 "decision_logging": _normalized_decision_logging_health(decision_logger),

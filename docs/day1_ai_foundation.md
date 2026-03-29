@@ -106,6 +106,13 @@ DETERMINISTIC_PORTFOLIO_BUY_PROB_THRESHOLD=0.64
 DETERMINISTIC_PORTFOLIO_SELL_PROB_THRESHOLD=0.44
 DETERMINISTIC_PORTFOLIO_BUY_DIP_THRESHOLD_PCT=-5.0
 DETERMINISTIC_PORTFOLIO_SELL_PROFIT_THRESHOLD_PCT=7.0
+DETERMINISTIC_CALIBRATION_ENABLED=false
+DETERMINISTIC_CALIBRATION_SLOPE=1.0
+DETERMINISTIC_CALIBRATION_INTERCEPT=0.0
+DETERMINISTIC_ROLLOUT_PERCENTAGE=100
+DETERMINISTIC_ROLLOUT_SEED=moneybot
+DETERMINISTIC_ROLLOUT_ALLOWLIST=
+DETERMINISTIC_ROLLOUT_BLOCKLIST=
 ```
 
 Notes:
@@ -228,3 +235,27 @@ To bypass the snapshot and force live computation for debugging:
 ```bash
 GET /api/decision-outcomes?limit=20&force_live=true
 ```
+
+## Day-12 deterministic calibration + rollout controls
+
+You can gradually roll out deterministic decisions and apply simple logit calibration without retraining.
+
+Recommended controls:
+
+```bash
+DETERMINISTIC_CALIBRATION_ENABLED=true
+DETERMINISTIC_CALIBRATION_SLOPE=0.90
+DETERMINISTIC_CALIBRATION_INTERCEPT=-0.15
+DETERMINISTIC_ROLLOUT_PERCENTAGE=35
+DETERMINISTIC_ROLLOUT_SEED=day12
+DETERMINISTIC_ROLLOUT_ALLOWLIST=AAPL,MSFT
+DETERMINISTIC_ROLLOUT_BLOCKLIST=TSLA
+```
+
+Behavior:
+- rollout is deterministic per symbol using `seed + symbol` hash buckets
+- allowlist always enables deterministic decisions for listed symbols
+- blocklist always disables deterministic decisions for listed symbols
+- when a symbol is outside rollout, API behavior falls back to the existing rule-based path
+
+`GET /api/model-health` now reports rollout and calibration settings so you can confirm production configuration quickly.
