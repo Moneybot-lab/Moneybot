@@ -168,7 +168,12 @@ def test_home_page_includes_model_ops_snapshot(monkeypatch):
     assert res.status_code == 200
     html = res.get_data(as_text=True)
     assert "Model Ops Snapshot" in html
-    assert "/api/decision-log-summary?limit=50" in html
     assert "Refresh Ops" in html
     assert "Recent Decisions & Outcomes" in html
-    assert "/api/decision-outcomes?limit=20" in html
+    assert "/static/js/home.js" in html
+
+    js_res = client.get("/static/js/home.js")
+    assert js_res.status_code == 200
+    js = js_res.get_data(as_text=True)
+    assert "/api/decision-log-summary?limit=50" in js
+    assert "/api/decision-outcomes?limit=20" in js

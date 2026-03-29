@@ -1,0 +1,113 @@
+
+            <html>
+              <body style="font-family:Inter,Segoe UI,system-ui,sans-serif;padding:24px;background:linear-gradient(180deg,#f7fee7,#ecfdf3);max-width:1120px;margin:0 auto;color:#0f172a">
+                <header style="display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:14px">
+                  <div style="flex:1;min-width:280px">
+                    <img src="/static/moneybot-pro-logo.svg" alt="MoneyBot Pro logo" style="display:block;width:100%;max-width:860px;height:auto"/>
+                  </div>
+                  <div style="display:flex;gap:10px;flex-wrap:wrap">
+                    <a href="/login" style="padding:8px 12px;background:#dcfce7;color:#000;border-radius:999px;text-decoration:none;font-weight:600">Login</a>
+                    <a href="/signup" style="padding:8px 12px;background:#dcfce7;color:#000;border-radius:999px;text-decoration:none;font-weight:600">Sign up</a>
+                    <a href="/portfolio" style="padding:8px 12px;background:#166534;color:#f0fdf4;border-radius:999px;text-decoration:none;font-weight:700">User Portfolio</a>
+                  </div>
+                </header>
+
+                <section style="background:#000;color:#d1fae5;border-radius:14px;padding:16px;margin-bottom:18px;box-shadow:0 10px 24px rgba(2,6,23,.18)">
+                  <h3 style="margin:0 0 10px 0;color:#f0fdf4">Quick Ask · What should I do now?</h3>
+                  <div style="display:grid;grid-template-columns:minmax(300px,430px) minmax(300px,1fr);gap:12px;align-items:start">
+                    <div>
+                      <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <input id="quickSymbol" placeholder="Ticker (e.g. AAPL)" style="padding:10px 12px;border:1px solid #166534;border-radius:10px;min-width:210px;background:#000;color:#f7fee7;font-size:1.15rem;font-weight:700;letter-spacing:.01em"/>
+                        <button id="quickAskBtn" onclick="quickAsk()" style="padding:10px 16px;border:none;background:#16a34a;color:#f0fdf4;border-radius:10px;font-weight:700;font-size:1.08rem">Analyze</button>
+                      </div>
+                      <div id="quickOut" style="margin-top:10px;color:#bbf7d0">Type a ticker to get an instant STRONG BUY / BUY / HOLD OFF FOR NOW call.</div>
+                      <div id="quickLoading" style="display:none;align-items:center;gap:8px;margin-top:10px;color:#86efac;font-weight:600">
+                        <span style="display:inline-block;width:14px;height:14px;border:2px solid #86efac;border-top-color:#22c55e;border-radius:9999px;animation:spin .7s linear infinite"></span>
+                        Analyzing signal...
+                      </div>
+                    </div>
+                    <div id="quickAdvice" style="min-height:72px;background:#052e16;border:1px solid #14532d;border-radius:10px;padding:10px 12px;color:#dcfce7">
+                      <strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong>
+                      <span style="color:#86efac">Advice will appear here after you analyze a ticker.</span>
+                    </div>
+                  </div>
+                </section>
+
+                <section style="margin-bottom:18px">
+                  <h3 style="margin-bottom:8px">Market Indices</h3>
+                  <div id="market-charts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px"></div>
+                </section>
+
+                <section style="background:#f7fee7;border:1px solid #bbf7d0;border-radius:12px;padding:14px;margin-bottom:12px">
+                  <h3 style="margin:0 0 8px 0">Buyer's Guide</h3>
+                  <p style="margin:0 0 6px 0;color:#166534"><strong>Stable Watchlist:</strong> Lower risk, long-term stocks.</p>
+                  <p style="margin:0 0 6px 0;color:#166534"><strong>Hot Momentum:</strong> Higher risk, low-price stocks with growth potential.</p>
+                  <p style="margin:0;color:#166534"><strong>Whales of Wall Street:</strong> See and follow top investors' picks.</p>
+                </section>
+
+                <section style="background:#f0fdf4;border:1px solid #d1fae5;border-radius:12px;padding:16px">
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+                    <button class="tab-btn" data-tab="stable" onclick="switchTab('stable')" style="padding:9px 14px;border:1px solid #bbf7d0;background:#dcfce7;border-radius:8px;font-size:1.06rem;font-weight:700">Stable Watchlist</button>
+                    <button class="tab-btn" data-tab="momentum" onclick="switchTab('momentum')" style="padding:9px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px;font-size:1.06rem;font-weight:700">Hot Momentum Buys</button>
+                    <button class="tab-btn" data-tab="wells" onclick="switchTab('wells')" style="padding:9px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px;font-size:1.06rem;font-weight:700">Whales of Wall Street</button>
+                  </div>
+                  <div id="tabLoading" style="display:none;align-items:center;gap:10px;margin-bottom:10px;color:#166534;font-weight:600">
+                    <span style="display:inline-block;width:16px;height:16px;border:2px solid #86efac;border-top-color:#16a34a;border-radius:9999px;animation:spin .7s linear infinite"></span>
+                    Loading table...
+                  </div>
+                  <div id="stable" class="tab-panel"></div>
+                  <div id="momentum" class="tab-panel" style="display:none"></div>
+                  <div id="wells" class="tab-panel" style="display:none"></div>
+                </section>
+
+                <section style="background:#ecfccb;border:1px solid #bef264;border-radius:12px;padding:16px;margin-top:18px">
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+                    <div>
+                      <h3 style="margin:0 0 4px 0">Model Ops Snapshot</h3>
+                      <p style="margin:0;color:#3f6212">Live rollout status for deterministic model health and recent decision telemetry.</p>
+                    </div>
+                    <button type="button" onclick="refreshOps()" style="padding:8px 12px;border:1px solid #84cc16;background:#f7fee7;color:#365314;border-radius:999px;font-weight:700;cursor:pointer">Refresh Ops</button>
+                  </div>
+                  <div id="opsLoading" style="display:none;align-items:center;gap:8px;margin-bottom:10px;color:#3f6212;font-weight:600">
+                    <span style="display:inline-block;width:14px;height:14px;border:2px solid #a3e635;border-top-color:#65a30d;border-radius:9999px;animation:spin .7s linear infinite"></span>
+                    Loading model ops snapshot...
+                  </div>
+                  <div id="opsCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px"></div>
+                  <div id="opsTopSymbols" style="margin-top:12px"></div>
+                  <div id="opsLatestEvent" style="margin-top:12px"></div>
+                </section>
+
+                <section style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:16px;margin-top:18px">
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+                    <div>
+                      <h3 style="margin:0 0 4px 0">Recent Decisions & Outcomes</h3>
+                      <p style="margin:0;color:#166534">Day 10 table showing the latest logged actions, sources, artifact versions, and 1D / 5D outcomes.</p>
+                    </div>
+                    <button type="button" onclick="refreshOutcomes()" style="padding:8px 12px;border:1px solid #16a34a;background:#dcfce7;color:#14532d;border-radius:999px;font-weight:700;cursor:pointer">Refresh Outcomes</button>
+                  </div>
+                  <div id="outcomesLoading" style="display:none;align-items:center;gap:8px;margin-bottom:10px;color:#166534;font-weight:600">
+                    <span style="display:inline-block;width:14px;height:14px;border:2px solid #86efac;border-top-color:#16a34a;border-radius:9999px;animation:spin .7s linear infinite"></span>
+                    Loading recent decision outcomes...
+                  </div>
+                  <div id="outcomesSummary" style="margin-bottom:12px"></div>
+                  <div id="outcomesTable"></div>
+                </section>
+
+                <div id="homeTickerModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:center;justify-content:center;padding:14px">
+                  <div style="background:#f0fdf4;border-radius:12px;max-width:680px;width:100%;max-height:80vh;overflow:auto;padding:14px">
+                    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+                      <h3 id="homeModalTitle" style="margin:0">Company Details</h3>
+                      <button onclick="closeHomeModal()" style="border:none;background:#d1fae5;border-radius:8px;padding:6px 10px">Close</button>
+                    </div>
+                    <p id="homeModalSummary" style="color:#166534"></p>
+                  </div>
+                </div>
+
+                <p style="color:#3f6212">Rule-based guidance; not financial advice.</p>
+
+                <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+                <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
+                <script src="{{ url_for('static', filename='js/home.js') }}"></script>
+              </body>
+            </html>
+            
