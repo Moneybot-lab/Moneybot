@@ -419,6 +419,13 @@ class MarketDataService:
             return round(float(raw_score), 2)
         return round(float(default_score), 2)
 
+    @staticmethod
+    def _change_percent_sort_value(value: Any) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
     def _reason_from_signal(self, signal: Dict[str, Any], fallback: str) -> str:
         reasons = signal.get("reasons") or signal.get("rationale") or []
         if isinstance(reasons, list) and reasons:
@@ -460,7 +467,11 @@ class MarketDataService:
 
         qualified = [item for item in enriched if item["qualified"]]
         pool = qualified if len(qualified) >= 5 else sorted(enriched, key=lambda x: x["signal_score"], reverse=True)
-        selected = sorted(pool, key=lambda x: (x["signal_score"], float(x.get("change_percent") or 0.0)), reverse=True)[:5]
+        selected = sorted(
+            pool,
+            key=lambda x: (x["signal_score"], self._change_percent_sort_value(x.get("change_percent"))),
+            reverse=True,
+        )[:5]
         for item in selected:
             item.pop("qualified", None)
         return selected
@@ -534,7 +545,11 @@ class MarketDataService:
 
         qualified = [item for item in enriched if item["qualified"]]
         pool = qualified if len(qualified) >= 5 else sorted(enriched, key=lambda x: x["score"], reverse=True)
-        selected = sorted(pool, key=lambda x: (x["score"], float(x.get("change_percent") or 0.0)), reverse=True)[:5]
+        selected = sorted(
+            pool,
+            key=lambda x: (x["score"], self._change_percent_sort_value(x.get("change_percent"))),
+            reverse=True,
+        )[:5]
         for item in selected:
             item.pop("qualified", None)
         return selected
