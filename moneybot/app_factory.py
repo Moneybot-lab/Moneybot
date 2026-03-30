@@ -18,6 +18,21 @@ def _parse_symbol_set(raw: str | None) -> set[str]:
     return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
 
 
+def _parse_int_env(name: str, default: int) -> int:
+    raw = str(os.environ.get(name, default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        if "=" in raw:
+            maybe_value = raw.rsplit("=", 1)[-1].strip()
+            if maybe_value:
+                try:
+                    return int(maybe_value)
+                except ValueError:
+                    pass
+        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
+
+
 def _resolve_database_url() -> str:
     # Prefer explicit DATABASE_URL, but support common provider aliases used on hosted platforms.
     raw_database_url = (
@@ -124,7 +139,7 @@ def create_app() -> Flask:
         DECISION_OUTCOMES_SNAPSHOT_PATH=os.environ.get("DECISION_OUTCOMES_SNAPSHOT_PATH", "data/decision_outcomes_snapshot.json"),
         DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS=int(os.environ.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")),
         DETERMINISTIC_CALIBRATION_REPORT_PATH=os.environ.get("DETERMINISTIC_CALIBRATION_REPORT_PATH", "data/day13_calibration_report.json"),
-        DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS=int(os.environ.get("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", "43200")),
+        DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS=_parse_int_env("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", 43200),
     )
 
     app.extensions["ai_advisor_service"] = AIAdvisorService(

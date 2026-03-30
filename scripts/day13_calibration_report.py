@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import math
 import sys
@@ -19,16 +21,20 @@ from moneybot.services.outcome_tracking import close_values
 
 
 def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
+    if int(start_ts) > int(datetime.now(timezone.utc).timestamp()):
+        return None
     start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
     end_dt = start_dt + timedelta(days=max(days + 3, 7))
-    history = yf.download(
-        symbol,
-        start=start_dt.strftime("%Y-%m-%d"),
-        end=end_dt.strftime("%Y-%m-%d"),
-        interval="1d",
-        progress=False,
-        auto_adjust=False,
-    )
+    capture = io.StringIO()
+    with contextlib.redirect_stderr(capture), contextlib.redirect_stdout(capture):
+        history = yf.download(
+            symbol,
+            start=start_dt.strftime("%Y-%m-%d"),
+            end=end_dt.strftime("%Y-%m-%d"),
+            interval="1d",
+            progress=False,
+            auto_adjust=False,
+        )
     closes = close_values(history)
     if len(closes) <= days:
         return None
@@ -39,8 +45,21 @@ def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
     return (end_price - start_price) / start_price
 
 
-def calibration_rows_from_events(events: list[dict], *, horizon_days: int = 5, min_prob: float = 0.0) -> list[dict]:
+def _is_mature_event(ts: int, *, horizon_days: int, now_ts: int | None = None) -> bool:
+    now_value = int(now_ts if now_ts is not None else datetime.now(timezone.utc).timestamp())
+    required_age_seconds = int((horizon_days + 2) * 86400)
+    return (now_value - int(ts)) >= required_age_seconds
+
+
+def calibration_rows_from_events(
+    events: list[dict],
+    *,
+    horizon_days: int = 5,
+    min_prob: float = 0.0,
+    now_ts: int | None = None,
+) -> list[dict]:
     out: list[dict] = []
+    lookup_cache: dict[tuple[str, int, int], float | None] = {}
     for event in events:
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         prob = payload.get("probability_up")
@@ -53,7 +72,13 @@ def calibration_rows_from_events(events: list[dict], *, horizon_days: int = 5, m
         ts = event.get("ts")
         if not symbol or not isinstance(ts, int):
             continue
-        future_ret = _future_return(symbol, ts, horizon_days)
+        if not _is_mature_event(ts, horizon_days=horizon_days, now_ts=now_ts):
+            continue
+
+        cache_key = (symbol, int(ts), int(horizon_days))
+        if cache_key not in lookup_cache:
+            lookup_cache[cache_key] = _future_return(symbol, ts, horizon_days)
+        future_ret = lookup_cache[cache_key]
         if future_ret is None:
             continue
         out.append(
