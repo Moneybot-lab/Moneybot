@@ -225,6 +225,55 @@ def test_model_health_includes_artifact_metadata_history(tmp_path, monkeypatch):
     assert data["artifact_history"][0]["train_rows"] == 100
 
 
+def test_model_health_includes_fresh_calibration_report(tmp_path, monkeypatch):
+    report_path = tmp_path / "day13_calibration_report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "calibration_report.v1",
+                "computed_at_utc": datetime.now(timezone.utc).isoformat(),
+                "brier_score": 0.19,
+                "rows": 80,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DETERMINISTIC_CALIBRATION_REPORT_PATH", str(report_path))
+    monkeypatch.setenv("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", "3600")
+
+    client = _client()
+    res = client.get("/api/model-health")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["calibration_report"] is not None
+    assert data["calibration_report"]["brier_score"] == 0.19
+
+
+def test_quick_ask_logs_shadow_decision_in_rollout_dry_run():
+    class DryRunAdvisor:
+        rollout_dry_run = True
+
+        def predict_quick_decision(self, *, signal_data, quote_data, symbol=None):
+            return None
+
+        def predict_shadow_decision(self, *, signal_data, quote_data):
+            return {
+                "recommendation": "BUY",
+                "decision_source": "deterministic_model",
+                "model_version": "day1-logreg-v1",
+                "probability_up": 0.66,
+                "confidence": 66.0,
+            }
+
+    client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = DryRunAdvisor()
+
+    res = client.get("/api/quick-ask?symbol=AAPL")
+    assert res.status_code == 200
+    summary = client.get("/api/decision-log-summary?limit=20").get_json()["data"]
+    assert summary["endpoint_counts"]["quick_ask_shadow"] >= 1
+
+
 def test_decision_log_summary_reports_recent_counts(tmp_path, monkeypatch):
     monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
     client = _client()

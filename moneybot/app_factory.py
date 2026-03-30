@@ -118,10 +118,13 @@ def create_app() -> Flask:
         DETERMINISTIC_ROLLOUT_SEED=os.environ.get("DETERMINISTIC_ROLLOUT_SEED", "moneybot"),
         DETERMINISTIC_ROLLOUT_ALLOWLIST=_parse_symbol_set(os.environ.get("DETERMINISTIC_ROLLOUT_ALLOWLIST", "")),
         DETERMINISTIC_ROLLOUT_BLOCKLIST=_parse_symbol_set(os.environ.get("DETERMINISTIC_ROLLOUT_BLOCKLIST", "")),
+        DETERMINISTIC_ROLLOUT_DRY_RUN=(os.environ.get("DETERMINISTIC_ROLLOUT_DRY_RUN", "false").lower() == "true"),
         DECISION_LOGGING_ENABLED=(os.environ.get("DECISION_LOGGING_ENABLED", "true").lower() == "true"),
         DECISION_LOG_PATH=os.environ.get("DECISION_LOG_PATH", "data/decision_events.jsonl"),
         DECISION_OUTCOMES_SNAPSHOT_PATH=os.environ.get("DECISION_OUTCOMES_SNAPSHOT_PATH", "data/decision_outcomes_snapshot.json"),
         DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS=int(os.environ.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")),
+        DETERMINISTIC_CALIBRATION_REPORT_PATH=os.environ.get("DETERMINISTIC_CALIBRATION_REPORT_PATH", "data/day13_calibration_report.json"),
+        DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS=int(os.environ.get("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", "43200")),
     )
 
     app.extensions["ai_advisor_service"] = AIAdvisorService(
@@ -149,6 +152,7 @@ def create_app() -> Flask:
         rollout_seed=app.config["DETERMINISTIC_ROLLOUT_SEED"],
         rollout_allowlist=app.config["DETERMINISTIC_ROLLOUT_ALLOWLIST"],
         rollout_blocklist=app.config["DETERMINISTIC_ROLLOUT_BLOCKLIST"],
+        rollout_dry_run=app.config["DETERMINISTIC_ROLLOUT_DRY_RUN"],
     )
     app.extensions["decision_logger"] = DecisionLogger(
         enabled=app.config["DECISION_LOGGING_ENABLED"],

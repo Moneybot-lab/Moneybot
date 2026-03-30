@@ -179,3 +179,20 @@ def test_predict_quick_decision_respects_rollout_controls(tmp_path: Path):
     assert allowed is not None
     assert blocked is None
     assert default_blocked is None
+
+
+def test_predict_shadow_decision_returns_payload_even_when_rollout_blocks(tmp_path: Path):
+    artifact_path = _write_artifact(tmp_path)
+    svc = DeterministicQuickAdvisor(
+        enabled=True,
+        artifact_path=str(artifact_path),
+        rollout_percentage=0.0,
+        rollout_dry_run=True,
+    )
+    signal_data = {"technical": {"rsi": 45.0, "macd_histogram": 0.2}, "volume_ratio": 1.4}
+    quote_data = {"price": 101.2, "change_percent": 1.6, "quote_source": "finnhub", "diagnostics": {}}
+
+    assert svc.predict_quick_decision(signal_data=signal_data, quote_data=quote_data, symbol="AAPL") is None
+    shadow = svc.predict_shadow_decision(signal_data=signal_data, quote_data=quote_data)
+    assert shadow is not None
+    assert shadow["decision_source"] == "deterministic_model"

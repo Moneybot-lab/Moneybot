@@ -222,6 +222,9 @@ const fallbackData = {
                     const deterministicCount = Number(sourceCounts.deterministic_model || 0);
                     const ruleCount = Number(sourceCounts.rule_based || 0);
                     const total = Number(summary.events_considered || 0);
+                    const calibrationReport = health.calibration_report || {};
+                    const brierScore = typeof calibrationReport.brier_score === 'number' ? calibrationReport.brier_score : null;
+                    const calibrationStatus = brierScore == null ? 'No report' : (brierScore <= 0.22 ? 'Healthy' : 'Drifting');
                     const cards = [
                       {
                         label: 'Model status',
@@ -242,6 +245,13 @@ const fallbackData = {
                         label: 'Most active endpoint',
                         value: `<strong style="font-size:1.2rem;color:#14532d">${escapeHtml(Object.entries(endpointCounts).sort((a,b)=>b[1]-a[1])[0]?.[0] || 'n/a')}</strong>`,
                         detail: `${Object.entries(endpointCounts).sort((a,b)=>b[1]-a[1])[0]?.[1] || 0} recent events`,
+                      },
+                      {
+                        label: 'Calibration',
+                        value: opsBadge(calibrationStatus, calibrationStatus === 'Healthy'),
+                        detail: brierScore == null
+                          ? 'Run day13_calibration_report.py to populate diagnostics.'
+                          : `Brier ${brierScore.toFixed(4)} · rows ${calibrationReport.rows || 0}`,
                       },
                     ];
                     document.getElementById('opsCards').innerHTML = cards.map(card => `<article style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:12px"><div style="font-size:12px;font-weight:800;letter-spacing:.06em;color:#4d7c0f;text-transform:uppercase;margin-bottom:8px">${card.label}</div><div>${card.value}</div><div style="margin-top:8px;color:#3f6212">${escapeHtml(card.detail)}</div></article>`).join('');

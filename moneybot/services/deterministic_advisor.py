@@ -32,6 +32,7 @@ class DeterministicQuickAdvisor:
         rollout_seed: str = "moneybot",
         rollout_allowlist: set[str] | None = None,
         rollout_blocklist: set[str] | None = None,
+        rollout_dry_run: bool = False,
     ):
         self.enabled = bool(enabled)
         self.artifact_path = artifact_path
@@ -51,6 +52,7 @@ class DeterministicQuickAdvisor:
         self.rollout_seed = str(rollout_seed or "moneybot")
         self.rollout_allowlist = {s.strip().upper() for s in (rollout_allowlist or set()) if str(s).strip()}
         self.rollout_blocklist = {s.strip().upper() for s in (rollout_blocklist or set()) if str(s).strip()}
+        self.rollout_dry_run = bool(rollout_dry_run)
 
         if self.enabled:
             self._load_artifact()
@@ -134,18 +136,15 @@ class DeterministicQuickAdvisor:
         calibrated_logit = (self.calibration_slope * logit) + self.calibration_intercept
         return self._sigmoid(calibrated_logit)
 
-    def predict_quick_decision(
+    def _predict_quick_decision_internal(
         self,
         *,
         signal_data: Dict[str, Any],
         quote_data: Dict[str, Any],
-        symbol: str | None = None,
     ) -> Dict[str, Any] | None:
         if not self.enabled:
             return None
         if self.artifact is None:
-            return None
-        if not self._is_in_rollout(symbol):
             return None
 
         row, imputed = self._build_feature_row(signal_data, quote_data)
@@ -191,6 +190,25 @@ class DeterministicQuickAdvisor:
             "rollout_percentage": self.rollout_percentage,
             "calibration_enabled": self.calibration_enabled,
         }
+
+    def predict_quick_decision(
+        self,
+        *,
+        signal_data: Dict[str, Any],
+        quote_data: Dict[str, Any],
+        symbol: str | None = None,
+    ) -> Dict[str, Any] | None:
+        if not self._is_in_rollout(symbol):
+            return None
+        return self._predict_quick_decision_internal(signal_data=signal_data, quote_data=quote_data)
+
+    def predict_shadow_decision(
+        self,
+        *,
+        signal_data: Dict[str, Any],
+        quote_data: Dict[str, Any],
+    ) -> Dict[str, Any] | None:
+        return self._predict_quick_decision_internal(signal_data=signal_data, quote_data=quote_data)
 
     def predict_portfolio_position(
         self,

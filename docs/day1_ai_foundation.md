@@ -250,6 +250,7 @@ DETERMINISTIC_ROLLOUT_PERCENTAGE=35
 DETERMINISTIC_ROLLOUT_SEED=day12
 DETERMINISTIC_ROLLOUT_ALLOWLIST=AAPL,MSFT
 DETERMINISTIC_ROLLOUT_BLOCKLIST=TSLA
+DETERMINISTIC_ROLLOUT_DRY_RUN=true
 ```
 
 Behavior:
@@ -259,3 +260,35 @@ Behavior:
 - when a symbol is outside rollout, API behavior falls back to the existing rule-based path
 
 `GET /api/model-health` now reports rollout and calibration settings so you can confirm production configuration quickly.
+
+### 5.1 rollout dry-run mode
+
+If you want to observe deterministic recommendations without exposing them to users yet:
+
+```bash
+DETERMINISTIC_ROLLOUT_DRY_RUN=true
+DETERMINISTIC_ROLLOUT_PERCENTAGE=0
+```
+
+In this mode, `/api/quick-ask` continues to serve the existing rule-based response, while logging deterministic shadow decisions under `quick_ask_shadow` for comparison.
+
+### Day-13 calibration diagnostics + plan
+
+Generate a calibration report from decision telemetry:
+
+```bash
+python3 scripts/day13_calibration_report.py --input data/decision_events.jsonl --output data/day13_calibration_report.json --limit 1000 --horizon-days 5
+```
+
+Generate a bounded recalibration plan (proposal only):
+
+```bash
+python3 scripts/day13_recalibrate.py --report data/day13_calibration_report.json --output data/day13_recalibration_plan.json --current-slope 1.0 --current-intercept 0.0
+```
+
+Optional model-health report wiring:
+
+```bash
+DETERMINISTIC_CALIBRATION_REPORT_PATH=data/day13_calibration_report.json
+DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS=43200
+```

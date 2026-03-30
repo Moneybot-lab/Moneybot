@@ -154,6 +154,9 @@ def test_create_app_reads_deterministic_calibration_and_rollout_settings(monkeyp
     monkeypatch.setenv("DETERMINISTIC_ROLLOUT_SEED", "day12")
     monkeypatch.setenv("DETERMINISTIC_ROLLOUT_ALLOWLIST", "AAPL, msft")
     monkeypatch.setenv("DETERMINISTIC_ROLLOUT_BLOCKLIST", "TSLA")
+    monkeypatch.setenv("DETERMINISTIC_ROLLOUT_DRY_RUN", "true")
+    monkeypatch.setenv("DETERMINISTIC_CALIBRATION_REPORT_PATH", "data/custom_calibration_report.json")
+    monkeypatch.setenv("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", "1234")
 
     app = create_app()
     svc = app.extensions["deterministic_quick_advisor"]
@@ -165,10 +168,14 @@ def test_create_app_reads_deterministic_calibration_and_rollout_settings(monkeyp
     assert app.config["DETERMINISTIC_ROLLOUT_SEED"] == "day12"
     assert app.config["DETERMINISTIC_ROLLOUT_ALLOWLIST"] == {"AAPL", "MSFT"}
     assert app.config["DETERMINISTIC_ROLLOUT_BLOCKLIST"] == {"TSLA"}
+    assert app.config["DETERMINISTIC_ROLLOUT_DRY_RUN"] is True
+    assert app.config["DETERMINISTIC_CALIBRATION_REPORT_PATH"] == "data/custom_calibration_report.json"
+    assert app.config["DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS"] == 1234
     assert svc.calibration_enabled is True
     assert svc.rollout_percentage == 35.0
     assert svc.rollout_allowlist == {"AAPL", "MSFT"}
     assert svc.rollout_blocklist == {"TSLA"}
+    assert svc.rollout_dry_run is True
 
 
 def test_create_app_reads_outcomes_snapshot_settings(monkeypatch):

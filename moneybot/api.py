@@ -59,6 +59,33 @@ def _load_materialized_outcomes_snapshot(path: str, *, max_age_seconds: int) -> 
     }
 
 
+def _load_fresh_json_payload(path: str, *, max_age_seconds: int) -> dict[str, Any] | None:
+    file_path = Path(path)
+    if not file_path.exists():
+        return None
+    try:
+        payload = json.loads(file_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    computed_at = payload.get("computed_at_utc")
+    if not isinstance(computed_at, str):
+        return None
+    try:
+        computed_dt = datetime.fromisoformat(computed_at.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    age_seconds = (datetime.now(timezone.utc) - computed_dt.astimezone(timezone.utc)).total_seconds()
+    if age_seconds < 0 or age_seconds > max(1, int(max_age_seconds)):
+        return None
+    return {
+        **payload,
+        "computed_at_utc": computed_dt.astimezone(timezone.utc).isoformat(),
+        "age_seconds": int(age_seconds),
+    }
+
+
 def _normalized_decision_logging_health(decision_logger) -> dict[str, Any]:
     health = decision_logger.health() if decision_logger is not None else {}
     if not isinstance(health, dict):
@@ -916,6 +943,24 @@ def quick_ask():
             quote_data=quote_data,
             symbol=symbol,
         )
+        if decision is None and getattr(deterministic_svc, "rollout_dry_run", False):
+            shadow = deterministic_svc.predict_shadow_decision(
+                signal_data=signal_data,
+                quote_data=quote_data,
+            )
+            if shadow is not None and decision_logger is not None:
+                decision_logger.log(
+                    endpoint="quick_ask_shadow",
+                    symbol=symbol,
+                    decision_source=shadow.get("decision_source"),
+                    payload={
+                        "shadow_only": True,
+                        "recommendation": shadow.get("recommendation"),
+                        "model_version": shadow.get("model_version"),
+                        "probability_up": shadow.get("probability_up"),
+                        "confidence": shadow.get("confidence"),
+                    },
+                )
     if decision is None:
         decision = _quick_decision(signal_data, quote_data)
 
@@ -1009,6 +1054,12 @@ def model_health():
     decision_logger = current_app.extensions.get("decision_logger")
     model_path = current_app.config.get("DETERMINISTIC_MODEL_PATH")
 
+    calibration_report_path = current_app.config.get("DETERMINISTIC_CALIBRATION_REPORT_PATH") or ""
+    calibration_report = _load_fresh_json_payload(
+        str(calibration_report_path),
+        max_age_seconds=int(current_app.config.get("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS") or 43200),
+    ) if calibration_report_path else None
+
     return jsonify(
         {
             "data": {
@@ -1022,9 +1073,12 @@ def model_health():
                 "rollout_percentage": getattr(deterministic_svc, "rollout_percentage", None),
                 "rollout_allowlist_size": len(getattr(deterministic_svc, "rollout_allowlist", set()) or set()),
                 "rollout_blocklist_size": len(getattr(deterministic_svc, "rollout_blocklist", set()) or set()),
+                "rollout_dry_run": bool(getattr(deterministic_svc, "rollout_dry_run", False)),
                 "calibration_enabled": bool(getattr(deterministic_svc, "calibration_enabled", False)),
                 "calibration_slope": getattr(deterministic_svc, "calibration_slope", None),
                 "calibration_intercept": getattr(deterministic_svc, "calibration_intercept", None),
+                "calibration_report_path": calibration_report_path,
+                "calibration_report": calibration_report,
                 "artifact_metadata": load_artifact_metadata(str(model_path)) if model_path else None,
                 "artifact_history": load_artifact_history(str(model_path)) if model_path else [],
                 "decision_logging": _normalized_decision_logging_health(decision_logger),
