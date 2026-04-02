@@ -1,0 +1,25 @@
+{
+  "avg_observed": 0.4,
+  "avg_predicted": 0.54876,
+  "bins": [
+    {
+      "avg_observed": 0.4,
+      "avg_predicted": 0.5488,
+      "count": 5,
+      "range": [
+        0.5,
+        0.6
+      ]
+    }
+  ],
+  "brier_score": 0.260981,
+  "computed_at_utc": "2026-04-02T03:21:50.687647+00:00",
+  "horizon_days": 5,
+  "input_path": "data/decision_events.jsonl",
+  "recommended": {
+    "intercept_delta": -0.601127,
+    "slope_delta": 0.0
+  },
+  "rows": 5,
+  "schema_version": "calibration_report.v1"
+}
