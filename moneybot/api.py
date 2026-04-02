@@ -25,7 +25,7 @@ from .extensions import db
 from .models import SoldTrade, User, WatchlistItem
 from .services.decision_log import read_decision_events, summarize_decision_events
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
-from .services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
+from .services.outcome_tracking import close_values, evaluate_decision_events, normalize_unix_ts, summarize_outcome_rows
 
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
@@ -1227,7 +1227,10 @@ def wells_picks():
     svc = current_app.extensions["market_data_service"]
     return jsonify({"items": svc.get_wells_picks(), "request_id": g.request_id})
 def _future_return_for_outcomes(symbol: str, start_ts: int, days: int) -> float | None:
-    start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
+    normalized_ts = normalize_unix_ts(start_ts)
+    if normalized_ts is None:
+        return None
+    start_dt = datetime.fromtimestamp(int(normalized_ts), tz=timezone.utc)
     now_utc = datetime.now(timezone.utc)
     # Skip network calls when event time is too recent (or future) to have realized horizon returns.
     if start_dt >= now_utc:

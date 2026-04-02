@@ -75,3 +75,18 @@ def test_evaluate_decision_events_handles_lookup_errors_as_skipped():
     assert rows[0]["return_1d"] is None
     assert rows[0]["outcome_1d"] == "skipped"
     assert rows[0]["return_5d"] == 0.02
+
+
+def test_evaluate_decision_events_normalizes_millisecond_timestamps():
+    events = [
+        {"symbol": "AAPL", "endpoint": "quick_ask", "decision_source": "deterministic_model", "ts": 1_700_000_000_000, "payload": {"recommendation": "BUY"}},
+    ]
+    calls: list[int] = []
+
+    def tracking_lookup(symbol, ts, days):
+        calls.append(ts)
+        return 0.01
+
+    rows = evaluate_decision_events(events, future_return_lookup=tracking_lookup)
+    assert rows[0]["ts"] == 1_700_000_000
+    assert calls and calls[0] == 1_700_000_000
