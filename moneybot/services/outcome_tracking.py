@@ -7,6 +7,7 @@ from typing import Any, Dict
 POSITIVE_ACTIONS = {"BUY", "STRONG BUY"}
 NEGATIVE_ACTIONS = {"SELL", "HOLD OFF FOR NOW"}
 NEUTRAL_ACTIONS = {"HOLD"}
+HOLD_FLAT_BAND = 0.005
 
 
 def normalize_action(event: Dict[str, Any]) -> str | None:
@@ -23,11 +24,12 @@ def normalize_action(event: Dict[str, Any]) -> str | None:
     return action or None
 
 
-def classify_outcome(action: str | None, future_return: float | None) -> str:
+def classify_outcome(action: str | None, future_return: float | None, *, hold_flat_band: float = HOLD_FLAT_BAND) -> str:
     if action is None or future_return is None:
         return "skipped"
     if action in NEUTRAL_ACTIONS:
-        return "neutral"
+        threshold = abs(float(hold_flat_band))
+        return "correct" if abs(float(future_return)) <= threshold else "incorrect"
     if action in POSITIVE_ACTIONS:
         return "correct" if future_return > 0 else "incorrect"
     if action in NEGATIVE_ACTIONS:
