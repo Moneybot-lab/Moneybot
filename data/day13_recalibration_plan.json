@@ -1,0 +1,19 @@
+{
+  "apply_change": false,
+  "computed_at_utc": "2026-04-02T03:19:17.417176+00:00",
+  "current": {
+    "intercept": 0.0,
+    "slope": 1.0
+  },
+  "next": {
+    "intercept": 0.0,
+    "slope": 1.0
+  },
+  "recommended_delta": {
+    "bounded_intercept_delta": -0.2,
+    "intercept_delta": -0.601127,
+    "slope_delta": 0.0
+  },
+  "rows": 5,
+  "schema_version": "calibration_recalibration_plan.v1"
+}
