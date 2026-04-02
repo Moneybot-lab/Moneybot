@@ -1,6 +1,6 @@
 # Moneybot Daily Terminal Report
 
-**Date (UTC):** `2026-04-01`  
+**Date (UTC):** `2026-04-02`  
 **Run started (UTC):** `HH:MM`  
 **Run finished (UTC):** `HH:MM`
 
@@ -17,8 +17,8 @@
 - **Metadata output path:** `data/day1_baseline_model.json.meta.json`
 - **History output path:** `data/day1_baseline_model.json.history.json`
 - **Baseline metrics:**
-  - Accuracy: `0.5057`
-  - Positive rate: `0.2249`
+  - Accuracy: `0.5016`
+  - Positive rate: `0.1979`
   - Eval rows: `965.0000`
 - **Status:** ✅ Pass
 - **Notes:**
@@ -124,13 +124,9 @@
 
 - **Pipeline health:** ✅ Healthy / ⚠️ Partial / ❌ Blocked
 - **Key takeaways (2–5 bullets):**
-  - `Model performance is slightly above random but not yet statistically reliable`
-  - `Only 5 evaluated outcomes (1-day) and 0 for 5-day → you don’t have enough closed trades to validate anything meaningful yet.
-`
-  - `System is functioning correctly end-to-end`
-  - `Avg predicted: 0.5488 Avg observed: 0.4000 Your model is too optimistic, even though recalibration didn’t trigger yet.`
+  - `____`
+  - `____`
+  - `____`
 - **Action items for next run:**
-  - `Increase outcome sample size ASAP`
-  - `Implement soft calibration adjustment (don’t wait for threshold)`
-  - `Audit “Neutral” outcomes logic`
-  - `Start tracking per-symbol performance`
+  - `____`
+  - `____`

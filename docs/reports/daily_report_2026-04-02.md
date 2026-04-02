@@ -124,9 +124,9 @@
 
 - **Pipeline health:** ✅ Healthy / ⚠️ Partial / ❌ Blocked
 - **Key takeaways (2–5 bullets):**
-  - `Model performance remains effectively random (~50% baseline), while short-term outcomes (60% on 1-day) show early but statistically insignificant signal due to low sample size.`
-  - `System pipeline is fully operational end-to-end, confirming that data ingestion, logging, evaluation, and reporting are stable and reliable.`
-  - `Model continues to show overconfidence bias (predicted 0.5488 vs observed 0.4000), indicating probability outputs are not yet well calibrated.`
+  - `____`
+  - `____`
+  - `____`
 - **Action items for next run:**
-  - `Increase evaluated outcome volume by allowing more decisions to mature and/or expanding evaluation limits to accelerate feedback collection.`
-  - `Investigate and reduce “neutral” classifications to ensure more decisions contribute to measurable outcomes and improve learning efficiency.`
+  - `____`
+  - `____`
