@@ -14,7 +14,8 @@ def test_classify_outcome_handles_positive_and_negative_actions():
     assert classify_outcome("BUY", -0.01) == "incorrect"
     assert classify_outcome("HOLD OFF FOR NOW", -0.02) == "correct"
     assert classify_outcome("SELL", 0.05) == "incorrect"
-    assert classify_outcome("HOLD", 0.01) == "neutral"
+    assert classify_outcome("HOLD", 0.001) == "correct"
+    assert classify_outcome("HOLD", 0.01) == "incorrect"
 
 
 def test_summarize_outcome_rows_reports_accuracy_and_average_returns():
@@ -27,10 +28,10 @@ def test_summarize_outcome_rows_reports_accuracy_and_average_returns():
     )
 
     assert summary["rows"] == 3
-    assert summary["counts"]["correct"] == 1
+    assert summary["counts"]["neutral"] == 0
+    assert summary["counts"]["correct"] == 2
     assert summary["counts"]["incorrect"] == 1
-    assert summary["counts"]["neutral"] == 1
-    assert summary["accuracy"] == 0.5
+    assert summary["accuracy"] == 0.6667
 
 
 def test_close_values_handles_dataframe_close_column():
