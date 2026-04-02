@@ -1,33 +1,10 @@
 # Mac
 .DS_Store
 *.localized
-
-# Python
+.env
+.venv/
 __pycache__/
 *.pyc
-
-# Virtual env
-.venv/
-venv/
-
-# Environment variables / secrets
-.env
-
-# Data logs (DO NOT TRACK)
 data/decision_events.jsonl
 data/decision_training_snapshot.jsonl
-
-# Large / regeneratable data
 data/*.parquet
-data/*.csv
-
-# Temp / logs
-logs/
-*.log
-tmp/
-
-# IDE
-.vscode/
-.idea/
-
-data/decision-log-archive/

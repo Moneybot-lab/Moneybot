@@ -119,6 +119,23 @@ def test_day10_candidate_trainer_fails_if_rows_below_min(tmp_path, monkeypatch):
         day10.main()
 
 
+def test_day10_prepares_fallback_numeric_features_when_snapshot_features_missing():
+    # smoke-check helper path through frame prep/select without requiring custom feature dicts
+    import pandas as pd
+
+    df = pd.DataFrame(
+        [
+            {"ts": 1, "recommendation": "BUY", "probability_up": None, "return_1d": 0.02, "return_5d": 0.03},
+            {"ts": 2, "recommendation": "SELL", "probability_up": 0.3, "return_1d": -0.01, "return_5d": -0.02},
+        ]
+    )
+    prepared = day10._prepare_frame(df)
+    cols = day10._select_feature_columns(prepared)
+    assert "rec_buy" in cols
+    assert "probability_up_filled" in cols
+    assert "return_1d" in cols
+
+
 def test_day11_compare_detects_win_and_loss():
     win, _ = day11._decide(
         {"accuracy": 0.60, "brier_score": 0.18, "rows": 250},
@@ -132,6 +149,15 @@ def test_day11_compare_detects_win_and_loss():
     )
     assert win is True
     assert loss is False
+
+
+def test_day11_compare_handles_missing_model_file_gracefully(tmp_path):
+    import pandas as pd
+
+    test_df = pd.DataFrame([{"return_5d": 0.02, "return_1d": 0.01, "x1": 1.0}])
+    metrics = day11._evaluate(str(tmp_path / "missing.json"), test_df)
+    assert metrics["rows"] == 0
+    assert metrics["accuracy"] is None
 
 
 def test_day14_promotion_only_runs_when_allowed(tmp_path, monkeypatch):

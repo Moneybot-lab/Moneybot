@@ -28,9 +28,7 @@ RESERVED_COLUMNS = {
     "endpoint",
     "decision_source",
     "recommendation",
-    "probability_up",
     "model_version",
-    "return_1d",
     "return_5d",
     "outcome_1d",
     "outcome_5d",
@@ -61,6 +59,18 @@ def _select_feature_columns(df: pd.DataFrame) -> list[str]:
         if pd.api.types.is_numeric_dtype(df[col]):
             cols.append(str(col))
     return sorted(cols)
+
+
+def _prepare_frame(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    recommendation = out["recommendation"] if "recommendation" in out.columns else pd.Series("", index=out.index)
+    recommendation = recommendation.fillna("").astype(str).str.upper()
+    out["rec_buy"] = (recommendation == "BUY").astype(float)
+    out["rec_sell"] = (recommendation == "SELL").astype(float)
+    out["rec_hold"] = recommendation.isin({"HOLD", "HOLD OFF FOR NOW"}).astype(float)
+    prob = out["probability_up"] if "probability_up" in out.columns else pd.Series(np.nan, index=out.index)
+    out["probability_up_filled"] = pd.to_numeric(prob, errors="coerce").fillna(0.5)
+    return out
 
 
 def _chronological_split(df: pd.DataFrame, train_ratio: float) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -96,6 +106,7 @@ def main() -> None:
 
     if "ts" in df.columns:
         df = df.sort_values("ts").reset_index(drop=True)
+    df = _prepare_frame(df)
 
     feature_columns = _select_feature_columns(df)
     if not feature_columns:

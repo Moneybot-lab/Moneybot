@@ -47,6 +47,8 @@ def _brier_score(y_true: np.ndarray, y_prob: np.ndarray) -> float:
 
 
 def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
+    if not Path(artifact_path).exists():
+        return {"accuracy": None, "avg_return": None, "brier_score": None, "rows": 0}
     artifact = load_artifact(artifact_path)
     for col in artifact.feature_columns:
         if col not in test_df.columns:
