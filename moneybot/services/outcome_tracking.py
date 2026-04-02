@@ -23,9 +23,12 @@ def normalize_unix_ts(ts: Any) -> int | None:
 
 
 def normalize_action(event: Dict[str, Any]) -> str | None:
+    snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     action = (
-        payload.get("recommendation")
+        snapshot.get("recommendation")
+        or snapshot.get("advice")
+        or payload.get("recommendation")
         or payload.get("advice")
         or event.get("recommendation")
         or event.get("advice")
@@ -111,6 +114,14 @@ def evaluate_decision_events(
             "ts": ts,
             "model_version": (event.get("payload") or {}).get("model_version") if isinstance(event.get("payload"), dict) else None,
         }
+        snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        if isinstance(snapshot.get("model_version"), str) and snapshot.get("model_version"):
+            row["model_version"] = snapshot.get("model_version")
+        prob = snapshot.get("probability_up")
+        if not isinstance(prob, (int, float)):
+            prob = payload.get("probability_up")
+        row["probability_up"] = float(prob) if isinstance(prob, (int, float)) else None
         try:
             row["return_1d"] = future_return_lookup(symbol, ts, 1)
         except Exception:  # noqa: BLE001
