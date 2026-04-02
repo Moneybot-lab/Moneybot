@@ -10,6 +10,18 @@ NEUTRAL_ACTIONS = {"HOLD"}
 HOLD_FLAT_BAND = 0.005
 
 
+def normalize_unix_ts(ts: Any) -> int | None:
+    if not isinstance(ts, (int, float)):
+        return None
+    value = int(ts)
+    if value <= 0:
+        return None
+    # Handle millisecond timestamps (for example, JS Date.now()).
+    if value >= 1_000_000_000_000:
+        value = value // 1000
+    return value
+
+
 def normalize_action(event: Dict[str, Any]) -> str | None:
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     action = (
@@ -88,8 +100,8 @@ def evaluate_decision_events(
     for event in events:
         symbol = str(event.get("symbol") or "").strip().upper()
         action = normalize_action(event)
-        ts = event.get("ts")
-        if not symbol or action is None or not isinstance(ts, int):
+        ts = normalize_unix_ts(event.get("ts"))
+        if not symbol or action is None or ts is None:
             continue
         row = {
             "symbol": symbol,
