@@ -12,6 +12,13 @@ from .services.ai_advisor import AIAdvisorService
 from .services.decision_log import DecisionLogger
 from .services.deterministic_advisor import DeterministicQuickAdvisor
 from .services.market_data import MarketDataService
+from .services.runtime_paths import (
+    day13_calibration_report_path,
+    decision_events_log_path,
+    decision_outcomes_snapshot_path,
+    is_durable_runtime_configured,
+    resolve_runtime_dir,
+)
 
 
 def _parse_symbol_set(raw: str | None) -> set[str]:
@@ -94,6 +101,7 @@ def create_app() -> Flask:
 
     database_url = _resolve_database_url()
 
+    runtime_dir = resolve_runtime_dir()
     app = Flask(__name__)
     app.url_map.strict_slashes = False
     app.config.update(
@@ -135,10 +143,10 @@ def create_app() -> Flask:
         DETERMINISTIC_ROLLOUT_BLOCKLIST=_parse_symbol_set(os.environ.get("DETERMINISTIC_ROLLOUT_BLOCKLIST", "")),
         DETERMINISTIC_ROLLOUT_DRY_RUN=(os.environ.get("DETERMINISTIC_ROLLOUT_DRY_RUN", "false").lower() == "true"),
         DECISION_LOGGING_ENABLED=(os.environ.get("DECISION_LOGGING_ENABLED", "true").lower() == "true"),
-        DECISION_LOG_PATH=os.environ.get("DECISION_LOG_PATH", "data/decision_events.jsonl"),
-        DECISION_OUTCOMES_SNAPSHOT_PATH=os.environ.get("DECISION_OUTCOMES_SNAPSHOT_PATH", "data/decision_outcomes_snapshot.json"),
+        DECISION_LOG_PATH=os.environ.get("DECISION_LOG_PATH", str(decision_events_log_path())),
+        DECISION_OUTCOMES_SNAPSHOT_PATH=os.environ.get("DECISION_OUTCOMES_SNAPSHOT_PATH", str(decision_outcomes_snapshot_path())),
         DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS=int(os.environ.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")),
-        DETERMINISTIC_CALIBRATION_REPORT_PATH=os.environ.get("DETERMINISTIC_CALIBRATION_REPORT_PATH", "data/day13_calibration_report.json"),
+        DETERMINISTIC_CALIBRATION_REPORT_PATH=os.environ.get("DETERMINISTIC_CALIBRATION_REPORT_PATH", str(day13_calibration_report_path())),
         DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS=_parse_int_env("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", 43200),
     )
 
@@ -187,6 +195,26 @@ def create_app() -> Flask:
         deterministic_quick_advisor=app.extensions["deterministic_quick_advisor"],
         deterministic_momentum_enabled=app.config["DETERMINISTIC_MOMENTUM_ENABLED"],
     )
+
+    model_path = str(app.config.get("DETERMINISTIC_MODEL_PATH") or "")
+    model_exists = bool(model_path and os.path.exists(model_path))
+    hot_momentum_ai_enabled = bool(
+        app.config.get("DETERMINISTIC_MOMENTUM_ENABLED")
+        and getattr(app.extensions.get("deterministic_quick_advisor"), "enabled", False)
+    )
+    logging.info(
+        "Moneybot runtime diagnostics: runtime_dir=%s durable_storage=%s model_path=%s model_exists=%s hot_momentum_live_ai=%s",
+        runtime_dir,
+        is_durable_runtime_configured(),
+        model_path,
+        model_exists,
+        hot_momentum_ai_enabled,
+    )
+    if not is_durable_runtime_configured():
+        logging.warning(
+            "Moneybot runtime data is using local ephemeral storage (%s); decisions and snapshots may reset on redeploy.",
+            runtime_dir,
+        )
 
     with app.app_context():
         db.create_all()

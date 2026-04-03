@@ -71,7 +71,15 @@ class DecisionLogger:
         self._source_counts: dict[str, int] = {}
         self._endpoint_counts: dict[str, int] = {}
 
-    def log(self, *, endpoint: str, symbol: str | None, decision_source: str | None, payload: Dict[str, Any]) -> None:
+    def log(
+        self,
+        *,
+        endpoint: str,
+        symbol: str | None,
+        decision_source: str | None,
+        payload: Dict[str, Any],
+        snapshot: Dict[str, Any] | None = None,
+    ) -> None:
         if not self.enabled:
             return
 
@@ -89,6 +97,8 @@ class DecisionLogger:
             "decision_source": source,
             "payload": payload,
         }
+        if isinstance(snapshot, dict):
+            record["snapshot"] = snapshot
         try:
             path = Path(self.output_path)
             path.parent.mkdir(parents=True, exist_ok=True)
