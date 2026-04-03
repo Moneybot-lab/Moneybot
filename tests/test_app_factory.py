@@ -190,6 +190,21 @@ def test_create_app_reads_outcomes_snapshot_settings(monkeypatch):
     assert app.config["DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS"] == 120
 
 
+def test_create_app_uses_runtime_data_dir_defaults(monkeypatch, tmp_path):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MONEYBOT_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.delenv("DECISION_LOG_PATH", raising=False)
+    monkeypatch.delenv("DECISION_OUTCOMES_SNAPSHOT_PATH", raising=False)
+    monkeypatch.delenv("DETERMINISTIC_CALIBRATION_REPORT_PATH", raising=False)
+
+    app = create_app()
+
+    assert app.config["DECISION_LOG_PATH"].endswith("runtime/decision_events.jsonl")
+    assert app.config["DECISION_OUTCOMES_SNAPSHOT_PATH"].endswith("runtime/decision_outcomes_snapshot.json")
+    assert app.config["DETERMINISTIC_CALIBRATION_REPORT_PATH"].endswith("runtime/day13_calibration_report.json")
+
+
 def test_create_app_parses_calibration_report_age_when_assignment_string_is_pasted(monkeypatch):
     monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
