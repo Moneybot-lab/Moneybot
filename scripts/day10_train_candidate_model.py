@@ -111,12 +111,24 @@ def main() -> None:
         df = df.sort_values("ts").reset_index(drop=True)
     df = _prepare_frame(df)
 
-    feature_columns = _select_feature_columns(df)
+    target_column = "label_up_5d"
+    rows_loaded = len(df)
+    if target_column not in df.columns:
+        if "return_5d" in df.columns:
+            df[target_column] = (pd.to_numeric(df["return_5d"], errors="coerce") > 0.0).astype(float)
+        else:
+            raise SystemExit("Missing target column label_up_5d and unable to derive from return_5d")
+
+    filtered_target = df.dropna(subset=[target_column]).copy()
+    rows_after_target_filter = len(filtered_target)
+
+    feature_columns = _select_feature_columns(filtered_target)
     if not feature_columns:
         raise SystemExit("No numeric feature columns found in decision dataset")
 
-    clean = df.dropna(subset=feature_columns + ["return_5d"]).copy()
-    clean["label_up_5d"] = (clean["return_5d"].astype(float) > 0.0).astype(float)
+    clean = filtered_target.dropna(subset=feature_columns + [target_column]).copy()
+    clean[target_column] = pd.to_numeric(clean[target_column], errors="coerce")
+    rows_after_feature_filter = len(clean)
 
     if len(clean) < max(1, args.min_rows):
         raise SystemExit(f"Not enough rows to train candidate model (have={len(clean)}, need={args.min_rows})")
@@ -124,12 +136,12 @@ def main() -> None:
     train_df, test_df = _chronological_split(clean, args.train_ratio)
 
     X_train = train_df[feature_columns].to_numpy(dtype=float)
-    y_train = train_df["label_up_5d"].to_numpy(dtype=float)
+    y_train = train_df[target_column].to_numpy(dtype=float)
     base_artifact = train_logistic_baseline(X_train, y_train)
     artifact = _build_artifact_with_features(base_artifact, feature_columns)
 
     X_test = test_df[feature_columns].to_numpy(dtype=float)
-    y_test = test_df["label_up_5d"].to_numpy(dtype=float)
+    y_test = test_df[target_column].to_numpy(dtype=float)
     y_pred = classify(artifact, X_test)
     metrics = summarize_binary_predictions(y_test, y_pred)
     metrics.update(
@@ -157,7 +169,18 @@ def main() -> None:
     print(f"Saved candidate model -> {args.output_model}")
     print(f"Saved metadata -> {metadata_path}")
     print(f"Updated history -> {history_path}")
-    print(json.dumps({"rows": len(clean), "feature_columns": feature_columns, "metrics": metrics}, sort_keys=True))
+    print (
+        json. dumps (
+            {
+                 "rows_loaded": rows_loaded,
+                 "rows_after_target_filter": rows_after_target_filter,
+                 "rows_after_feature_filter": rows_after_feature_filter,
+                 "selected_feature_columns": feature_columns,
+                 "target_column": target_column,
+            },
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":
