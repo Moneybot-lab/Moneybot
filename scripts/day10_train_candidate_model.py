@@ -54,10 +54,13 @@ def _load_jsonl(path: str) -> pd.DataFrame:
 def _select_feature_columns(df: pd.DataFrame) -> list[str]:
     cols: list[str] = []
     for col in df.columns:
-        if col in RESERVED_COLUMNS:
+        name = str(col)
+        if name in RESERVED_COLUMNS:
+            continue
+        if not name.startswith("feature_"):
             continue
         if pd.api.types.is_numeric_dtype(df[col]):
-            cols.append(str(col))
+            cols.append(name)
     return sorted(cols)
 
 
