@@ -15,6 +15,7 @@ import yfinance as yf
 
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
+from moneybot.services.runtime_paths import decision_events_log_path
 
 
 def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
@@ -40,7 +41,7 @@ def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate logged recommendations against later price moves.")
-    parser.add_argument("--input", default="data/decision_events.jsonl")
+    parser.add_argument("--input", default=str(decision_events_log_path()))
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--output", default="")
     args = parser.parse_args()

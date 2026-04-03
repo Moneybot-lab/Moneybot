@@ -3,8 +3,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from moneybot.services.runtime_paths import day13_calibration_report_path, day13_recalibration_plan_path
 
 
 def build_recalibration_plan(
@@ -40,8 +47,8 @@ def build_recalibration_plan(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create Day-13 deterministic recalibration plan from report JSON.")
-    parser.add_argument("--report", default="data/day13_calibration_report.json")
-    parser.add_argument("--output", default="data/day13_recalibration_plan.json")
+    parser.add_argument("--report", default=str(day13_calibration_report_path()))
+    parser.add_argument("--output", default=str(day13_recalibration_plan_path()))
     parser.add_argument("--current-slope", type=float, default=1.0)
     parser.add_argument("--current-intercept", type=float, default=0.0)
     parser.add_argument("--max-intercept-step", type=float, default=0.2)
