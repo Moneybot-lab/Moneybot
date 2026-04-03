@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import classify_outcome, close_values, normalize_action, normalize_unix_ts
+from moneybot.services.runtime_paths import decision_events_log_path
 
 
 def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
@@ -169,7 +170,7 @@ def build_rows(events: list[dict[str, Any]], *, horizon_days: int) -> tuple[list
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build decision training dataset from historical decision events.")
-    parser.add_argument("--input", default="data/decision_events.jsonl")
+    parser.add_argument("--input", default=str(decision_events_log_path()))
     parser.add_argument("--output", default="data/decision_training_snapshot.jsonl")
     parser.add_argument("--limit", type=int, default=5000)
     parser.add_argument("--horizon-days", type=int, default=5)

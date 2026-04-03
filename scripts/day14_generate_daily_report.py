@@ -13,6 +13,12 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from moneybot.services.decision_log import summarize_decision_events
+from moneybot.services.runtime_paths import (
+    day13_calibration_report_path,
+    day13_recalibration_plan_path,
+    decision_events_log_path,
+    decision_outcomes_snapshot_path,
+)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -210,11 +216,11 @@ def build_report_text(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate a prefilled Markdown daily report from latest JSON outputs.")
     parser.add_argument("--model-meta", default="data/day1_baseline_model.json.meta.json")
-    parser.add_argument("--decision-log", default="data/decision_events.jsonl")
+    parser.add_argument("--decision-log", default=str(decision_events_log_path()))
     parser.add_argument("--decision-limit", type=int, default=200)
-    parser.add_argument("--outcomes", default="data/decision_outcomes_snapshot.json")
-    parser.add_argument("--calibration", default="data/day13_calibration_report.json")
-    parser.add_argument("--recalibration", default="data/day13_recalibration_plan.json")
+    parser.add_argument("--outcomes", default=str(decision_outcomes_snapshot_path()))
+    parser.add_argument("--calibration", default=str(day13_calibration_report_path()))
+    parser.add_argument("--recalibration", default=str(day13_recalibration_plan_path()))
     parser.add_argument("--output", default="")
     args = parser.parse_args()
 

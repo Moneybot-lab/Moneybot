@@ -18,6 +18,7 @@ import yfinance as yf
 
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import close_values
+from moneybot.services.runtime_paths import day13_calibration_report_path, decision_events_log_path
 
 
 def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
@@ -147,8 +148,8 @@ def calibration_summary(rows: list[dict], *, bins: int = 10) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build Day-13 deterministic calibration diagnostics report.")
-    parser.add_argument("--input", default="data/decision_events.jsonl")
-    parser.add_argument("--output", default="data/day13_calibration_report.json")
+    parser.add_argument("--input", default=str(decision_events_log_path()))
+    parser.add_argument("--output", default=str(day13_calibration_report_path()))
     parser.add_argument("--limit", type=int, default=1000)
     parser.add_argument("--horizon-days", type=int, default=5)
     parser.add_argument("--bins", type=int, default=10)

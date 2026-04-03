@@ -11,13 +11,14 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from moneybot.services.decision_log import summarize_decision_events
+from moneybot.services.runtime_paths import decision_events_log_path
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Summarize recent Moneybot decision log activity.")
     parser.add_argument(
         "--input",
-        default="data/decision_events.jsonl",
+        default=str(decision_events_log_path()),
         help="Path to the JSONL decision log file.",
     )
     parser.add_argument(

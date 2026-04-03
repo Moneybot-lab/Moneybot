@@ -27,6 +27,7 @@ from .services.decision_log import read_decision_events, summarize_decision_even
 from .services.decision_snapshot import build_decision_snapshot
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
 from .services.outcome_tracking import close_values, evaluate_decision_events, normalize_unix_ts, summarize_outcome_rows
+from .services.runtime_paths import decision_events_log_path, decision_outcomes_snapshot_path
 
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
@@ -1181,6 +1182,11 @@ def model_health():
                 "schema_version": "model_health.v1",
                 "deterministic_quick_enabled": bool(current_app.config.get("DETERMINISTIC_QUICK_ENABLED")),
                 "deterministic_momentum_enabled": bool(current_app.config.get("DETERMINISTIC_MOMENTUM_ENABLED")),
+                "hot_momentum_live_ai_enabled": bool(
+                    current_app.config.get("DETERMINISTIC_MOMENTUM_ENABLED")
+                    and bool(getattr(deterministic_svc, "artifact", None) is not None)
+                    and not getattr(deterministic_svc, "load_error", None)
+                ),
                 "deterministic_model_path": model_path,
                 "model_loaded": bool(getattr(deterministic_svc, "artifact", None) is not None),
                 "model_version": getattr(getattr(deterministic_svc, "artifact", None), "version", None),
@@ -1215,7 +1221,7 @@ def decision_log_summary():
     output_path = (
         getattr(decision_logger, "output_path", None)
         or current_app.config.get("DECISION_LOG_PATH")
-        or "data/decision_events.jsonl"
+        or str(decision_events_log_path())
     )
     summary = summarize_decision_events(str(output_path), limit=limit)
     normalized_summary = _normalized_decision_summary(
@@ -1237,7 +1243,7 @@ def decision_outcomes():
     except ValueError:
         return jsonify({"error": "limit must be an integer", "request_id": g.request_id}), 400
 
-    snapshot_path = current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_PATH") or "data/decision_outcomes_snapshot.json"
+    snapshot_path = current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_PATH") or str(decision_outcomes_snapshot_path())
     snapshot_max_age_seconds = int(current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS") or 900)
     if not force_live:
         snapshot = _load_materialized_outcomes_snapshot(
@@ -1261,7 +1267,7 @@ def decision_outcomes():
     output_path = (
         getattr(decision_logger, "output_path", None)
         or current_app.config.get("DECISION_LOG_PATH")
-        or "data/decision_events.jsonl"
+        or str(decision_events_log_path())
     )
     lookup_cache: dict[tuple[str, int, int], float | None] = {}
     cache_hits = 0
