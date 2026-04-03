@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -15,8 +16,19 @@ def resolve_runtime_dir() -> Path:
         or DEFAULT_RUNTIME_DIR
     )
     path = Path(preferred).expanduser()
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    except OSError as exc:
+        fallback = Path(DEFAULT_RUNTIME_DIR)
+        fallback.mkdir(parents=True, exist_ok=True)
+        logging.warning(
+            "Unable to initialize runtime dir %s (%s). Falling back to local %s (ephemeral).",
+            path,
+            exc,
+            fallback,
+        )
+        return fallback
 
 
 def is_durable_runtime_configured() -> bool:

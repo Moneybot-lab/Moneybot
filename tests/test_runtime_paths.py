@@ -41,3 +41,20 @@ def test_runtime_paths_default_to_local_data(monkeypatch):
     resolved = resolve_runtime_dir()
     assert resolved == Path("data")
     assert is_durable_runtime_configured() is False
+
+
+def test_runtime_paths_fallback_to_local_when_configured_path_unwritable(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", "/var/data/moneybot")
+    monkeypatch.delenv("MONEYBOT_RUNTIME_DIR", raising=False)
+
+    original_mkdir = Path.mkdir
+
+    def _fake_mkdir(self, *args, **kwargs):  # noqa: ANN001, ANN002
+        if str(self).startswith("/var/data"):
+            raise PermissionError("permission denied")
+        return original_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", _fake_mkdir)
+
+    resolved = resolve_runtime_dir()
+    assert resolved == Path("data")
