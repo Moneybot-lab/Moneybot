@@ -562,6 +562,23 @@ class MarketDataService:
             {"symbol": "PFE", "price": 28.77, "score": 7.2, "rationale": "Defensive rotation candidate near support."},
             {"symbol": "CCL", "price": 16.1, "score": 7.1, "rationale": "Travel beta with strong volume participation."},
             {"symbol": "RUN", "price": 13.5, "score": 7.0, "rationale": "High-beta clean energy momentum candidate."},
+            {"symbol": "SOUN", "price": 5.82, "score": 8.7, "rationale": "AI voice momentum with elevated volume."},
+            {"symbol": "RKLB", "price": 6.11, "score": 8.4, "rationale": "Small-cap space momentum setup."},
+            {"symbol": "JOBY", "price": 5.02, "score": 7.7, "rationale": "eVTOL speculation trend continuation."},
+            {"symbol": "ACHR", "price": 4.26, "score": 7.6, "rationale": "Aerospace momentum with strong social chatter."},
+            {"symbol": "IONQ", "price": 12.14, "score": 8.2, "rationale": "Quantum-theme momentum flow."},
+            {"symbol": "ASTS", "price": 10.53, "score": 8.0, "rationale": "Satellite connectivity beta with breakout profile."},
+            {"symbol": "HIMS", "price": 14.22, "score": 7.9, "rationale": "Direct-to-consumer healthcare trend strength."},
+            {"symbol": "HOOD", "price": 19.72, "score": 7.8, "rationale": "Retail trading beta in risk-on sessions."},
+            {"symbol": "AFRM", "price": 34.8, "score": 7.7, "rationale": "Fintech momentum with high-vol ranges."},
+            {"symbol": "UPST", "price": 25.6, "score": 7.6, "rationale": "Credit AI theme with speculative bid."},
+            {"symbol": "OPEN", "price": 3.11, "score": 7.4, "rationale": "High-beta housing rebound candidate."},
+            {"symbol": "RIVN", "price": 11.92, "score": 7.4, "rationale": "EV swing momentum in news-heavy periods."},
+            {"symbol": "CHPT", "price": 1.89, "score": 7.3, "rationale": "Charging infrastructure speculative rotation."},
+            {"symbol": "BTBT", "price": 2.77, "score": 7.2, "rationale": "Crypto miner beta with intraday momentum."},
+            {"symbol": "CLSK", "price": 18.42, "score": 7.5, "rationale": "Mining efficiency narrative with risk-on flow."},
+            {"symbol": "T", "price": 17.11, "score": 6.9, "rationale": "Low-vol telecom catch-up swing candidate."},
+            {"symbol": "WBD", "price": 8.64, "score": 7.0, "rationale": "Media re-rating momentum setup."},
         ]
 
         enriched: list[Dict[str, Any]] = []
@@ -601,13 +618,21 @@ class MarketDataService:
 
             enriched.append(merged)
 
+        target_count = 20
+        price_cap = 100.0
         qualified = [item for item in enriched if item["qualified"]]
-        pool = qualified if len(qualified) >= 5 else sorted(enriched, key=lambda x: x["score"], reverse=True)
-        selected = sorted(
+        pool = qualified if len(qualified) >= target_count else sorted(enriched, key=lambda x: x["score"], reverse=True)
+        sorted_pool = sorted(
             pool,
             key=lambda x: (x["score"], self._change_percent_sort_value(x.get("change_percent"))),
             reverse=True,
-        )[:5]
+        )
+        under_cap = [item for item in sorted_pool if isinstance(item.get("price"), (int, float)) and float(item["price"]) <= price_cap]
+        if len(under_cap) >= target_count:
+            selected = under_cap[:target_count]
+        else:
+            remainder = [item for item in sorted_pool if item not in under_cap]
+            selected = (under_cap + remainder)[:target_count]
         for item in selected:
             item.pop("qualified", None)
         return selected

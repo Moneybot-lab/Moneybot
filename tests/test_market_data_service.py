@@ -486,12 +486,13 @@ def test_get_hot_momentum_buys_uses_deterministic_scores_when_enabled(monkeypatc
 
     out = svc.get_hot_momentum_buys()
 
-    assert len(out) == 5
+    assert len(out) == 20
     assert out[0]["symbol"] == "SOFI"
     assert out[0]["decision_source"] == "deterministic_model"
     assert out[0]["model_version"] == "day1-logreg-v1"
     assert out[0]["score"] == 9.1
     assert out[0]["probability_up"] == 0.91
+    assert all(float(item["price"]) <= 100.0 for item in out if isinstance(item.get("price"), (int, float)))
 
 
 def test_get_hot_momentum_buys_falls_back_when_deterministic_disabled(monkeypatch):
@@ -521,7 +522,7 @@ def test_get_hot_momentum_buys_falls_back_when_deterministic_disabled(monkeypatc
 
     out = svc.get_hot_momentum_buys()
 
-    assert len(out) == 5
+    assert len(out) == 20
     assert out[0]["decision_source"] == "rule_based"
     assert "model_version" not in out[0]
 
@@ -553,7 +554,7 @@ def test_get_hot_momentum_buys_strips_deterministic_boilerplate_rationale(monkey
 
     out = svc.get_hot_momentum_buys()
 
-    assert len(out) == 5
+    assert len(out) == 20
     assert out[0]["decision_source"] == "deterministic_model"
     assert out[0]["rationale"].startswith("Based on threshold")
     assert "Deterministic model (day1-logreg-v1)" not in out[0]["rationale"]
