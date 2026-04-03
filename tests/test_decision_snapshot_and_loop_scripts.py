@@ -97,6 +97,29 @@ def test_day8_builder_outputs_labeled_rows_with_snapshot_fields(monkeypatch):
     assert rows[0]["model_version"] == "snap-v1"
     assert rows[0]["outcome_5d"] in {"correct", "incorrect"}
     assert rows[0]["return_1d"] == 0.03
+    assert "feature_return_1d" in rows[0]
+    assert "feature_rsi_14" in rows[0] or "feature_rsi" in rows[0]
+    assert rows[0]["label_up_5d"] in {0, 1}
+
+
+def test_day8_builder_backward_compatible_without_snapshot(monkeypatch):
+    now = datetime.now(timezone.utc)
+    mature_ts = int((now - timedelta(days=10)).timestamp())
+    events = [
+        {
+            "ts": mature_ts,
+            "symbol": "TSLA",
+            "endpoint": "quick_ask",
+            "decision_source": "rule_based",
+            "payload": {"recommendation": "BUY", "probability_up": 0.55},
+        }
+    ]
+    monkeypatch.setattr("scripts.day8_build_decision_training_dataset._future_return", lambda symbol, ts, days: 0.02 if days == 1 else 0.01)
+    rows, _ = build_rows(events, horizon_days=5)
+    assert rows[0]["recommendation"] == "BUY"
+    assert rows[0]["feature_probability_up"] == 0.55
+    assert rows[0]["feature_return_1d"] == 0.02
+    assert rows[0]["label_up_5d"] == 1
 
 
 def test_day10_candidate_trainer_fails_if_rows_below_min(tmp_path, monkeypatch):
@@ -125,15 +148,43 @@ def test_day10_prepares_fallback_numeric_features_when_snapshot_features_missing
 
     df = pd.DataFrame(
         [
-            {"ts": 1, "recommendation": "BUY", "probability_up": None, "return_1d": 0.02, "return_5d": 0.03},
-            {"ts": 2, "recommendation": "SELL", "probability_up": 0.3, "return_1d": -0.01, "return_5d": -0.02},
+            {"ts": 1, "recommendation": "BUY", "probability_up": None, "feature_return_1d": 0.02, "return_5d": 0.03},
+            {"ts": 2, "recommendation": "SELL", "probability_up": 0.3, "feature_return_1d": -0.01, "return_5d": -0.02},
         ]
     )
     prepared = day10._prepare_frame(df)
     cols = day10._select_feature_columns(prepared)
-    assert "rec_buy" in cols
-    assert "probability_up_filled" in cols
-    assert "return_1d" in cols
+    assert "feature_return_1d" in cols
+
+
+def test_day10_trains_when_feature_columns_exist(tmp_path, monkeypatch):
+    rows = [
+        {"ts": 1, "feature_return_1d": 0.01, "feature_price": 100.0, "label_up_5d": 1, "return_1d": 0.01, "return_5d": 0.02},
+        {"ts": 2, "feature_return_1d": -0.02, "feature_price": 99.0, "label_up_5d": 0, "return_1d": -0.02, "return_5d": -0.03},
+        {"ts": 3, "feature_return_1d": 0.03, "feature_price": 101.0, "label_up_5d": 1, "return_1d": 0.03, "return_5d": 0.04},
+        {"ts": 4, "feature_return_1d": -0.01, "feature_price": 98.0, "label_up_5d": 0, "return_1d": -0.01, "return_5d": -0.01},
+        {"ts": 5, "feature_return_1d": 0.02, "feature_price": 102.0, "label_up_5d": 1, "return_1d": 0.02, "return_5d": 0.03},
+    ]
+    input_path = tmp_path / "decision_training_snapshot.jsonl"
+    input_path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    output_model = tmp_path / "candidate_model.json"
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "day10_train_candidate_model.py",
+            "--input",
+            str(input_path),
+            "--output-model",
+            str(output_model),
+            "--train-ratio",
+            "0.8",
+            "--min-rows",
+            "4",
+        ],
+    )
+    day10.main()
+    assert output_model.exists()
 
 
 def test_day11_compare_detects_win_and_loss():

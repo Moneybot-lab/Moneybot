@@ -69,6 +69,43 @@ def _extract_recommendation(event: dict[str, Any], snapshot: dict[str, Any]) -> 
     return normalize_action(event)
 
 
+def _extract_feature_columns(
+    *,
+    snapshot: dict[str, Any],
+    payload: dict[str, Any],
+    return_1d: float | None,
+    return_5d: float | None,
+) -> dict[str, float]:
+    features_raw = snapshot.get("features") if isinstance(snapshot.get("features"), dict) else {}
+    quote_raw = snapshot.get("quote") if isinstance(snapshot.get("quote"), dict) else {}
+    out: dict[str, float] = {}
+
+    for key, value in features_raw.items():
+        if isinstance(value, (int, float)):
+            clean_key = str(key)
+            if not clean_key.startswith("feature_"):
+                clean_key = f"feature_{clean_key}"
+            out[clean_key] = float(value)
+
+    fallback_map = {
+        "feature_price": quote_raw.get("price") if isinstance(quote_raw.get("price"), (int, float)) else payload.get("price"),
+        "feature_change_percent": quote_raw.get("change_percent")
+        if isinstance(quote_raw.get("change_percent"), (int, float))
+        else payload.get("change_percent"),
+        "feature_probability_up": payload.get("probability_up"),
+    }
+    for key, value in fallback_map.items():
+        if key not in out and isinstance(value, (int, float)):
+            out[key] = float(value)
+
+    if isinstance(return_1d, (int, float)):
+        out.setdefault("feature_return_1d", float(return_1d))
+    if isinstance(return_5d, (int, float)):
+        out.setdefault("feature_return_5d", float(return_5d))
+
+    return out
+
+
 def build_rows(events: list[dict[str, Any]], *, horizon_days: int) -> tuple[list[dict[str, Any]], dict[str, int]]:
     now_utc = datetime.now(timezone.utc)
     mature_cutoff = now_utc - timedelta(days=max(1, horizon_days + 2))
@@ -92,8 +129,6 @@ def build_rows(events: list[dict[str, Any]], *, horizon_days: int) -> tuple[list
 
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
-        features = snapshot.get("features") if isinstance(snapshot.get("features"), dict) else {}
-
         recommendation = _extract_recommendation(event, snapshot)
         if not recommendation:
             continue
@@ -115,11 +150,16 @@ def build_rows(events: list[dict[str, Any]], *, horizon_days: int) -> tuple[list
             "return_5d": ret_5d,
             "outcome_1d": classify_outcome(recommendation, ret_1d),
             "outcome_5d": classify_outcome(recommendation, ret_5d),
+            "label_up_5d": int(ret_5d > 0) if isinstance(ret_5d, (int, float)) else None,
         }
-        for key, value in features.items():
-            if key in row:
-                continue
-            row[key] = value
+        row.update(
+            _extract_feature_columns(
+                snapshot=snapshot,
+                payload=payload,
+                return_1d=ret_1d,
+                return_5d=ret_5d,
+            )
+        )
 
         rows.append(row)
         labeled += 1
