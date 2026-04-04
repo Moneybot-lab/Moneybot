@@ -557,3 +557,41 @@ def test_get_hot_momentum_buys_strips_deterministic_boilerplate_rationale(monkey
     assert out[0]["decision_source"] == "deterministic_model"
     assert out[0]["rationale"].startswith("Based on threshold")
     assert "Deterministic model (day1-logreg-v1)" not in out[0]["rationale"]
+
+
+def test_get_hot_momentum_buys_uses_shadow_decision_when_rollout_dry_run(monkeypatch):
+    class StubDeterministicAdvisor:
+        rollout_dry_run = True
+
+        def predict_quick_decision(self, *, signal_data, quote_data, symbol=None):
+            return None
+
+        def predict_shadow_decision(self, *, signal_data, quote_data):
+            return {
+                "decision_source": "deterministic_model",
+                "model_version": "day1-logreg-v1-fallback",
+                "probability_up": 0.82,
+                "confidence": 82.0,
+                "recommendation": "BUY",
+                "rationale": "Deterministic model fallback score.",
+            }
+
+    svc = MarketDataService(deterministic_quick_advisor=StubDeterministicAdvisor(), deterministic_momentum_enabled=True)
+
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda symbol: {"symbol": symbol, "price": 10.0, "change_percent": 1.2, "live_data_available": True, "quote_source": "test"},
+    )
+    monkeypatch.setattr(
+        svc,
+        "get_signal",
+        lambda symbol: {"symbol": symbol, "action": "BUY", "score": 8.0, "technical": {"rsi": 48, "macd_histogram": 0.2}, "volume_ratio": 1.3, "reasons": [f"{symbol} signal"]},
+    )
+
+    out = svc.get_hot_momentum_buys()
+
+    assert len(out) == 5
+    assert out[0]["decision_source"] == "deterministic_model"
+    assert out[0]["model_version"] == "day1-logreg-v1-fallback"
+    assert out[0]["score"] == 8.2

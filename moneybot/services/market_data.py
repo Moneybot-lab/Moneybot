@@ -541,6 +541,14 @@ class MarketDataService:
                     quote_data=quote,
                     symbol=item["symbol"],
                 )
+                if (
+                    deterministic_decision is None
+                    and bool(getattr(self.deterministic_quick_advisor, "rollout_dry_run", False))
+                ):
+                    deterministic_decision = self.deterministic_quick_advisor.predict_shadow_decision(
+                        signal_data=signal,
+                        quote_data=quote,
+                    )
 
             if deterministic_decision is not None:
                 prob_up = float(deterministic_decision.get("probability_up") or 0.0)
