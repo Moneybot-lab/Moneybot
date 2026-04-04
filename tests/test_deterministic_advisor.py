@@ -201,3 +201,25 @@ def test_predict_shadow_decision_returns_payload_even_when_rollout_blocks(tmp_pa
     shadow = svc.predict_shadow_decision(signal_data=signal_data, quote_data=quote_data)
     assert shadow is not None
     assert shadow["decision_source"] == "deterministic_model"
+
+
+def test_predict_portfolio_position_uses_shadow_in_rollout_dry_run(tmp_path: Path):
+    artifact_path = _write_artifact(tmp_path)
+    svc = DeterministicQuickAdvisor(
+        enabled=True,
+        artifact_path=str(artifact_path),
+        rollout_percentage=0.0,
+        rollout_dry_run=True,
+    )
+    out = svc.predict_portfolio_position(
+        symbol="AAPL",
+        entry_price=100.0,
+        current_price=92.0,
+        shares=2,
+        signal_data={"technical": {"rsi": 45.0, "macd_histogram": 0.2}, "volume_ratio": 1.4},
+        quote_data={"price": 92.0, "change_percent": -1.2, "quote_source": "test", "diagnostics": {}},
+    )
+
+    assert out is not None
+    assert out["decision_source"] == "deterministic_model"
+    assert out["model_version"] in {"day1-logreg-v1", "day1-logreg-v1-fallback"}

@@ -228,6 +228,8 @@ class DeterministicQuickAdvisor:
         quote_data: Dict[str, Any],
     ) -> Dict[str, Any] | None:
         quick = self.predict_quick_decision(signal_data=signal_data, quote_data=quote_data, symbol=symbol)
+        if quick is None and self.rollout_dry_run:
+            quick = self.predict_shadow_decision(signal_data=signal_data, quote_data=quote_data)
         if quick is None:
             return None
 
