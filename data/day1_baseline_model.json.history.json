@@ -1,0 +1,242 @@
+[
+  {
+    "horizon_days": 5,
+    "input_path": "data/day1_training_snapshot.csv",
+    "metrics": {
+      "accuracy": 0.4922,
+      "positive_rate": 0.3313,
+      "rows": 963.0
+    },
+    "model_path": "data/day1_baseline_model.json",
+    "model_version": "day1-logreg-v1",
+    "recorded_at_utc": "2026-03-21T01:41:44.251572+00:00",
+    "target_return": 0.0,
+    "test_rows": 963,
+    "train_ratio": 0.8,
+    "train_rows": 3850
+  },
+  {
+    "horizon_days": 5,
+    "input_path": "data/day1_training_snapshot.csv",
+    "metrics": {
+      "accuracy": 0.4922,
+      "positive_rate": 0.3313,
+      "rows": 963.0
+    },
+    "model_path": "data/day1_baseline_model.json",
+    "model_version": "day1-logreg-v1",
+    "recorded_at_utc": "2026-03-21T01:50:31.050063+00:00",
+    "target_return": 0.0,
+    "test_rows": 963,
+    "train_ratio": 0.8,
+    "train_rows": 3850
+  },
+  {
+    "horizon_days": 5,
+    "input_path": "data/day1_training_snapshot.csv",
+    "metrics": {
+      "accuracy": 0.4922,
+      "positive_rate": 0.3313,
+      "rows": 963.0
+    },
+    "model_path": "data/day1_baseline_model.json",
+    "model_version": "day1-logreg-v1",
+    "recorded_at_utc": "2026-03-21T22:51:04.581168+00:00",
+    "target_return": 0.0,
+    "test_rows": 963,
+    "train_ratio": 0.8,
+    "train_rows": 3850
+  },
+  {
+    "horizon_days": 5,
+    "input_path": "data/day1_training_snapshot.csv",
+    "metrics": {
+      "accuracy": 0.4922,
+      "positive_rate": 0.3313,
+      "rows": 963.0
+    },
+    "model_path": "data/day1_baseline_model.json",
+    "model_version": "day1-logreg-v1",
+    "recorded_at_utc": "2026-03-21T22:51:32.365503+00:00",
+    "target_return": 0.0,
+    "test_rows": 963,
+    "train_ratio": 0.8,
+    "train_rows": 3850
+  },
+  {
+    "horizon_days": 5,
+    "input_path": "data/day1_training_snapshot.csv",
+    "metrics": {
+      "accuracy": 0.4912,
+      "positive_rate": 0.3548,
+      "rows": 961.0
+    },
+    "model_path": "data/day1_baseline_model.json",
+    "model_version": "day1-logreg-v1",
+    "recorded_at_utc": "2026-03-24T01:07:48.423234+00:00",
+    "target_return": 0.0,
+    "test_rows": 961,
+    "train_ratio": 0.8,
+    "train_rows": 3842
+  },
+  {
+    "horizon_days": 5,
+    "input_path": "data/day1_training_snapshot.csv",
+    "metrics": {
+      "accuracy": 0.4912,
+      "positive_rate": 0.3548,
+      "rows": 961.0
+    },
+    "model_path": "data/day1_baseline_model.json",
+    "model_version": "day1-logreg-v1",
+    "recorded_at_utc": "2026-03-24T01:10:43.506221+00:00",
+    "target_return": 0.0,
+    "test_rows": 961,
+    "train_ratio": 0.8,
+    "train_rows": 3842
+  },
+  {
+    "horizon_days": 5,
+    "input_path": "data/day1_training_snapshot.csv",
+    "metrics": {
+      "accuracy": 0.4933,
+      "positive_rate": 0.3448,
+      "rows": 963.0
+    },
+    "model_path": "data/day1_baseline_model.json",
+    "model_version": "day1-logreg-v1",
+    "recorded_at_utc": "2026-03-24T22:25:49.787894+00:00",
+    "target_return": 0.0,
+    "test_rows": 963,
+    "train_ratio": 0.8,
+    "train_rows": 3850
+  },
+  {
+    "horizon_days": 5,
+    "input_path": "data/day1_training_snapshot.csv",
+    "metrics": {
+      "accuracy": 0.4933,
+      "positive_rate": 0.3448,
+      "rows": 963.0
+    },
+    "model_path": "data/day1_baseline_model.json",
+    "model_version": "day1-logreg-v1",
+    "recorded_at_utc": "2026-03-24T22:26:41.032290+00:00",
+    "target_return": 0.0,
+    "test_rows": 963,
+    "train_ratio": 0.8,
+    "train_rows": 3850
+  },
+  {
+    "horizon_days": 5,
+    "input_path": "data/day1_training_snapshot.csv",
+    "metrics": {
+      "accuracy": 0.4798,
+      "positive_rate": 0.2544,
+      "rows": 963.0
+    },
+    "model_path": "data/day1_baseline_model.json",
+    "model_version": "day1-logreg-v1",
+    "recorded_at_utc": "2026-03-26T01:40:36.739247+00:00",
+    "target_return": 0.0,
+    "test_rows": 963,
+    "train_ratio": 0.8,
+    "train_rows": 3850
+  },
+  {
+    "horizon_days": 5,
+    "input_path": "data/day1_training_snapshot.csv",
+    "metrics": {
+      "accuracy": 0.4798,
+      "positive_rate": 0.2544,
+      "rows": 963.0
+    },
+    "model_path": "data/day1_baseline_model.json",
+    "model_version": "day1-logreg-v1",
+    "recorded_at_utc": "2026-03-26T01:42:26.182613+00:00",
+    "target_return": 0.0,
+    "test_rows": 963,
+    "train_ratio": 0.8,
+    "train_rows": 3850
+  },
+  {
+    "horizon_days": 5,
+    "input_path": "data/day1_training_snapshot.csv",
+    "metrics": {
+      "accuracy": 0.4943,
+      "positive_rate": 0.298,
+      "rows": 963.0
+    },
+    "model_path": "data/day1_baseline_model.json",
+    "model_version": "day1-logreg-v1",
+    "recorded_at_utc": "2026-03-27T00:56:40.349282+00:00",
+    "target_return": 0.0,
+    "test_rows": 963,
+    "train_ratio": 0.8,
+    "train_rows": 3850
+  },
+  {
+    "horizon_days": 5,
+    "input_path": "data/day1_training_snapshot.csv",
+    "metrics": {
+      "accuracy": 0.4922,
+      "positive_rate": 0.3167,
+      "rows": 963.0
+    },
+    "model_path": "data/day1_baseline_model.json",
+    "model_version": "day1-logreg-v1",
+    "recorded_at_utc": "2026-03-28T02:47:15.553052+00:00",
+    "target_return": 0.0,
+    "test_rows": 963,
+    "train_ratio": 0.8,
+    "train_rows": 3850
+  },
+  {
+    "horizon_days": 5,
+    "input_path": "data/day1_training_snapshot.csv",
+    "metrics": {
+      "accuracy": 0.4964,
+      "positive_rate": 0.298,
+      "rows": 963.0
+    },
+    "model_path": "data/day1_baseline_model.json",
+    "model_version": "day1-logreg-v1",
+    "recorded_at_utc": "2026-03-31T01:58:03.995914+00:00",
+    "target_return": 0.0,
+    "test_rows": 963,
+    "train_ratio": 0.8,
+    "train_rows": 3850
+  },
+  {
+    "horizon_days": 5,
+    "input_path": "data/day1_training_snapshot.csv",
+    "metrics": {
+      "accuracy": 0.5057,
+      "positive_rate": 0.2249,
+      "rows": 965.0
+    },
+    "model_path": "data/day1_baseline_model.json",
+    "model_version": "day1-logreg-v1",
+    "recorded_at_utc": "2026-04-01T01:23:13.833486+00:00",
+    "target_return": 0.0,
+    "test_rows": 965,
+    "train_ratio": 0.8,
+    "train_rows": 3858
+  },
+  {
+    "horizon_days": 5,
+    "input_path": "data/day1_training_snapshot.csv",
+    "metrics": {
+      "accuracy": 0.5016,
+      "positive_rate": 0.1979,
+      "rows": 965.0
+    },
+    "model_path": "data/day1_baseline_model.json",
+    "model_version": "day1-logreg-v1",
+    "recorded_at_utc": "2026-04-02T01:35:53.597373+00:00",
+    "target_return": 0.0,
+    "test_rows": 965,
+    "train_ratio": 0.8,
+    "train_rows": 3858
+  }
+]
