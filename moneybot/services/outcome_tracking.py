@@ -7,12 +7,28 @@ from typing import Any, Dict
 POSITIVE_ACTIONS = {"BUY", "STRONG BUY"}
 NEGATIVE_ACTIONS = {"SELL", "HOLD OFF FOR NOW"}
 NEUTRAL_ACTIONS = {"HOLD"}
+HOLD_FLAT_BAND = 0.005
+
+
+def normalize_unix_ts(ts: Any) -> int | None:
+    if not isinstance(ts, (int, float)):
+        return None
+    value = int(ts)
+    if value <= 0:
+        return None
+    # Handle millisecond timestamps (for example, JS Date.now()).
+    if value >= 1_000_000_000_000:
+        value = value // 1000
+    return value
 
 
 def normalize_action(event: Dict[str, Any]) -> str | None:
+    snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     action = (
-        payload.get("recommendation")
+        snapshot.get("recommendation")
+        or snapshot.get("advice")
+        or payload.get("recommendation")
         or payload.get("advice")
         or event.get("recommendation")
         or event.get("advice")
@@ -23,11 +39,12 @@ def normalize_action(event: Dict[str, Any]) -> str | None:
     return action or None
 
 
-def classify_outcome(action: str | None, future_return: float | None) -> str:
+def classify_outcome(action: str | None, future_return: float | None, *, hold_flat_band: float = HOLD_FLAT_BAND) -> str:
     if action is None or future_return is None:
         return "skipped"
     if action in NEUTRAL_ACTIONS:
-        return "neutral"
+        threshold = abs(float(hold_flat_band))
+        return "correct" if abs(float(future_return)) <= threshold else "incorrect"
     if action in POSITIVE_ACTIONS:
         return "correct" if future_return > 0 else "incorrect"
     if action in NEGATIVE_ACTIONS:
@@ -86,8 +103,8 @@ def evaluate_decision_events(
     for event in events:
         symbol = str(event.get("symbol") or "").strip().upper()
         action = normalize_action(event)
-        ts = event.get("ts")
-        if not symbol or action is None or not isinstance(ts, int):
+        ts = normalize_unix_ts(event.get("ts"))
+        if not symbol or action is None or ts is None:
             continue
         row = {
             "symbol": symbol,
@@ -97,6 +114,14 @@ def evaluate_decision_events(
             "ts": ts,
             "model_version": (event.get("payload") or {}).get("model_version") if isinstance(event.get("payload"), dict) else None,
         }
+        snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        if isinstance(snapshot.get("model_version"), str) and snapshot.get("model_version"):
+            row["model_version"] = snapshot.get("model_version")
+        prob = snapshot.get("probability_up")
+        if not isinstance(prob, (int, float)):
+            prob = payload.get("probability_up")
+        row["probability_up"] = float(prob) if isinstance(prob, (int, float)) else None
         try:
             row["return_1d"] = future_return_lookup(symbol, ts, 1)
         except Exception:  # noqa: BLE001
