@@ -114,6 +114,25 @@ def _parse_int_env(name: str, default: int) -> int:
         raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
 
 
+def _parse_symbol_set(raw: str | None) -> set[str]:
+    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
+
+
+def _parse_int_env(name: str, default: int) -> int:
+    raw = str(os.environ.get(name, default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        if "=" in raw:
+            maybe_value = raw.rsplit("=", 1)[-1].strip()
+            if maybe_value:
+                try:
+                    return int(maybe_value)
+                except ValueError:
+                    pass
+        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
+
+
 def _resolve_database_url() -> str:
     # Prefer explicit DATABASE_URL, but support common provider aliases used on hosted platforms.
     raw_database_url = (
@@ -212,6 +231,7 @@ def create_app() -> Flask:
         SMTP_USE_SSL=(os.environ.get("SMTP_USE_SSL", "false").lower() == "true"),
         PASSWORD_RESET_FROM_EMAIL=os.environ.get("PASSWORD_RESET_FROM_EMAIL", os.environ.get("SMTP_USER", "")),
         PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS=int(os.environ.get("PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS", "3600")),
+        DAILY_OPS_TOKEN=os.environ.get("DAILY_OPS_TOKEN", ""),
         AI_ENABLED=(os.environ.get("AI_ENABLED", "false").lower() == "true"),
         AI_PROVIDER=os.environ.get("AI_PROVIDER", "openai"),
         AI_MODEL=os.environ.get("AI_MODEL", "gpt-5-mini"),

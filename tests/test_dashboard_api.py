@@ -275,6 +275,44 @@ def test_quick_ask_logs_shadow_decision_in_rollout_dry_run():
     assert summary["endpoint_counts"]["quick_ask_shadow"] >= 1
 
 
+def test_run_daily_ops_requires_token():
+    client = _client()
+    client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
+
+    res = client.post("/api/run-daily-ops")
+
+    assert res.status_code == 401
+    assert res.get_json()["error"] == "unauthorized"
+
+
+def test_run_daily_ops_executes_and_returns_output(monkeypatch):
+    class Completed:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    def fake_run(command, cwd, capture_output, text, check):
+        assert command[:3] == ["python3", "scripts/run_daily_ops.py", "--input-log"]
+        assert capture_output is True
+        assert text is True
+        assert check is False
+        assert cwd.endswith("/Moneybot")
+        return Completed()
+
+    monkeypatch.setattr(api_module.subprocess, "run", fake_run)
+
+    client = _client()
+    client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
+    res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token"})
+
+    assert res.status_code == 200
+    payload = res.get_json()["data"]
+    assert payload["success"] is True
+    assert payload["returncode"] == 0
+    assert payload["stdout"] == "ok"
+    assert payload["stderr"] == ""
+
+
 def test_decision_log_summary_reports_recent_counts(tmp_path, monkeypatch):
     monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
     client = _client()

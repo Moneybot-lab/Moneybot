@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import smtplib
+import subprocess
 import time
 import uuid
+import hmac
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -1013,6 +1015,50 @@ def explain_recommendation():
 
     explanation = _plain_english_recommendation(recommendation, reason)
     return jsonify({"data": {"explanation": explanation}, "request_id": g.request_id})
+
+
+@api_bp.post("/run-daily-ops")
+def run_daily_ops():
+    expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
+    provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
+    if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
+
+    project_root = Path(__file__).resolve().parents[1]
+    command = ["python3", "scripts/run_daily_ops.py", "--input-log", "data/decision_events.jsonl"]
+    logging.info("Running daily ops command via protected API endpoint.")
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return jsonify(
+            {
+                "data": {
+                    "success": completed.returncode == 0,
+                    "returncode": completed.returncode,
+                    "stdout": completed.stdout,
+                    "stderr": completed.stderr,
+                },
+                "request_id": g.request_id,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.exception("run-daily-ops failed to execute.")
+        return jsonify(
+            {
+                "data": {
+                    "success": False,
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": str(exc),
+                },
+                "request_id": g.request_id,
+            }
+        ), 500
 
 
 @api_bp.get("/market-overview")
