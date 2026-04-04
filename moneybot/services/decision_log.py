@@ -71,15 +71,7 @@ class DecisionLogger:
         self._source_counts: dict[str, int] = {}
         self._endpoint_counts: dict[str, int] = {}
 
-    def log(
-        self,
-        *,
-        endpoint: str,
-        symbol: str | None,
-        decision_source: str | None,
-        payload: Dict[str, Any],
-        snapshot: Dict[str, Any] | None = None,
-    ) -> None:
+    def log(self, *, endpoint: str, symbol: str | None, decision_source: str | None, payload: Dict[str, Any]) -> None:
         if not self.enabled:
             return
 
@@ -97,8 +89,6 @@ class DecisionLogger:
             "decision_source": source,
             "payload": payload,
         }
-        if isinstance(snapshot, dict):
-            record["snapshot"] = snapshot
         try:
             path = Path(self.output_path)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,26 +99,12 @@ class DecisionLogger:
             return
 
     def health(self) -> Dict[str, Any]:
-        persisted_source_counts: dict[str, int] = {}
-        persisted_endpoint_counts: dict[str, int] = {}
-        try:
-            summary = summarize_decision_events(self.output_path, limit=5000)
-            raw_sources = summary.get("source_counts")
-            raw_endpoints = summary.get("endpoint_counts")
-            if isinstance(raw_sources, dict):
-                persisted_source_counts = {str(k): int(v) for k, v in raw_sources.items() if isinstance(v, int)}
-            if isinstance(raw_endpoints, dict):
-                persisted_endpoint_counts = {str(k): int(v) for k, v in raw_endpoints.items() if isinstance(v, int)}
-        except Exception:
-            persisted_source_counts = {}
-            persisted_endpoint_counts = {}
-
         with self._lock:
             return {
                 "enabled": self.enabled,
                 "output_path": self.output_path,
-                "source_counts": persisted_source_counts or dict(self._source_counts),
-                "endpoint_counts": persisted_endpoint_counts or dict(self._endpoint_counts),
+                "source_counts": dict(self._source_counts),
+                "endpoint_counts": dict(self._endpoint_counts),
             }
 
     def summary(self, *, limit: int = 200) -> Dict[str, Any]:

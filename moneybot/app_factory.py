@@ -38,6 +38,25 @@ def _parse_int_env(name: str, default: int) -> int:
         raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
 
 
+def _parse_symbol_set(raw: str | None) -> set[str]:
+    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
+
+
+def _parse_int_env(name: str, default: int) -> int:
+    raw = str(os.environ.get(name, default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        if "=" in raw:
+            maybe_value = raw.rsplit("=", 1)[-1].strip()
+            if maybe_value:
+                try:
+                    return int(maybe_value)
+                except ValueError:
+                    pass
+        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
+
+
 def _resolve_database_url() -> str:
     # Prefer explicit DATABASE_URL, but support common provider aliases used on hosted platforms.
     raw_database_url = (
@@ -161,10 +180,10 @@ def create_app() -> Flask:
         DETERMINISTIC_ROLLOUT_BLOCKLIST=_parse_symbol_set(os.environ.get("DETERMINISTIC_ROLLOUT_BLOCKLIST", "")),
         DETERMINISTIC_ROLLOUT_DRY_RUN=(os.environ.get("DETERMINISTIC_ROLLOUT_DRY_RUN", "false").lower() == "true"),
         DECISION_LOGGING_ENABLED=(os.environ.get("DECISION_LOGGING_ENABLED", "true").lower() == "true"),
-        DECISION_LOG_PATH=_resolve_runtime_file_path(runtime_dir, "DECISION_LOG_PATH", "decision_events.jsonl"),
-        DECISION_OUTCOMES_SNAPSHOT_PATH=_resolve_runtime_file_path(runtime_dir, "DECISION_OUTCOMES_SNAPSHOT_PATH", "decision_outcomes_snapshot.json"),
+        DECISION_LOG_PATH=os.environ.get("DECISION_LOG_PATH", "data/decision_events.jsonl"),
+        DECISION_OUTCOMES_SNAPSHOT_PATH=os.environ.get("DECISION_OUTCOMES_SNAPSHOT_PATH", "data/decision_outcomes_snapshot.json"),
         DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS=int(os.environ.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")),
-        DETERMINISTIC_CALIBRATION_REPORT_PATH=_resolve_runtime_file_path(runtime_dir, "DETERMINISTIC_CALIBRATION_REPORT_PATH", "day13_calibration_report.json"),
+        DETERMINISTIC_CALIBRATION_REPORT_PATH=os.environ.get("DETERMINISTIC_CALIBRATION_REPORT_PATH", "data/day13_calibration_report.json"),
         DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS=_parse_int_env("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", 43200),
     )
 
@@ -213,26 +232,6 @@ def create_app() -> Flask:
         deterministic_quick_advisor=app.extensions["deterministic_quick_advisor"],
         deterministic_momentum_enabled=app.config["DETERMINISTIC_MOMENTUM_ENABLED"],
     )
-
-    model_path = str(app.config.get("DETERMINISTIC_MODEL_PATH") or "")
-    model_exists = bool(model_path and os.path.exists(model_path))
-    hot_momentum_ai_enabled = bool(
-        app.config.get("DETERMINISTIC_MOMENTUM_ENABLED")
-        and getattr(app.extensions.get("deterministic_quick_advisor"), "enabled", False)
-    )
-    logging.info(
-        "Moneybot runtime diagnostics: runtime_dir=%s durable_storage=%s model_path=%s model_exists=%s hot_momentum_live_ai=%s",
-        runtime_dir,
-        is_durable_runtime_configured(),
-        model_path,
-        model_exists,
-        hot_momentum_ai_enabled,
-    )
-    if not is_durable_runtime_configured():
-        logging.warning(
-            "Moneybot runtime data is using local ephemeral storage (%s); decisions and snapshots may reset on redeploy.",
-            runtime_dir,
-        )
 
     with app.app_context():
         db.create_all()

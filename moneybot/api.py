@@ -24,78 +24,11 @@ from advice_engine import compute_user_advice
 from .extensions import db
 from .models import SoldTrade, User, WatchlistItem
 from .services.decision_log import read_decision_events, summarize_decision_events
-from .services.decision_snapshot import build_decision_snapshot
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
-from .services.outcome_tracking import close_values, evaluate_decision_events, normalize_unix_ts, summarize_outcome_rows
-from .services.runtime_paths import decision_events_log_path, decision_outcomes_snapshot_path
+from .services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
 
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
-
-
-def _num(value: Any) -> float | None:
-    if isinstance(value, (int, float)):
-        return float(value)
-    return None
-
-
-def _build_logging_snapshot(
-    *,
-    endpoint: str,
-    symbol: str | None,
-    decision_source: str | None,
-    recommendation: str | None,
-    payload: dict[str, Any],
-    signal_data: dict[str, Any] | None = None,
-    quote_data: dict[str, Any] | None = None,
-    rationale: str | None = None,
-) -> dict[str, Any]:
-    signal_data = signal_data if isinstance(signal_data, dict) else {}
-    quote_data = quote_data if isinstance(quote_data, dict) else {}
-    technical = signal_data.get("technical") if isinstance(signal_data.get("technical"), dict) else {}
-
-    raw_change_percent = _num(quote_data.get("change_percent"))
-    feature_return_1d = (_num(signal_data.get("return_1d")) or ((raw_change_percent or 0.0) / 100.0 if raw_change_percent is not None else None))
-    feature_return_5d = _num(signal_data.get("return_5d"))
-    features = {
-        "feature_return_1d": feature_return_1d,
-        "feature_return_5d": feature_return_5d,
-        "feature_rsi": _num(technical.get("rsi")),
-        "feature_macd_histogram": _num(technical.get("macd_histogram") or signal_data.get("macd_hist")),
-        "feature_volume_ratio": _num(signal_data.get("volume_ratio")),
-        "feature_price": _num(quote_data.get("price")),
-        "feature_change_percent": raw_change_percent,
-        "feature_sentiment_score": _num((signal_data.get("sentiment") or {}).get("score")) if isinstance(signal_data.get("sentiment"), dict) else None,
-    }
-    compact_features = {k: v for k, v in features.items() if isinstance(v, (int, float))}
-    signals = {
-        "score": _num(signal_data.get("score") if signal_data.get("score") is not None else signal_data.get("hybrid_score")),
-        "confidence": _num(payload.get("confidence")),
-        "decision_threshold": _num(payload.get("decision_threshold")),
-    }
-    compact_signals = {k: v for k, v in signals.items() if isinstance(v, (int, float))}
-
-    return build_decision_snapshot(
-        symbol=str(symbol or "").upper(),
-        endpoint=endpoint,
-        decision_source=str(decision_source or "unknown"),
-        recommendation=str(recommendation or payload.get("recommendation") or payload.get("advice") or "HOLD"),
-        probability_up=_num(payload.get("probability_up")),
-        model_version=str(payload.get("model_version")) if isinstance(payload.get("model_version"), str) else None,
-        calibration_version=str(payload.get("calibration_version")) if isinstance(payload.get("calibration_version"), str) else None,
-        quote={
-            "price": _num(quote_data.get("price")),
-            "change_percent": raw_change_percent,
-            "source": quote_data.get("quote_source") if isinstance(quote_data.get("quote_source"), str) else None,
-        },
-        features=compact_features,
-        signals=compact_signals,
-        explanation={
-            "rationale": rationale or (payload.get("rationale") if isinstance(payload.get("rationale"), str) else None),
-            "risk_notes": payload.get("risk_notes") if isinstance(payload.get("risk_notes"), list) else [],
-            "next_checks": payload.get("next_checks") if isinstance(payload.get("next_checks"), list) else [],
-        },
-    )
 
 
 def _load_materialized_outcomes_snapshot(path: str, *, max_age_seconds: int) -> dict[str, Any] | None:
@@ -684,27 +617,17 @@ def user_watchlist():
             }
         )
         if decision_logger is not None:
-            decision_source = (deterministic_portfolio or {}).get("decision_source") or (ai_portfolio or {}).get("mode") or "rule_based"
-            payload = {
-                "advice": advice,
-                "model_version": (deterministic_portfolio or {}).get("model_version"),
-                "confidence": (deterministic_portfolio or {}).get("confidence"),
-            }
             decision_logger.log(
                 endpoint="user_watchlist",
                 symbol=item.get("symbol"),
-                decision_source=decision_source,
-                payload=payload,
-                snapshot=_build_logging_snapshot(
-                    endpoint="user_watchlist",
-                    symbol=item.get("symbol"),
-                    decision_source=decision_source,
-                    recommendation=advice,
-                    payload=payload,
-                    signal_data=signal,
-                    quote_data=quote,
-                    rationale=advice_reason,
-                ),
+                decision_source=(deterministic_portfolio or {}).get("decision_source")
+                or (ai_portfolio or {}).get("mode")
+                or "rule_based",
+                payload={
+                    "advice": advice,
+                    "model_version": (deterministic_portfolio or {}).get("model_version"),
+                    "confidence": (deterministic_portfolio or {}).get("confidence"),
+                },
             )
 
     return jsonify({"items": base_items, "enriched_items": enriched_items, "request_id": g.request_id})
@@ -1026,30 +949,17 @@ def quick_ask():
                 quote_data=quote_data,
             )
             if shadow is not None and decision_logger is not None:
-                shadow_payload = {
-                    "shadow_only": True,
-                    "recommendation": shadow.get("recommendation"),
-                    "model_version": shadow.get("model_version"),
-                    "probability_up": shadow.get("probability_up"),
-                    "confidence": shadow.get("confidence"),
-                    "decision_threshold": shadow.get("decision_threshold"),
-                    "rationale": shadow.get("rationale"),
-                }
                 decision_logger.log(
                     endpoint="quick_ask_shadow",
                     symbol=symbol,
                     decision_source=shadow.get("decision_source"),
-                    payload=shadow_payload,
-                    snapshot=_build_logging_snapshot(
-                        endpoint="quick_ask_shadow",
-                        symbol=symbol,
-                        decision_source=shadow.get("decision_source"),
-                        recommendation=shadow.get("recommendation"),
-                        payload=shadow_payload,
-                        signal_data=signal_data,
-                        quote_data=quote_data,
-                        rationale=shadow.get("rationale"),
-                    ),
+                    payload={
+                        "shadow_only": True,
+                        "recommendation": shadow.get("recommendation"),
+                        "model_version": shadow.get("model_version"),
+                        "probability_up": shadow.get("probability_up"),
+                        "confidence": shadow.get("confidence"),
+                    },
                 )
     if decision is None:
         decision = _quick_decision(signal_data, quote_data)
@@ -1066,30 +976,17 @@ def quick_ask():
     ai_mode = (ai_payload or {}).get("mode")
 
     if decision_logger is not None:
-        quick_payload = {
-            "recommendation": decision.get("recommendation"),
-            "model_version": decision.get("model_version"),
-            "probability_up": decision.get("probability_up"),
-            "confidence": decision.get("confidence"),
-            "decision_threshold": decision.get("decision_threshold"),
-            "rationale": decision.get("rationale"),
-            "ai_mode": ai_mode,
-        }
         decision_logger.log(
             endpoint="quick_ask",
             symbol=symbol,
             decision_source=decision.get("decision_source"),
-            payload=quick_payload,
-            snapshot=_build_logging_snapshot(
-                endpoint="quick_ask",
-                symbol=symbol,
-                decision_source=decision.get("decision_source"),
-                recommendation=decision.get("recommendation"),
-                payload=quick_payload,
-                signal_data=signal_data,
-                quote_data=quote_data,
-                rationale=decision.get("rationale"),
-            ),
+            payload={
+                "recommendation": decision.get("recommendation"),
+                "model_version": decision.get("model_version"),
+                "probability_up": decision.get("probability_up"),
+                "confidence": decision.get("confidence"),
+                "ai_mode": ai_mode,
+            },
         )
 
     return jsonify(
@@ -1137,29 +1034,16 @@ def hot_momentum_buys():
     items = svc.get_hot_momentum_buys()
     if decision_logger is not None:
         for item in items:
-            item_payload = {
-                "score": item.get("score"),
-                "model_version": item.get("model_version"),
-                "probability_up": item.get("probability_up"),
-                "confidence": item.get("confidence"),
-                "recommendation": item.get("recommendation") or "BUY",
-                "rationale": item.get("rationale"),
-            }
             decision_logger.log(
                 endpoint="hot_momentum_buys",
                 symbol=item.get("symbol"),
                 decision_source=item.get("decision_source") or "rule_based",
-                payload=item_payload,
-                snapshot=_build_logging_snapshot(
-                    endpoint="hot_momentum_buys",
-                    symbol=item.get("symbol"),
-                    decision_source=item.get("decision_source") or "rule_based",
-                    recommendation=item.get("recommendation") or "BUY",
-                    payload=item_payload,
-                    signal_data=item if isinstance(item, dict) else {},
-                    quote_data={"price": item.get("price"), "change_percent": item.get("change_percent"), "quote_source": item.get("quote_source")} if isinstance(item, dict) else {},
-                    rationale=item.get("rationale") if isinstance(item, dict) else None,
-                ),
+                payload={
+                    "score": item.get("score"),
+                    "model_version": item.get("model_version"),
+                    "probability_up": item.get("probability_up"),
+                    "confidence": item.get("confidence"),
+                },
             )
     return jsonify({"items": items, "request_id": g.request_id})
 
@@ -1182,11 +1066,6 @@ def model_health():
                 "schema_version": "model_health.v1",
                 "deterministic_quick_enabled": bool(current_app.config.get("DETERMINISTIC_QUICK_ENABLED")),
                 "deterministic_momentum_enabled": bool(current_app.config.get("DETERMINISTIC_MOMENTUM_ENABLED")),
-                "hot_momentum_live_ai_enabled": bool(
-                    current_app.config.get("DETERMINISTIC_MOMENTUM_ENABLED")
-                    and bool(getattr(deterministic_svc, "artifact", None) is not None)
-                    and not getattr(deterministic_svc, "load_error", None)
-                ),
                 "deterministic_model_path": model_path,
                 "model_loaded": bool(getattr(deterministic_svc, "artifact", None) is not None),
                 "model_version": getattr(getattr(deterministic_svc, "artifact", None), "version", None),
@@ -1221,7 +1100,7 @@ def decision_log_summary():
     output_path = (
         getattr(decision_logger, "output_path", None)
         or current_app.config.get("DECISION_LOG_PATH")
-        or str(decision_events_log_path())
+        or "data/decision_events.jsonl"
     )
     summary = summarize_decision_events(str(output_path), limit=limit)
     normalized_summary = _normalized_decision_summary(
@@ -1243,7 +1122,7 @@ def decision_outcomes():
     except ValueError:
         return jsonify({"error": "limit must be an integer", "request_id": g.request_id}), 400
 
-    snapshot_path = current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_PATH") or str(decision_outcomes_snapshot_path())
+    snapshot_path = current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_PATH") or "data/decision_outcomes_snapshot.json"
     snapshot_max_age_seconds = int(current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS") or 900)
     if not force_live:
         snapshot = _load_materialized_outcomes_snapshot(
@@ -1267,7 +1146,7 @@ def decision_outcomes():
     output_path = (
         getattr(decision_logger, "output_path", None)
         or current_app.config.get("DECISION_LOG_PATH")
-        or str(decision_events_log_path())
+        or "data/decision_events.jsonl"
     )
     lookup_cache: dict[tuple[str, int, int], float | None] = {}
     cache_hits = 0
@@ -1348,10 +1227,7 @@ def wells_picks():
     svc = current_app.extensions["market_data_service"]
     return jsonify({"items": svc.get_wells_picks(), "request_id": g.request_id})
 def _future_return_for_outcomes(symbol: str, start_ts: int, days: int) -> float | None:
-    normalized_ts = normalize_unix_ts(start_ts)
-    if normalized_ts is None:
-        return None
-    start_dt = datetime.fromtimestamp(int(normalized_ts), tz=timezone.utc)
+    start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
     now_utc = datetime.now(timezone.utc)
     # Skip network calls when event time is too recent (or future) to have realized horizon returns.
     if start_dt >= now_utc:

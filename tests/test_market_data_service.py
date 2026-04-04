@@ -486,13 +486,12 @@ def test_get_hot_momentum_buys_uses_deterministic_scores_when_enabled(monkeypatc
 
     out = svc.get_hot_momentum_buys()
 
-    assert len(out) == 20
+    assert len(out) == 5
     assert out[0]["symbol"] == "SOFI"
     assert out[0]["decision_source"] == "deterministic_model"
     assert out[0]["model_version"] == "day1-logreg-v1"
     assert out[0]["score"] == 9.1
     assert out[0]["probability_up"] == 0.91
-    assert all(float(item["price"]) <= 100.0 for item in out if isinstance(item.get("price"), (int, float)))
 
 
 def test_get_hot_momentum_buys_falls_back_when_deterministic_disabled(monkeypatch):
@@ -522,7 +521,7 @@ def test_get_hot_momentum_buys_falls_back_when_deterministic_disabled(monkeypatc
 
     out = svc.get_hot_momentum_buys()
 
-    assert len(out) == 20
+    assert len(out) == 5
     assert out[0]["decision_source"] == "rule_based"
     assert "model_version" not in out[0]
 
@@ -554,68 +553,7 @@ def test_get_hot_momentum_buys_strips_deterministic_boilerplate_rationale(monkey
 
     out = svc.get_hot_momentum_buys()
 
-    assert len(out) == 20
+    assert len(out) == 5
     assert out[0]["decision_source"] == "deterministic_model"
     assert out[0]["rationale"].startswith("Based on threshold")
     assert "Deterministic model (day1-logreg-v1)" not in out[0]["rationale"]
-
-
-def test_get_hot_momentum_buys_uses_shadow_when_model_healthy_but_rollout_gated(monkeypatch):
-    class StubDeterministicAdvisor:
-        artifact = object()
-        load_error = None
-
-        def predict_quick_decision(self, *, signal_data, quote_data, symbol=None):
-            return None
-
-        def predict_shadow_decision(self, *, signal_data, quote_data):
-            return {
-                "decision_source": "deterministic_model",
-                "model_version": "day1-logreg-v1",
-                "probability_up": 0.73,
-                "confidence": 73.0,
-                "recommendation": "BUY",
-                "rationale": "Deterministic model shadow score.",
-            }
-
-    svc = MarketDataService(deterministic_quick_advisor=StubDeterministicAdvisor(), deterministic_momentum_enabled=True)
-    monkeypatch.setattr(
-        svc,
-        "get_quote",
-        lambda symbol: {"symbol": symbol, "price": 10.0, "change_percent": 1.2, "live_data_available": True, "quote_source": "test"},
-    )
-    monkeypatch.setattr(
-        svc,
-        "get_signal",
-        lambda symbol: {"symbol": symbol, "action": "BUY", "score": 8.0, "technical": {"rsi": 48, "macd_histogram": 0.2}, "volume_ratio": 1.3, "reasons": [f"{symbol} signal"]},
-    )
-
-    out = svc.get_hot_momentum_buys()
-    assert out
-    assert out[0]["decision_source"] == "deterministic_model"
-    assert out[0]["model_version"] == "day1-logreg-v1"
-
-
-def test_get_hot_momentum_buys_falls_back_rule_based_on_scoring_exception(monkeypatch):
-    class StubDeterministicAdvisor:
-        artifact = object()
-        load_error = None
-
-        def predict_quick_decision(self, *, signal_data, quote_data, symbol=None):
-            raise RuntimeError("boom")
-
-    svc = MarketDataService(deterministic_quick_advisor=StubDeterministicAdvisor(), deterministic_momentum_enabled=True)
-    monkeypatch.setattr(
-        svc,
-        "get_quote",
-        lambda symbol: {"symbol": symbol, "price": 10.0, "change_percent": 1.2, "live_data_available": True, "quote_source": "test"},
-    )
-    monkeypatch.setattr(
-        svc,
-        "get_signal",
-        lambda symbol: {"symbol": symbol, "action": "BUY", "score": 8.0, "technical": {"rsi": 48, "macd_histogram": 0.2}, "volume_ratio": 1.3, "reasons": [f"{symbol} signal"]},
-    )
-
-    out = svc.get_hot_momentum_buys()
-    assert out
-    assert out[0]["decision_source"] == "rule_based"

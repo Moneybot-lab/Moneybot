@@ -15,7 +15,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
-from moneybot.services.runtime_paths import decision_events_log_path, decision_outcomes_snapshot_path
 
 
 def select_visible_rows(rows: list[dict], evaluated_rows: list[dict], rows_limit: int) -> list[dict]:
@@ -56,8 +55,8 @@ def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Materialize decision outcomes to a snapshot JSON file.")
-    parser.add_argument("--input", default=str(decision_events_log_path()))
-    parser.add_argument("--output", default=str(decision_outcomes_snapshot_path()))
+    parser.add_argument("--input", default="data/decision_events.jsonl")
+    parser.add_argument("--output", default="data/decision_outcomes_snapshot.json")
     parser.add_argument("--limit", type=int, default=2000)
     parser.add_argument("--rows-limit", type=int, default=20)
     args = parser.parse_args()

@@ -125,66 +125,6 @@ class MarketDataService:
                 return text[marker_index:].strip().capitalize()
         return text
 
-    def _predict_hot_momentum_decision(
-        self,
-        *,
-        symbol: str,
-        signal: Dict[str, Any],
-        quote: Dict[str, Any],
-    ) -> Dict[str, Any] | None:
-        """
-        Resolve deterministic momentum decision for live endpoint usage.
-
-        Priority:
-        1) live deterministic rollout path
-        2) model-healthy shadow path (bypass rollout/dry-run for hot momentum endpoint)
-        3) None => rule-based fallback
-        """
-        if not self.deterministic_momentum_enabled or self.deterministic_quick_advisor is None:
-            return None
-
-        advisor = self.deterministic_quick_advisor
-        try:
-            live = advisor.predict_quick_decision(
-                signal_data=signal,
-                quote_data=quote,
-                symbol=symbol,
-            )
-            if live is not None:
-                return live
-
-            model_healthy = bool(getattr(advisor, "artifact", None) is not None and not getattr(advisor, "load_error", None))
-            if model_healthy:
-                shadow = advisor.predict_shadow_decision(
-                    signal_data=signal,
-                    quote_data=quote,
-                )
-                if shadow is not None:
-                    logging.info(
-                        "hot_momentum_buys promoted deterministic shadow scoring to live path symbol=%s reason=rollout_or_dry_run_gate",
-                        symbol,
-                    )
-                    return shadow
-                logging.warning(
-                    "hot_momentum_buys fallback to rule_based symbol=%s reason=model_healthy_but_shadow_unavailable",
-                    symbol,
-                )
-                return None
-
-            logging.warning(
-                "hot_momentum_buys fallback to rule_based symbol=%s reason=model_unavailable load_error=%s",
-                symbol,
-                getattr(advisor, "load_error", None),
-            )
-            return None
-        except Exception as exc:  # noqa: BLE001
-            logging.warning(
-                "hot_momentum_buys fallback to rule_based symbol=%s reason=deterministic_scoring_exception error=%s",
-                symbol,
-                exc,
-            )
-            return None
-
     def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
         return [
             {"symbol": "SOFI", "price": 9.84, "score": 9.4, "rationale": "Member growth trend and improving margins."},
@@ -594,11 +534,13 @@ class MarketDataService:
             merged["quote_source"] = quote.get("quote_source")
             merged["live_data_available"] = bool(quote.get("live_data_available"))
 
-            deterministic_decision = self._predict_hot_momentum_decision(
-                symbol=item["symbol"],
-                signal=signal,
-                quote=quote,
-            )
+            deterministic_decision = None
+            if self.deterministic_momentum_enabled and self.deterministic_quick_advisor is not None:
+                deterministic_decision = self.deterministic_quick_advisor.predict_quick_decision(
+                    signal_data=signal,
+                    quote_data=quote,
+                    symbol=item["symbol"],
+                )
 
             if deterministic_decision is not None:
                 prob_up = float(deterministic_decision.get("probability_up") or 0.0)

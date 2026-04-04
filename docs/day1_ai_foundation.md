@@ -292,3 +292,49 @@ Optional model-health report wiring:
 DETERMINISTIC_CALIBRATION_REPORT_PATH=data/day13_calibration_report.json
 DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS=43200
 ```
+
+## Ops shortcuts (daily/weekly in 2-3 commands)
+
+Instead of running many day scripts manually, use these wrappers:
+
+### Daily (single command)
+
+```bash
+python3 scripts/run_daily_ops.py --input-log data/decision_events.jsonl
+```
+
+This runs:
+- Day 7 decision summary
+- Day 12 outcomes materialization
+- Day 13 calibration report + recalibration plan
+- daily markdown auto-report generation (`data/daily_report.md`)
+
+### Weekly (single command)
+
+```bash
+python3 scripts/run_weekly_model_refresh.py --input-log data/decision_events.jsonl
+```
+
+This runs:
+- Day 1 model refresh workflow
+- then the daily ops bundle above
+
+### Auto-fill daily report only
+
+```bash
+python3 scripts/autofill_daily_report.py --output data/daily_report.md
+```
+
+## What should be pushed to GitHub vs kept local
+
+Push to GitHub:
+- Code and script changes under `moneybot/`, `scripts/`, `tests/`, `docs/`
+- Any config/template updates that define reproducible behavior
+
+Keep local / do not commit:
+- `data/decision_events.jsonl`
+- `data/decision_outcomes_snapshot.json`
+- `data/day13_calibration_report.json`
+- `data/day13_recalibration_plan.json`
+- `data/daily_report.md`
+- other runtime artifacts/logs generated during ops
