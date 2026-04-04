@@ -158,6 +158,19 @@ def train_logistic_baseline(
     )
 
 
+def default_baseline_artifact() -> BaselineModelArtifact:
+    """Built-in fallback artifact used when external artifact file is unavailable."""
+    return BaselineModelArtifact(
+        version="day1-logreg-v1-fallback",
+        feature_columns=list(FEATURE_COLUMNS),
+        means=[0.0, 0.0, 50.0, 0.0, 1.0],
+        stds=[1.0, 1.0, 10.0, 1.0, 1.0],
+        weights=[0.3, 0.2, -0.1, 0.5, 0.1],
+        bias=0.1,
+        decision_threshold=0.55,
+    )
+
+
 def predict_proba(artifact: BaselineModelArtifact, rows: np.ndarray) -> np.ndarray:
     if rows.ndim == 1:
         rows = rows.reshape(1, -1)

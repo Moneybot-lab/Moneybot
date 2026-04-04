@@ -129,6 +129,7 @@ def test_tab_data_endpoints_return_items():
 
 def test_quick_ask_returns_shopping_friendly_recommendation_scale():
     client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = None
     res = client.get("/api/quick-ask?symbol=AAPL")
     assert res.status_code == 200
     data = res.get_json()["data"]

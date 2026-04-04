@@ -19,10 +19,15 @@ def _write_artifact(tmp_path: Path) -> Path:
     return out
 
 
-def test_predict_quick_decision_returns_none_when_artifact_missing(tmp_path: Path):
+def test_predict_quick_decision_uses_builtin_fallback_when_artifact_missing(tmp_path: Path):
     svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(tmp_path / "missing.json"))
-    out = svc.predict_quick_decision(signal_data={}, quote_data={})
-    assert out is None
+    out = svc.predict_quick_decision(
+        signal_data={"technical": {"rsi": 50.0, "macd_histogram": 0.1}, "volume_ratio": 1.2},
+        quote_data={"price": 100.0, "change_percent": 0.8, "quote_source": "test", "diagnostics": {}},
+    )
+    assert out is not None
+    assert out["decision_source"] == "deterministic_model"
+    assert "built-in deterministic fallback artifact" in str(svc.load_error or "")
 
 
 def test_predict_quick_decision_returns_structured_payload(tmp_path: Path):

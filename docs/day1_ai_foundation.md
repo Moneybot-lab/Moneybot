@@ -61,6 +61,7 @@ DETERMINISTIC_MODEL_PATH=data/day1_baseline_model.json
 ```
 
 If model loading fails, hot momentum automatically falls back to existing rule-based ranking.
+If the artifact file is missing (for example after cleaning local runtime data), Moneybot now uses a built-in deterministic fallback artifact so deterministic scoring remains available until you regenerate `data/day1_baseline_model.json`.
 
 ## Day-4 usage (portfolio/watchlist advice)
 

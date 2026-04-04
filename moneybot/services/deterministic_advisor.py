@@ -8,7 +8,7 @@ from typing import Any, Dict
 
 import numpy as np
 
-from .deterministic_model import BaselineModelArtifact, load_artifact, predict_proba
+from .deterministic_model import BaselineModelArtifact, default_baseline_artifact, load_artifact, predict_proba
 
 
 class DeterministicQuickAdvisor:
@@ -61,6 +61,13 @@ class DeterministicQuickAdvisor:
         try:
             self.artifact = load_artifact(self.artifact_path)
             self.load_error = None
+        except FileNotFoundError:
+            self.artifact = default_baseline_artifact()
+            self.load_error = (
+                f"Artifact file not found at {self.artifact_path}. "
+                "Using built-in deterministic fallback artifact."
+            )
+            logging.warning("%s", self.load_error)
         except Exception as exc:  # noqa: BLE001
             self.artifact = None
             self.load_error = str(exc)

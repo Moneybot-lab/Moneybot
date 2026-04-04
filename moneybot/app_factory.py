@@ -57,6 +57,25 @@ def _parse_int_env(name: str, default: int) -> int:
         raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
 
 
+def _parse_symbol_set(raw: str | None) -> set[str]:
+    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
+
+
+def _parse_int_env(name: str, default: int) -> int:
+    raw = str(os.environ.get(name, default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        if "=" in raw:
+            maybe_value = raw.rsplit("=", 1)[-1].strip()
+            if maybe_value:
+                try:
+                    return int(maybe_value)
+                except ValueError:
+                    pass
+        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
+
+
 def _resolve_database_url() -> str:
     # Prefer explicit DATABASE_URL, but support common provider aliases used on hosted platforms.
     raw_database_url = (
