@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 import os
+from pathlib import Path
 
 from flask import Flask, render_template, render_template_string
 from flask_cors import CORS
@@ -13,9 +14,6 @@ from .services.decision_log import DecisionLogger
 from .services.deterministic_advisor import DeterministicQuickAdvisor
 from .services.market_data import MarketDataService
 from .services.runtime_paths import (
-    day13_calibration_report_path,
-    decision_events_log_path,
-    decision_outcomes_snapshot_path,
     is_durable_runtime_configured,
     resolve_runtime_dir,
 )
@@ -91,6 +89,26 @@ def _resolve_database_url() -> str:
     return database_url
 
 
+def _resolve_runtime_file_path(runtime_dir, env_name: str, default_filename: str) -> str:
+    raw = os.environ.get(env_name)
+    if not raw:
+        return str(runtime_dir / default_filename)
+
+    candidate = raw.strip()
+    if not candidate:
+        return str(runtime_dir / default_filename)
+
+    candidate_path = Path(candidate).expanduser()
+    if candidate_path.is_absolute():
+        return str(candidate_path)
+
+    parts = list(candidate_path.parts)
+    if parts and parts[0] == "data":
+        parts = parts[1:]
+    relative = Path(*parts) if parts else Path(default_filename)
+    return str(runtime_dir / relative)
+
+
 def create_app() -> Flask:
     secret = os.environ.get("MONEYBOT_SECRET_KEY")
     if not secret:
@@ -143,10 +161,10 @@ def create_app() -> Flask:
         DETERMINISTIC_ROLLOUT_BLOCKLIST=_parse_symbol_set(os.environ.get("DETERMINISTIC_ROLLOUT_BLOCKLIST", "")),
         DETERMINISTIC_ROLLOUT_DRY_RUN=(os.environ.get("DETERMINISTIC_ROLLOUT_DRY_RUN", "false").lower() == "true"),
         DECISION_LOGGING_ENABLED=(os.environ.get("DECISION_LOGGING_ENABLED", "true").lower() == "true"),
-        DECISION_LOG_PATH=os.environ.get("DECISION_LOG_PATH", str(decision_events_log_path())),
-        DECISION_OUTCOMES_SNAPSHOT_PATH=os.environ.get("DECISION_OUTCOMES_SNAPSHOT_PATH", str(decision_outcomes_snapshot_path())),
+        DECISION_LOG_PATH=_resolve_runtime_file_path(runtime_dir, "DECISION_LOG_PATH", "decision_events.jsonl"),
+        DECISION_OUTCOMES_SNAPSHOT_PATH=_resolve_runtime_file_path(runtime_dir, "DECISION_OUTCOMES_SNAPSHOT_PATH", "decision_outcomes_snapshot.json"),
         DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS=int(os.environ.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")),
-        DETERMINISTIC_CALIBRATION_REPORT_PATH=os.environ.get("DETERMINISTIC_CALIBRATION_REPORT_PATH", str(day13_calibration_report_path())),
+        DETERMINISTIC_CALIBRATION_REPORT_PATH=_resolve_runtime_file_path(runtime_dir, "DETERMINISTIC_CALIBRATION_REPORT_PATH", "day13_calibration_report.json"),
         DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS=_parse_int_env("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", 43200),
     )
 
