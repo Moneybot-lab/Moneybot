@@ -1,2 +1,10 @@
+# Mac
 .DS_Store
 *.localized
+.env
+.venv/
+__pycache__/
+*.pyc
+data/decision_events.jsonl
+data/decision_training_snapshot.jsonl
+data/*.parquet

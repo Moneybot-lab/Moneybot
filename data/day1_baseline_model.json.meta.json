@@ -1,0 +1,16 @@
+{
+  "horizon_days": 5,
+  "input_path": "data/day1_training_snapshot.csv",
+  "metrics": {
+    "accuracy": 0.5016,
+    "positive_rate": 0.1979,
+    "rows": 965.0
+  },
+  "model_path": "data/day1_baseline_model.json",
+  "model_version": "day1-logreg-v1",
+  "recorded_at_utc": "2026-04-02T01:35:53.597373+00:00",
+  "target_return": 0.0,
+  "test_rows": 965,
+  "train_ratio": 0.8,
+  "train_rows": 3858
+}
