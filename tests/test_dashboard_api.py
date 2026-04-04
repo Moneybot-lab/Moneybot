@@ -1,4 +1,6 @@
 import os
+import json
+from datetime import datetime, timezone
 
 from moneybot.app_factory import create_app
 from moneybot import api as api_module
@@ -26,6 +28,38 @@ class StubAIAdvisorService:
             "next_checks": ["Watch RSI and volume.", "Reassess after earnings."],
             "provider": "stub",
             "model": "stub-fast",
+        }
+
+
+class StubDeterministicQuickAdvisor:
+    def predict_quick_decision(self, *, signal_data, quote_data, symbol=None):
+        return {
+            "recommendation": "STRONG BUY",
+            "rationale": "Deterministic model says upside probability is high.",
+            "current_price": quote_data.get("price"),
+            "change_percent": quote_data.get("change_percent"),
+            "quote_source": quote_data.get("quote_source"),
+            "quote_diagnostics": quote_data.get("diagnostics"),
+            "decision_source": "deterministic_model",
+            "model_version": "day1-logreg-v1",
+            "probability_up": 0.78,
+            "decision_threshold": 0.55,
+            "confidence": 78.0,
+            "imputed_features": [],
+        }
+
+    def predict_portfolio_position(self, *, symbol, entry_price, current_price, shares, signal_data, quote_data):
+        return {
+            "mode": "deterministic_model",
+            "symbol": symbol,
+            "advice": "BUY",
+            "advice_reason": f"Deterministic portfolio signal for {symbol}.",
+            "decision_source": "deterministic_model",
+            "model_version": "day1-logreg-v1",
+            "probability_up": 0.71,
+            "confidence": 71.0,
+            "position_shares": float(shares),
+            "pnl_percent": -7.2,
         }
 
 class StubMarketService:
@@ -95,6 +129,7 @@ def test_tab_data_endpoints_return_items():
 
 def test_quick_ask_returns_shopping_friendly_recommendation_scale():
     client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = None
     res = client.get("/api/quick-ask?symbol=AAPL")
     assert res.status_code == 200
     data = res.get_json()["data"]
@@ -138,6 +173,338 @@ def test_quick_ask_uses_ai_extension_when_present():
     assert "reason" not in data["ai"]
     assert data["ai"]["provider"] == "stub"
     assert "TSLA" in data["ai"]["narrative"]
+
+
+def test_quick_ask_uses_deterministic_model_extension_when_present():
+    client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = StubDeterministicQuickAdvisor()
+    client.application.extensions["ai_advisor_service"] = None
+
+    res = client.get("/api/quick-ask?symbol=AAPL")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["recommendation"] == "STRONG BUY"
+    assert data["decision_source"] == "deterministic_model"
+    assert data["model_version"] == "day1-logreg-v1"
+    assert data["confidence"] == 78.0
+
+
+def test_model_health_reports_deterministic_and_logging_status():
+    client = _client()
+
+    res = client.get("/api/model-health")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["schema_version"] == "model_health.v1"
+    assert "deterministic_quick_enabled" in data
+    assert "deterministic_momentum_enabled" in data
+    assert "model_loaded" in data
+    assert "artifact_metadata" in data
+    assert "artifact_history" in data
+    assert "decision_logging" in data
+    assert "rollout_percentage" in data
+    assert "calibration_enabled" in data
+    assert "enabled" in data["decision_logging"]
+    assert "source_counts" in data["decision_logging"]
+    assert "endpoint_counts" in data["decision_logging"]
+
+
+def test_model_health_includes_artifact_metadata_history(tmp_path, monkeypatch):
+    model_path = tmp_path / "day1_baseline_model.json"
+    metadata_path = tmp_path / "day1_baseline_model.json.meta.json"
+    history_path = tmp_path / "day1_baseline_model.json.history.json"
+    metadata = {"model_version": "day1-logreg-v1", "train_rows": 100}
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+    history_path.write_text(json.dumps([metadata]), encoding="utf-8")
+    monkeypatch.setenv("DETERMINISTIC_MODEL_PATH", str(model_path))
+
+    client = _client()
+    res = client.get("/api/model-health")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["artifact_metadata"]["model_version"] == "day1-logreg-v1"
+    assert data["artifact_history"][0]["train_rows"] == 100
+
+
+def test_model_health_includes_fresh_calibration_report(tmp_path, monkeypatch):
+    report_path = tmp_path / "day13_calibration_report.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "calibration_report.v1",
+                "computed_at_utc": datetime.now(timezone.utc).isoformat(),
+                "brier_score": 0.19,
+                "rows": 80,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DETERMINISTIC_CALIBRATION_REPORT_PATH", str(report_path))
+    monkeypatch.setenv("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", "3600")
+
+    client = _client()
+    res = client.get("/api/model-health")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["calibration_report"] is not None
+    assert data["calibration_report"]["brier_score"] == 0.19
+
+
+def test_quick_ask_logs_shadow_decision_in_rollout_dry_run():
+    class DryRunAdvisor:
+        rollout_dry_run = True
+
+        def predict_quick_decision(self, *, signal_data, quote_data, symbol=None):
+            return None
+
+        def predict_shadow_decision(self, *, signal_data, quote_data):
+            return {
+                "recommendation": "BUY",
+                "decision_source": "deterministic_model",
+                "model_version": "day1-logreg-v1",
+                "probability_up": 0.66,
+                "confidence": 66.0,
+            }
+
+    client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = DryRunAdvisor()
+
+    res = client.get("/api/quick-ask?symbol=AAPL")
+    assert res.status_code == 200
+    summary = client.get("/api/decision-log-summary?limit=20").get_json()["data"]
+    assert summary["endpoint_counts"]["quick_ask_shadow"] >= 1
+
+
+def test_decision_log_summary_reports_recent_counts(tmp_path, monkeypatch):
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+    logger.log(endpoint="quick_ask", symbol="AAPL", decision_source="deterministic_model", payload={"recommendation": "BUY"})
+    logger.log(endpoint="hot_momentum_buys", symbol="SOFI", decision_source="rule_based", payload={"score": 7.8})
+
+    res = client.get("/api/decision-log-summary?limit=10")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["schema_version"] == "decision_log_summary.v1"
+    assert data["events_considered"] == 2
+    assert data["source_counts"]["deterministic_model"] == 1
+    assert data["source_counts"]["rule_based"] == 1
+    assert data["endpoint_counts"]["quick_ask"] == 1
+    assert data["endpoint_counts"]["hot_momentum_buys"] == 1
+    assert data["latest_event"]["symbol"] == "SOFI"
+    assert data["logging_enabled"] is True
+
+
+def test_decision_log_summary_rejects_invalid_limit():
+    client = _client()
+
+    res = client.get("/api/decision-log-summary?limit=bad")
+
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "limit must be an integer"
+
+
+def test_decision_outcomes_returns_rows_and_summaries(tmp_path, monkeypatch):
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+    logger.log(endpoint="quick_ask", symbol="AAPL", decision_source="deterministic_model", payload={"recommendation": "BUY", "model_version": "day1-logreg-v1"})
+    logger.log(endpoint="user_watchlist", symbol="TSLA", decision_source="rule_based", payload={"advice": "SELL"})
+
+    monkeypatch.setattr(
+        api_module,
+        "_future_return_for_outcomes",
+        lambda symbol, ts, days: {("AAPL", 1): 0.02, ("AAPL", 5): 0.04, ("TSLA", 1): -0.01, ("TSLA", 5): -0.03}[(symbol, days)],
+    )
+
+    res = client.get("/api/decision-outcomes?limit=10")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["schema_version"] == "decision_outcomes.v1"
+    assert data["summary_1d"]["rows"] == 2
+    assert data["summary_1d"]["accuracy"] == 1.0
+    assert data["rows"][0]["outcome_1d"] == "correct"
+    assert data["rows"][0]["model_version"] == "day1-logreg-v1"
+    assert data["include_skipped"] is False
+    assert data["rows_scanned"] >= 2
+    assert data["evaluated_rows_available"] == 2
+
+
+def test_decision_outcomes_filters_skipped_rows_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+    logger.log(endpoint="quick_ask", symbol="AAPL", decision_source="deterministic_model", payload={"recommendation": "BUY"})
+    logger.log(endpoint="quick_ask", symbol="TSLA", decision_source="rule_based", payload={"recommendation": "BUY"})
+
+    monkeypatch.setattr(
+        api_module,
+        "_future_return_for_outcomes",
+        lambda symbol, ts, days: {("AAPL", 1): None, ("AAPL", 5): None, ("TSLA", 1): 0.03, ("TSLA", 5): None}[(symbol, days)],
+    )
+
+    filtered = client.get("/api/decision-outcomes?limit=10")
+    assert filtered.status_code == 200
+    filtered_data = filtered.get_json()["data"]
+    assert len(filtered_data["rows"]) == 1
+    assert filtered_data["rows"][0]["symbol"] == "TSLA"
+    assert filtered_data["summary_1d"]["rows"] == 1
+    assert filtered_data["used_unevaluated_fallback"] is False
+
+    include_skipped = client.get("/api/decision-outcomes?limit=10&include_skipped=true")
+    assert include_skipped.status_code == 200
+    include_skipped_data = include_skipped.get_json()["data"]
+    assert len(include_skipped_data["rows"]) == 2
+    assert include_skipped_data["include_skipped"] is True
+
+
+def test_decision_outcomes_falls_back_to_recent_rows_when_nothing_is_evaluable(tmp_path, monkeypatch):
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+    logger.log(endpoint="quick_ask", symbol="AAPL", decision_source="deterministic_model", payload={"recommendation": "BUY"})
+    logger.log(endpoint="quick_ask", symbol="TSLA", decision_source="rule_based", payload={"recommendation": "SELL"})
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda symbol, ts, days: None)
+
+    res = client.get("/api/decision-outcomes?limit=10")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert len(data["rows"]) == 2
+    assert data["summary_1d"]["evaluated_rows"] == 0
+    assert data["used_unevaluated_fallback"] is True
+
+
+def test_decision_outcomes_expands_scan_window_to_find_older_evaluated_rows(tmp_path, monkeypatch):
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+
+    for idx in range(260):
+        symbol = f"SYM{idx}"
+        logger.log(endpoint="quick_ask", symbol=symbol, decision_source="deterministic_model", payload={"recommendation": "BUY"})
+
+    monkeypatch.setattr(
+        api_module,
+        "_future_return_for_outcomes",
+        lambda symbol, ts, days: 0.02 if (symbol == "SYM0" and days == 1) else None,
+    )
+
+    res = client.get("/api/decision-outcomes?limit=1")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert len(data["rows"]) == 1
+    assert data["rows"][0]["symbol"] == "SYM0"
+    assert data["rows_scanned"] == 260
+
+
+def test_decision_outcomes_returns_200_when_lookup_raises(tmp_path, monkeypatch):
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+    logger.log(endpoint="quick_ask", symbol="MSFT", decision_source="deterministic_model", payload={"recommendation": "BUY"})
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda symbol, ts, days: (_ for _ in ()).throw(ValueError("No objects to concatenate")))
+
+    res = client.get("/api/decision-outcomes?limit=10&include_skipped=true")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert len(data["rows"]) == 1
+    assert data["rows"][0]["outcome_1d"] == "skipped"
+    assert data["rows"][0]["outcome_5d"] == "skipped"
+
+
+def test_decision_outcomes_uses_lookup_cache_for_duplicate_events(tmp_path, monkeypatch):
+    events_path = tmp_path / "decision_events.jsonl"
+    event = {
+        "ts": 1700000000,
+        "endpoint": "quick_ask",
+        "symbol": "AAPL",
+        "decision_source": "deterministic_model",
+        "payload": {"recommendation": "BUY"},
+    }
+    events_path.write_text("\n".join(json.dumps(event) for _ in range(3)) + "\n", encoding="utf-8")
+    monkeypatch.setenv("DECISION_LOG_PATH", str(events_path))
+
+    client = _client()
+    calls = {"count": 0}
+
+    def fake_lookup(symbol, ts, days):
+        calls["count"] += 1
+        return 0.02 if days == 1 else 0.04
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", fake_lookup)
+
+    res = client.get("/api/decision-outcomes?limit=10&include_skipped=true")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert len(data["rows"]) == 3
+    assert calls["count"] == 2
+    assert data["lookup_cache_misses"] == 2
+    assert data["lookup_cache_hits"] >= 4
+    assert data["lookup_cache_size"] == 2
+
+
+def test_decision_outcomes_uses_materialized_snapshot_when_fresh(tmp_path, monkeypatch):
+    snapshot_path = tmp_path / "decision_outcomes_snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "computed_at_utc": datetime.now(timezone.utc).isoformat(),
+                "data": {
+                    "rows": [{"symbol": "AAPL", "action": "BUY", "return_1d": 0.02, "return_5d": 0.04}],
+                    "summary_1d": {"rows": 1, "evaluated_rows": 1, "accuracy": 1.0, "counts": {"correct": 1, "incorrect": 0, "neutral": 0, "skipped": 0}, "avg_return_1d": 0.02, "avg_return_5d": 0.04},
+                    "summary_5d": {"rows": 1, "evaluated_rows": 1, "accuracy": 1.0, "counts": {"correct": 1, "incorrect": 0, "neutral": 0, "skipped": 0}, "avg_return_1d": 0.04, "avg_return_5d": 0.04},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_PATH", str(snapshot_path))
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")
+    client = _client()
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not run live lookup")))
+
+    res = client.get("/api/decision-outcomes?limit=10")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["snapshot_source"] == "materialized"
+    assert data["rows"][0]["symbol"] == "AAPL"
+    assert data["snapshot_age_seconds"] >= 0
+
+
+def test_decision_outcomes_force_live_bypasses_materialized_snapshot(tmp_path, monkeypatch):
+    snapshot_path = tmp_path / "decision_outcomes_snapshot.json"
+    snapshot_path.write_text(
+        json.dumps({"computed_at_utc": datetime.now(timezone.utc).isoformat(), "data": {"rows": [{"symbol": "OLD"}], "summary_1d": {}, "summary_5d": {}}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_PATH", str(snapshot_path))
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+    logger.log(endpoint="quick_ask", symbol="MSFT", decision_source="deterministic_model", payload={"recommendation": "BUY"})
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda symbol, ts, days: 0.01)
+
+    res = client.get("/api/decision-outcomes?limit=10&force_live=true")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["snapshot_source"] == "live"
+    assert data["rows"][0]["symbol"] == "MSFT"
+
+
+def test_decision_outcomes_rejects_invalid_limit():
+    client = _client()
+
+    res = client.get("/api/decision-outcomes?limit=bad")
+
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "limit must be an integer"
 
 
 def test_explain_recommendation_returns_plain_english_text():
@@ -292,6 +659,41 @@ def test_sell_watchlist_item_rejects_selling_more_than_owned():
     assert sell.get_json()["error"] == "shares_sold cannot exceed current shares"
 
 
+def test_buy_watchlist_item_increases_shares_and_recalculates_entry_price():
+    client = _client()
+    signup = client.post("/api/auth/signup", json={"email": "buy@b.com", "password": "pw", "password_confirmation": "pw"})
+    assert signup.status_code == 201
+
+    add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 10})
+    assert add.status_code == 201
+    item_id = add.get_json()["item"]["id"]
+
+    buy = client.post(f"/api/user-watchlist/{item_id}/buy", json={"bought_price": 130, "shares_bought": 5})
+    assert buy.status_code == 200
+    payload = buy.get_json()
+    assert payload["item"]["shares"] == 15.0
+    assert payload["item"]["entry_price"] == 110.0
+    assert payload["added"]["new_entry_price"] == 110.0
+
+
+def test_buy_watchlist_item_validates_positive_inputs():
+    client = _client()
+    signup = client.post("/api/auth/signup", json={"email": "buy-invalid@b.com", "password": "pw", "password_confirmation": "pw"})
+    assert signup.status_code == 201
+
+    add = client.post("/api/user-watchlist", json={"symbol": "TSLA", "buy_price": 200, "shares": 2})
+    assert add.status_code == 201
+    item_id = add.get_json()["item"]["id"]
+
+    bad_price = client.post(f"/api/user-watchlist/{item_id}/buy", json={"bought_price": 0, "shares_bought": 1})
+    assert bad_price.status_code == 400
+    assert bad_price.get_json()["error"] == "bought_price must be > 0"
+
+    bad_shares = client.post(f"/api/user-watchlist/{item_id}/buy", json={"bought_price": 210, "shares_bought": 0})
+    assert bad_shares.status_code == 400
+    assert bad_shares.get_json()["error"] == "shares_bought must be > 0"
+
+
 def test_forgot_password_sends_reset_email_for_existing_user(monkeypatch):
     client = _client()
     signup = client.post("/api/auth/signup", json={"email": "mailer@b.com", "password": "pw", "password_confirmation": "pw"})
@@ -358,3 +760,21 @@ def test_user_watchlist_uses_ai_portfolio_advice_when_available():
     assert "buy-in" in enriched["advice_reason"].lower()
     assert enriched["ai_portfolio"]["mode"] == "ai_enhanced"
     assert enriched["ai_portfolio"]["provider"] == "stub"
+
+
+def test_user_watchlist_includes_deterministic_portfolio_advice_when_available():
+    client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = StubDeterministicQuickAdvisor()
+    client.application.extensions["ai_advisor_service"] = None
+
+    signup = client.post("/api/auth/signup", json={"email": "portfolio-det@b.com", "password": "pw", "password_confirmation": "pw"})
+    assert signup.status_code == 201
+    add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 1})
+    assert add.status_code == 201
+
+    res = client.get("/api/user-watchlist")
+    assert res.status_code == 200
+    enriched = res.get_json()["enriched_items"][0]
+    assert enriched["advice"] == "BUY"
+    assert enriched["deterministic_portfolio"]["mode"] == "deterministic_model"
+    assert enriched["deterministic_portfolio"]["decision_source"] == "deterministic_model"

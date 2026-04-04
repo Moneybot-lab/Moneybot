@@ -12,6 +12,7 @@ import requests
 import yfinance as yf
 
 from trade_signal import analyze_ticker
+from .deterministic_advisor import DeterministicQuickAdvisor
 
 
 @dataclass
@@ -39,9 +40,17 @@ class TTLCache:
 
 
 class MarketDataService:
-    def __init__(self, timeout_s: int = 8, retries: int = 2):
+    def __init__(
+        self,
+        timeout_s: int = 8,
+        retries: int = 2,
+        deterministic_quick_advisor: DeterministicQuickAdvisor | None = None,
+        deterministic_momentum_enabled: bool = True,
+    ):
         self.timeout_s = timeout_s
         self.retries = retries
+        self.deterministic_quick_advisor = deterministic_quick_advisor
+        self.deterministic_momentum_enabled = bool(deterministic_momentum_enabled)
         self.quote_cache = TTLCache(ttl_seconds=20)
         self.signal_cache = TTLCache(ttl_seconds=20)
         self.sector_cache = TTLCache(ttl_seconds=3600)
@@ -103,6 +112,18 @@ class MarketDataService:
     def get_stable_watchlist(self) -> list[Dict[str, Any]]:
         self._maybe_refresh_daily_lists()
         return [dict(item) for item in self._daily_lists_cache.get("stable", [])]
+
+
+    @staticmethod
+    def _clean_deterministic_rationale(rationale: str) -> str:
+        text = (rationale or "").strip()
+        lowered = text.lower()
+        if lowered.startswith("deterministic model"):
+            marker = "based on threshold"
+            marker_index = lowered.find(marker)
+            if marker_index != -1:
+                return text[marker_index:].strip().capitalize()
+        return text
 
     def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
         return [
@@ -274,6 +295,18 @@ class MarketDataService:
         self._maybe_refresh_daily_lists()
         return [dict(item) for item in self._daily_lists_cache.get("stable", [])]
 
+
+    @staticmethod
+    def _clean_deterministic_rationale(rationale: str) -> str:
+        text = (rationale or "").strip()
+        lowered = text.lower()
+        if lowered.startswith("deterministic model"):
+            marker = "based on threshold"
+            marker_index = lowered.find(marker)
+            if marker_index != -1:
+                return text[marker_index:].strip().capitalize()
+        return text
+
     def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
         return [
             {"symbol": "SOFI", "price": 9.84, "score": 9.4, "rationale": "Member growth trend and improving margins."},
@@ -432,6 +465,18 @@ class MarketDataService:
             item.pop("qualified", None)
         return selected
 
+
+    @staticmethod
+    def _clean_deterministic_rationale(rationale: str) -> str:
+        text = (rationale or "").strip()
+        lowered = text.lower()
+        if lowered.startswith("deterministic model"):
+            marker = "based on threshold"
+            marker_index = lowered.find(marker)
+            if marker_index != -1:
+                return text[marker_index:].strip().capitalize()
+        return text
+
     def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
         candidates = [
             {"symbol": "SOFI", "price": 9.84, "score": 9.4, "rationale": "Member growth trend and improving margins."},
@@ -460,7 +505,39 @@ class MarketDataService:
             merged["change_percent"] = quote.get("change_percent")
             merged["quote_source"] = quote.get("quote_source")
             merged["live_data_available"] = bool(quote.get("live_data_available"))
-            merged["qualified"] = bool(merged["live_data_available"] and merged["score"] >= 7.0 and self._is_buy_like(signal))
+
+            deterministic_decision = None
+            if self.deterministic_momentum_enabled and self.deterministic_quick_advisor is not None:
+                deterministic_decision = self.deterministic_quick_advisor.predict_quick_decision(
+                    signal_data=signal,
+                    quote_data=quote,
+                    symbol=item["symbol"],
+                )
+                if (
+                    deterministic_decision is None
+                    and bool(getattr(self.deterministic_quick_advisor, "rollout_dry_run", False))
+                ):
+                    deterministic_decision = self.deterministic_quick_advisor.predict_shadow_decision(
+                        signal_data=signal,
+                        quote_data=quote,
+                    )
+
+            if deterministic_decision is not None:
+                prob_up = float(deterministic_decision.get("probability_up") or 0.0)
+                merged["score"] = round(prob_up * 10.0, 2)
+                merged["rationale"] = self._clean_deterministic_rationale(str(deterministic_decision.get("rationale") or merged["rationale"]))
+                merged["decision_source"] = str(deterministic_decision.get("decision_source") or "deterministic_model")
+                merged["model_version"] = deterministic_decision.get("model_version")
+                merged["probability_up"] = deterministic_decision.get("probability_up")
+                merged["confidence"] = deterministic_decision.get("confidence")
+                merged["qualified"] = bool(
+                    merged["live_data_available"]
+                    and deterministic_decision.get("recommendation") in {"BUY", "STRONG BUY"}
+                )
+            else:
+                merged["decision_source"] = "rule_based"
+                merged["qualified"] = bool(merged["live_data_available"] and merged["score"] >= 7.0 and self._is_buy_like(signal))
+
             enriched.append(merged)
 
         qualified = [item for item in enriched if item["qualified"]]
