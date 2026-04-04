@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 import os
+from pathlib import Path
 
 from flask import Flask, render_template, render_template_string
 from flask_cors import CORS
@@ -12,6 +13,86 @@ from .services.ai_advisor import AIAdvisorService
 from .services.decision_log import DecisionLogger
 from .services.deterministic_advisor import DeterministicQuickAdvisor
 from .services.market_data import MarketDataService
+from .services.runtime_paths import (
+    is_durable_runtime_configured,
+    resolve_runtime_dir,
+)
+
+
+def _parse_symbol_set(raw: str | None) -> set[str]:
+    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
+
+
+def _parse_int_env(name: str, default: int) -> int:
+    raw = str(os.environ.get(name, default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        if "=" in raw:
+            maybe_value = raw.rsplit("=", 1)[-1].strip()
+            if maybe_value:
+                try:
+                    return int(maybe_value)
+                except ValueError:
+                    pass
+        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
+
+
+def _parse_symbol_set(raw: str | None) -> set[str]:
+    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
+
+
+def _parse_int_env(name: str, default: int) -> int:
+    raw = str(os.environ.get(name, default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        if "=" in raw:
+            maybe_value = raw.rsplit("=", 1)[-1].strip()
+            if maybe_value:
+                try:
+                    return int(maybe_value)
+                except ValueError:
+                    pass
+        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
+
+
+def _parse_symbol_set(raw: str | None) -> set[str]:
+    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
+
+
+def _parse_int_env(name: str, default: int) -> int:
+    raw = str(os.environ.get(name, default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        if "=" in raw:
+            maybe_value = raw.rsplit("=", 1)[-1].strip()
+            if maybe_value:
+                try:
+                    return int(maybe_value)
+                except ValueError:
+                    pass
+        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
+
+
+def _parse_symbol_set(raw: str | None) -> set[str]:
+    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
+
+
+def _parse_int_env(name: str, default: int) -> int:
+    raw = str(os.environ.get(name, default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        if "=" in raw:
+            maybe_value = raw.rsplit("=", 1)[-1].strip()
+            if maybe_value:
+                try:
+                    return int(maybe_value)
+                except ValueError:
+                    pass
+        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
 
 
 def _parse_symbol_set(raw: str | None) -> set[str]:
@@ -84,6 +165,26 @@ def _resolve_database_url() -> str:
     return database_url
 
 
+def _resolve_runtime_file_path(runtime_dir, env_name: str, default_filename: str) -> str:
+    raw = os.environ.get(env_name)
+    if not raw:
+        return str(runtime_dir / default_filename)
+
+    candidate = raw.strip()
+    if not candidate:
+        return str(runtime_dir / default_filename)
+
+    candidate_path = Path(candidate).expanduser()
+    if candidate_path.is_absolute():
+        return str(candidate_path)
+
+    parts = list(candidate_path.parts)
+    if parts and parts[0] == "data":
+        parts = parts[1:]
+    relative = Path(*parts) if parts else Path(default_filename)
+    return str(runtime_dir / relative)
+
+
 def create_app() -> Flask:
     secret = os.environ.get("MONEYBOT_SECRET_KEY")
     if not secret:
@@ -94,6 +195,7 @@ def create_app() -> Flask:
 
     database_url = _resolve_database_url()
 
+    runtime_dir = resolve_runtime_dir()
     app = Flask(__name__)
     app.url_map.strict_slashes = False
     app.config.update(
