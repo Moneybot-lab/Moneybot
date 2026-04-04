@@ -1,5 +1,5 @@
 {
-  "computed_at_utc": "2026-04-02T01:37:53.969701+00:00",
+  "computed_at_utc": "2026-04-04T17:41:04.238480+00:00",
   "data": {
     "evaluated_rows_available": 69,
     "include_skipped": false,
@@ -249,7 +249,7 @@
         "ts": 1774752401
       }
     ],
-    "rows_scanned": 69,
+    "rows_scanned": 149,
     "summary_1d": {
       "accuracy": 0.6,
       "avg_return_1d": 0.0071,
