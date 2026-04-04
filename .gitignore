@@ -9,3 +9,5 @@ data/decision_events.jsonl
 data/decision_training_snapshot.jsonl
 data/*.parquet
 .venv/
+data/
+data/
