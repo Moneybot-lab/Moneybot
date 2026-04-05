@@ -298,6 +298,14 @@ DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS=43200
 
 Instead of running many day scripts manually, use these wrappers:
 
+All runtime artifacts/logs now use:
+
+```bash
+MONEYBOT_PERSISTENT_DATA_DIR=/path/to/persistent/data
+```
+
+When unset, defaults remain `data/`.
+
 ### Daily (single command)
 
 ```bash

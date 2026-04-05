@@ -133,6 +133,31 @@ def _parse_int_env(name: str, default: int) -> int:
         raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
 
 
+def _parse_symbol_set(raw: str | None) -> set[str]:
+    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
+
+
+def _runtime_data_path(filename: str) -> str:
+    base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
+    os.makedirs(base_dir, exist_ok=True)
+    return os.path.join(base_dir, filename)
+
+
+def _parse_int_env(name: str, default: int) -> int:
+    raw = str(os.environ.get(name, default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        if "=" in raw:
+            maybe_value = raw.rsplit("=", 1)[-1].strip()
+            if maybe_value:
+                try:
+                    return int(maybe_value)
+                except ValueError:
+                    pass
+        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
+
+
 def _resolve_database_url() -> str:
     # Prefer explicit DATABASE_URL, but support common provider aliases used on hosted platforms.
     raw_database_url = (
@@ -257,10 +282,16 @@ def create_app() -> Flask:
         DETERMINISTIC_ROLLOUT_BLOCKLIST=_parse_symbol_set(os.environ.get("DETERMINISTIC_ROLLOUT_BLOCKLIST", "")),
         DETERMINISTIC_ROLLOUT_DRY_RUN=(os.environ.get("DETERMINISTIC_ROLLOUT_DRY_RUN", "false").lower() == "true"),
         DECISION_LOGGING_ENABLED=(os.environ.get("DECISION_LOGGING_ENABLED", "true").lower() == "true"),
-        DECISION_LOG_PATH=os.environ.get("DECISION_LOG_PATH", "data/decision_events.jsonl"),
-        DECISION_OUTCOMES_SNAPSHOT_PATH=os.environ.get("DECISION_OUTCOMES_SNAPSHOT_PATH", "data/decision_outcomes_snapshot.json"),
+        DECISION_LOG_PATH=os.environ.get("DECISION_LOG_PATH", _runtime_data_path("decision_events.jsonl")),
+        DECISION_OUTCOMES_SNAPSHOT_PATH=os.environ.get(
+            "DECISION_OUTCOMES_SNAPSHOT_PATH",
+            _runtime_data_path("decision_outcomes_snapshot.json"),
+        ),
         DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS=int(os.environ.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")),
-        DETERMINISTIC_CALIBRATION_REPORT_PATH=os.environ.get("DETERMINISTIC_CALIBRATION_REPORT_PATH", "data/day13_calibration_report.json"),
+        DETERMINISTIC_CALIBRATION_REPORT_PATH=os.environ.get(
+            "DETERMINISTIC_CALIBRATION_REPORT_PATH",
+            _runtime_data_path("day13_calibration_report.json"),
+        ),
         DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS=_parse_int_env("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", 43200),
     )
 

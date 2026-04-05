@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import smtplib
 import subprocess
 import time
@@ -31,6 +32,12 @@ from .services.outcome_tracking import close_values, evaluate_decision_events, s
 
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
+
+
+def _runtime_data_path(filename: str) -> str:
+    base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
+    os.makedirs(base_dir, exist_ok=True)
+    return os.path.join(base_dir, filename)
 
 
 def _load_materialized_outcomes_snapshot(path: str, *, max_age_seconds: int) -> dict[str, Any] | None:
@@ -1025,7 +1032,7 @@ def run_daily_ops():
         return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
 
     project_root = Path(__file__).resolve().parents[1]
-    command = ["python3", "scripts/run_daily_ops.py", "--input-log", "data/decision_events.jsonl"]
+    command = ["python3", "scripts/run_daily_ops.py", "--input-log", _runtime_data_path("decision_events.jsonl")]
     logging.info("Running daily ops command via protected API endpoint.")
     try:
         completed = subprocess.run(
@@ -1146,7 +1153,7 @@ def decision_log_summary():
     output_path = (
         getattr(decision_logger, "output_path", None)
         or current_app.config.get("DECISION_LOG_PATH")
-        or "data/decision_events.jsonl"
+        or _runtime_data_path("decision_events.jsonl")
     )
     summary = summarize_decision_events(str(output_path), limit=limit)
     normalized_summary = _normalized_decision_summary(
@@ -1168,7 +1175,7 @@ def decision_outcomes():
     except ValueError:
         return jsonify({"error": "limit must be an integer", "request_id": g.request_id}), 400
 
-    snapshot_path = current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_PATH") or "data/decision_outcomes_snapshot.json"
+    snapshot_path = current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_PATH") or _runtime_data_path("decision_outcomes_snapshot.json")
     snapshot_max_age_seconds = int(current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS") or 900)
     if not force_live:
         snapshot = _load_materialized_outcomes_snapshot(
@@ -1192,7 +1199,7 @@ def decision_outcomes():
     output_path = (
         getattr(decision_logger, "output_path", None)
         or current_app.config.get("DECISION_LOG_PATH")
-        or "data/decision_events.jsonl"
+        or _runtime_data_path("decision_events.jsonl")
     )
     lookup_cache: dict[tuple[str, int, int], float | None] = {}
     cache_hits = 0

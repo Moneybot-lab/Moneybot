@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import math
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -146,9 +147,11 @@ def calibration_summary(rows: list[dict], *, bins: int = 10) -> dict:
 
 
 def main() -> None:
+    base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
+    os.makedirs(base_dir, exist_ok=True)
     parser = argparse.ArgumentParser(description="Build Day-13 deterministic calibration diagnostics report.")
-    parser.add_argument("--input", default="data/decision_events.jsonl")
-    parser.add_argument("--output", default="data/day13_calibration_report.json")
+    parser.add_argument("--input", default=os.path.join(base_dir, "decision_events.jsonl"))
+    parser.add_argument("--output", default=os.path.join(base_dir, "day13_calibration_report.json"))
     parser.add_argument("--limit", type=int, default=1000)
     parser.add_argument("--horizon-days", type=int, default=5)
     parser.add_argument("--bins", type=int, default=10)

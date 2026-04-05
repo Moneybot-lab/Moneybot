@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -39,8 +40,10 @@ def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
 
 
 def main() -> None:
+    base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
+    os.makedirs(base_dir, exist_ok=True)
     parser = argparse.ArgumentParser(description="Evaluate logged recommendations against later price moves.")
-    parser.add_argument("--input", default="data/decision_events.jsonl")
+    parser.add_argument("--input", default=os.path.join(base_dir, "decision_events.jsonl"))
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--output", default="")
     args = parser.parse_args()

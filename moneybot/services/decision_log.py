@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections import Counter
 from pathlib import Path
@@ -64,9 +65,11 @@ def summarize_decision_events(path: str, *, limit: int = 200) -> Dict[str, Any]:
 class DecisionLogger:
     """Lightweight decision telemetry logger (optional JSONL + in-memory counters)."""
 
-    def __init__(self, *, enabled: bool = True, output_path: str = "data/decision_events.jsonl"):
+    def __init__(self, *, enabled: bool = True, output_path: str | None = None):
         self.enabled = bool(enabled)
-        self.output_path = output_path
+        base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
+        os.makedirs(base_dir, exist_ok=True)
+        self.output_path = output_path or os.path.join(base_dir, "decision_events.jsonl")
         self._lock = Lock()
         self._source_counts: dict[str, int] = {}
         self._endpoint_counts: dict[str, int] = {}

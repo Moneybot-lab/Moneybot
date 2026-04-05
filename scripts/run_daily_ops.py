@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,7 @@ def build_daily_ops_commands(
     outcomes_rows_limit: int,
     calibration_limit: int,
     horizon_days: int,
+    base_dir: str,
 ) -> list[list[str]]:
     scripts_dir = project_root / "scripts"
     return [
@@ -28,7 +30,7 @@ def build_daily_ops_commands(
             "--limit",
             str(summary_limit),
             "--output",
-            "data/day7_decision_log_summary.json",
+            os.path.join(base_dir, "day7_decision_log_summary.json"),
         ],
         [
             python_executable,
@@ -36,7 +38,7 @@ def build_daily_ops_commands(
             "--input",
             input_log,
             "--output",
-            "data/decision_outcomes_snapshot.json",
+            os.path.join(base_dir, "decision_outcomes_snapshot.json"),
             "--limit",
             str(outcomes_limit),
             "--rows-limit",
@@ -48,7 +50,7 @@ def build_daily_ops_commands(
             "--input",
             input_log,
             "--output",
-            "data/day13_calibration_report.json",
+            os.path.join(base_dir, "day13_calibration_report.json"),
             "--limit",
             str(calibration_limit),
             "--horizon-days",
@@ -58,30 +60,32 @@ def build_daily_ops_commands(
             python_executable,
             str(scripts_dir / "day13_recalibrate.py"),
             "--report",
-            "data/day13_calibration_report.json",
+            os.path.join(base_dir, "day13_calibration_report.json"),
             "--output",
-            "data/day13_recalibration_plan.json",
+            os.path.join(base_dir, "day13_recalibration_plan.json"),
         ],
         [
             python_executable,
             str(scripts_dir / "autofill_daily_report.py"),
             "--summary",
-            "data/day7_decision_log_summary.json",
+            os.path.join(base_dir, "day7_decision_log_summary.json"),
             "--outcomes",
-            "data/decision_outcomes_snapshot.json",
+            os.path.join(base_dir, "decision_outcomes_snapshot.json"),
             "--calibration",
-            "data/day13_calibration_report.json",
+            os.path.join(base_dir, "day13_calibration_report.json"),
             "--plan",
-            "data/day13_recalibration_plan.json",
+            os.path.join(base_dir, "day13_recalibration_plan.json"),
             "--output",
-            "data/daily_report.md",
+            os.path.join(base_dir, "daily_report.md"),
         ],
     ]
 
 
 def main() -> None:
+    base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
+    os.makedirs(base_dir, exist_ok=True)
     parser = argparse.ArgumentParser(description="Run daily Moneybot ops scripts in one command.")
-    parser.add_argument("--input-log", default="data/decision_events.jsonl")
+    parser.add_argument("--input-log", default=os.path.join(base_dir, "decision_events.jsonl"))
     parser.add_argument("--summary-limit", type=int, default=200)
     parser.add_argument("--outcomes-limit", type=int, default=2000)
     parser.add_argument("--outcomes-rows-limit", type=int, default=20)
@@ -99,9 +103,10 @@ def main() -> None:
         outcomes_rows_limit=max(1, args.outcomes_rows_limit),
         calibration_limit=max(1, args.calibration_limit),
         horizon_days=max(1, args.horizon_days),
+        base_dir=base_dir,
     )
 
-    Path("data").mkdir(parents=True, exist_ok=True)
+    Path(base_dir).mkdir(parents=True, exist_ok=True)
     for command in commands:
         print("Running:", " ".join(command))
         subprocess.run(command, check=True)

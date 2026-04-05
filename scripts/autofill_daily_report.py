@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,12 +84,14 @@ def build_daily_report_markdown(
 
 
 def main() -> None:
+    base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
+    os.makedirs(base_dir, exist_ok=True)
     parser = argparse.ArgumentParser(description="Generate a markdown daily ops report from current artifacts.")
-    parser.add_argument("--summary", default="data/day7_decision_log_summary.json")
-    parser.add_argument("--outcomes", default="data/decision_outcomes_snapshot.json")
-    parser.add_argument("--calibration", default="data/day13_calibration_report.json")
-    parser.add_argument("--plan", default="data/day13_recalibration_plan.json")
-    parser.add_argument("--output", default="data/daily_report.md")
+    parser.add_argument("--summary", default=os.path.join(base_dir, "day7_decision_log_summary.json"))
+    parser.add_argument("--outcomes", default=os.path.join(base_dir, "decision_outcomes_snapshot.json"))
+    parser.add_argument("--calibration", default=os.path.join(base_dir, "day13_calibration_report.json"))
+    parser.add_argument("--plan", default=os.path.join(base_dir, "day13_recalibration_plan.json"))
+    parser.add_argument("--output", default=os.path.join(base_dir, "daily_report.md"))
     parser.add_argument("--git-limit", type=int, default=5)
     args = parser.parse_args()
 

@@ -13,6 +13,7 @@ def test_build_daily_ops_commands_includes_autofill_and_expected_scripts():
         outcomes_rows_limit=20,
         calibration_limit=1000,
         horizon_days=5,
+        base_dir="data",
     )
 
     assert commands[0][:2] == ["python3", "/tmp/Moneybot/scripts/day7_decision_log_summary.py"]

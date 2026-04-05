@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -39,9 +40,11 @@ def build_recalibration_plan(
 
 
 def main() -> None:
+    base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
+    os.makedirs(base_dir, exist_ok=True)
     parser = argparse.ArgumentParser(description="Create Day-13 deterministic recalibration plan from report JSON.")
-    parser.add_argument("--report", default="data/day13_calibration_report.json")
-    parser.add_argument("--output", default="data/day13_recalibration_plan.json")
+    parser.add_argument("--report", default=os.path.join(base_dir, "day13_calibration_report.json"))
+    parser.add_argument("--output", default=os.path.join(base_dir, "day13_recalibration_plan.json"))
     parser.add_argument("--current-slope", type=float, default=1.0)
     parser.add_argument("--current-intercept", type=float, default=0.0)
     parser.add_argument("--max-intercept-step", type=float, default=0.2)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -14,10 +15,12 @@ from moneybot.services.decision_log import summarize_decision_events
 
 
 def main() -> None:
+    base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
+    os.makedirs(base_dir, exist_ok=True)
     parser = argparse.ArgumentParser(description="Summarize recent Moneybot decision log activity.")
     parser.add_argument(
         "--input",
-        default="data/decision_events.jsonl",
+        default=os.path.join(base_dir, "decision_events.jsonl"),
         help="Path to the JSONL decision log file.",
     )
     parser.add_argument(
