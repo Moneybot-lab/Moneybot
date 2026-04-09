@@ -14,6 +14,10 @@ from .services.decision_log import DecisionLogger
 from .services.deterministic_advisor import DeterministicQuickAdvisor
 from .services.market_data import MarketDataService
 from .services.runtime_paths import (
+    day13_calibration_report_path,
+    day13_recalibration_plan_path,
+    decision_events_log_path,
+    decision_outcomes_snapshot_path,
     is_durable_runtime_configured,
     resolve_runtime_dir,
 )
@@ -282,17 +286,26 @@ def create_app() -> Flask:
         DETERMINISTIC_ROLLOUT_BLOCKLIST=_parse_symbol_set(os.environ.get("DETERMINISTIC_ROLLOUT_BLOCKLIST", "")),
         DETERMINISTIC_ROLLOUT_DRY_RUN=(os.environ.get("DETERMINISTIC_ROLLOUT_DRY_RUN", "false").lower() == "true"),
         DECISION_LOGGING_ENABLED=(os.environ.get("DECISION_LOGGING_ENABLED", "true").lower() == "true"),
-        DECISION_LOG_PATH=os.environ.get("DECISION_LOG_PATH", _runtime_data_path("decision_events.jsonl")),
+        DECISION_LOG_PATH=os.environ.get("DECISION_LOG_PATH", str(decision_events_log_path())),
         DECISION_OUTCOMES_SNAPSHOT_PATH=os.environ.get(
             "DECISION_OUTCOMES_SNAPSHOT_PATH",
-            _runtime_data_path("decision_outcomes_snapshot.json"),
+            str(decision_outcomes_snapshot_path()),
         ),
         DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS=int(os.environ.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")),
         DETERMINISTIC_CALIBRATION_REPORT_PATH=os.environ.get(
             "DETERMINISTIC_CALIBRATION_REPORT_PATH",
-            _runtime_data_path("day13_calibration_report.json"),
+            str(day13_calibration_report_path()),
         ),
         DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS=_parse_int_env("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", 43200),
+    )
+    calibration_report = day13_calibration_report_path()
+    recalibration_plan = day13_recalibration_plan_path()
+    logging.info(
+        "Resolved model-ops diagnostics paths calibration_report_path=%s exists=%s recalibration_plan_path=%s exists=%s",
+        calibration_report,
+        calibration_report.exists(),
+        recalibration_plan,
+        recalibration_plan.exists(),
     )
 
     app.extensions["ai_advisor_service"] = AIAdvisorService(
