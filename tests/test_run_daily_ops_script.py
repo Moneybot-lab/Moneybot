@@ -13,9 +13,11 @@ def test_build_daily_ops_commands_includes_autofill_and_expected_scripts():
         outcomes_rows_limit=20,
         calibration_limit=1000,
         horizon_days=5,
-        base_dir="data",
+        base_dir=Path("data"),
     )
 
     assert commands[0][:2] == ["python3", "/tmp/Moneybot/scripts/day7_decision_log_summary.py"]
     assert "--output" in commands[0]
+    assert "data/day13_calibration_report.json" in commands[2]
+    assert "data/day13_recalibration_plan.json" in commands[3]
     assert commands[-1][:2] == ["python3", "/tmp/Moneybot/scripts/autofill_daily_report.py"]
