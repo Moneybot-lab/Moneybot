@@ -9,5 +9,17 @@ data/decision_events.jsonl
 data/decision_training_snapshot.jsonl
 data/*.parquet
 .venv/
-data/
-data/
+# Ignore data by default
+data/*
+
+# Allow tracked runtime artifacts
+!data/day1_baseline_model.json
+!data/day1_baseline_model.json.meta.json
+!data/day1_baseline_model.json.history.json
+!data/decision_events.jsonl
+!data/decision_outcomes_snapshot.json
+!data/day13_calibration_report.json
+!data/day13_recalibration_plan.json
+
+# Still ignore archive folder
+data/decision-log-archive/
