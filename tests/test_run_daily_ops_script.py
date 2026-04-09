@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from scripts.run_daily_ops import build_daily_ops_commands
@@ -21,3 +24,24 @@ def test_build_daily_ops_commands_includes_autofill_and_expected_scripts():
     assert "data/day13_calibration_report.json" in commands[2]
     assert "data/day13_recalibration_plan.json" in commands[3]
     assert commands[-1][:2] == ["python3", "/tmp/Moneybot/scripts/autofill_daily_report.py"]
+
+
+def test_day13_scripts_bootstrap_project_root_for_imports(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+
+    for script in [
+        "scripts/run_daily_ops.py",
+        "scripts/day13_recalibrate.py",
+        "scripts/autofill_daily_report.py",
+    ]:
+        completed = subprocess.run(
+            [sys.executable, str(repo_root / script), "--help"],
+            cwd=str(tmp_path),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+        )
+        assert completed.returncode == 0, f"{script} failed to import with stderr={completed.stderr}"
