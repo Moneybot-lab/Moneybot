@@ -2,10 +2,21 @@
 from __future__ import annotations
 
 import argparse
-import os
+import logging
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+
+from moneybot.services.runtime_paths import (
+    day13_calibration_report_path,
+    day13_recalibration_plan_path,
+    resolve_runtime_dir,
+)
+
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+LOGGER = logging.getLogger(__name__)
 
 
 def build_daily_ops_commands(
@@ -18,7 +29,7 @@ def build_daily_ops_commands(
     outcomes_rows_limit: int,
     calibration_limit: int,
     horizon_days: int,
-    base_dir: str,
+    base_dir: Path,
 ) -> list[list[str]]:
     scripts_dir = project_root / "scripts"
     return [
@@ -30,7 +41,7 @@ def build_daily_ops_commands(
             "--limit",
             str(summary_limit),
             "--output",
-            os.path.join(base_dir, "day7_decision_log_summary.json"),
+            str(base_dir / "day7_decision_log_summary.json"),
         ],
         [
             python_executable,
@@ -38,7 +49,7 @@ def build_daily_ops_commands(
             "--input",
             input_log,
             "--output",
-            os.path.join(base_dir, "decision_outcomes_snapshot.json"),
+            str(base_dir / "decision_outcomes_snapshot.json"),
             "--limit",
             str(outcomes_limit),
             "--rows-limit",
@@ -50,7 +61,7 @@ def build_daily_ops_commands(
             "--input",
             input_log,
             "--output",
-            os.path.join(base_dir, "day13_calibration_report.json"),
+            str(day13_calibration_report_path()),
             "--limit",
             str(calibration_limit),
             "--horizon-days",
@@ -60,32 +71,41 @@ def build_daily_ops_commands(
             python_executable,
             str(scripts_dir / "day13_recalibrate.py"),
             "--report",
-            os.path.join(base_dir, "day13_calibration_report.json"),
+            str(day13_calibration_report_path()),
             "--output",
-            os.path.join(base_dir, "day13_recalibration_plan.json"),
+            str(day13_recalibration_plan_path()),
         ],
         [
             python_executable,
             str(scripts_dir / "autofill_daily_report.py"),
             "--summary",
-            os.path.join(base_dir, "day7_decision_log_summary.json"),
+            str(base_dir / "day7_decision_log_summary.json"),
             "--outcomes",
-            os.path.join(base_dir, "decision_outcomes_snapshot.json"),
+            str(base_dir / "decision_outcomes_snapshot.json"),
             "--calibration",
-            os.path.join(base_dir, "day13_calibration_report.json"),
+            str(day13_calibration_report_path()),
             "--plan",
-            os.path.join(base_dir, "day13_recalibration_plan.json"),
+            str(day13_recalibration_plan_path()),
             "--output",
-            os.path.join(base_dir, "daily_report.md"),
+            str(base_dir / "daily_report.md"),
         ],
     ]
 
 
+def _log_file_state(label: str, path: Path) -> None:
+    exists = path.exists()
+    LOGGER.info("%s path=%s exists=%s", label, path, exists)
+    if not exists:
+        return
+    stat = path.stat()
+    modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+    LOGGER.info("%s file_size_bytes=%s modified_utc=%s", label, stat.st_size, modified)
+
+
 def main() -> None:
-    base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
-    os.makedirs(base_dir, exist_ok=True)
+    base_dir = resolve_runtime_dir()
     parser = argparse.ArgumentParser(description="Run daily Moneybot ops scripts in one command.")
-    parser.add_argument("--input-log", default=os.path.join(base_dir, "decision_events.jsonl"))
+    parser.add_argument("--input-log", default=str(base_dir / "decision_events.jsonl"))
     parser.add_argument("--summary-limit", type=int, default=200)
     parser.add_argument("--outcomes-limit", type=int, default=2000)
     parser.add_argument("--outcomes-rows-limit", type=int, default=20)
@@ -106,10 +126,35 @@ def main() -> None:
         base_dir=base_dir,
     )
 
-    Path(base_dir).mkdir(parents=True, exist_ok=True)
+    calibration_report = day13_calibration_report_path()
+    recalibration_plan = day13_recalibration_plan_path()
+    LOGGER.info("Resolved daily ops runtime base_dir=%s", base_dir)
+    LOGGER.info("Resolved Day 13 calibration_report_path=%s", calibration_report)
+    LOGGER.info("Resolved Day 13 recalibration_plan_path=%s", recalibration_plan)
+
     for command in commands:
-        print("Running:", " ".join(command))
-        subprocess.run(command, check=True)
+        script_name = Path(command[1]).name if len(command) > 1 else "unknown"
+        LOGGER.info("Running daily ops script=%s command=%s", script_name, " ".join(command))
+        completed = subprocess.run(command, capture_output=True, text=True, check=False)
+        if completed.stdout:
+            LOGGER.info("Script stdout (%s): %s", script_name, completed.stdout.strip())
+        if completed.returncode != 0:
+            if completed.stderr:
+                LOGGER.error("Script stderr (%s): %s", script_name, completed.stderr.strip())
+            raise subprocess.CalledProcessError(
+                returncode=completed.returncode,
+                cmd=command,
+                output=completed.stdout,
+                stderr=completed.stderr,
+            )
+        if completed.stderr:
+            LOGGER.warning("Script stderr (%s): %s", script_name, completed.stderr.strip())
+
+        if script_name == "day13_calibration_report.py":
+            _log_file_state("After day13_calibration_report", calibration_report)
+        if script_name == "day13_recalibrate.py":
+            _log_file_state("After day13_recalibrate calibration_report", calibration_report)
+            _log_file_state("After day13_recalibrate recalibration_plan", recalibration_plan)
 
 
 if __name__ == "__main__":
