@@ -3,11 +3,22 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from moneybot.services.runtime_paths import (
+    day13_calibration_report_path,
+    day13_recalibration_plan_path,
+    decision_outcomes_snapshot_path,
+    resolve_runtime_dir,
+)
 
 
 def _load_json(path: str) -> dict[str, Any]:
@@ -84,14 +95,13 @@ def build_daily_report_markdown(
 
 
 def main() -> None:
-    base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
-    os.makedirs(base_dir, exist_ok=True)
+    base_dir = resolve_runtime_dir()
     parser = argparse.ArgumentParser(description="Generate a markdown daily ops report from current artifacts.")
-    parser.add_argument("--summary", default=os.path.join(base_dir, "day7_decision_log_summary.json"))
-    parser.add_argument("--outcomes", default=os.path.join(base_dir, "decision_outcomes_snapshot.json"))
-    parser.add_argument("--calibration", default=os.path.join(base_dir, "day13_calibration_report.json"))
-    parser.add_argument("--plan", default=os.path.join(base_dir, "day13_recalibration_plan.json"))
-    parser.add_argument("--output", default=os.path.join(base_dir, "daily_report.md"))
+    parser.add_argument("--summary", default=str(base_dir / "day7_decision_log_summary.json"))
+    parser.add_argument("--outcomes", default=str(decision_outcomes_snapshot_path()))
+    parser.add_argument("--calibration", default=str(day13_calibration_report_path()))
+    parser.add_argument("--plan", default=str(day13_recalibration_plan_path()))
+    parser.add_argument("--output", default=str(base_dir / "daily_report.md"))
     parser.add_argument("--git-limit", type=int, default=5)
     args = parser.parse_args()
 
