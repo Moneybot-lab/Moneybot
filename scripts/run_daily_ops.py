@@ -111,6 +111,16 @@ def _log_file_state(label: str, path: Path) -> None:
     LOGGER.info("%s file_size_bytes=%s modified_utc=%s", label, stat.st_size, modified)
 
 
+def _log_file_state(label: str, path: Path) -> None:
+    exists = path.exists()
+    LOGGER.info("%s path=%s exists=%s", label, path, exists)
+    if not exists:
+        return
+    stat = path.stat()
+    modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+    LOGGER.info("%s file_size_bytes=%s modified_utc=%s", label, stat.st_size, modified)
+
+
 def main() -> None:
     base_dir = resolve_runtime_dir()
     parser = argparse.ArgumentParser(description="Run daily Moneybot ops scripts in one command.")
