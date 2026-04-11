@@ -34,9 +34,13 @@ def build_daily_ops_commands(
     calibration_limit: int,
     horizon_days: int,
     base_dir: Path,
+    include_day1_refresh: bool = True,
 ) -> list[list[str]]:
     scripts_dir = project_root / "scripts"
-    return [
+    commands: list[list[str]] = []
+    if include_day1_refresh:
+        commands.append([python_executable, str(scripts_dir / "day1_refresh_artifact.py")])
+    commands.extend([
         [
             python_executable,
             str(scripts_dir / "day7_decision_log_summary.py"),
@@ -93,7 +97,18 @@ def build_daily_ops_commands(
             "--output",
             str(base_dir / "daily_report.md"),
         ],
-    ]
+    ])
+    return commands
+
+
+def _log_file_state(label: str, path: Path) -> None:
+    exists = path.exists()
+    LOGGER.info("%s path=%s exists=%s", label, path, exists)
+    if not exists:
+        return
+    stat = path.stat()
+    modified = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+    LOGGER.info("%s file_size_bytes=%s modified_utc=%s", label, stat.st_size, modified)
 
 
 def _log_file_state(label: str, path: Path) -> None:
@@ -115,6 +130,11 @@ def main() -> None:
     parser.add_argument("--outcomes-rows-limit", type=int, default=20)
     parser.add_argument("--calibration-limit", type=int, default=1000)
     parser.add_argument("--horizon-days", type=int, default=5)
+    parser.add_argument(
+        "--skip-day1-refresh",
+        action="store_true",
+        help="Skip day1_refresh_artifact.py (used when already run by another wrapper).",
+    )
     args = parser.parse_args()
 
     project_root = PROJECT_ROOT
@@ -128,6 +148,7 @@ def main() -> None:
         calibration_limit=max(1, args.calibration_limit),
         horizon_days=max(1, args.horizon_days),
         base_dir=base_dir,
+        include_day1_refresh=not args.skip_day1_refresh,
     )
 
     calibration_report = day13_calibration_report_path()
