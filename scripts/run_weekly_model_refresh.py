@@ -17,7 +17,7 @@ def build_weekly_refresh_commands(
     scripts_dir = project_root / "scripts"
     return [
         [python_executable, str(scripts_dir / "day1_refresh_artifact.py")],
-        [python_executable, str(scripts_dir / "run_daily_ops.py"), "--input-log", input_log],
+        [python_executable, str(scripts_dir / "run_daily_ops.py"), "--input-log", input_log, "--skip-day1-refresh"],
     ]
 
 
