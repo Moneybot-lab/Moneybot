@@ -33,6 +33,7 @@ from .services.runtime_paths import (
     day13_calibration_report_path,
     day13_recalibration_plan_path,
     decision_events_log_path,
+    resolve_runtime_dir,
 )
 
 
@@ -1098,6 +1099,65 @@ def run_daily_ops():
                     "returncode": -1,
                     "stdout": "",
                     "stderr": str(exc),
+                },
+                "request_id": g.request_id,
+            }
+        ), 500
+
+
+@api_bp.post("/run-weekly-model-refresh")
+def run_weekly_model_refresh():
+    expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
+    provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
+    if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
+
+    project_root = Path(__file__).resolve().parents[1]
+    runtime_dir = resolve_runtime_dir()
+    calibration_report = day13_calibration_report_path()
+    recalibration_plan = day13_recalibration_plan_path()
+    command = ["python3", "scripts/run_weekly_model_refresh.py"]
+    logging.info("Running weekly model refresh command via protected API endpoint.")
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        report_diag = _file_diagnostics(calibration_report)
+        plan_diag = _file_diagnostics(recalibration_plan)
+        return jsonify(
+            {
+                "data": {
+                    "success": completed.returncode == 0,
+                    "command": command,
+                    "exit_code": completed.returncode,
+                    "returncode": completed.returncode,
+                    "stdout": completed.stdout,
+                    "stderr": completed.stderr,
+                    "runtime_dir": str(runtime_dir),
+                    "calibration_report_path": report_diag["path"],
+                    "calibration_report_exists": report_diag["exists"],
+                    "recalibration_plan_path": plan_diag["path"],
+                    "recalibration_plan_exists": plan_diag["exists"],
+                },
+                "request_id": g.request_id,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.exception("run-weekly-model-refresh failed to execute.")
+        return jsonify(
+            {
+                "data": {
+                    "success": False,
+                    "command": command,
+                    "exit_code": -1,
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": str(exc),
+                    "runtime_dir": str(runtime_dir),
                 },
                 "request_id": g.request_id,
             }
