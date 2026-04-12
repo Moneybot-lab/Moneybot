@@ -228,6 +228,7 @@ def test_model_health_includes_artifact_metadata_history(tmp_path, monkeypatch):
 
 def test_model_health_includes_fresh_calibration_report(tmp_path, monkeypatch):
     report_path = tmp_path / "day13_calibration_report.json"
+    plan_path = tmp_path / "day13_recalibration_plan.json"
     report_path.write_text(
         json.dumps(
             {
@@ -239,7 +240,17 @@ def test_model_health_includes_fresh_calibration_report(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("DETERMINISTIC_CALIBRATION_REPORT_PATH", str(report_path))
+    plan_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "calibration_recalibration_plan.v1",
+                "computed_at_utc": datetime.now(timezone.utc).isoformat(),
+                "apply_change": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", "3600")
 
     client = _client()
@@ -248,6 +259,28 @@ def test_model_health_includes_fresh_calibration_report(tmp_path, monkeypatch):
     data = res.get_json()["data"]
     assert data["calibration_report"] is not None
     assert data["calibration_report"]["brier_score"] == 0.19
+    assert data["calibration_report_path"] == str(report_path)
+    assert data["calibration_report_exists"] is True
+    assert data["recalibration_plan_path"] == str(plan_path)
+    assert data["recalibration_plan_exists"] is True
+    assert data["calibration_report_mtime_utc"] is not None
+    assert data["recalibration_plan_mtime_utc"] is not None
+
+
+def test_model_health_reports_missing_calibration_and_plan(monkeypatch, tmp_path):
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
+    client = _client()
+
+    res = client.get("/api/model-health")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["calibration_report_path"] == str(tmp_path / "day13_calibration_report.json")
+    assert data["calibration_report_exists"] is False
+    assert data["recalibration_plan_path"] == str(tmp_path / "day13_recalibration_plan.json")
+    assert data["recalibration_plan_exists"] is False
+    assert data["calibration_report_mtime_utc"] is None
+    assert data["recalibration_plan_mtime_utc"] is None
 
 
 def test_quick_ask_logs_shadow_decision_in_rollout_dry_run():
@@ -285,7 +318,17 @@ def test_run_daily_ops_requires_token():
     assert res.get_json()["error"] == "unauthorized"
 
 
-def test_run_daily_ops_executes_and_returns_output(monkeypatch):
+def test_run_weekly_model_refresh_requires_token():
+    client = _client()
+    client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
+
+    res = client.post("/api/run-weekly-model-refresh")
+
+    assert res.status_code == 401
+    assert res.get_json()["error"] == "unauthorized"
+
+
+def test_run_daily_ops_executes_and_returns_output(monkeypatch, tmp_path):
     class Completed:
         returncode = 0
         stdout = "ok"
@@ -300,6 +343,7 @@ def test_run_daily_ops_executes_and_returns_output(monkeypatch):
         return Completed()
 
     monkeypatch.setattr(api_module.subprocess, "run", fake_run)
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
 
     client = _client()
     client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
@@ -311,6 +355,111 @@ def test_run_daily_ops_executes_and_returns_output(monkeypatch):
     assert payload["returncode"] == 0
     assert payload["stdout"] == "ok"
     assert payload["stderr"] == ""
+    assert payload["calibration_report_path"] == str(tmp_path / "day13_calibration_report.json")
+    assert payload["calibration_report_exists"] is False
+    assert payload["recalibration_plan_path"] == str(tmp_path / "day13_recalibration_plan.json")
+    assert payload["recalibration_plan_exists"] is False
+    assert payload["day13_stderr"] == ""
+
+
+def test_run_weekly_model_refresh_executes_and_returns_output(monkeypatch, tmp_path):
+    class Completed:
+        returncode = 0
+        stdout = "weekly ok"
+        stderr = ""
+
+    def fake_run(command, cwd, capture_output, text, check):
+        assert command == ["python3", "scripts/run_weekly_model_refresh.py"]
+        assert capture_output is True
+        assert text is True
+        assert check is False
+        assert cwd.endswith("/Moneybot")
+        return Completed()
+
+    monkeypatch.setattr(api_module.subprocess, "run", fake_run)
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
+
+    client = _client()
+    client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
+    res = client.post("/api/run-weekly-model-refresh", headers={"X-Daily-Ops-Token": "secret-token"})
+
+    assert res.status_code == 200
+    payload = res.get_json()["data"]
+    assert payload["success"] is True
+    assert payload["command"] == ["python3", "scripts/run_weekly_model_refresh.py"]
+    assert payload["exit_code"] == 0
+    assert payload["returncode"] == 0
+    assert payload["stdout"] == "weekly ok"
+    assert payload["stderr"] == ""
+    assert payload["runtime_dir"] == str(tmp_path)
+    assert payload["calibration_report_path"] == str(tmp_path / "day13_calibration_report.json")
+    assert payload["calibration_report_exists"] is False
+    assert payload["recalibration_plan_path"] == str(tmp_path / "day13_recalibration_plan.json")
+    assert payload["recalibration_plan_exists"] is False
+
+
+def test_run_daily_ops_reports_day13_paths_in_runtime_dir_when_files_exist(monkeypatch, tmp_path):
+    report_path = tmp_path / "day13_calibration_report.json"
+    plan_path = tmp_path / "day13_recalibration_plan.json"
+    report_path.write_text("{}", encoding="utf-8")
+    plan_path.write_text("{}", encoding="utf-8")
+
+    class Completed:
+        returncode = 1
+        stdout = ""
+        stderr = "Script stderr (day13_calibration_report.py): boom"
+
+    def fake_run(command, cwd, capture_output, text, check):
+        assert command[-1] == str(tmp_path / "decision_events.jsonl")
+        return Completed()
+
+    monkeypatch.setattr(api_module.subprocess, "run", fake_run)
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
+
+    client = _client()
+    client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
+    res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token"})
+
+    assert res.status_code == 200
+    payload = res.get_json()["data"]
+    assert payload["success"] is False
+    assert payload["calibration_report_path"] == str(report_path)
+    assert payload["calibration_report_exists"] is True
+    assert payload["recalibration_plan_path"] == str(plan_path)
+    assert payload["recalibration_plan_exists"] is True
+    assert "day13_calibration_report.py" in payload["day13_stderr"]
+
+
+def test_run_weekly_model_refresh_reports_diagnostics_when_files_exist(monkeypatch, tmp_path):
+    report_path = tmp_path / "day13_calibration_report.json"
+    plan_path = tmp_path / "day13_recalibration_plan.json"
+    report_path.write_text("{}", encoding="utf-8")
+    plan_path.write_text("{}", encoding="utf-8")
+
+    class Completed:
+        returncode = 1
+        stdout = ""
+        stderr = "weekly failed"
+
+    def fake_run(command, cwd, capture_output, text, check):
+        return Completed()
+
+    monkeypatch.setattr(api_module.subprocess, "run", fake_run)
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
+
+    client = _client()
+    client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
+    res = client.post("/api/run-weekly-model-refresh", headers={"X-Daily-Ops-Token": "secret-token"})
+
+    assert res.status_code == 200
+    payload = res.get_json()["data"]
+    assert payload["success"] is False
+    assert payload["exit_code"] == 1
+    assert payload["runtime_dir"] == str(tmp_path)
+    assert payload["calibration_report_path"] == str(report_path)
+    assert payload["calibration_report_exists"] is True
+    assert payload["recalibration_plan_path"] == str(plan_path)
+    assert payload["recalibration_plan_exists"] is True
 
 
 def test_decision_log_summary_reports_recent_counts(tmp_path, monkeypatch):

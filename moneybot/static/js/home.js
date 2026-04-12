@@ -223,8 +223,13 @@ const fallbackData = {
                     const ruleCount = Number(sourceCounts.rule_based || 0);
                     const total = Number(summary.events_considered || 0);
                     const calibrationReport = health.calibration_report || {};
+                    const calibrationReportExists = Boolean(health.calibration_report_exists);
                     const brierScore = typeof calibrationReport.brier_score === 'number' ? calibrationReport.brier_score : null;
-                    const calibrationStatus = brierScore == null ? 'No report' : (brierScore <= 0.22 ? 'Healthy' : 'Drifting');
+                    const calibrationRows = Number(calibrationReport.rows || 0);
+                    const hasCalibrationPayload = calibrationReportExists || Object.keys(calibrationReport).length > 0;
+                    const calibrationStatus = !hasCalibrationPayload
+                      ? 'No report'
+                      : (brierScore == null ? 'Pending maturity' : (brierScore <= 0.22 ? 'Healthy' : 'Drifting'));
                     const cards = [
                       {
                         label: 'Model status',
@@ -248,10 +253,12 @@ const fallbackData = {
                       },
                       {
                         label: 'Calibration',
-                        value: opsBadge(calibrationStatus, calibrationStatus === 'Healthy'),
-                        detail: brierScore == null
+                        value: opsBadge(calibrationStatus, calibrationStatus === 'Healthy' || calibrationStatus === 'Pending maturity'),
+                        detail: !hasCalibrationPayload
                           ? 'Run day13_calibration_report.py to populate diagnostics.'
-                          : `Brier ${brierScore.toFixed(4)} · rows ${calibrationReport.rows || 0}`,
+                          : (brierScore == null
+                            ? `Report loaded · ${calibrationRows} mature rows available for scoring`
+                            : `Brier ${brierScore.toFixed(4)} · rows ${calibrationRows}`),
                       },
                     ];
                     document.getElementById('opsCards').innerHTML = cards.map(card => `<article style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:12px"><div style="font-size:12px;font-weight:800;letter-spacing:.06em;color:#4d7c0f;text-transform:uppercase;margin-bottom:8px">${card.label}</div><div>${card.value}</div><div style="margin-top:8px;color:#3f6212">${escapeHtml(card.detail)}</div></article>`).join('');

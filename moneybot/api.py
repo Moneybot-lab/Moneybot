@@ -29,6 +29,12 @@ from .models import SoldTrade, User, WatchlistItem
 from .services.decision_log import read_decision_events, summarize_decision_events
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
 from .services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
+from .services.runtime_paths import (
+    day13_calibration_report_path,
+    day13_recalibration_plan_path,
+    decision_events_log_path,
+    resolve_runtime_dir,
+)
 
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
@@ -38,6 +44,22 @@ def _runtime_data_path(filename: str) -> str:
     base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
     os.makedirs(base_dir, exist_ok=True)
     return os.path.join(base_dir, filename)
+
+
+def _file_diagnostics(path: str | Path) -> dict[str, Any]:
+    file_path = Path(path)
+    exists = file_path.exists()
+    diagnostics: dict[str, Any] = {
+        "path": str(file_path),
+        "exists": exists,
+        "mtime_utc": None,
+    }
+    if not exists:
+        return diagnostics
+    stat = file_path.stat()
+    diagnostics["size_bytes"] = stat.st_size
+    diagnostics["mtime_utc"] = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+    return diagnostics
 
 
 def _load_materialized_outcomes_snapshot(path: str, *, max_age_seconds: int) -> dict[str, Any] | None:
@@ -74,7 +96,11 @@ def _load_fresh_json_payload(path: str, *, max_age_seconds: int) -> dict[str, An
         return None
     try:
         payload = json.loads(file_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError:
+        logging.exception("Failed to read JSON payload at path=%s", file_path)
+        return None
+    except json.JSONDecodeError:
+        logging.exception("Failed to decode JSON payload at path=%s", file_path)
         return None
     if not isinstance(payload, dict):
         return None
@@ -1032,7 +1058,10 @@ def run_daily_ops():
         return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
 
     project_root = Path(__file__).resolve().parents[1]
-    command = ["python3", "scripts/run_daily_ops.py", "--input-log", _runtime_data_path("decision_events.jsonl")]
+    input_log_path = decision_events_log_path()
+    calibration_report = day13_calibration_report_path()
+    recalibration_plan = day13_recalibration_plan_path()
+    command = ["python3", "scripts/run_daily_ops.py", "--input-log", str(input_log_path)]
     logging.info("Running daily ops command via protected API endpoint.")
     try:
         completed = subprocess.run(
@@ -1042,6 +1071,9 @@ def run_daily_ops():
             text=True,
             check=False,
         )
+        report_diag = _file_diagnostics(calibration_report)
+        plan_diag = _file_diagnostics(recalibration_plan)
+        day13_stderr = completed.stderr if (completed.returncode != 0 and "day13_" in completed.stderr) else ""
         return jsonify(
             {
                 "data": {
@@ -1049,6 +1081,11 @@ def run_daily_ops():
                     "returncode": completed.returncode,
                     "stdout": completed.stdout,
                     "stderr": completed.stderr,
+                    "calibration_report_path": report_diag["path"],
+                    "calibration_report_exists": report_diag["exists"],
+                    "recalibration_plan_path": plan_diag["path"],
+                    "recalibration_plan_exists": plan_diag["exists"],
+                    "day13_stderr": day13_stderr,
                 },
                 "request_id": g.request_id,
             }
@@ -1062,6 +1099,65 @@ def run_daily_ops():
                     "returncode": -1,
                     "stdout": "",
                     "stderr": str(exc),
+                },
+                "request_id": g.request_id,
+            }
+        ), 500
+
+
+@api_bp.post("/run-weekly-model-refresh")
+def run_weekly_model_refresh():
+    expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
+    provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
+    if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
+
+    project_root = Path(__file__).resolve().parents[1]
+    runtime_dir = resolve_runtime_dir()
+    calibration_report = day13_calibration_report_path()
+    recalibration_plan = day13_recalibration_plan_path()
+    command = ["python3", "scripts/run_weekly_model_refresh.py"]
+    logging.info("Running weekly model refresh command via protected API endpoint.")
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        report_diag = _file_diagnostics(calibration_report)
+        plan_diag = _file_diagnostics(recalibration_plan)
+        return jsonify(
+            {
+                "data": {
+                    "success": completed.returncode == 0,
+                    "command": command,
+                    "exit_code": completed.returncode,
+                    "returncode": completed.returncode,
+                    "stdout": completed.stdout,
+                    "stderr": completed.stderr,
+                    "runtime_dir": str(runtime_dir),
+                    "calibration_report_path": report_diag["path"],
+                    "calibration_report_exists": report_diag["exists"],
+                    "recalibration_plan_path": plan_diag["path"],
+                    "recalibration_plan_exists": plan_diag["exists"],
+                },
+                "request_id": g.request_id,
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.exception("run-weekly-model-refresh failed to execute.")
+        return jsonify(
+            {
+                "data": {
+                    "success": False,
+                    "command": command,
+                    "exit_code": -1,
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": str(exc),
+                    "runtime_dir": str(runtime_dir),
                 },
                 "request_id": g.request_id,
             }
@@ -1107,11 +1203,28 @@ def model_health():
     decision_logger = current_app.extensions.get("decision_logger")
     model_path = current_app.config.get("DETERMINISTIC_MODEL_PATH")
 
-    calibration_report_path = current_app.config.get("DETERMINISTIC_CALIBRATION_REPORT_PATH") or ""
+    calibration_report_path = str(day13_calibration_report_path())
+    recalibration_plan_path = str(day13_recalibration_plan_path())
+    calibration_report_diag = _file_diagnostics(calibration_report_path)
+    recalibration_plan_diag = _file_diagnostics(recalibration_plan_path)
+    logging.info(
+        "Model health calibration diagnostics path=%s exists=%s mtime_utc=%s",
+        calibration_report_diag["path"],
+        calibration_report_diag["exists"],
+        calibration_report_diag["mtime_utc"],
+    )
+    logging.info(
+        "Model health recalibration diagnostics path=%s exists=%s mtime_utc=%s",
+        recalibration_plan_diag["path"],
+        recalibration_plan_diag["exists"],
+        recalibration_plan_diag["mtime_utc"],
+    )
     calibration_report = _load_fresh_json_payload(
         str(calibration_report_path),
         max_age_seconds=int(current_app.config.get("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS") or 43200),
     ) if calibration_report_path else None
+    if calibration_report_diag["exists"] and calibration_report is None:
+        logging.warning("Failed to load calibration report JSON from path=%s", calibration_report_path)
 
     return jsonify(
         {
@@ -1131,6 +1244,11 @@ def model_health():
                 "calibration_slope": getattr(deterministic_svc, "calibration_slope", None),
                 "calibration_intercept": getattr(deterministic_svc, "calibration_intercept", None),
                 "calibration_report_path": calibration_report_path,
+                "calibration_report_exists": calibration_report_diag["exists"],
+                "calibration_report_mtime_utc": calibration_report_diag["mtime_utc"],
+                "recalibration_plan_path": recalibration_plan_path,
+                "recalibration_plan_exists": recalibration_plan_diag["exists"],
+                "recalibration_plan_mtime_utc": recalibration_plan_diag["mtime_utc"],
                 "calibration_report": calibration_report,
                 "artifact_metadata": load_artifact_metadata(str(model_path)) if model_path else None,
                 "artifact_history": load_artifact_history(str(model_path)) if model_path else [],
