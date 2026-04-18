@@ -547,6 +547,38 @@ def test_decision_outcomes_filters_skipped_rows_by_default(tmp_path, monkeypatch
     assert include_skipped_data["include_skipped"] is True
 
 
+def test_decision_outcomes_prefers_rows_with_5d_returns_for_default_view(tmp_path, monkeypatch):
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+    logger.log(endpoint="quick_ask", symbol="AAPL", decision_source="deterministic_model", payload={"recommendation": "BUY"})
+    logger.log(endpoint="quick_ask", symbol="TSLA", decision_source="rule_based", payload={"recommendation": "SELL"})
+    logger.log(endpoint="quick_ask", symbol="MSFT", decision_source="rule_based", payload={"recommendation": "BUY"})
+
+    monkeypatch.setattr(
+        api_module,
+        "_future_return_for_outcomes",
+        lambda symbol, ts, days: {
+            ("AAPL", 1): 0.03,
+            ("AAPL", 5): None,
+            ("TSLA", 1): -0.01,
+            ("TSLA", 5): -0.04,
+            ("MSFT", 1): 0.02,
+            ("MSFT", 5): None,
+        }[(symbol, days)],
+    )
+
+    res = client.get("/api/decision-outcomes?limit=10")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert len(data["rows"]) == 1
+    assert data["rows"][0]["symbol"] == "TSLA"
+    assert data["rows"][0]["return_5d"] == -0.04
+    assert data["summary_5d"]["evaluated_rows"] == 1
+    assert data["evaluated_rows_available"] == 3
+    assert data["evaluated_rows_5d_available"] == 1
+
+
 def test_decision_outcomes_falls_back_to_recent_rows_when_nothing_is_evaluable(tmp_path, monkeypatch):
     monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
     client = _client()
