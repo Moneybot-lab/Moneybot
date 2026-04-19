@@ -5,12 +5,66 @@
                   <div style="flex:1;min-width:280px">
                     <img src="/static/moneybot-pro-logo.svg" alt="MoneyBot Pro logo" style="display:block;width:100%;max-width:860px;height:auto"/>
                   </div>
-                  <div style="display:flex;gap:10px;flex-wrap:wrap">
+                  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:flex-end">
                     <a href="/login" style="padding:8px 12px;background:#dcfce7;color:#000;border-radius:999px;text-decoration:none;font-weight:600">Login</a>
                     <a href="/signup" style="padding:8px 12px;background:#dcfce7;color:#000;border-radius:999px;text-decoration:none;font-weight:600">Sign up</a>
                     <a href="/portfolio" style="padding:8px 12px;background:#166534;color:#f0fdf4;border-radius:999px;text-decoration:none;font-weight:700">User Portfolio</a>
+                    <button
+                      id="menuToggleBtn"
+                      type="button"
+                      aria-controls="homeMenuSidebar"
+                      aria-expanded="false"
+                      style="padding:8px 14px;border:1px solid #166534;background:#f0fdf4;color:#14532d;border-radius:999px;font-weight:800;cursor:pointer"
+                    >
+                      ☰ Menu
+                    </button>
                   </div>
                 </header>
+
+                <div
+                  id="homeMenuOverlay"
+                  style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.42);z-index:60"
+                  aria-hidden="true"
+                ></div>
+
+                <aside
+                  id="homeMenuSidebar"
+                  aria-hidden="true"
+                  style="position:fixed;top:0;right:0;height:100vh;width:min(92vw,380px);background:#f8fafc;border-left:1px solid #cbd5e1;box-shadow:-10px 0 26px rgba(15,23,42,.2);padding:16px;transform:translateX(105%);transition:transform .2s ease;z-index:70;overflow:auto"
+                >
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px">
+                    <h3 style="margin:0;color:#0f172a">Menu</h3>
+                    <button id="menuCloseBtn" type="button" style="border:none;background:#e2e8f0;border-radius:8px;padding:6px 10px;cursor:pointer">Close</button>
+                  </div>
+                  <nav aria-label="User navigation">
+                    <ul style="list-style:none;padding:0;margin:0;display:grid;gap:10px">
+                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px">
+                        <strong style="display:block;color:#14532d;margin-bottom:4px">User</strong>
+                        <span style="color:#166534;font-size:14px">Open to see or edit name, username, and profile picture.</span>
+                      </li>
+                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px">
+                        <strong style="display:block;color:#14532d;margin-bottom:4px">Account</strong>
+                        <span style="color:#166534;font-size:14px">Open to see or edit payment method, current plan, and upgrade options.</span>
+                      </li>
+                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px">
+                        <strong style="display:block;color:#14532d;margin-bottom:4px">Privacy</strong>
+                        <span style="color:#166534;font-size:14px">Review data controls and personal information settings.</span>
+                      </li>
+                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px">
+                        <strong style="display:block;color:#14532d;margin-bottom:4px">Terms</strong>
+                        <span style="color:#166534;font-size:14px">Read terms of service and policy documents.</span>
+                      </li>
+                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px">
+                        <strong style="display:block;color:#14532d;margin-bottom:4px">Help</strong>
+                        <span style="color:#166534;font-size:14px">Get support resources, contact options, and FAQs.</span>
+                      </li>
+                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px">
+                        <strong style="display:block;color:#14532d;margin-bottom:4px">Disclaimer</strong>
+                        <span style="color:#166534;font-size:14px">Understand risk and advisory limitations before acting.</span>
+                      </li>
+                    </ul>
+                  </nav>
+                </aside>
 
                 <section style="background:#000;color:#d1fae5;border-radius:14px;padding:16px;margin-bottom:18px;box-shadow:0 10px 24px rgba(2,6,23,.18)">
                   <h3 style="margin:0 0 10px 0;color:#f0fdf4">Quick Ask · What should I do now?</h3>
