@@ -61,6 +61,9 @@ class MarketDataService:
         self._daily_lists_cache: dict[str, list[Dict[str, Any]]] = {}
         self._logged_missing_finnhub_key = False
         self._logged_missing_massive_key = False
+        self._finnhub_forbidden_symbols: dict[str, float] = {}
+        self._finnhub_forbidden_ttl_seconds = int(os.environ.get("FINNHUB_FORBIDDEN_SYMBOL_TTL_SECONDS", "21600"))
+        self._twelve_data_backoff_until = 0.0
 
 
     def _mock_market_indices(self) -> list[Dict[str, Any]]:
@@ -753,40 +756,52 @@ class MarketDataService:
         finnhub_key, finnhub_key_source = self._get_finnhub_key()
         finnhub_error: str | None = None
         if finnhub_key:
-            try:
-                resp = requests.get(
-                    "https://finnhub.io/api/v1/quote",
-                    params={"symbol": cache_key, "token": finnhub_key},
-                    headers={"X-Finnhub-Token": finnhub_key},
-                    timeout=self.timeout_s,
-                )
-                resp.raise_for_status()
-                data = resp.json() or {}
-                price = data.get("c")
-                prev_close = data.get("pc")
-                change_percent = data.get("dp")
+            block_until = self._finnhub_forbidden_symbols.get(cache_key)
+            now = time.time()
+            if block_until and now < block_until:
+                finnhub_error = "symbol_forbidden_cached"
+            else:
+                if block_until:
+                    self._finnhub_forbidden_symbols.pop(cache_key, None)
+                try:
+                    resp = requests.get(
+                        "https://finnhub.io/api/v1/quote",
+                        params={"symbol": cache_key, "token": finnhub_key},
+                        headers={"X-Finnhub-Token": finnhub_key},
+                        timeout=self.timeout_s,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json() or {}
+                    price = data.get("c")
+                    prev_close = data.get("pc")
+                    change_percent = data.get("dp")
 
-                if price not in (None, 0):
-                    if change_percent is None and prev_close not in (None, 0):
-                        change_percent = ((float(price) - float(prev_close)) / float(prev_close)) * 100
+                    if price not in (None, 0):
+                        if change_percent is None and prev_close not in (None, 0):
+                            change_percent = ((float(price) - float(prev_close)) / float(prev_close)) * 100
 
-                    if change_percent is not None:
-                        payload = {
-                            "symbol": cache_key,
-                            "price": float(price),
-                            "change_percent": float(change_percent),
-                            "live_data_available": True,
-                            "quote_source": "finnhub",
-                            "diagnostics": {"provider": "finnhub", "error": None, "finnhub_key_source": finnhub_key_source},
-                        }
-                        self.quote_cache.set(cache_key, payload)
-                        return payload
+                        if change_percent is not None:
+                            payload = {
+                                "symbol": cache_key,
+                                "price": float(price),
+                                "change_percent": float(change_percent),
+                                "live_data_available": True,
+                                "quote_source": "finnhub",
+                                "diagnostics": {"provider": "finnhub", "error": None, "finnhub_key_source": finnhub_key_source},
+                            }
+                            self.quote_cache.set(cache_key, payload)
+                            return payload
 
-                finnhub_error = f"incomplete_response:{data}"
-                logging.warning("Finnhub returned incomplete quote for %s: %s", cache_key, data)
-            except Exception as exc:  # noqa: BLE001
-                finnhub_error = str(exc)
-                logging.warning("Finnhub quote fetch failed for %s: %s", cache_key, exc)
+                    finnhub_error = f"incomplete_response:{data}"
+                    logging.warning("Finnhub returned incomplete quote for %s: %s", cache_key, data)
+                except Exception as exc:  # noqa: BLE001
+                    status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                    if status_code == 403:
+                        self._finnhub_forbidden_symbols[cache_key] = now + max(60, self._finnhub_forbidden_ttl_seconds)
+                        finnhub_error = "http_403_forbidden"
+                    else:
+                        finnhub_error = str(exc)
+                    logging.warning("Finnhub quote fetch failed for %s: %s", cache_key, exc)
         else:
             finnhub_error = "missing_api_key"
             if not self._logged_missing_finnhub_key:
@@ -798,50 +813,60 @@ class MarketDataService:
         twelve_data_key, twelve_data_key_source = self._get_twelve_data_key()
         twelve_data_error: str | None = None
         if twelve_data_key:
-            try:
-                resp = requests.get(
-                    "https://api.twelvedata.com/quote",
-                    params={"symbol": cache_key, "apikey": twelve_data_key},
-                    timeout=self.timeout_s,
-                )
-                resp.raise_for_status()
-                data = resp.json() or {}
-                if data.get("status") == "error":
-                    raise RuntimeError(str(data.get("message") or data))
+            now = time.time()
+            if now < self._twelve_data_backoff_until:
+                twelve_data_error = "rate_limited_backoff_active"
+            else:
+                try:
+                    resp = requests.get(
+                        "https://api.twelvedata.com/quote",
+                        params={"symbol": cache_key, "apikey": twelve_data_key},
+                        timeout=self.timeout_s,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json() or {}
+                    if data.get("status") == "error":
+                        raise RuntimeError(str(data.get("message") or data))
 
-                price_raw = data.get("close")
-                prev_close_raw = data.get("previous_close")
-                change_percent_raw = data.get("percent_change")
+                    price_raw = data.get("close")
+                    prev_close_raw = data.get("previous_close")
+                    change_percent_raw = data.get("percent_change")
 
-                price = float(price_raw) if price_raw not in (None, "") else None
-                change_percent = float(change_percent_raw) if change_percent_raw not in (None, "") else None
+                    price = float(price_raw) if price_raw not in (None, "") else None
+                    change_percent = float(change_percent_raw) if change_percent_raw not in (None, "") else None
 
-                if change_percent is None and price is not None and prev_close_raw not in (None, "", 0, "0"):
-                    prev_close = float(prev_close_raw)
-                    if prev_close:
-                        change_percent = ((price - prev_close) / prev_close) * 100
+                    if change_percent is None and price is not None and prev_close_raw not in (None, "", 0, "0"):
+                        prev_close = float(prev_close_raw)
+                        if prev_close:
+                            change_percent = ((price - prev_close) / prev_close) * 100
 
-                if price is not None and change_percent is not None:
-                    payload = {
-                        "symbol": cache_key,
-                        "price": float(price),
-                        "change_percent": float(change_percent),
-                        "live_data_available": True,
-                        "quote_source": "twelve_data",
-                        "diagnostics": {
-                            "provider": "twelve_data",
-                            "error": None,
-                            "twelve_data_key_source": twelve_data_key_source,
-                        },
-                    }
-                    self.quote_cache.set(cache_key, payload)
-                    return payload
+                    if price is not None and change_percent is not None:
+                        payload = {
+                            "symbol": cache_key,
+                            "price": float(price),
+                            "change_percent": float(change_percent),
+                            "live_data_available": True,
+                            "quote_source": "twelve_data",
+                            "diagnostics": {
+                                "provider": "twelve_data",
+                                "error": None,
+                                "twelve_data_key_source": twelve_data_key_source,
+                            },
+                        }
+                        self.quote_cache.set(cache_key, payload)
+                        return payload
 
-                twelve_data_error = f"incomplete_response:{data}"
-                logging.warning("Twelve Data returned incomplete quote for %s: %s", cache_key, data)
-            except Exception as exc:  # noqa: BLE001
-                twelve_data_error = str(exc)
-                logging.warning("Twelve Data quote fetch failed for %s: %s", cache_key, exc)
+                    twelve_data_error = f"incomplete_response:{data}"
+                    logging.warning("Twelve Data returned incomplete quote for %s: %s", cache_key, data)
+                except Exception as exc:  # noqa: BLE001
+                    error_text = str(exc)
+                    status_code = getattr(getattr(exc, "response", None), "status_code", None)
+                    if status_code == 429 or "run out of API credits for the current minute" in error_text:
+                        self._twelve_data_backoff_until = now + 65.0
+                        twelve_data_error = "http_429_rate_limited"
+                    else:
+                        twelve_data_error = error_text
+                    logging.warning("Twelve Data quote fetch failed for %s: %s", cache_key, exc)
         else:
             twelve_data_error = "missing_api_key"
 
