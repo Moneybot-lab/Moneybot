@@ -569,11 +569,11 @@ def create_app() -> Flask:
                     <h3 style="margin:0 0 8px;color:#0f172a">Adjust picture</h3>
                     <div style="display:flex;justify-content:center;margin-bottom:10px">
                       <div id="avatarEditorViewport" style="width:170px;height:170px;border-radius:999px;overflow:hidden;background:#e2e8f0;position:relative;border:1px solid #cbd5e1">
-                        <img id="avatarEditorImage" alt="Adjust profile image" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);transform-origin:center center;max-width:none" />
+                        <img id="avatarEditorImage" alt="Adjust profile image" style="position:absolute;left:50%;top:50%;width:100%;height:100%;object-fit:cover;transform:translate(-50%,-50%);transform-origin:center center" />
                       </div>
                     </div>
                     <label style="display:block;font-size:.9rem;color:#166534;font-weight:700">Zoom</label>
-                    <input id="avatarZoom" type="range" min="1" max="3" step="0.01" value="1" style="width:100%" />
+                    <input id="avatarZoom" type="range" min="1" max="4" step="0.01" value="1.35" style="width:100%" />
                     <label style="display:block;font-size:.9rem;color:#166534;font-weight:700;margin-top:8px">Horizontal</label>
                     <input id="avatarOffsetX" type="range" min="-120" max="120" step="1" value="0" style="width:100%" />
                     <label style="display:block;font-size:.9rem;color:#166534;font-weight:700;margin-top:8px">Vertical</label>
@@ -628,7 +628,7 @@ def create_app() -> Flask:
               function openAvatarEditor(dataUrl){
                 rawSelectedAvatarUrl = dataUrl;
                 avatarEditorImage.src = dataUrl;
-                avatarZoomEl.value = '1';
+                avatarZoomEl.value = '1.35';
                 avatarOffsetXEl.value = '0';
                 avatarOffsetYEl.value = '0';
                 applyEditorTransform();
@@ -644,15 +644,18 @@ def create_app() -> Flask:
                 const zoom = Number(avatarZoomEl.value || 1);
                 const offsetX = Number(avatarOffsetXEl.value || 0);
                 const offsetY = Number(avatarOffsetYEl.value || 0);
-                const base = Math.max(img.naturalWidth, img.naturalHeight) || 1;
-                const drawSize = base * zoom;
-                const x = (canvas.width - drawSize) / 2 + (offsetX * (canvas.width / 170));
-                const y = (canvas.height - drawSize) / 2 + (offsetY * (canvas.height / 170));
+                const width = Number(img.naturalWidth || canvas.width);
+                const height = Number(img.naturalHeight || canvas.height);
+                const fitScale = Math.max(canvas.width / width, canvas.height / height);
+                const drawWidth = width * fitScale * zoom;
+                const drawHeight = height * fitScale * zoom;
+                const x = (canvas.width - drawWidth) / 2 + (offsetX * (canvas.width / 170));
+                const y = (canvas.height - drawHeight) / 2 + (offsetY * (canvas.height / 170));
                 ctx.save();
                 ctx.beginPath();
                 ctx.arc(canvas.width / 2, canvas.height / 2, canvas.width / 2, 0, Math.PI * 2);
                 ctx.clip();
-                ctx.drawImage(img, x, y, drawSize, drawSize);
+                ctx.drawImage(img, x, y, drawWidth, drawHeight);
                 ctx.restore();
                 return canvas.toDataURL('image/png');
               }
