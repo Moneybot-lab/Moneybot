@@ -88,6 +88,7 @@ const fallbackData = {
                     document.getElementById('userMenuName').textContent = profileName;
                     document.getElementById('menuProfileName').textContent = profileName;
                     document.getElementById('menuProfileUsername').textContent = '@' + profileUsername;
+                    document.getElementById('menuUserLinkMeta').textContent = `${profileName} · @${profileUsername}`;
                     setAvatar(
                       document.getElementById('userMenuAvatarImage'),
                       document.getElementById('userMenuAvatarInitials'),
@@ -97,6 +98,12 @@ const fallbackData = {
                     setAvatar(
                       document.getElementById('menuProfileImage'),
                       document.getElementById('menuProfileInitials'),
+                      user?.profile_image_url,
+                      profileName,
+                    );
+                    setAvatar(
+                      document.getElementById('menuUserLinkImage'),
+                      document.getElementById('menuUserLinkInitials'),
                       user?.profile_image_url,
                       profileName,
                     );

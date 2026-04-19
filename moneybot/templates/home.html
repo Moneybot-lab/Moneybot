@@ -43,30 +43,22 @@
                   </div>
                   <nav aria-label="User navigation">
                     <ul style="list-style:none;padding:0;margin:0;display:grid;gap:10px">
-                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px">
-                        <strong style="display:block;color:#14532d;margin-bottom:4px">User</strong>
-                        <span style="color:#166534;font-size:14px">Open to see or edit name, username, and profile picture.</span>
+                      <li id="menuUserProfileLink" style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px">
+                        <a href="/user-profile" style="display:flex;align-items:center;gap:10px;color:#14532d;text-decoration:none">
+                          <img id="menuUserLinkImage" alt="User profile image" style="display:none;width:36px;height:36px;border-radius:999px;object-fit:cover" />
+                          <span id="menuUserLinkInitials" style="width:36px;height:36px;border-radius:999px;background:#14532d;color:#f0fdf4;display:flex;align-items:center;justify-content:center;font-weight:800">U</span>
+                          <span>
+                            <strong style="display:block">User Profile</strong>
+                            <span id="menuUserLinkMeta" style="font-size:.88rem;color:#166534"></span>
+                          </span>
+                        </a>
                       </li>
-                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px">
-                        <strong style="display:block;color:#14532d;margin-bottom:4px">Account</strong>
-                        <span style="color:#166534;font-size:14px">Open to see or edit payment method, current plan, and upgrade options.</span>
-                      </li>
-                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px">
-                        <strong style="display:block;color:#14532d;margin-bottom:4px">Privacy</strong>
-                        <span style="color:#166534;font-size:14px">Review data controls and personal information settings.</span>
-                      </li>
-                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px">
-                        <strong style="display:block;color:#14532d;margin-bottom:4px">Terms</strong>
-                        <span style="color:#166534;font-size:14px">Read terms of service and policy documents.</span>
-                      </li>
-                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px">
-                        <strong style="display:block;color:#14532d;margin-bottom:4px">Help</strong>
-                        <span style="color:#166534;font-size:14px">Get support resources, contact options, and FAQs.</span>
-                      </li>
-                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px">
-                        <strong style="display:block;color:#14532d;margin-bottom:4px">Disclaimer</strong>
-                        <span style="color:#166534;font-size:14px">Understand risk and advisory limitations before acting.</span>
-                      </li>
+                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px"><a href="/security" style="display:block;color:#14532d;text-decoration:none;font-weight:700">Security</a></li>
+                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px"><a href="/account" style="display:block;color:#14532d;text-decoration:none;font-weight:700">Account</a></li>
+                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px"><a href="/privacy" style="display:block;color:#14532d;text-decoration:none;font-weight:700">Privacy</a></li>
+                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px"><a href="/terms" style="display:block;color:#14532d;text-decoration:none;font-weight:700">Terms</a></li>
+                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px"><a href="/help" style="display:block;color:#14532d;text-decoration:none;font-weight:700">Help</a></li>
+                      <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px"><a href="/disclaimer" style="display:block;color:#14532d;text-decoration:none;font-weight:700">Disclaimer</a></li>
                       <li id="menuProfileCard" style="display:none;border:1px solid #cbd5e1;background:#f8fafc;border-radius:10px;padding:10px 12px">
                         <div style="display:flex;align-items:center;gap:10px">
                           <img id="menuProfileImage" alt="Profile image" style="display:none;width:40px;height:40px;border-radius:999px;object-fit:cover" />
