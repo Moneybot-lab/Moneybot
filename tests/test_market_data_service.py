@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import requests
+
 from moneybot.services.market_data import MarketDataService
 
 
@@ -433,6 +435,95 @@ def test_get_quote_fallback_diagnostics_include_twelve_data_fields(monkeypatch):
 
     assert quote["diagnostics"]["twelve_data_attempted"] is False
     assert quote["diagnostics"]["twelve_data_error"] == "missing_api_key"
+
+
+def test_get_quote_caches_finnhub_403_per_symbol(monkeypatch):
+    svc = MarketDataService()
+
+    monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+    monkeypatch.delenv("POLYGON_API_KEY", raising=False)
+    monkeypatch.setenv("FINNHUB_API_KEY", "fh-key")
+    monkeypatch.delenv("TWELVE_DATA_API_KEY", raising=False)
+    monkeypatch.delenv("TWELVEDATA_API_KEY", raising=False)
+
+    class DummyTicker:
+        @property
+        def info(self):
+            return {}
+
+        def history(self, period, interval):
+            class Empty:
+                empty = True
+            return Empty()
+
+    finnhub_calls = {"count": 0}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        if url == "https://finnhub.io/api/v1/quote":
+            finnhub_calls["count"] += 1
+            response = requests.Response()
+            response.status_code = 403
+            raise requests.HTTPError("403 Client Error: Forbidden", response=response)
+        raise AssertionError(f"Unexpected URL called: {url}")
+
+    monkeypatch.setattr("moneybot.services.market_data.requests.get", fake_get)
+    monkeypatch.setattr("moneybot.services.market_data.yf.Ticker", lambda _symbol: DummyTicker())
+
+    first = svc.get_quote("SOFI")
+    assert first["diagnostics"]["finnhub_error"] == "http_403_forbidden"
+    svc.quote_cache._store.clear()
+    second = svc.get_quote("SOFI")
+    assert second["diagnostics"]["finnhub_error"] == "symbol_forbidden_cached"
+    assert finnhub_calls["count"] == 1
+
+
+def test_get_quote_applies_twelve_data_rate_limit_backoff(monkeypatch):
+    svc = MarketDataService()
+
+    monkeypatch.delenv("MASSIVE_API_KEY", raising=False)
+    monkeypatch.delenv("POLYGON_API_KEY", raising=False)
+    monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
+    monkeypatch.delenv("FINNHUB_TOKEN", raising=False)
+    monkeypatch.delenv("X_FINNHUB_TOKEN", raising=False)
+    monkeypatch.setenv("TWELVE_DATA_API_KEY", "td-key")
+
+    class DummyTicker:
+        @property
+        def info(self):
+            return {}
+
+        def history(self, period, interval):
+            class Empty:
+                empty = True
+            return Empty()
+
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "status": "error",
+                "message": "You have run out of API credits for the current minute.",
+            }
+
+    td_calls = {"count": 0}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        if url == "https://api.twelvedata.com/quote":
+            td_calls["count"] += 1
+            return DummyResponse()
+        raise AssertionError(f"Unexpected URL called: {url}")
+
+    monkeypatch.setattr("moneybot.services.market_data.requests.get", fake_get)
+    monkeypatch.setattr("moneybot.services.market_data.yf.Ticker", lambda _symbol: DummyTicker())
+
+    first = svc.get_quote("CCL")
+    assert first["diagnostics"]["twelve_data_error"] == "http_429_rate_limited"
+    svc.quote_cache._store.clear()
+    second = svc.get_quote("RUN")
+    assert second["diagnostics"]["twelve_data_error"] == "rate_limited_backoff_active"
+    assert td_calls["count"] == 1
 
 
 def test_get_hot_momentum_buys_uses_deterministic_scores_when_enabled(monkeypatch):

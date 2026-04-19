@@ -1346,6 +1346,7 @@ def decision_outcomes():
     read_limit = min(max(limit * 10, 200), read_cap)
     rows: list[dict[str, Any]] = []
     evaluated_rows: list[dict[str, Any]] = []
+    evaluated_rows_5d: list[dict[str, Any]] = []
     while True:
         events = read_decision_events(str(output_path), limit=read_limit)
         rows = evaluate_decision_events(events, future_return_lookup=cached_future_return_lookup)
@@ -1354,11 +1355,15 @@ def decision_outcomes():
             for row in rows
             if isinstance(row.get("return_1d"), (int, float)) or isinstance(row.get("return_5d"), (int, float))
         ]
-        if include_skipped or len(evaluated_rows) >= limit or read_limit >= read_cap:
+        evaluated_rows_5d = [row for row in rows if isinstance(row.get("return_5d"), (int, float))]
+        if include_skipped or len(evaluated_rows_5d) >= limit or len(evaluated_rows) >= limit or read_limit >= read_cap:
             break
         read_limit = min(read_limit * 2, read_cap)
     used_unevaluated_fallback = False
-    visible_rows = rows if include_skipped else evaluated_rows
+    if include_skipped:
+        visible_rows = rows
+    else:
+        visible_rows = evaluated_rows_5d if evaluated_rows_5d else evaluated_rows
     if not include_skipped and not visible_rows and rows:
         # If nothing is evaluable yet, return the most recent rows so the UI still shows
         # live decision activity instead of an empty panel.
@@ -1379,6 +1384,7 @@ def decision_outcomes():
                 "include_skipped": include_skipped,
                 "rows_scanned": len(rows),
                 "evaluated_rows_available": len(evaluated_rows),
+                "evaluated_rows_5d_available": len(evaluated_rows_5d),
                 "used_unevaluated_fallback": used_unevaluated_fallback,
                 "lookup_cache_hits": cache_hits,
                 "lookup_cache_misses": cache_misses,

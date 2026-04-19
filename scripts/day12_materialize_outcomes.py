@@ -71,7 +71,9 @@ def main() -> None:
         for row in rows
         if isinstance(row.get("return_1d"), (int, float)) or isinstance(row.get("return_5d"), (int, float))
     ]
-    visible_rows = select_visible_rows(rows, evaluated_rows, args.rows_limit)
+    evaluated_rows_5d = [row for row in rows if isinstance(row.get("return_5d"), (int, float))]
+    preferred_rows = evaluated_rows_5d if evaluated_rows_5d else evaluated_rows
+    visible_rows = select_visible_rows(rows, preferred_rows, args.rows_limit)
 
     payload = {
         "computed_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -82,6 +84,7 @@ def main() -> None:
             "include_skipped": False,
             "rows_scanned": len(rows),
             "evaluated_rows_available": len(evaluated_rows),
+            "evaluated_rows_5d_available": len(evaluated_rows_5d),
             "used_unevaluated_fallback": len(evaluated_rows) == 0 and bool(rows),
             "lookup_cache_hits": 0,
             "lookup_cache_misses": 0,
