@@ -151,6 +151,24 @@ const fallbackData = {
                   }
                   function openHomeModal(){ document.getElementById('homeTickerModal').style.display='flex'; }
                   function closeHomeModal(){ document.getElementById('homeTickerModal').style.display='none'; }
+                  function setMenuState(isOpen){
+                    const sidebar = document.getElementById('homeMenuSidebar');
+                    const overlay = document.getElementById('homeMenuOverlay');
+                    const toggleBtn = document.getElementById('menuToggleBtn');
+                    if(!sidebar || !overlay || !toggleBtn) return;
+                    sidebar.style.transform = isOpen ? 'translateX(0)' : 'translateX(105%)';
+                    sidebar.setAttribute('aria-hidden', String(!isOpen));
+                    overlay.style.display = isOpen ? 'block' : 'none';
+                    overlay.setAttribute('aria-hidden', String(!isOpen));
+                    toggleBtn.setAttribute('aria-expanded', String(isOpen));
+                  }
+                  function openMenu(){ setMenuState(true); }
+                  function closeMenu(){ setMenuState(false); }
+                  function toggleMenu(){
+                    const sidebar = document.getElementById('homeMenuSidebar');
+                    const isOpen = sidebar?.getAttribute('aria-hidden') === 'false';
+                    setMenuState(!isOpen);
+                  }
                   async function showCompanyDetails(symbol){
                     const titleEl = document.getElementById('homeModalTitle');
                     const summaryEl = document.getElementById('homeModalSummary');
@@ -354,8 +372,18 @@ const fallbackData = {
                     if(event.target.value){ event.target.value = ''; }
                   });
                   document.getElementById('homeTickerModal').addEventListener('click', (event) => { if(event.target.id==='homeTickerModal'){ closeHomeModal(); }});
+                  document.getElementById('menuToggleBtn').addEventListener('click', toggleMenu);
+                  document.getElementById('menuCloseBtn').addEventListener('click', closeMenu);
+                  document.getElementById('homeMenuOverlay').addEventListener('click', closeMenu);
+                  document.addEventListener('keydown', (event) => {
+                    if(event.key === 'Escape'){
+                      closeHomeModal();
+                      closeMenu();
+                    }
+                  });
 
                   async function init(){
+                    setMenuState(false);
                     const market = await fetchWithFallback('/api/market-overview', 'market');
                     renderMarket(market);
                     await refreshTab('stable');
