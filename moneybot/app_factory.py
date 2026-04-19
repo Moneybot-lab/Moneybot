@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 import os
+import re
 from pathlib import Path
 
 from flask import Flask, render_template, render_template_string
@@ -21,6 +22,61 @@ from .services.runtime_paths import (
     is_durable_runtime_configured,
     resolve_runtime_dir,
 )
+
+
+def _slug_username(raw: str) -> str:
+    value = re.sub(r"[^a-z0-9_]+", "_", (raw or "").strip().lower())
+    value = re.sub(r"_+", "_", value).strip("_")
+    return value or "user"
+
+
+def _ensure_user_profile_schema() -> None:
+    inspector = db.inspect(db.engine)
+    if "users" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("users")}
+    if "name" not in columns:
+        db.session.execute(db.text("ALTER TABLE users ADD COLUMN name VARCHAR(255)"))
+    if "username" not in columns:
+        db.session.execute(db.text("ALTER TABLE users ADD COLUMN username VARCHAR(80)"))
+    if "profile_image_url" not in columns:
+        db.session.execute(db.text("ALTER TABLE users ADD COLUMN profile_image_url TEXT"))
+    if "updated_at" not in columns:
+        db.session.execute(db.text("ALTER TABLE users ADD COLUMN updated_at TIMESTAMP"))
+    db.session.commit()
+
+    rows = db.session.execute(
+        db.text("SELECT id, email, name, username, created_at, updated_at FROM users ORDER BY id ASC"),
+    ).mappings().all()
+    assigned_usernames: set[str] = set()
+    for row in rows:
+        existing_username = _slug_username(str(row["username"] or ""))
+        if existing_username:
+            assigned_usernames.add(existing_username)
+
+    for row in rows:
+        email = str(row["email"] or "")
+        local_part = email.split("@")[0] if "@" in email else email
+        resolved_name = str(row["name"] or "").strip() or local_part.replace(".", " ").replace("_", " ").title() or "User"
+
+        base_username = _slug_username(str(row["username"] or "") or local_part)
+        candidate = base_username
+        suffix = 1
+        while candidate in assigned_usernames and candidate != str(row["username"] or ""):
+            suffix += 1
+            candidate = f"{base_username}{suffix}"
+        assigned_usernames.add(candidate)
+        db.session.execute(
+            db.text(
+                "UPDATE users SET name=:name, username=:username, updated_at=COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) WHERE id=:user_id",
+            ),
+            {"name": resolved_name, "username": candidate, "user_id": row["id"]},
+        )
+    db.session.commit()
+    db.session.execute(
+        db.text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON users (username)"),
+    )
+    db.session.commit()
 
 
 def _parse_symbol_set(raw: str | None) -> set[str]:
@@ -356,12 +412,60 @@ def create_app() -> Flask:
 
     with app.app_context():
         db.create_all()
+        _ensure_user_profile_schema()
 
     @app.get("/")
     @app.get("/index.html")
     @app.get("/home")
     def home():
         return render_template("home.html")
+
+    @app.get("/user-profile")
+    def user_profile_page():
+        return render_template_string(
+            """
+            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f7fee7;max-width:760px;margin:0 auto">
+              <h2>User Profile</h2>
+              <p><a href="/" style="color:#166534;font-weight:700">← Back Home</a></p>
+              <p>This page will be expanded soon.</p>
+            </body></html>
+            """
+        )
+
+    def _simple_page(title: str):
+        return render_template_string(
+            f"""
+            <html><body style=\"font-family:Inter,sans-serif;padding:24px;background:#f7fee7;max-width:760px;margin:0 auto\">
+              <h2>{title}</h2>
+              <p><a href=\"/\" style=\"color:#166534;font-weight:700\">← Back Home</a></p>
+              <p>Content coming soon.</p>
+            </body></html>
+            """
+        )
+
+    @app.get("/security")
+    def security_page():
+        return _simple_page("Security")
+
+    @app.get("/account")
+    def account_page():
+        return _simple_page("Account")
+
+    @app.get("/privacy")
+    def privacy_page():
+        return _simple_page("Privacy")
+
+    @app.get("/terms")
+    def terms_page():
+        return _simple_page("Terms")
+
+    @app.get("/help")
+    def help_page():
+        return _simple_page("Help")
+
+    @app.get("/disclaimer")
+    def disclaimer_page():
+        return _simple_page("Disclaimer")
 
     @app.get("/login")
     @app.get("/login/")
@@ -400,10 +504,15 @@ def create_app() -> Flask:
 
               async function go(event){
                 if (event) event.preventDefault();
-                const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,tab_session_id:getOrCreateTabSessionId()})});
-                const data = await res.json();
-                if(res.ok){ outEl.textContent='Login successful. Redirecting...'; location.href='/portfolio'; }
-                else { outEl.textContent = data.error || 'Login failed. Please verify your credentials.'; }
+                outEl.textContent = 'Logging in...';
+                try {
+                  const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,tab_session_id:getOrCreateTabSessionId()})});
+                  const data = await res.json();
+                  if(res.ok){ outEl.textContent='Login successful. Redirecting...'; location.href='/portfolio'; }
+                  else { outEl.textContent = data.error || 'Login failed. Please verify your credentials.'; }
+                } catch (err) {
+                  outEl.textContent = 'Unable to login right now. Please retry.';
+                }
               }
 
               async function forgotPassword(){
@@ -438,18 +547,61 @@ def create_app() -> Flask:
                   <a href="/login" style="text-decoration:none;background:#d1fae5;color:#0f172a;padding:10px 16px;border-radius:999px;font-size:1.05rem;font-weight:600">Login</a>
                 </p>
                 <form id="signupForm" style="display:flex;flex-direction:column;gap:12px">
+                  <div style="display:flex;justify-content:center;margin-bottom:4px">
+                    <button id="avatarPickerBtn" type="button" style="position:relative;width:86px;height:86px;border-radius:999px;border:2px dashed #86efac;background:#dcfce7;color:#166534;font-weight:700;cursor:pointer">
+                      <span id="avatarPickerText" style="font-size:.82rem;line-height:1.1">Add<br/>Picture</span>
+                      <img id="avatarPreview" alt="Profile preview" style="display:none;width:100%;height:100%;border-radius:999px;object-fit:cover" />
+                      <span style="position:absolute;right:-3px;bottom:-3px;background:#16a34a;color:#f0fdf4;width:24px;height:24px;border-radius:999px;display:flex;align-items:center;justify-content:center;font-size:13px">✎</span>
+                    </button>
+                    <input id="profileImage" type="file" accept="image/*" style="display:none" />
+                  </div>
+                  <input id="name" placeholder="full name" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <input id="username" placeholder="username" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
                   <input id="email" placeholder="email" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
                   <input id="password" type="password" placeholder="password" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
                   <input id="confirmPassword" type="password" placeholder="confirm password" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
                   <button type="submit" style="font-size:1.08rem;padding:12px;border:none;border-radius:10px;background:#16a34a;color:#f0fdf4;font-weight:700;cursor:pointer">Create</button>
                 </form>
+                <div id="avatarEditorModal" style="display:none;position:fixed;inset:0;background:rgba(2,6,23,.5);align-items:center;justify-content:center;padding:14px">
+                  <div style="background:#f8fafc;border-radius:12px;padding:14px;width:min(96vw,420px)">
+                    <h3 style="margin:0 0 8px;color:#0f172a">Adjust picture</h3>
+                    <div style="display:flex;justify-content:center;margin-bottom:10px">
+                      <div id="avatarEditorViewport" style="width:170px;height:170px;border-radius:999px;overflow:hidden;background:#e2e8f0;position:relative;border:1px solid #cbd5e1">
+                        <img id="avatarEditorImage" alt="Adjust profile image" style="position:absolute;left:50%;top:50%;width:100%;height:100%;object-fit:cover;transform:translate(-50%,-50%);transform-origin:center center" />
+                      </div>
+                    </div>
+                    <label style="display:block;font-size:.9rem;color:#166534;font-weight:700">Zoom</label>
+                    <input id="avatarZoom" type="range" min="1" max="4" step="0.01" value="1.35" style="width:100%" />
+                    <label style="display:block;font-size:.9rem;color:#166534;font-weight:700;margin-top:8px">Horizontal</label>
+                    <input id="avatarOffsetX" type="range" min="-120" max="120" step="1" value="0" style="width:100%" />
+                    <label style="display:block;font-size:.9rem;color:#166534;font-weight:700;margin-top:8px">Vertical</label>
+                    <input id="avatarOffsetY" type="range" min="-120" max="120" step="1" value="0" style="width:100%" />
+                    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">
+                      <button id="cancelAvatarEditBtn" type="button" style="border:none;background:#e2e8f0;color:#0f172a;padding:8px 12px;border-radius:8px;cursor:pointer">Cancel</button>
+                      <button id="saveAvatarEditBtn" type="button" style="border:none;background:#16a34a;color:#f0fdf4;padding:8px 12px;border-radius:8px;cursor:pointer;font-weight:700">Use picture</button>
+                    </div>
+                  </div>
+                </div>
                 <div id="out" style="margin-top:12px;color:#166534;text-align:center;font-size:1.02rem"></div>
               </div>
               <script>
+              const nameEl = document.getElementById('name');
+              const usernameEl = document.getElementById('username');
               const emailEl = document.getElementById('email');
+              const profileImageEl = document.getElementById('profileImage');
+              const avatarPickerBtn = document.getElementById('avatarPickerBtn');
+              const avatarPreview = document.getElementById('avatarPreview');
+              const avatarPickerText = document.getElementById('avatarPickerText');
+              const avatarEditorModal = document.getElementById('avatarEditorModal');
+              const avatarEditorImage = document.getElementById('avatarEditorImage');
+              const avatarZoomEl = document.getElementById('avatarZoom');
+              const avatarOffsetXEl = document.getElementById('avatarOffsetX');
+              const avatarOffsetYEl = document.getElementById('avatarOffsetY');
               const passwordEl = document.getElementById('password');
               const confirmPasswordEl = document.getElementById('confirmPassword');
               const outEl = document.getElementById('out');
+              let profileImageDataUrl = null;
+              let rawSelectedAvatarUrl = null;
               const TAB_SESSION_KEY = 'moneybot_tab_session_id';
               function getOrCreateTabSessionId(){
                 let tabSessionId = sessionStorage.getItem(TAB_SESSION_KEY);
@@ -459,6 +611,68 @@ def create_app() -> Flask:
                 }
                 return tabSessionId;
               }
+              function readFileAsDataUrl(file){
+                return new Promise((resolve, reject) => {
+                  if(!file){ resolve(null); return; }
+                  const reader = new FileReader();
+                  reader.onload = () => resolve(reader.result);
+                  reader.onerror = () => reject(new Error('Unable to read selected file.'));
+                  reader.readAsDataURL(file);
+                });
+              }
+              function applyEditorTransform(){
+                avatarEditorImage.style.transform = `translate(calc(-50% + ${avatarOffsetXEl.value}px), calc(-50% + ${avatarOffsetYEl.value}px)) scale(${avatarZoomEl.value})`;
+              }
+              function openAvatarEditor(dataUrl){
+                rawSelectedAvatarUrl = dataUrl;
+                avatarEditorImage.src = dataUrl;
+                avatarZoomEl.value = '1.35';
+                avatarOffsetXEl.value = '0';
+                avatarOffsetYEl.value = '0';
+                applyEditorTransform();
+                avatarEditorModal.style.display = 'flex';
+              }
+              function closeAvatarEditor(){ avatarEditorModal.style.display = 'none'; }
+              function buildCroppedAvatarDataUrl(){
+                const canvas = document.createElement('canvas');
+                canvas.width = 240;
+                canvas.height = 240;
+                const ctx = canvas.getContext('2d');
+                const img = avatarEditorImage;
+                const zoom = Number(avatarZoomEl.value || 1);
+                const offsetX = Number(avatarOffsetXEl.value || 0);
+                const offsetY = Number(avatarOffsetYEl.value || 0);
+                const width = Number(img.naturalWidth || canvas.width);
+                const height = Number(img.naturalHeight || canvas.height);
+                const fitScale = Math.max(canvas.width / width, canvas.height / height);
+                const drawWidth = width * fitScale * zoom;
+                const drawHeight = height * fitScale * zoom;
+                const x = (canvas.width - drawWidth) / 2 + (offsetX * (canvas.width / 170));
+                const y = (canvas.height - drawHeight) / 2 + (offsetY * (canvas.height / 170));
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(canvas.width / 2, canvas.height / 2, canvas.width / 2, 0, Math.PI * 2);
+                ctx.clip();
+                ctx.drawImage(img, x, y, drawWidth, drawHeight);
+                ctx.restore();
+                return canvas.toDataURL('image/png');
+              }
+              avatarPickerBtn.addEventListener('click', () => profileImageEl.click());
+              profileImageEl.addEventListener('change', async () => {
+                const file = profileImageEl.files && profileImageEl.files[0];
+                if(!file){ return; }
+                const dataUrl = await readFileAsDataUrl(file);
+                openAvatarEditor(dataUrl);
+              });
+              [avatarZoomEl, avatarOffsetXEl, avatarOffsetYEl].forEach((el) => el.addEventListener('input', applyEditorTransform));
+              document.getElementById('cancelAvatarEditBtn').addEventListener('click', closeAvatarEditor);
+              document.getElementById('saveAvatarEditBtn').addEventListener('click', () => {
+                profileImageDataUrl = buildCroppedAvatarDataUrl() || rawSelectedAvatarUrl;
+                avatarPreview.src = profileImageDataUrl;
+                avatarPreview.style.display = 'block';
+                avatarPickerText.style.display = 'none';
+                closeAvatarEditor();
+              });
               document.getElementById('signupForm').addEventListener('submit', go);
 
               async function go(event){
@@ -467,7 +681,7 @@ def create_app() -> Flask:
                   outEl.textContent = 'Passwords do not match.';
                   return;
                 }
-                const res = await fetch('/api/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,password_confirmation:confirmPasswordEl.value,tab_session_id:getOrCreateTabSessionId()})});
+                const res = await fetch('/api/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:nameEl.value,username:usernameEl.value,email:emailEl.value,password:passwordEl.value,profile_image_url:profileImageDataUrl,password_confirmation:confirmPasswordEl.value,tab_session_id:getOrCreateTabSessionId()})});
                 const data = await res.json();
                 if(res.ok){ outEl.textContent='Account created. Redirecting...'; location.href='/portfolio'; }
                 else { outEl.textContent = data.error || 'Sign-up failed. Please try again.'; }
@@ -510,6 +724,114 @@ def create_app() -> Flask:
                   if(res.ok){ outEl.textContent='Password updated. Redirecting to login...'; setTimeout(()=>{ location.href='/login'; }, 900); }
                   else { outEl.textContent = data.error || 'Unable to reset password.'; }
                 });
+              </script>
+            </body></html>
+            """
+        )
+
+    @app.get("/settings")
+    @app.get("/settings/")
+    def settings_page():
+        return render_template_string(
+            """
+            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f7fee7;max-width:860px;margin:0 auto">
+              <h2 style="margin-bottom:10px">Profile & Account Settings</h2>
+              <p style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 16px">
+                <a href="/" style="text-decoration:none;background:#dcfce7;color:#14532d;padding:10px 14px;border-radius:999px;font-weight:700">Home</a>
+                <a href="/portfolio" style="text-decoration:none;background:#dcfce7;color:#14532d;padding:10px 14px;border-radius:999px;font-weight:700">Portfolio</a>
+              </p>
+              <section style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:16px">
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+                  <img id="avatarImage" alt="Profile image" style="display:none;width:56px;height:56px;border-radius:999px;object-fit:cover;border:1px solid #bbf7d0" />
+                  <div id="avatarInitials" style="width:56px;height:56px;border-radius:999px;background:#14532d;color:#f0fdf4;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.15rem">U</div>
+                  <div><div id="profileNameLabel" style="font-weight:800;color:#14532d"></div><div id="profileUsernameLabel" style="color:#166534"></div></div>
+                </div>
+                <form id="profileForm" style="display:grid;gap:10px">
+                  <input id="name" placeholder="full name" required style="font-size:1.03rem;padding:10px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <input id="username" placeholder="username" required style="font-size:1.03rem;padding:10px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <input id="profileImage" type="file" accept="image/*" style="font-size:1rem;padding:8px;border:1px solid #bbf7d0;border-radius:10px;background:#fff" />
+                  <button id="removeImageBtn" type="button" style="justify-self:start;border:1px solid #166534;background:#ecfdf5;color:#14532d;padding:8px 12px;border-radius:999px;font-weight:700;cursor:pointer">Remove profile image</button>
+                  <button type="submit" style="justify-self:start;border:none;background:#16a34a;color:#f0fdf4;padding:10px 16px;border-radius:999px;font-weight:800;cursor:pointer">Save profile</button>
+                </form>
+                <div id="out" style="margin-top:10px;color:#166534"></div>
+              </section>
+              <script>
+                const TAB_SESSION_KEY = 'moneybot_tab_session_id';
+                let currentProfileImageUrl = null;
+                function getTabSessionId(){ return sessionStorage.getItem(TAB_SESSION_KEY) || ''; }
+                async function apiFetch(url, options = {}){
+                  const headers = Object.assign({'Content-Type':'application/json', 'X-Tab-Session-Id': getTabSessionId()}, options.headers || {});
+                  const res = await fetch(url, Object.assign({}, options, { headers }));
+                  if(res.status === 401){ location.href = '/login'; throw new Error('authentication required'); }
+                  return res;
+                }
+                function initials(name){
+                  return String(name || '').trim().split(/\\s+/).filter(Boolean).slice(0,2).map((part)=>part[0]).join('').toUpperCase() || 'U';
+                }
+                function renderAvatar(profileImageUrl, name){
+                  const img = document.getElementById('avatarImage');
+                  const initialsNode = document.getElementById('avatarInitials');
+                  const value = initials(name);
+                  initialsNode.textContent = value;
+                  if(profileImageUrl){
+                    img.src = profileImageUrl;
+                    img.style.display = 'block';
+                    initialsNode.style.display = 'none';
+                  } else {
+                    img.style.display = 'none';
+                    initialsNode.style.display = 'flex';
+                  }
+                }
+                function readFileAsDataUrl(file){
+                  return new Promise((resolve, reject) => {
+                    if(!file){ resolve(null); return; }
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result);
+                    reader.onerror = () => reject(new Error('Unable to read selected file.'));
+                    reader.readAsDataURL(file);
+                  });
+                }
+                async function loadProfile(){
+                  const res = await apiFetch('/api/me');
+                  const payload = await res.json();
+                  const user = payload.user || {};
+                  document.getElementById('name').value = user.name || '';
+                  document.getElementById('username').value = user.username || '';
+                  document.getElementById('profileNameLabel').textContent = user.name || 'Unknown user';
+                  document.getElementById('profileUsernameLabel').textContent = user.username ? '@' + user.username : '';
+                  currentProfileImageUrl = user.profile_image_url || null;
+                  renderAvatar(currentProfileImageUrl, user.name);
+                }
+                document.getElementById('removeImageBtn').addEventListener('click', () => {
+                  currentProfileImageUrl = null;
+                  document.getElementById('profileImage').value = '';
+                  renderAvatar(null, document.getElementById('name').value);
+                });
+                document.getElementById('profileForm').addEventListener('submit', async (event) => {
+                  event.preventDefault();
+                  const outEl = document.getElementById('out');
+                  outEl.textContent = 'Saving...';
+                  const chosenFile = document.getElementById('profileImage').files[0];
+                  const uploadedDataUrl = chosenFile ? await readFileAsDataUrl(chosenFile) : null;
+                  const profileImageUrl = uploadedDataUrl !== null ? uploadedDataUrl : currentProfileImageUrl;
+                  const res = await apiFetch('/api/me/profile', {
+                    method:'PUT',
+                    body: JSON.stringify({
+                      name: document.getElementById('name').value,
+                      username: document.getElementById('username').value,
+                      profile_image_url: profileImageUrl
+                    }),
+                  });
+                  const payload = await res.json();
+                  if(!res.ok){ outEl.textContent = payload.error || 'Unable to update profile.'; return; }
+                  const user = payload.user || {};
+                  currentProfileImageUrl = user.profile_image_url || null;
+                  document.getElementById('profileNameLabel').textContent = user.name || 'Unknown user';
+                  document.getElementById('profileUsernameLabel').textContent = user.username ? '@' + user.username : '';
+                  renderAvatar(currentProfileImageUrl, user.name);
+                  outEl.textContent = 'Saved.';
+                });
+                loadProfile();
               </script>
             </body></html>
             """

@@ -102,6 +102,17 @@ def _client():
     return app.test_client()
 
 
+def _signup_payload(email: str, password: str = "pw", password_confirmation: str | None = None):
+    local = email.split("@")[0]
+    return {
+        "name": f"{local.title()} User",
+        "username": local.replace(".", "_"),
+        "email": email,
+        "password": password,
+        "password_confirmation": password if password_confirmation is None else password_confirmation,
+    }
+
+
 def test_market_overview_endpoint_returns_items():
     client = _client()
     res = client.get("/api/market-overview")
@@ -775,15 +786,51 @@ def test_signup_rejects_mismatched_password_confirmation():
     client = _client()
     signup = client.post(
         "/api/auth/signup",
-        json={"email": "mismatch@b.com", "password": "pw1", "password_confirmation": "pw2"},
+        json=_signup_payload("mismatch@b.com", password="pw1", password_confirmation="pw2"),
     )
     assert signup.status_code == 400
     assert signup.get_json()["error"] == "passwords do not match"
 
 
+def test_signup_requires_name_and_username():
+    client = _client()
+    signup = client.post(
+        "/api/auth/signup",
+        json={"email": "noname@b.com", "password": "pw", "password_confirmation": "pw"},
+    )
+    assert signup.status_code == 400
+    assert "name, username" in signup.get_json()["error"]
+
+
+def test_signup_rejects_duplicate_username():
+    client = _client()
+    first = client.post("/api/auth/signup", json=_signup_payload("alpha@b.com"))
+    assert first.status_code == 201
+    second_payload = _signup_payload("beta@b.com")
+    second_payload["username"] = first.get_json()["user"]["username"]
+    second = client.post("/api/auth/signup", json=second_payload)
+    assert second.status_code == 409
+    assert second.get_json()["error"] == "username already exists"
+
+
+def test_me_profile_update_reflects_name_username_and_initials():
+    client = _client()
+    signup = client.post("/api/auth/signup", json=_signup_payload("profile@b.com"))
+    assert signup.status_code == 201
+    update = client.put("/api/me/profile", json={"name": "John Smith", "username": "johnsmith", "profile_image_url": None})
+    assert update.status_code == 200
+    payload = update.get_json()["user"]
+    assert payload["name"] == "John Smith"
+    assert payload["username"] == "johnsmith"
+    assert payload["initials"] == "JS"
+    me = client.get("/api/me")
+    assert me.status_code == 200
+    assert me.get_json()["user"]["username"] == "johnsmith"
+
+
 def test_user_watchlist_exposes_quote_source_diagnostics():
     client = _client()
-    signup = client.post("/api/auth/signup", json={"email": "a@b.com", "password": "pw", "password_confirmation": "pw"})
+    signup = client.post("/api/auth/signup", json=_signup_payload("a@b.com"))
     assert signup.status_code == 201
     add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 1})
     assert add.status_code == 201
@@ -797,7 +844,7 @@ def test_user_watchlist_exposes_quote_source_diagnostics():
 
 def test_forgot_password_returns_generic_success_message():
     client = _client()
-    signup = client.post("/api/auth/signup", json={"email": "recover@b.com", "password": "pw", "password_confirmation": "pw"})
+    signup = client.post("/api/auth/signup", json=_signup_payload("recover@b.com"))
     assert signup.status_code == 201
 
     res = client.post("/api/auth/forgot-password", json={"email": "recover@b.com"})
@@ -817,7 +864,7 @@ def test_forgot_password_requires_email():
 
 def test_sell_watchlist_item_records_realized_gain_and_reduces_shares():
     client = _client()
-    signup = client.post("/api/auth/signup", json={"email": "sell@b.com", "password": "pw", "password_confirmation": "pw"})
+    signup = client.post("/api/auth/signup", json=_signup_payload("sell@b.com"))
     assert signup.status_code == 201
 
     add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 10})
@@ -844,7 +891,7 @@ def test_sell_watchlist_item_records_realized_gain_and_reduces_shares():
 
 def test_sell_watchlist_item_removes_position_when_all_shares_are_sold():
     client = _client()
-    signup = client.post("/api/auth/signup", json={"email": "sellall@b.com", "password": "pw", "password_confirmation": "pw"})
+    signup = client.post("/api/auth/signup", json=_signup_payload("sellall@b.com"))
     assert signup.status_code == 201
 
     add = client.post("/api/user-watchlist", json={"symbol": "TSLA", "buy_price": 200, "shares": 2})
@@ -865,7 +912,7 @@ def test_sell_watchlist_item_removes_position_when_all_shares_are_sold():
 
 def test_sell_watchlist_item_rejects_selling_more_than_owned():
     client = _client()
-    signup = client.post("/api/auth/signup", json={"email": "over@b.com", "password": "pw", "password_confirmation": "pw"})
+    signup = client.post("/api/auth/signup", json=_signup_payload("over@b.com"))
     assert signup.status_code == 201
 
     add = client.post("/api/user-watchlist", json={"symbol": "MSFT", "buy_price": 50, "shares": 1})
@@ -879,7 +926,7 @@ def test_sell_watchlist_item_rejects_selling_more_than_owned():
 
 def test_buy_watchlist_item_increases_shares_and_recalculates_entry_price():
     client = _client()
-    signup = client.post("/api/auth/signup", json={"email": "buy@b.com", "password": "pw", "password_confirmation": "pw"})
+    signup = client.post("/api/auth/signup", json=_signup_payload("buy@b.com"))
     assert signup.status_code == 201
 
     add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 10})
@@ -896,7 +943,7 @@ def test_buy_watchlist_item_increases_shares_and_recalculates_entry_price():
 
 def test_buy_watchlist_item_validates_positive_inputs():
     client = _client()
-    signup = client.post("/api/auth/signup", json={"email": "buy-invalid@b.com", "password": "pw", "password_confirmation": "pw"})
+    signup = client.post("/api/auth/signup", json=_signup_payload("buy-invalid@b.com"))
     assert signup.status_code == 201
 
     add = client.post("/api/user-watchlist", json={"symbol": "TSLA", "buy_price": 200, "shares": 2})
@@ -914,7 +961,7 @@ def test_buy_watchlist_item_validates_positive_inputs():
 
 def test_forgot_password_sends_reset_email_for_existing_user(monkeypatch):
     client = _client()
-    signup = client.post("/api/auth/signup", json={"email": "mailer@b.com", "password": "pw", "password_confirmation": "pw"})
+    signup = client.post("/api/auth/signup", json=_signup_payload("mailer@b.com"))
     assert signup.status_code == 201
 
     captured = {}
@@ -934,7 +981,7 @@ def test_forgot_password_sends_reset_email_for_existing_user(monkeypatch):
 
 def test_reset_password_updates_credentials_and_allows_login():
     client = _client()
-    signup = client.post("/api/auth/signup", json={"email": "reset@b.com", "password": "oldpw", "password_confirmation": "oldpw"})
+    signup = client.post("/api/auth/signup", json=_signup_payload("reset@b.com", password="oldpw"))
     assert signup.status_code == 201
 
     with client.application.app_context():
@@ -966,7 +1013,7 @@ def test_user_watchlist_uses_ai_portfolio_advice_when_available():
     client = _client()
     client.application.extensions["ai_advisor_service"] = StubAIAdvisorService()
 
-    signup = client.post("/api/auth/signup", json={"email": "portfolio-ai@b.com", "password": "pw", "password_confirmation": "pw"})
+    signup = client.post("/api/auth/signup", json=_signup_payload("portfolio-ai@b.com"))
     assert signup.status_code == 201
     add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 1})
     assert add.status_code == 201
@@ -985,7 +1032,7 @@ def test_user_watchlist_includes_deterministic_portfolio_advice_when_available()
     client.application.extensions["deterministic_quick_advisor"] = StubDeterministicQuickAdvisor()
     client.application.extensions["ai_advisor_service"] = None
 
-    signup = client.post("/api/auth/signup", json={"email": "portfolio-det@b.com", "password": "pw", "password_confirmation": "pw"})
+    signup = client.post("/api/auth/signup", json=_signup_payload("portfolio-det@b.com"))
     assert signup.status_code == 201
     add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 1})
     assert add.status_code == 201
