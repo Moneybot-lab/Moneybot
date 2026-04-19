@@ -8,7 +8,6 @@ from pathlib import Path
 
 from flask import Flask, render_template, render_template_string
 from flask_cors import CORS
-from sqlalchemy import inspect, text
 from .api import api_bp
 from .extensions import db, migrate
 from .services.ai_advisor import AIAdvisorService
