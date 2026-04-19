@@ -47,6 +47,81 @@ const fallbackData = {
                   function opsBadge(value, positive){
                     return `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${positive ? '#166534' : '#7f1d1d'};color:#fefce8;font-weight:700;font-size:12px">${escapeHtml(value)}</span>`;
                   }
+                  const TAB_SESSION_KEY = 'moneybot_tab_session_id';
+                  function getTabSessionId(){
+                    return sessionStorage.getItem(TAB_SESSION_KEY) || '';
+                  }
+                  async function apiFetch(url, options = {}){
+                    const headers = Object.assign({}, options.headers || {});
+                    const tabSessionId = getTabSessionId();
+                    if(tabSessionId){
+                      headers['X-Tab-Session-Id'] = tabSessionId;
+                    }
+                    return fetch(url, Object.assign({}, options, { headers }));
+                  }
+                  function initialsFromName(name){
+                    const tokens = String(name || '').trim().replaceAll('-', ' ').split(/\s+/).filter(Boolean);
+                    return tokens.slice(0,2).map((part) => part[0]).join('').toUpperCase() || 'U';
+                  }
+                  function setAvatar(imageNode, initialsNode, profileImageUrl, name){
+                    initialsNode.textContent = initialsFromName(name);
+                    if(profileImageUrl){
+                      imageNode.src = profileImageUrl;
+                      imageNode.style.display = 'block';
+                      initialsNode.style.display = 'none';
+                    } else {
+                      imageNode.style.display = 'none';
+                      initialsNode.style.display = 'flex';
+                    }
+                  }
+                  function renderAuthenticatedMenu(user){
+                    const loginLink = document.getElementById('loginLink');
+                    const signupLink = document.getElementById('signupLink');
+                    const userMenuButton = document.getElementById('userMenuButton');
+                    const profileCard = document.getElementById('menuProfileCard');
+                    const profileName = user?.name || 'User';
+                    const profileUsername = user?.username || 'user';
+                    if(loginLink) loginLink.style.display = 'none';
+                    if(signupLink) signupLink.style.display = 'none';
+                    if(userMenuButton) userMenuButton.style.display = 'inline-flex';
+                    if(profileCard) profileCard.style.display = 'block';
+                    document.getElementById('userMenuName').textContent = profileName;
+                    document.getElementById('menuProfileName').textContent = profileName;
+                    document.getElementById('menuProfileUsername').textContent = '@' + profileUsername;
+                    setAvatar(
+                      document.getElementById('userMenuAvatarImage'),
+                      document.getElementById('userMenuAvatarInitials'),
+                      user?.profile_image_url,
+                      profileName,
+                    );
+                    setAvatar(
+                      document.getElementById('menuProfileImage'),
+                      document.getElementById('menuProfileInitials'),
+                      user?.profile_image_url,
+                      profileName,
+                    );
+                  }
+                  async function refreshCurrentUser(){
+                    try {
+                      const res = await apiFetch('/api/me');
+                      if(!res.ok){
+                        return null;
+                      }
+                      const payload = await res.json();
+                      const user = payload.user || null;
+                      if(user){
+                        renderAuthenticatedMenu(user);
+                      }
+                      return user;
+                    } catch (err) {
+                      return null;
+                    }
+                  }
+                  async function logoutFromMenu(){
+                    await apiFetch('/api/auth/logout', { method: 'POST' });
+                    sessionStorage.removeItem(TAB_SESSION_KEY);
+                    location.href = '/';
+                  }
                   const marketChartInstances = {};
                   function destroyMarketCharts(){ Object.values(marketChartInstances).forEach(c => c.destroy()); Object.keys(marketChartInstances).forEach(k => delete marketChartInstances[k]); }
 
@@ -373,8 +448,10 @@ const fallbackData = {
                   });
                   document.getElementById('homeTickerModal').addEventListener('click', (event) => { if(event.target.id==='homeTickerModal'){ closeHomeModal(); }});
                   document.getElementById('menuToggleBtn').addEventListener('click', toggleMenu);
+                  document.getElementById('userMenuButton').addEventListener('click', openMenu);
                   document.getElementById('menuCloseBtn').addEventListener('click', closeMenu);
                   document.getElementById('homeMenuOverlay').addEventListener('click', closeMenu);
+                  document.getElementById('menuLogoutBtn').addEventListener('click', logoutFromMenu);
                   document.addEventListener('keydown', (event) => {
                     if(event.key === 'Escape'){
                       closeHomeModal();
@@ -384,6 +461,7 @@ const fallbackData = {
 
                   async function init(){
                     setMenuState(false);
+                    await refreshCurrentUser();
                     const market = await fetchWithFallback('/api/market-overview', 'market');
                     renderMarket(market);
                     await refreshTab('stable');
