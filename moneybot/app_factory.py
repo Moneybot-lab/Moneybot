@@ -438,7 +438,11 @@ def create_app() -> Flask:
                   <a href="/login" style="text-decoration:none;background:#d1fae5;color:#0f172a;padding:10px 16px;border-radius:999px;font-size:1.05rem;font-weight:600">Login</a>
                 </p>
                 <form id="signupForm" style="display:flex;flex-direction:column;gap:12px">
+                  <input id="name" placeholder="full name" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <input id="username" placeholder="username" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
                   <input id="email" placeholder="email" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <label style="font-size:.95rem;color:#166534;font-weight:600">Profile picture (optional)</label>
+                  <input id="profileImage" type="file" accept="image/*" style="font-size:1rem;padding:8px;border:1px solid #bbf7d0;border-radius:10px;background:#fff" />
                   <input id="password" type="password" placeholder="password" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
                   <input id="confirmPassword" type="password" placeholder="confirm password" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
                   <button type="submit" style="font-size:1.08rem;padding:12px;border:none;border-radius:10px;background:#16a34a;color:#f0fdf4;font-weight:700;cursor:pointer">Create</button>
@@ -446,7 +450,10 @@ def create_app() -> Flask:
                 <div id="out" style="margin-top:12px;color:#166534;text-align:center;font-size:1.02rem"></div>
               </div>
               <script>
+              const nameEl = document.getElementById('name');
+              const usernameEl = document.getElementById('username');
               const emailEl = document.getElementById('email');
+              const profileImageEl = document.getElementById('profileImage');
               const passwordEl = document.getElementById('password');
               const confirmPasswordEl = document.getElementById('confirmPassword');
               const outEl = document.getElementById('out');
@@ -459,6 +466,15 @@ def create_app() -> Flask:
                 }
                 return tabSessionId;
               }
+              function readFileAsDataUrl(file){
+                return new Promise((resolve, reject) => {
+                  if(!file){ resolve(null); return; }
+                  const reader = new FileReader();
+                  reader.onload = () => resolve(reader.result);
+                  reader.onerror = () => reject(new Error('Unable to read selected file.'));
+                  reader.readAsDataURL(file);
+                });
+              }
               document.getElementById('signupForm').addEventListener('submit', go);
 
               async function go(event){
@@ -467,7 +483,9 @@ def create_app() -> Flask:
                   outEl.textContent = 'Passwords do not match.';
                   return;
                 }
-                const res = await fetch('/api/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,password_confirmation:confirmPasswordEl.value,tab_session_id:getOrCreateTabSessionId()})});
+                const profileImageFile = profileImageEl.files && profileImageEl.files[0];
+                const profileImageUrl = profileImageFile ? await readFileAsDataUrl(profileImageFile) : null;
+                const res = await fetch('/api/auth/signup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:nameEl.value,username:usernameEl.value,email:emailEl.value,password:passwordEl.value,profile_image_url:profileImageUrl,password_confirmation:confirmPasswordEl.value,tab_session_id:getOrCreateTabSessionId()})});
                 const data = await res.json();
                 if(res.ok){ outEl.textContent='Account created. Redirecting...'; location.href='/portfolio'; }
                 else { outEl.textContent = data.error || 'Sign-up failed. Please try again.'; }
@@ -510,6 +528,114 @@ def create_app() -> Flask:
                   if(res.ok){ outEl.textContent='Password updated. Redirecting to login...'; setTimeout(()=>{ location.href='/login'; }, 900); }
                   else { outEl.textContent = data.error || 'Unable to reset password.'; }
                 });
+              </script>
+            </body></html>
+            """
+        )
+
+    @app.get("/settings")
+    @app.get("/settings/")
+    def settings_page():
+        return render_template_string(
+            """
+            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f7fee7;max-width:860px;margin:0 auto">
+              <h2 style="margin-bottom:10px">Profile & Account Settings</h2>
+              <p style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 16px">
+                <a href="/" style="text-decoration:none;background:#dcfce7;color:#14532d;padding:10px 14px;border-radius:999px;font-weight:700">Home</a>
+                <a href="/portfolio" style="text-decoration:none;background:#dcfce7;color:#14532d;padding:10px 14px;border-radius:999px;font-weight:700">Portfolio</a>
+              </p>
+              <section style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:16px">
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+                  <img id="avatarImage" alt="Profile image" style="display:none;width:56px;height:56px;border-radius:999px;object-fit:cover;border:1px solid #bbf7d0" />
+                  <div id="avatarInitials" style="width:56px;height:56px;border-radius:999px;background:#14532d;color:#f0fdf4;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.15rem">U</div>
+                  <div><div id="profileNameLabel" style="font-weight:800;color:#14532d"></div><div id="profileUsernameLabel" style="color:#166534"></div></div>
+                </div>
+                <form id="profileForm" style="display:grid;gap:10px">
+                  <input id="name" placeholder="full name" required style="font-size:1.03rem;padding:10px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <input id="username" placeholder="username" required style="font-size:1.03rem;padding:10px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <input id="profileImage" type="file" accept="image/*" style="font-size:1rem;padding:8px;border:1px solid #bbf7d0;border-radius:10px;background:#fff" />
+                  <button id="removeImageBtn" type="button" style="justify-self:start;border:1px solid #166534;background:#ecfdf5;color:#14532d;padding:8px 12px;border-radius:999px;font-weight:700;cursor:pointer">Remove profile image</button>
+                  <button type="submit" style="justify-self:start;border:none;background:#16a34a;color:#f0fdf4;padding:10px 16px;border-radius:999px;font-weight:800;cursor:pointer">Save profile</button>
+                </form>
+                <div id="out" style="margin-top:10px;color:#166534"></div>
+              </section>
+              <script>
+                const TAB_SESSION_KEY = 'moneybot_tab_session_id';
+                let currentProfileImageUrl = null;
+                function getTabSessionId(){ return sessionStorage.getItem(TAB_SESSION_KEY) || ''; }
+                async function apiFetch(url, options = {}){
+                  const headers = Object.assign({'Content-Type':'application/json', 'X-Tab-Session-Id': getTabSessionId()}, options.headers || {});
+                  const res = await fetch(url, Object.assign({}, options, { headers }));
+                  if(res.status === 401){ location.href = '/login'; throw new Error('authentication required'); }
+                  return res;
+                }
+                function initials(name){
+                  return String(name || '').trim().split(/\\s+/).filter(Boolean).slice(0,2).map((part)=>part[0]).join('').toUpperCase() || 'U';
+                }
+                function renderAvatar(profileImageUrl, name){
+                  const img = document.getElementById('avatarImage');
+                  const initialsNode = document.getElementById('avatarInitials');
+                  const value = initials(name);
+                  initialsNode.textContent = value;
+                  if(profileImageUrl){
+                    img.src = profileImageUrl;
+                    img.style.display = 'block';
+                    initialsNode.style.display = 'none';
+                  } else {
+                    img.style.display = 'none';
+                    initialsNode.style.display = 'flex';
+                  }
+                }
+                function readFileAsDataUrl(file){
+                  return new Promise((resolve, reject) => {
+                    if(!file){ resolve(null); return; }
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result);
+                    reader.onerror = () => reject(new Error('Unable to read selected file.'));
+                    reader.readAsDataURL(file);
+                  });
+                }
+                async function loadProfile(){
+                  const res = await apiFetch('/api/me');
+                  const payload = await res.json();
+                  const user = payload.user || {};
+                  document.getElementById('name').value = user.name || '';
+                  document.getElementById('username').value = user.username || '';
+                  document.getElementById('profileNameLabel').textContent = user.name || 'Unknown user';
+                  document.getElementById('profileUsernameLabel').textContent = user.username ? '@' + user.username : '';
+                  currentProfileImageUrl = user.profile_image_url || null;
+                  renderAvatar(currentProfileImageUrl, user.name);
+                }
+                document.getElementById('removeImageBtn').addEventListener('click', () => {
+                  currentProfileImageUrl = null;
+                  document.getElementById('profileImage').value = '';
+                  renderAvatar(null, document.getElementById('name').value);
+                });
+                document.getElementById('profileForm').addEventListener('submit', async (event) => {
+                  event.preventDefault();
+                  const outEl = document.getElementById('out');
+                  outEl.textContent = 'Saving...';
+                  const chosenFile = document.getElementById('profileImage').files[0];
+                  const uploadedDataUrl = chosenFile ? await readFileAsDataUrl(chosenFile) : null;
+                  const profileImageUrl = uploadedDataUrl !== null ? uploadedDataUrl : currentProfileImageUrl;
+                  const res = await apiFetch('/api/me/profile', {
+                    method:'PUT',
+                    body: JSON.stringify({
+                      name: document.getElementById('name').value,
+                      username: document.getElementById('username').value,
+                      profile_image_url: profileImageUrl
+                    }),
+                  });
+                  const payload = await res.json();
+                  if(!res.ok){ outEl.textContent = payload.error || 'Unable to update profile.'; return; }
+                  const user = payload.user || {};
+                  currentProfileImageUrl = user.profile_image_url || null;
+                  document.getElementById('profileNameLabel').textContent = user.name || 'Unknown user';
+                  document.getElementById('profileUsernameLabel').textContent = user.username ? '@' + user.username : '';
+                  renderAvatar(currentProfileImageUrl, user.name);
+                  outEl.textContent = 'Saved.';
+                });
+                loadProfile();
               </script>
             </body></html>
             """
