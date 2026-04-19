@@ -32,22 +32,22 @@ def _slug_username(raw: str) -> str:
 
 
 def _ensure_user_profile_schema() -> None:
-    inspector = inspect(db.engine)
+    inspector = db.inspect(db.engine)
     if "users" not in inspector.get_table_names():
         return
     columns = {column["name"] for column in inspector.get_columns("users")}
     if "name" not in columns:
-        db.session.execute(text("ALTER TABLE users ADD COLUMN name VARCHAR(255)"))
+        db.session.execute(db.text("ALTER TABLE users ADD COLUMN name VARCHAR(255)"))
     if "username" not in columns:
-        db.session.execute(text("ALTER TABLE users ADD COLUMN username VARCHAR(80)"))
+        db.session.execute(db.text("ALTER TABLE users ADD COLUMN username VARCHAR(80)"))
     if "profile_image_url" not in columns:
-        db.session.execute(text("ALTER TABLE users ADD COLUMN profile_image_url TEXT"))
+        db.session.execute(db.text("ALTER TABLE users ADD COLUMN profile_image_url TEXT"))
     if "updated_at" not in columns:
-        db.session.execute(text("ALTER TABLE users ADD COLUMN updated_at TIMESTAMP"))
+        db.session.execute(db.text("ALTER TABLE users ADD COLUMN updated_at TIMESTAMP"))
     db.session.commit()
 
     rows = db.session.execute(
-        text("SELECT id, email, name, username, created_at, updated_at FROM users ORDER BY id ASC"),
+        db.text("SELECT id, email, name, username, created_at, updated_at FROM users ORDER BY id ASC"),
     ).mappings().all()
     assigned_usernames: set[str] = set()
     for row in rows:
@@ -68,14 +68,14 @@ def _ensure_user_profile_schema() -> None:
             candidate = f"{base_username}{suffix}"
         assigned_usernames.add(candidate)
         db.session.execute(
-            text(
+            db.text(
                 "UPDATE users SET name=:name, username=:username, updated_at=COALESCE(updated_at, created_at, CURRENT_TIMESTAMP) WHERE id=:user_id",
             ),
             {"name": resolved_name, "username": candidate, "user_id": row["id"]},
         )
     db.session.commit()
     db.session.execute(
-        text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON users (username)"),
+        db.text("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON users (username)"),
     )
     db.session.commit()
 
