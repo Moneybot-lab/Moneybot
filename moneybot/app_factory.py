@@ -769,10 +769,31 @@ def create_app() -> Flask:
                 </form>
                 <div id="out" style="margin-top:10px;color:#166534;text-align:right;padding-right:8px"></div>
               </section>
+              <div id="settingsAvatarEditorModal" style="display:none;position:fixed;inset:0;background:rgba(2,6,23,.5);align-items:center;justify-content:center;padding:14px">
+                <div style="background:#f8fafc;border-radius:12px;padding:14px;width:min(96vw,420px)">
+                  <h3 style="margin:0 0 8px;color:#0f172a">Adjust profile picture</h3>
+                  <div style="display:flex;justify-content:center;margin-bottom:10px">
+                    <div style="width:170px;height:170px;border-radius:999px;overflow:hidden;background:#e2e8f0;position:relative;border:1px solid #cbd5e1">
+                      <img id="settingsAvatarEditorImage" alt="Adjust profile image" style="position:absolute;left:50%;top:50%;width:100%;height:100%;object-fit:cover;transform:translate(-50%,-50%);transform-origin:center center" />
+                    </div>
+                  </div>
+                  <label style="display:block;font-size:.9rem;color:#166534;font-weight:700">Zoom</label>
+                  <input id="settingsAvatarZoom" type="range" min="1" max="4" step="0.01" value="1.35" style="width:100%" />
+                  <label style="display:block;font-size:.9rem;color:#166534;font-weight:700;margin-top:8px">Horizontal</label>
+                  <input id="settingsAvatarOffsetX" type="range" min="-120" max="120" step="1" value="0" style="width:100%" />
+                  <label style="display:block;font-size:.9rem;color:#166534;font-weight:700;margin-top:8px">Vertical</label>
+                  <input id="settingsAvatarOffsetY" type="range" min="-120" max="120" step="1" value="0" style="width:100%" />
+                  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">
+                    <button id="settingsCancelAvatarEditBtn" type="button" style="border:none;background:#e2e8f0;color:#0f172a;padding:8px 12px;border-radius:8px;cursor:pointer">Cancel</button>
+                    <button id="settingsSaveAvatarEditBtn" type="button" style="border:none;background:#16a34a;color:#f0fdf4;padding:8px 12px;border-radius:8px;cursor:pointer;font-weight:700">Use picture</button>
+                  </div>
+                </div>
+              </div>
               <script>
                 const TAB_SESSION_KEY = 'moneybot_tab_session_id';
                 let currentProfileImageUrl = null;
                 let originalProfile = null;
+                let rawSelectedAvatarUrl = null;
                 function getTabSessionId(){ return sessionStorage.getItem(TAB_SESSION_KEY) || ''; }
                 async function apiFetch(url, options = {}){
                   const headers = Object.assign({'Content-Type':'application/json', 'X-Tab-Session-Id': getTabSessionId()}, options.headers || {});
@@ -806,6 +827,48 @@ def create_app() -> Flask:
                     reader.readAsDataURL(file);
                   });
                 }
+                function applyAvatarEditorTransform(){
+                  const zoom = document.getElementById('settingsAvatarZoom').value;
+                  const x = document.getElementById('settingsAvatarOffsetX').value;
+                  const y = document.getElementById('settingsAvatarOffsetY').value;
+                  document.getElementById('settingsAvatarEditorImage').style.transform = `translate(calc(-50% + ${x}px), calc(-50% + ${y}px)) scale(${zoom})`;
+                }
+                function openAvatarEditor(dataUrl){
+                  rawSelectedAvatarUrl = dataUrl;
+                  document.getElementById('settingsAvatarEditorImage').src = dataUrl;
+                  document.getElementById('settingsAvatarZoom').value = '1.35';
+                  document.getElementById('settingsAvatarOffsetX').value = '0';
+                  document.getElementById('settingsAvatarOffsetY').value = '0';
+                  applyAvatarEditorTransform();
+                  document.getElementById('settingsAvatarEditorModal').style.display = 'flex';
+                }
+                function closeAvatarEditor(){
+                  document.getElementById('settingsAvatarEditorModal').style.display = 'none';
+                }
+                function buildCroppedAvatarDataUrl(){
+                  const canvas = document.createElement('canvas');
+                  canvas.width = 240;
+                  canvas.height = 240;
+                  const ctx = canvas.getContext('2d');
+                  const img = document.getElementById('settingsAvatarEditorImage');
+                  const zoom = Number(document.getElementById('settingsAvatarZoom').value || 1);
+                  const offsetX = Number(document.getElementById('settingsAvatarOffsetX').value || 0);
+                  const offsetY = Number(document.getElementById('settingsAvatarOffsetY').value || 0);
+                  const width = Number(img.naturalWidth || canvas.width);
+                  const height = Number(img.naturalHeight || canvas.height);
+                  const fitScale = Math.max(canvas.width / width, canvas.height / height);
+                  const drawWidth = width * fitScale * zoom;
+                  const drawHeight = height * fitScale * zoom;
+                  const x = (canvas.width - drawWidth) / 2 + (offsetX * (canvas.width / 170));
+                  const y = (canvas.height - drawHeight) / 2 + (offsetY * (canvas.height / 170));
+                  ctx.save();
+                  ctx.beginPath();
+                  ctx.arc(canvas.width / 2, canvas.height / 2, canvas.width / 2, 0, Math.PI * 2);
+                  ctx.clip();
+                  ctx.drawImage(img, x, y, drawWidth, drawHeight);
+                  ctx.restore();
+                  return canvas.toDataURL('image/png');
+                }
                 async function loadProfile(){
                   const res = await apiFetch('/api/me');
                   const payload = await res.json();
@@ -821,8 +884,16 @@ def create_app() -> Flask:
                   const chosenFile = document.getElementById('profileImage').files[0];
                   if(!chosenFile){ return; }
                   const uploadedDataUrl = await readFileAsDataUrl(chosenFile);
-                  currentProfileImageUrl = uploadedDataUrl;
+                  openAvatarEditor(uploadedDataUrl);
+                });
+                ['settingsAvatarZoom', 'settingsAvatarOffsetX', 'settingsAvatarOffsetY'].forEach((id) => {
+                  document.getElementById(id).addEventListener('input', applyAvatarEditorTransform);
+                });
+                document.getElementById('settingsCancelAvatarEditBtn').addEventListener('click', closeAvatarEditor);
+                document.getElementById('settingsSaveAvatarEditBtn').addEventListener('click', () => {
+                  currentProfileImageUrl = buildCroppedAvatarDataUrl() || rawSelectedAvatarUrl;
                   renderAvatar(currentProfileImageUrl, document.getElementById('name').value);
+                  closeAvatarEditor();
                 });
                 document.getElementById('cancelEditBtn').addEventListener('click', () => {
                   if(!originalProfile){ return; }
