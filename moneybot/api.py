@@ -297,7 +297,19 @@ def _attach_request_id(response):
 
 
 def _user_payload(user: User) -> Dict[str, Any]:
-    return {"id": user.id, "email": user.email, "created_at": user.created_at.isoformat()}
+    name = (user.name or "").strip()
+    parts = [part for part in name.replace("-", " ").split() if part]
+    initials = "".join(part[0] for part in parts[:2]).upper() or "U"
+    return {
+        "id": user.id,
+        "name": user.name,
+        "username": user.username,
+        "initials": initials,
+        "email": user.email,
+        "profile_image_url": user.profile_image_url,
+        "created_at": user.created_at.isoformat(),
+        "updated_at": user.updated_at.isoformat(),
+    }
 
 
 def _watchlist_item_payload(item: WatchlistItem) -> Dict[str, Any]:
@@ -406,19 +418,32 @@ def _plain_english_recommendation(recommendation: str, reason: str) -> str:
 @api_bp.post("/auth/signup")
 def signup():
     data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    username = (data.get("username") or "").strip().lower()
     email = (data.get("email") or "").strip().lower()
     password = data.get("password") or ""
+    profile_image_url = (data.get("profile_image_url") or "").strip() or None
     tab_session_id = (data.get("tab_session_id") or "").strip()
     password_confirmation = data.get("password_confirmation")
-    if not email or not password:
-        return jsonify({"error": "email and password required", "request_id": g.request_id}), 400
+    if not name or not username or not email or not password:
+        return jsonify(
+            {"error": "name, username, email, and password required", "request_id": g.request_id},
+        ), 400
     if password_confirmation is not None and password != password_confirmation:
         return jsonify({"error": "passwords do not match", "request_id": g.request_id}), 400
 
     if User.query.filter_by(email=email).first():
         return jsonify({"error": "email already exists", "request_id": g.request_id}), 409
+    if User.query.filter_by(username=username).first():
+        return jsonify({"error": "username already exists", "request_id": g.request_id}), 409
 
-    user = User(email=email, password_hash=generate_password_hash(password))
+    user = User(
+        name=name,
+        username=username,
+        email=email,
+        password_hash=generate_password_hash(password),
+        profile_image_url=profile_image_url,
+    )
     db.session.add(user)
     db.session.commit()
 
@@ -506,6 +531,32 @@ def me():
     if not user:
         session.clear()
         return jsonify({"error": "user not found", "request_id": g.request_id}), 404
+    return jsonify({"user": _user_payload(user), "request_id": g.request_id})
+
+
+@api_bp.put("/me/profile")
+@login_required
+def update_profile():
+    user = db.session.get(User, session["user_id"])
+    if not user:
+        session.clear()
+        return jsonify({"error": "user not found", "request_id": g.request_id}), 404
+
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    username = (data.get("username") or "").strip().lower()
+    profile_image_url = (data.get("profile_image_url") or "").strip() or None
+    if not name or not username:
+        return jsonify({"error": "name and username required", "request_id": g.request_id}), 400
+
+    existing = User.query.filter(User.username == username, User.id != user.id).first()
+    if existing:
+        return jsonify({"error": "username already exists", "request_id": g.request_id}), 409
+
+    user.name = name
+    user.username = username
+    user.profile_image_url = profile_image_url
+    db.session.commit()
     return jsonify({"user": _user_payload(user), "request_id": g.request_id})
 
 
@@ -632,6 +683,29 @@ def user_watchlist():
             except Exception:  # noqa: BLE001
                 ai_portfolio = None
 
+        quick_alignment_recommendation = None
+        quick_alignment_source = "rule_based_quick_scale"
+        try:
+            quick_alignment_payload = _quick_decision(signal, quote)
+            quick_alignment_recommendation = str(
+                (quick_alignment_payload or {}).get("recommendation") or "",
+            ).upper()
+        except Exception:  # noqa: BLE001
+            quick_alignment_recommendation = None
+
+        if quick_alignment_recommendation in {"BUY", "STRONG BUY"} and advice == "SELL":
+            advice = "HOLD"
+            advice_reason = (
+                f"{advice_reason} Consistency adjustment: Quick Ask currently reads "
+                f"{quick_alignment_recommendation}, so SELL was softened to HOLD."
+            )
+        elif quick_alignment_recommendation == "HOLD OFF FOR NOW" and advice == "BUY":
+            advice = "HOLD"
+            advice_reason = (
+                f"{advice_reason} Consistency adjustment: Quick Ask currently reads HOLD OFF FOR NOW, "
+                "so BUY was softened to HOLD."
+            )
+
         enriched_items.append(
             {
                 **item,
@@ -649,6 +723,8 @@ def user_watchlist():
                 "history30": history30,
                 "quote_source": quote.get("quote_source"),
                 "quote_diagnostics": quote.get("diagnostics"),
+                "quick_alignment_recommendation": quick_alignment_recommendation,
+                "quick_alignment_source": quick_alignment_source,
             }
         )
         if decision_logger is not None:
