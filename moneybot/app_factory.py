@@ -736,30 +736,43 @@ def create_app() -> Flask:
     def settings_page():
         return render_template_string(
             """
-            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f7fee7;max-width:860px;margin:0 auto">
-              <h2 style="margin-bottom:10px">Profile & Account Settings</h2>
-              <p style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 16px">
-                <a href="/" style="text-decoration:none;background:#dcfce7;color:#14532d;padding:10px 14px;border-radius:999px;font-weight:700">Home</a>
-                <a href="/portfolio" style="text-decoration:none;background:#dcfce7;color:#14532d;padding:10px 14px;border-radius:999px;font-weight:700">Portfolio</a>
-              </p>
-              <section style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:16px">
-                <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-                  <img id="avatarImage" alt="Profile image" style="display:none;width:56px;height:56px;border-radius:999px;object-fit:cover;border:1px solid #bbf7d0" />
-                  <div id="avatarInitials" style="width:56px;height:56px;border-radius:999px;background:#14532d;color:#f0fdf4;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.15rem">U</div>
-                  <div><div id="profileNameLabel" style="font-weight:800;color:#14532d"></div><div id="profileUsernameLabel" style="color:#166534"></div></div>
+            <html><body style="font-family:Inter,sans-serif;padding:18px;background:#e5e7eb;max-width:760px;margin:0 auto">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+                <h2 style="margin:0;font-size:2rem;color:#111827">Edit profile</h2>
+                <a href="/" style="text-decoration:none;color:#166534;font-weight:700">Back Home</a>
+              </div>
+              <section style="background:#e5e7eb;border-radius:12px;padding:4px 2px 12px">
+                <div style="display:flex;justify-content:center;position:relative;margin:18px 0 18px">
+                  <div style="position:relative;width:168px;height:168px">
+                    <img id="avatarImage" alt="Profile image" style="display:none;width:168px;height:168px;border-radius:999px;object-fit:cover" />
+                    <div id="avatarInitials" style="width:168px;height:168px;border-radius:999px;background:#e879f9;color:#ffffff;display:flex;align-items:center;justify-content:center;font-weight:500;font-size:3rem;letter-spacing:.02em">U</div>
+                    <button id="avatarEditBtn" type="button" style="position:absolute;right:6px;bottom:8px;border:1px solid #d1d5db;background:#fff;color:#374151;width:36px;height:36px;border-radius:999px;font-size:18px;cursor:pointer">📷</button>
+                    <input id="profileImage" type="file" accept="image/*" style="display:none" />
+                  </div>
                 </div>
                 <form id="profileForm" style="display:grid;gap:10px">
-                  <input id="name" placeholder="full name" required style="font-size:1.03rem;padding:10px;border:1px solid #bbf7d0;border-radius:10px" />
-                  <input id="username" placeholder="username" required style="font-size:1.03rem;padding:10px;border:1px solid #bbf7d0;border-radius:10px" />
-                  <input id="profileImage" type="file" accept="image/*" style="font-size:1rem;padding:8px;border:1px solid #bbf7d0;border-radius:10px;background:#fff" />
-                  <button id="removeImageBtn" type="button" style="justify-self:start;border:1px solid #166534;background:#ecfdf5;color:#14532d;padding:8px 12px;border-radius:999px;font-weight:700;cursor:pointer">Remove profile image</button>
-                  <button type="submit" style="justify-self:start;border:none;background:#16a34a;color:#f0fdf4;padding:10px 16px;border-radius:999px;font-weight:800;cursor:pointer">Save profile</button>
+                  <label style="display:block;background:#f3f4f6;border:1px solid #d1d5db;border-radius:10px;padding:8px 10px">
+                    <span style="display:block;color:#374151;font-size:1rem;margin-bottom:2px">Display name</span>
+                    <input id="name" placeholder="Display name" required style="width:100%;font-size:2rem;padding:4px 2px;border:none;background:transparent;color:#111827;outline:none" />
+                  </label>
+                  <label style="display:block;background:#f3f4f6;border:1px solid #d1d5db;border-radius:10px;padding:8px 10px">
+                    <span style="display:block;color:#374151;font-size:1rem;margin-bottom:2px">Username</span>
+                    <input id="username" placeholder="username" required style="width:100%;font-size:2rem;padding:4px 2px;border:none;background:transparent;color:#111827;outline:none" />
+                  </label>
+                  <p style="margin:2px 4px 0;color:#4b5563;font-size:.98rem;text-align:center">
+                    Your profile helps people recognize you. Your name and username are also used in the Sora app.
+                  </p>
+                  <div style="display:flex;justify-content:flex-end;gap:10px;align-items:center;margin-top:4px">
+                    <button id="cancelEditBtn" type="button" style="border:1px solid #d1d5db;background:#f3f4f6;color:#111827;padding:9px 18px;border-radius:999px;font-weight:500;cursor:pointer">Cancel</button>
+                    <button type="submit" style="border:none;background:#111827;color:#fff;padding:10px 18px;border-radius:999px;font-weight:700;cursor:pointer">Save</button>
+                  </div>
                 </form>
-                <div id="out" style="margin-top:10px;color:#166534"></div>
+                <div id="out" style="margin-top:10px;color:#166534;text-align:right;padding-right:8px"></div>
               </section>
               <script>
                 const TAB_SESSION_KEY = 'moneybot_tab_session_id';
                 let currentProfileImageUrl = null;
+                let originalProfile = null;
                 function getTabSessionId(){ return sessionStorage.getItem(TAB_SESSION_KEY) || ''; }
                 async function apiFetch(url, options = {}){
                   const headers = Object.assign({'Content-Type':'application/json', 'X-Tab-Session-Id': getTabSessionId()}, options.headers || {});
@@ -799,37 +812,44 @@ def create_app() -> Flask:
                   const user = payload.user || {};
                   document.getElementById('name').value = user.name || '';
                   document.getElementById('username').value = user.username || '';
-                  document.getElementById('profileNameLabel').textContent = user.name || 'Unknown user';
-                  document.getElementById('profileUsernameLabel').textContent = user.username ? '@' + user.username : '';
+                  originalProfile = { name: user.name || '', username: user.username || '', profile_image_url: user.profile_image_url || null };
                   currentProfileImageUrl = user.profile_image_url || null;
                   renderAvatar(currentProfileImageUrl, user.name);
                 }
-                document.getElementById('removeImageBtn').addEventListener('click', () => {
-                  currentProfileImageUrl = null;
+                document.getElementById('avatarEditBtn').addEventListener('click', () => document.getElementById('profileImage').click());
+                document.getElementById('profileImage').addEventListener('change', async () => {
+                  const chosenFile = document.getElementById('profileImage').files[0];
+                  if(!chosenFile){ return; }
+                  const uploadedDataUrl = await readFileAsDataUrl(chosenFile);
+                  currentProfileImageUrl = uploadedDataUrl;
+                  renderAvatar(currentProfileImageUrl, document.getElementById('name').value);
+                });
+                document.getElementById('cancelEditBtn').addEventListener('click', () => {
+                  if(!originalProfile){ return; }
+                  document.getElementById('name').value = originalProfile.name;
+                  document.getElementById('username').value = originalProfile.username;
+                  currentProfileImageUrl = originalProfile.profile_image_url;
                   document.getElementById('profileImage').value = '';
-                  renderAvatar(null, document.getElementById('name').value);
+                  renderAvatar(currentProfileImageUrl, originalProfile.name);
+                  document.getElementById('out').textContent = '';
                 });
                 document.getElementById('profileForm').addEventListener('submit', async (event) => {
                   event.preventDefault();
                   const outEl = document.getElementById('out');
                   outEl.textContent = 'Saving...';
-                  const chosenFile = document.getElementById('profileImage').files[0];
-                  const uploadedDataUrl = chosenFile ? await readFileAsDataUrl(chosenFile) : null;
-                  const profileImageUrl = uploadedDataUrl !== null ? uploadedDataUrl : currentProfileImageUrl;
                   const res = await apiFetch('/api/me/profile', {
                     method:'PUT',
                     body: JSON.stringify({
                       name: document.getElementById('name').value,
                       username: document.getElementById('username').value,
-                      profile_image_url: profileImageUrl
+                      profile_image_url: currentProfileImageUrl
                     }),
                   });
                   const payload = await res.json();
                   if(!res.ok){ outEl.textContent = payload.error || 'Unable to update profile.'; return; }
                   const user = payload.user || {};
                   currentProfileImageUrl = user.profile_image_url || null;
-                  document.getElementById('profileNameLabel').textContent = user.name || 'Unknown user';
-                  document.getElementById('profileUsernameLabel').textContent = user.username ? '@' + user.username : '';
+                  originalProfile = { name: user.name || '', username: user.username || '', profile_image_url: user.profile_image_url || null };
                   renderAvatar(currentProfileImageUrl, user.name);
                   outEl.textContent = 'Saved.';
                 });

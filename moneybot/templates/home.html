@@ -43,15 +43,19 @@
                   </div>
                   <nav aria-label="User navigation">
                     <ul style="list-style:none;padding:0;margin:0;display:grid;gap:10px">
-                      <li id="menuUserProfileLink" style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px">
-                        <a href="/user-profile" style="display:flex;align-items:center;gap:10px;color:#14532d;text-decoration:none">
-                          <img id="menuUserLinkImage" alt="User profile image" style="display:none;width:36px;height:36px;border-radius:999px;object-fit:cover" />
-                          <span id="menuUserLinkInitials" style="width:36px;height:36px;border-radius:999px;background:#14532d;color:#f0fdf4;display:flex;align-items:center;justify-content:center;font-weight:800">U</span>
-                          <span>
-                            <strong style="display:block">User Profile</strong>
-                            <span id="menuUserLinkMeta" style="font-size:.88rem;color:#166534"></span>
-                          </span>
-                        </a>
+                      <li id="menuProfileCard" style="display:none;border:2px solid #cbd5e1;background:#f1f5f9;border-radius:18px;padding:12px 14px">
+                        <div style="display:flex;align-items:center;gap:10px">
+                          <img id="menuProfileImage" alt="Profile image" style="display:none;width:54px;height:54px;border-radius:999px;object-fit:cover;border:1px solid #cbd5e1" />
+                          <span id="menuProfileInitials" style="width:54px;height:54px;border-radius:999px;background:#e9d5ff;color:#581c87;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:1.2rem">U</span>
+                          <div style="line-height:1.15">
+                            <div id="menuProfileName" style="font-weight:900;color:#0f172a;font-size:1.05rem">User</div>
+                            <div id="menuProfileUsername" style="color:#475569;font-size:1.55rem;font-weight:500">@user</div>
+                          </div>
+                        </div>
+                        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
+                          <a href="/settings" style="text-decoration:none;padding:10px 16px;background:#d1fae5;border-radius:999px;color:#166534;font-weight:900;font-size:1.1rem">Profile / Account Settings</a>
+                          <button id="menuLogoutBtn" type="button" style="border:none;padding:10px 16px;background:#fee2e2;border-radius:999px;color:#991b1b;font-weight:900;cursor:pointer;font-size:1.1rem">Logout</button>
+                        </div>
                       </li>
                       <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px"><a href="/security" style="display:block;color:#14532d;text-decoration:none;font-weight:700">Security</a></li>
                       <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px"><a href="/account" style="display:block;color:#14532d;text-decoration:none;font-weight:700">Account</a></li>
@@ -59,20 +63,6 @@
                       <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px"><a href="/terms" style="display:block;color:#14532d;text-decoration:none;font-weight:700">Terms</a></li>
                       <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px"><a href="/help" style="display:block;color:#14532d;text-decoration:none;font-weight:700">Help</a></li>
                       <li style="border:1px solid #d1fae5;background:#f0fdf4;border-radius:10px;padding:10px 12px"><a href="/disclaimer" style="display:block;color:#14532d;text-decoration:none;font-weight:700">Disclaimer</a></li>
-                      <li id="menuProfileCard" style="display:none;border:1px solid #cbd5e1;background:#f8fafc;border-radius:10px;padding:10px 12px">
-                        <div style="display:flex;align-items:center;gap:10px">
-                          <img id="menuProfileImage" alt="Profile image" style="display:none;width:40px;height:40px;border-radius:999px;object-fit:cover" />
-                          <span id="menuProfileInitials" style="width:40px;height:40px;border-radius:999px;background:#14532d;color:#f0fdf4;display:flex;align-items:center;justify-content:center;font-weight:800">U</span>
-                          <div>
-                            <div id="menuProfileName" style="font-weight:800;color:#0f172a">User</div>
-                            <div id="menuProfileUsername" style="color:#475569;font-size:.9rem">@user</div>
-                          </div>
-                        </div>
-                        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-                          <a href="/settings" style="text-decoration:none;padding:7px 10px;background:#dcfce7;border-radius:999px;color:#166534;font-weight:700;font-size:.9rem">Profile / Account Settings</a>
-                          <button id="menuLogoutBtn" type="button" style="border:none;padding:7px 10px;background:#fee2e2;border-radius:999px;color:#991b1b;font-weight:700;cursor:pointer;font-size:.9rem">Logout</button>
-                        </div>
-                      </li>
                     </ul>
                   </nav>
                 </aside>
