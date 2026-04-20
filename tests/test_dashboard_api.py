@@ -1021,8 +1021,9 @@ def test_user_watchlist_uses_ai_portfolio_advice_when_available():
     res = client.get("/api/user-watchlist")
     assert res.status_code == 200
     enriched = res.get_json()["enriched_items"][0]
-    assert enriched["advice"] == "SELL"
-    assert "buy-in" in enriched["advice_reason"].lower()
+    assert enriched["advice"] == "HOLD"
+    assert "consistency adjustment" in enriched["advice_reason"].lower()
+    assert enriched["quick_alignment_recommendation"] in {"BUY", "STRONG BUY"}
     assert enriched["ai_portfolio"]["mode"] == "ai_enhanced"
     assert enriched["ai_portfolio"]["provider"] == "stub"
 

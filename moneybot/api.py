@@ -683,6 +683,29 @@ def user_watchlist():
             except Exception:  # noqa: BLE001
                 ai_portfolio = None
 
+        quick_alignment_recommendation = None
+        quick_alignment_source = "rule_based_quick_scale"
+        try:
+            quick_alignment_payload = _quick_decision(signal, quote)
+            quick_alignment_recommendation = str(
+                (quick_alignment_payload or {}).get("recommendation") or "",
+            ).upper()
+        except Exception:  # noqa: BLE001
+            quick_alignment_recommendation = None
+
+        if quick_alignment_recommendation in {"BUY", "STRONG BUY"} and advice == "SELL":
+            advice = "HOLD"
+            advice_reason = (
+                f"{advice_reason} Consistency adjustment: Quick Ask currently reads "
+                f"{quick_alignment_recommendation}, so SELL was softened to HOLD."
+            )
+        elif quick_alignment_recommendation == "HOLD OFF FOR NOW" and advice == "BUY":
+            advice = "HOLD"
+            advice_reason = (
+                f"{advice_reason} Consistency adjustment: Quick Ask currently reads HOLD OFF FOR NOW, "
+                "so BUY was softened to HOLD."
+            )
+
         enriched_items.append(
             {
                 **item,
@@ -700,6 +723,8 @@ def user_watchlist():
                 "history30": history30,
                 "quote_source": quote.get("quote_source"),
                 "quote_diagnostics": quote.get("diagnostics"),
+                "quick_alignment_recommendation": quick_alignment_recommendation,
+                "quick_alignment_source": quick_alignment_source,
             }
         )
         if decision_logger is not None:
