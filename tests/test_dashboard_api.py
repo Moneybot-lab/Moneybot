@@ -828,6 +828,38 @@ def test_me_profile_update_reflects_name_username_and_initials():
     assert me.get_json()["user"]["username"] == "johnsmith"
 
 
+def test_me_security_requires_current_password():
+    client = _client()
+    signup = client.post("/api/auth/signup", json=_signup_payload("security@b.com", password="pw"))
+    assert signup.status_code == 201
+    res = client.put(
+        "/api/me/security",
+        json={"email": "security-new@b.com", "current_password": "wrong"},
+    )
+    assert res.status_code == 401
+    assert res.get_json()["error"] == "current password is incorrect"
+
+
+def test_me_security_updates_email_and_password():
+    client = _client()
+    signup = client.post("/api/auth/signup", json=_signup_payload("secure-update@b.com", password="oldpw"))
+    assert signup.status_code == 201
+    update = client.put(
+        "/api/me/security",
+        json={
+            "email": "secure-new@b.com",
+            "current_password": "oldpw",
+            "new_password": "newpw",
+            "confirm_new_password": "newpw",
+        },
+    )
+    assert update.status_code == 200
+    old_login = client.post("/api/auth/login", json={"email": "secure-update@b.com", "password": "oldpw"})
+    assert old_login.status_code == 401
+    new_login = client.post("/api/auth/login", json={"email": "secure-new@b.com", "password": "newpw"})
+    assert new_login.status_code == 200
+
+
 def test_user_watchlist_exposes_quote_source_diagnostics():
     client = _client()
     signup = client.post("/api/auth/signup", json=_signup_payload("a@b.com"))

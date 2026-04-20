@@ -560,6 +560,45 @@ def update_profile():
     return jsonify({"user": _user_payload(user), "request_id": g.request_id})
 
 
+@api_bp.put("/me/security")
+@login_required
+def update_security():
+    user = db.session.get(User, session["user_id"])
+    if not user:
+        session.clear()
+        return jsonify({"error": "user not found", "request_id": g.request_id}), 404
+
+    data = request.get_json(silent=True) or {}
+    new_email = (data.get("email") or "").strip().lower()
+    current_password = data.get("current_password") or ""
+    new_password = data.get("new_password") or ""
+    confirm_password = data.get("confirm_new_password") or ""
+
+    wants_email_change = bool(new_email) and new_email != user.email
+    wants_password_change = bool(new_password or confirm_password)
+    if not wants_email_change and not wants_password_change:
+        return jsonify({"error": "no security changes provided", "request_id": g.request_id}), 400
+
+    if not current_password or not check_password_hash(user.password_hash, current_password):
+        return jsonify({"error": "current password is incorrect", "request_id": g.request_id}), 401
+
+    if wants_email_change:
+        existing = User.query.filter(User.email == new_email, User.id != user.id).first()
+        if existing:
+            return jsonify({"error": "email already exists", "request_id": g.request_id}), 409
+        user.email = new_email
+
+    if wants_password_change:
+        if new_password != confirm_password:
+            return jsonify({"error": "new passwords do not match", "request_id": g.request_id}), 400
+        if not new_password:
+            return jsonify({"error": "new password required", "request_id": g.request_id}), 400
+        user.password_hash = generate_password_hash(new_password)
+
+    db.session.commit()
+    return jsonify({"ok": True, "user": _user_payload(user), "request_id": g.request_id})
+
+
 @api_bp.get("/user-watchlist")
 @login_required
 def user_watchlist():

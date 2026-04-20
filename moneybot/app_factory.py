@@ -445,7 +445,61 @@ def create_app() -> Flask:
 
     @app.get("/security")
     def security_page():
-        return _simple_page("Security")
+        return render_template_string(
+            """
+            <html><body style="font-family:Inter,sans-serif;padding:24px;background:#f7fee7;max-width:760px;margin:0 auto">
+              <h2 style="margin:0 0 12px">Security</h2>
+              <p style="margin:0 0 14px"><a href="/" style="color:#166534;font-weight:700">← Back Home</a></p>
+              <section style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:14px">
+                <h3 style="margin:0 0 8px;color:#14532d">Update email and password</h3>
+                <p style="margin:0 0 12px;color:#166534">For security, enter your current password before any change.</p>
+                <form id="securityForm" style="display:grid;gap:10px">
+                  <input id="email" type="email" placeholder="New email (optional)" style="font-size:1.02rem;padding:10px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <input id="currentPassword" type="password" placeholder="Current password (required for changes)" style="font-size:1.02rem;padding:10px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <input id="newPassword" type="password" placeholder="New password" style="font-size:1.02rem;padding:10px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <input id="confirmNewPassword" type="password" placeholder="Confirm new password" style="font-size:1.02rem;padding:10px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <button type="submit" style="justify-self:start;border:none;background:#14532d;color:#f0fdf4;padding:10px 14px;border-radius:999px;font-weight:700;cursor:pointer">Save security changes</button>
+                </form>
+                <div id="out" style="margin-top:10px;color:#166534"></div>
+              </section>
+              <script>
+                const TAB_SESSION_KEY = 'moneybot_tab_session_id';
+                function getTabSessionId(){ return sessionStorage.getItem(TAB_SESSION_KEY) || ''; }
+                async function apiFetch(url, options = {}){
+                  const headers = Object.assign({'Content-Type':'application/json', 'X-Tab-Session-Id': getTabSessionId()}, options.headers || {});
+                  const res = await fetch(url, Object.assign({}, options, { headers }));
+                  if(res.status === 401){ location.href = '/login'; throw new Error('authentication required'); }
+                  return res;
+                }
+                async function loadSecurityDefaults(){
+                  const res = await apiFetch('/api/me');
+                  const payload = await res.json();
+                  const user = payload.user || {};
+                  document.getElementById('email').value = user.email || '';
+                }
+                document.getElementById('securityForm').addEventListener('submit', async (event) => {
+                  event.preventDefault();
+                  const outEl = document.getElementById('out');
+                  outEl.textContent = 'Saving...';
+                  const body = {
+                    email: document.getElementById('email').value,
+                    current_password: document.getElementById('currentPassword').value,
+                    new_password: document.getElementById('newPassword').value,
+                    confirm_new_password: document.getElementById('confirmNewPassword').value,
+                  };
+                  const res = await apiFetch('/api/me/security', { method: 'PUT', body: JSON.stringify(body) });
+                  const payload = await res.json();
+                  if(!res.ok){ outEl.textContent = payload.error || 'Unable to save changes.'; return; }
+                  document.getElementById('currentPassword').value = '';
+                  document.getElementById('newPassword').value = '';
+                  document.getElementById('confirmNewPassword').value = '';
+                  outEl.textContent = 'Security settings updated.';
+                });
+                loadSecurityDefaults();
+              </script>
+            </body></html>
+            """
+        )
 
     @app.get("/account")
     def account_page():
