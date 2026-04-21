@@ -50,3 +50,11 @@ def day13_calibration_report_path() -> Path:
 
 def day13_recalibration_plan_path() -> Path:
     return resolve_runtime_dir() / "day13_recalibration_plan.json"
+
+
+def day1_training_snapshot_path() -> Path:
+    return resolve_runtime_dir() / "day1_training_snapshot.csv"
+
+
+def day1_baseline_model_path() -> Path:
+    return resolve_runtime_dir() / "day1_baseline_model.json"
