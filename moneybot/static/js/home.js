@@ -381,7 +381,22 @@ const fallbackData = {
                     const calibrationStatus = !hasCalibrationPayload
                       ? 'No report'
                       : (brierScore == null ? 'Pending maturity' : (brierScore <= 0.22 ? 'Healthy' : 'Drifting'));
+                    const trainingFresh = health.training_fresh;
+                    const trainingAgeHours = typeof health.training_age_hours === 'number' ? health.training_age_hours : null;
+                    const trainingMaxAgeHours = Number(health.training_max_age_hours || 36);
+                    const trainingRecordedAt = String(health.training_recorded_at_utc || '');
+                    const trainingStatus = trainingFresh === false ? 'STALE' : (trainingFresh === true ? 'Fresh' : 'Unknown');
                     const cards = [
+                      {
+                        label: 'Training freshness',
+                        value: opsBadge(trainingStatus, trainingFresh === true),
+                        detail: trainingFresh === false
+                          ? `Model training is stale (${trainingAgeHours ?? 'n/a'}h old, max ${trainingMaxAgeHours}h). Check Render cron jobs now.`
+                          : (trainingFresh === true
+                            ? `Last training recorded ${trainingAgeHours ?? 'n/a'}h ago.`
+                            : `No usable training timestamp found${trainingRecordedAt ? ` (${trainingRecordedAt})` : ''}.`),
+                        tone: trainingFresh === false ? 'danger' : 'normal',
+                      },
                       {
                         label: 'Model status',
                         value: health.model_loaded ? opsBadge(`Loaded · ${health.model_version || 'unknown'}`, true) : opsBadge('Not loaded', false),
@@ -410,9 +425,17 @@ const fallbackData = {
                           : (brierScore == null
                             ? `Report loaded · ${calibrationRows} mature rows available for scoring`
                             : `Brier ${brierScore.toFixed(4)} · rows ${calibrationRows}`),
+                        tone: 'normal',
                       },
                     ];
-                    document.getElementById('opsCards').innerHTML = cards.map(card => `<article style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:12px"><div style="font-size:12px;font-weight:800;letter-spacing:.06em;color:#4d7c0f;text-transform:uppercase;margin-bottom:8px">${card.label}</div><div>${card.value}</div><div style="margin-top:8px;color:#3f6212">${escapeHtml(card.detail)}</div></article>`).join('');
+                    document.getElementById('opsCards').innerHTML = cards.map((card) => {
+                      const isDanger = card.tone === 'danger';
+                      const bg = isDanger ? '#fff1f2' : '#f7fee7';
+                      const border = isDanger ? '#fda4af' : '#d9f99d';
+                      const labelColor = isDanger ? '#9f1239' : '#4d7c0f';
+                      const detailColor = isDanger ? '#881337' : '#3f6212';
+                      return `<article style="background:${bg};border:1px solid ${border};border-radius:12px;padding:12px"><div style="font-size:12px;font-weight:800;letter-spacing:.06em;color:${labelColor};text-transform:uppercase;margin-bottom:8px">${card.label}</div><div>${card.value}</div><div style="margin-top:8px;color:${detailColor}">${escapeHtml(card.detail)}</div></article>`;
+                    }).join('');
 
                     const topSymbols = Array.isArray(summary.top_symbols) ? summary.top_symbols : [];
                     document.getElementById('opsTopSymbols').innerHTML = `<div style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:12px"><div style="font-weight:800;color:#365314;margin-bottom:8px">Top recent symbols</div><div style="display:flex;gap:8px;flex-wrap:wrap">${topSymbols.length ? topSymbols.map(item => `<span style="display:inline-flex;gap:6px;align-items:center;background:#dcfce7;border-radius:999px;padding:6px 10px;color:#166534;font-weight:700">${escapeHtml(item.symbol)}<span style="color:#4d7c0f">×${escapeHtml(item.count)}</span></span>`).join('') : '<span style="color:#4d7c0f">No recent symbols yet.</span>'}</div></div>`;
