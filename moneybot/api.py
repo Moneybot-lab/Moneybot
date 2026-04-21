@@ -1343,6 +1343,28 @@ def model_health():
     if calibration_report_diag["exists"] and calibration_report is None:
         logging.warning("Failed to load calibration report JSON from path=%s", calibration_report_path)
 
+    artifact_metadata = load_artifact_metadata(str(model_path)) if model_path else None
+    artifact_history = load_artifact_history(str(model_path)) if model_path else []
+    training_max_age_hours = max(
+        1,
+        int(current_app.config.get("DETERMINISTIC_TRAINING_MAX_AGE_HOURS") or 36),
+    )
+    training_recorded_at_utc = None
+    training_age_hours = None
+    training_fresh = None
+    if isinstance(artifact_metadata, dict):
+        recorded_at_raw = artifact_metadata.get("recorded_at_utc")
+        if isinstance(recorded_at_raw, str) and recorded_at_raw.strip():
+            training_recorded_at_utc = recorded_at_raw
+            try:
+                recorded_at = datetime.fromisoformat(recorded_at_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+                age_hours = (datetime.now(timezone.utc) - recorded_at).total_seconds() / 3600.0
+                if age_hours >= 0:
+                    training_age_hours = round(age_hours, 2)
+                    training_fresh = age_hours <= training_max_age_hours
+            except ValueError:
+                training_fresh = False
+
     return jsonify(
         {
             "data": {
@@ -1367,8 +1389,12 @@ def model_health():
                 "recalibration_plan_exists": recalibration_plan_diag["exists"],
                 "recalibration_plan_mtime_utc": recalibration_plan_diag["mtime_utc"],
                 "calibration_report": calibration_report,
-                "artifact_metadata": load_artifact_metadata(str(model_path)) if model_path else None,
-                "artifact_history": load_artifact_history(str(model_path)) if model_path else [],
+                "artifact_metadata": artifact_metadata,
+                "artifact_history": artifact_history,
+                "training_recorded_at_utc": training_recorded_at_utc,
+                "training_age_hours": training_age_hours,
+                "training_max_age_hours": training_max_age_hours,
+                "training_fresh": training_fresh,
                 "decision_logging": _normalized_decision_logging_health(decision_logger),
             },
             "request_id": g.request_id,
