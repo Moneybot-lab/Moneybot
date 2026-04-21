@@ -303,10 +303,20 @@ def create_app() -> Flask:
     runtime_dir = resolve_runtime_dir()
     configured_model_path = str(os.environ.get("DETERMINISTIC_MODEL_PATH", "") or "").strip()
     runtime_model_path = str(day1_baseline_model_path())
+    legacy_model_path = "data/day1_baseline_model.json"
+    runtime_model_exists = Path(runtime_model_path).exists()
+    legacy_model_exists = Path(legacy_model_path).exists()
+
     default_model_path = runtime_model_path
     if configured_model_path:
-        # Auto-upgrade legacy relative default to runtime path when available.
-        default_model_path = runtime_model_path if configured_model_path == "data/day1_baseline_model.json" else configured_model_path
+        if configured_model_path == legacy_model_path:
+            # Keep legacy path if that's where the artifact currently exists; otherwise prefer runtime path.
+            default_model_path = legacy_model_path if legacy_model_exists else runtime_model_path
+        else:
+            default_model_path = configured_model_path
+    elif not runtime_model_exists and legacy_model_exists:
+        # Safety fallback for existing installs that still write to legacy relative path.
+        default_model_path = legacy_model_path
 
     app = Flask(__name__)
     app.url_map.strict_slashes = False
