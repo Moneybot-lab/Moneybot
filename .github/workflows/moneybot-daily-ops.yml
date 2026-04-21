@@ -1,0 +1,36 @@
+name: Moneybot Daily Ops
+
+on:
+  schedule:
+    # 13:00 UTC daily (7:00 AM MDT during daylight saving)
+    - cron: '0 13 * * *'
+  workflow_dispatch:
+
+jobs:
+  trigger-daily-ops:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: moneybot-daily-ops
+      cancel-in-progress: false
+
+    steps:
+      - name: Validate required secrets
+        env:
+          MONEYBOT_BASE_URL: ${{ secrets.MONEYBOT_BASE_URL }}
+          DAILY_OPS_TOKEN: ${{ secrets.DAILY_OPS_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$MONEYBOT_BASE_URL" || (echo "Missing secret: MONEYBOT_BASE_URL" && exit 1)
+          test -n "$DAILY_OPS_TOKEN" || (echo "Missing secret: DAILY_OPS_TOKEN" && exit 1)
+
+      - name: Trigger /api/run-daily-ops
+        env:
+          MONEYBOT_BASE_URL: ${{ secrets.MONEYBOT_BASE_URL }}
+          DAILY_OPS_TOKEN: ${{ secrets.DAILY_OPS_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 3 --retry-delay 3 --retry-all-errors \
+            -X POST "$MONEYBOT_BASE_URL/api/run-daily-ops" \
+            -H "X-Daily-Ops-Token: $DAILY_OPS_TOKEN" \
+            -H "Content-Type: application/json"
