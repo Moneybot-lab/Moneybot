@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
+from moneybot.services.runtime_paths import resolve_runtime_dir
 
 
 def select_visible_rows(rows: list[dict], evaluated_rows: list[dict], rows_limit: int) -> list[dict]:
@@ -55,11 +55,10 @@ def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
 
 
 def main() -> None:
-    base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
-    os.makedirs(base_dir, exist_ok=True)
+    base_dir = resolve_runtime_dir()
     parser = argparse.ArgumentParser(description="Materialize decision outcomes to a snapshot JSON file.")
-    parser.add_argument("--input", default=os.path.join(base_dir, "decision_events.jsonl"))
-    parser.add_argument("--output", default=os.path.join(base_dir, "decision_outcomes_snapshot.json"))
+    parser.add_argument("--input", default=str(base_dir / "decision_events.jsonl"))
+    parser.add_argument("--output", default=str(base_dir / "decision_outcomes_snapshot.json"))
     parser.add_argument("--limit", type=int, default=2000)
     parser.add_argument("--rows-limit", type=int, default=20)
     args = parser.parse_args()

@@ -1,0 +1,36 @@
+name: Moneybot Weekly Refresh
+
+on:
+  schedule:
+    # 12:00 UTC every Sunday (6:00 AM MDT during daylight saving)
+    - cron: '0 12 * * 0'
+  workflow_dispatch:
+
+jobs:
+  trigger-weekly-refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: moneybot-weekly-refresh
+      cancel-in-progress: false
+
+    steps:
+      - name: Validate required secrets
+        env:
+          MONEYBOT_BASE_URL: ${{ secrets.MONEYBOT_BASE_URL }}
+          DAILY_OPS_TOKEN: ${{ secrets.DAILY_OPS_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$MONEYBOT_BASE_URL" || (echo "Missing secret: MONEYBOT_BASE_URL" && exit 1)
+          test -n "$DAILY_OPS_TOKEN" || (echo "Missing secret: DAILY_OPS_TOKEN" && exit 1)
+
+      - name: Trigger /api/run-weekly-model-refresh
+        env:
+          MONEYBOT_BASE_URL: ${{ secrets.MONEYBOT_BASE_URL }}
+          DAILY_OPS_TOKEN: ${{ secrets.DAILY_OPS_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fsS --retry 3 --retry-delay 5 --retry-all-errors \
+            -X POST "$MONEYBOT_BASE_URL/api/run-weekly-model-refresh" \
+            -H "X-Daily-Ops-Token: $DAILY_OPS_TOKEN" \
+            -H "Content-Type: application/json"
