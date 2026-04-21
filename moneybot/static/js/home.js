@@ -124,6 +124,62 @@ const fallbackData = {
                   }
                   const marketChartInstances = {};
                   function destroyMarketCharts(){ Object.values(marketChartInstances).forEach(c => c.destroy()); Object.keys(marketChartInstances).forEach(k => delete marketChartInstances[k]); }
+                  function destroyQuickTrendChart(){
+                    const graphEl = document.getElementById('quickTrendGraph');
+                    if(graphEl){
+                      graphEl.innerHTML = '';
+                    }
+                  }
+                  function trendPath(points, width, height){
+                    if(!points.length) return '';
+                    const min = Math.min(...points);
+                    const max = Math.max(...points);
+                    const span = Math.max(max - min, 1e-9);
+                    return points.map((value, idx) => {
+                      const x = points.length === 1 ? 0 : (idx / (points.length - 1)) * width;
+                      const y = height - (((value - min) / span) * height);
+                      return `${idx === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+                    }).join(' ');
+                  }
+                  function renderQuickTrend(symbol, series){
+                    const labelEl = document.getElementById('quickTrendLabel');
+                    const graphEl = document.getElementById('quickTrendGraph');
+                    if(!labelEl || !graphEl){
+                      return;
+                    }
+
+                    const values = Array.isArray(series) ? series.filter((v) => Number.isFinite(Number(v))).map((v) => Number(v)) : [];
+                    if(values.length < 2){
+                      destroyQuickTrendChart();
+                      labelEl.textContent = '';
+                      return;
+                    }
+
+                    const latest = values[values.length - 1];
+                    const min = Math.min(...values);
+                    const max = Math.max(...values);
+                    const span = max - min;
+                    const position = span <= 0 ? 0.5 : (latest - min) / span;
+                    const trendLabel = position >= 0.8 ? 'Near peak' : (position <= 0.2 ? 'Near dip' : 'Mid-range');
+                    const isPositive = values[values.length - 1] >= values[0];
+
+                    labelEl.textContent = `${escapeHtml(symbol)} · ${trendLabel} (${values.length} sessions)`;
+                    labelEl.style.color = trendLabel === 'Near peak' ? '#86efac' : (trendLabel === 'Near dip' ? '#fca5a5' : '#bbf7d0');
+                    destroyQuickTrendChart();
+                    const stroke = isPositive ? '#22c55e' : '#dc2626';
+                    const fill = isPositive ? 'rgba(34,197,94,.16)' : 'rgba(239,68,68,.14)';
+                    const width = 400;
+                    const height = 90;
+                    const linePath = trendPath(values, width, height - 8);
+                    if(!linePath){
+                      return;
+                    }
+                    const areaPath = `${linePath} L ${width} ${height} L 0 ${height} Z`;
+                    graphEl.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" width="100%" height="100%" aria-label="${escapeHtml(symbol)} 30 day trend graph">
+                      <path d="${areaPath}" fill="${fill}"></path>
+                      <path d="${linePath}" fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></path>
+                    </svg>`;
+                  }
 
                   async function fetchWithFallback(url, key){
                     try {
@@ -195,6 +251,7 @@ const fallbackData = {
                       const data = payload.data || {};
                       const recommendation = String(data.recommendation || 'HOLD OFF FOR NOW').toUpperCase();
                       outEl.innerHTML = `${quickRecommendationBadge(recommendation)} <span style="margin-left:8px">· ${formatMoney(data.current_price)} · ${data.rationale || 'Signal generated from current indicators.'}</span>`;
+                      renderQuickTrend(symbol, data.history30 || []);
 
                       const ai = data.ai || {};
                       const narrative = ai.narrative || data.rationale || 'No AI narrative available.';
@@ -212,6 +269,7 @@ const fallbackData = {
                     } catch (err) {
                       outEl.textContent = 'Unable to analyze this ticker.';
                       adviceEl.innerHTML = `<strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong><span style="color:#fca5a5">Network issue while loading assistant notes.</span>`;
+                      renderQuickTrend(symbol, []);
                     } finally {
                       loadingEl.style.display = 'none';
                       outEl.style.display = 'block';
@@ -323,7 +381,22 @@ const fallbackData = {
                     const calibrationStatus = !hasCalibrationPayload
                       ? 'No report'
                       : (brierScore == null ? 'Pending maturity' : (brierScore <= 0.22 ? 'Healthy' : 'Drifting'));
+                    const trainingFresh = health.training_fresh;
+                    const trainingAgeHours = typeof health.training_age_hours === 'number' ? health.training_age_hours : null;
+                    const trainingMaxAgeHours = Number(health.training_max_age_hours || 36);
+                    const trainingRecordedAt = String(health.training_recorded_at_utc || '');
+                    const trainingStatus = trainingFresh === false ? 'STALE' : (trainingFresh === true ? 'Fresh' : 'Unknown');
                     const cards = [
+                      {
+                        label: 'Training freshness',
+                        value: opsBadge(trainingStatus, trainingFresh === true),
+                        detail: trainingFresh === false
+                          ? `Model training is stale (${trainingAgeHours ?? 'n/a'}h old, max ${trainingMaxAgeHours}h). Check Render cron jobs now.`
+                          : (trainingFresh === true
+                            ? `Last training recorded ${trainingAgeHours ?? 'n/a'}h ago.`
+                            : `No usable training timestamp found${trainingRecordedAt ? ` (${trainingRecordedAt})` : ''}.`),
+                        tone: trainingFresh === false ? 'danger' : 'normal',
+                      },
                       {
                         label: 'Model status',
                         value: health.model_loaded ? opsBadge(`Loaded · ${health.model_version || 'unknown'}`, true) : opsBadge('Not loaded', false),
@@ -352,9 +425,17 @@ const fallbackData = {
                           : (brierScore == null
                             ? `Report loaded · ${calibrationRows} mature rows available for scoring`
                             : `Brier ${brierScore.toFixed(4)} · rows ${calibrationRows}`),
+                        tone: 'normal',
                       },
                     ];
-                    document.getElementById('opsCards').innerHTML = cards.map(card => `<article style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:12px"><div style="font-size:12px;font-weight:800;letter-spacing:.06em;color:#4d7c0f;text-transform:uppercase;margin-bottom:8px">${card.label}</div><div>${card.value}</div><div style="margin-top:8px;color:#3f6212">${escapeHtml(card.detail)}</div></article>`).join('');
+                    document.getElementById('opsCards').innerHTML = cards.map((card) => {
+                      const isDanger = card.tone === 'danger';
+                      const bg = isDanger ? '#fff1f2' : '#f7fee7';
+                      const border = isDanger ? '#fda4af' : '#d9f99d';
+                      const labelColor = isDanger ? '#9f1239' : '#4d7c0f';
+                      const detailColor = isDanger ? '#881337' : '#3f6212';
+                      return `<article style="background:${bg};border:1px solid ${border};border-radius:12px;padding:12px"><div style="font-size:12px;font-weight:800;letter-spacing:.06em;color:${labelColor};text-transform:uppercase;margin-bottom:8px">${card.label}</div><div>${card.value}</div><div style="margin-top:8px;color:${detailColor}">${escapeHtml(card.detail)}</div></article>`;
+                    }).join('');
 
                     const topSymbols = Array.isArray(summary.top_symbols) ? summary.top_symbols : [];
                     document.getElementById('opsTopSymbols').innerHTML = `<div style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:12px"><div style="font-weight:800;color:#365314;margin-bottom:8px">Top recent symbols</div><div style="display:flex;gap:8px;flex-wrap:wrap">${topSymbols.length ? topSymbols.map(item => `<span style="display:inline-flex;gap:6px;align-items:center;background:#dcfce7;border-radius:999px;padding:6px 10px;color:#166534;font-weight:700">${escapeHtml(item.symbol)}<span style="color:#4d7c0f">×${escapeHtml(item.count)}</span></span>`).join('') : '<span style="color:#4d7c0f">No recent symbols yet.</span>'}</div></div>`;

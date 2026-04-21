@@ -26,14 +26,15 @@ from moneybot.services.model_metadata import (
     build_artifact_metadata,
     save_artifact_metadata,
 )
+from moneybot.services.runtime_paths import day1_baseline_model_path, day1_training_snapshot_path
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train Day-1 deterministic logistic baseline model")
-    parser.add_argument("--input", default="data/day1_training_snapshot.csv")
+    parser.add_argument("--input", default=str(day1_training_snapshot_path()))
     parser.add_argument("--horizon-days", type=int, default=5)
     parser.add_argument("--target-return", type=float, default=0.0)
-    parser.add_argument("--output-model", default="data/day1_baseline_model.json")
+    parser.add_argument("--output-model", default=str(day1_baseline_model_path()))
     parser.add_argument("--train-ratio", type=float, default=0.8)
     args = parser.parse_args()
 
