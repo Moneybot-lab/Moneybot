@@ -15,6 +15,7 @@ from .services.decision_log import DecisionLogger
 from .services.deterministic_advisor import DeterministicQuickAdvisor
 from .services.market_data import MarketDataService
 from .services.runtime_paths import (
+    day1_baseline_model_path,
     day13_calibration_report_path,
     day13_recalibration_plan_path,
     decision_events_log_path,
@@ -325,7 +326,7 @@ def create_app() -> Flask:
         AI_FAILURE_COOLDOWN_SECONDS=int(os.environ.get("AI_FAILURE_COOLDOWN_SECONDS", "120")),
         AI_RESPONSE_CACHE_TTL_SECONDS=int(os.environ.get("AI_RESPONSE_CACHE_TTL_SECONDS", "300")),
         DETERMINISTIC_QUICK_ENABLED=(os.environ.get("DETERMINISTIC_QUICK_ENABLED", "true").lower() == "true"),
-        DETERMINISTIC_MODEL_PATH=os.environ.get("DETERMINISTIC_MODEL_PATH", "data/day1_baseline_model.json"),
+        DETERMINISTIC_MODEL_PATH=os.environ.get("DETERMINISTIC_MODEL_PATH", str(day1_baseline_model_path())),
         DETERMINISTIC_MOMENTUM_ENABLED=(os.environ.get("DETERMINISTIC_MOMENTUM_ENABLED", "true").lower() == "true"),
         DETERMINISTIC_QUICK_BUY_THRESHOLD=(float(os.environ.get("DETERMINISTIC_QUICK_BUY_THRESHOLD", "0.0")) or None),
         DETERMINISTIC_QUICK_STRONG_BUY_THRESHOLD=float(os.environ.get("DETERMINISTIC_QUICK_STRONG_BUY_THRESHOLD", "0.70")),
