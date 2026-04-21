@@ -353,6 +353,7 @@ def create_app() -> Flask:
             str(day13_calibration_report_path()),
         ),
         DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS=_parse_int_env("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", 43200),
+        DETERMINISTIC_TRAINING_MAX_AGE_HOURS=_parse_int_env("DETERMINISTIC_TRAINING_MAX_AGE_HOURS", 36),
     )
     calibration_report = day13_calibration_report_path()
     recalibration_plan = day13_recalibration_plan_path()

@@ -124,6 +124,62 @@ const fallbackData = {
                   }
                   const marketChartInstances = {};
                   function destroyMarketCharts(){ Object.values(marketChartInstances).forEach(c => c.destroy()); Object.keys(marketChartInstances).forEach(k => delete marketChartInstances[k]); }
+                  function destroyQuickTrendChart(){
+                    const graphEl = document.getElementById('quickTrendGraph');
+                    if(graphEl){
+                      graphEl.innerHTML = '';
+                    }
+                  }
+                  function trendPath(points, width, height){
+                    if(!points.length) return '';
+                    const min = Math.min(...points);
+                    const max = Math.max(...points);
+                    const span = Math.max(max - min, 1e-9);
+                    return points.map((value, idx) => {
+                      const x = points.length === 1 ? 0 : (idx / (points.length - 1)) * width;
+                      const y = height - (((value - min) / span) * height);
+                      return `${idx === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+                    }).join(' ');
+                  }
+                  function renderQuickTrend(symbol, series){
+                    const labelEl = document.getElementById('quickTrendLabel');
+                    const graphEl = document.getElementById('quickTrendGraph');
+                    if(!labelEl || !graphEl){
+                      return;
+                    }
+
+                    const values = Array.isArray(series) ? series.filter((v) => Number.isFinite(Number(v))).map((v) => Number(v)) : [];
+                    if(values.length < 2){
+                      destroyQuickTrendChart();
+                      labelEl.textContent = '';
+                      return;
+                    }
+
+                    const latest = values[values.length - 1];
+                    const min = Math.min(...values);
+                    const max = Math.max(...values);
+                    const span = max - min;
+                    const position = span <= 0 ? 0.5 : (latest - min) / span;
+                    const trendLabel = position >= 0.8 ? 'Near peak' : (position <= 0.2 ? 'Near dip' : 'Mid-range');
+                    const isPositive = values[values.length - 1] >= values[0];
+
+                    labelEl.textContent = `${escapeHtml(symbol)} · ${trendLabel} (${values.length} sessions)`;
+                    labelEl.style.color = trendLabel === 'Near peak' ? '#86efac' : (trendLabel === 'Near dip' ? '#fca5a5' : '#bbf7d0');
+                    destroyQuickTrendChart();
+                    const stroke = isPositive ? '#22c55e' : '#dc2626';
+                    const fill = isPositive ? 'rgba(34,197,94,.16)' : 'rgba(239,68,68,.14)';
+                    const width = 400;
+                    const height = 90;
+                    const linePath = trendPath(values, width, height - 8);
+                    if(!linePath){
+                      return;
+                    }
+                    const areaPath = `${linePath} L ${width} ${height} L 0 ${height} Z`;
+                    graphEl.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" width="100%" height="100%" aria-label="${escapeHtml(symbol)} 30 day trend graph">
+                      <path d="${areaPath}" fill="${fill}"></path>
+                      <path d="${linePath}" fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></path>
+                    </svg>`;
+                  }
 
                   async function fetchWithFallback(url, key){
                     try {
@@ -195,6 +251,7 @@ const fallbackData = {
                       const data = payload.data || {};
                       const recommendation = String(data.recommendation || 'HOLD OFF FOR NOW').toUpperCase();
                       outEl.innerHTML = `${quickRecommendationBadge(recommendation)} <span style="margin-left:8px">· ${formatMoney(data.current_price)} · ${data.rationale || 'Signal generated from current indicators.'}</span>`;
+                      renderQuickTrend(symbol, data.history30 || []);
 
                       const ai = data.ai || {};
                       const narrative = ai.narrative || data.rationale || 'No AI narrative available.';
@@ -212,6 +269,7 @@ const fallbackData = {
                     } catch (err) {
                       outEl.textContent = 'Unable to analyze this ticker.';
                       adviceEl.innerHTML = `<strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong><span style="color:#fca5a5">Network issue while loading assistant notes.</span>`;
+                      renderQuickTrend(symbol, []);
                     } finally {
                       loadingEl.style.display = 'none';
                       outEl.style.display = 'block';
