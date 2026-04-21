@@ -1086,6 +1086,7 @@ def quick_ask():
 
     signal_data = svc.get_signal(symbol)
     quote_data = signal_data.get("quote") or svc.get_quote(symbol)
+    history30 = svc.get_price_history(symbol, days=30)
     decision = None
     if deterministic_svc is not None:
         decision = deterministic_svc.predict_quick_decision(
@@ -1143,6 +1144,7 @@ def quick_ask():
         {
             "data": {
                 "symbol": symbol,
+                "history30": history30,
                 **decision,
                 "ai": ai_payload,
                 "ai_status": "working" if ai_mode == "ai_enhanced" else "fallback",
