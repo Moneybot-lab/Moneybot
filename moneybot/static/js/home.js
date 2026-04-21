@@ -124,25 +124,34 @@ const fallbackData = {
                   }
                   const marketChartInstances = {};
                   function destroyMarketCharts(){ Object.values(marketChartInstances).forEach(c => c.destroy()); Object.keys(marketChartInstances).forEach(k => delete marketChartInstances[k]); }
-                  let quickTrendChart = null;
                   function destroyQuickTrendChart(){
-                    if(quickTrendChart){
-                      quickTrendChart.destroy();
-                      quickTrendChart = null;
+                    const graphEl = document.getElementById('quickTrendGraph');
+                    if(graphEl){
+                      graphEl.innerHTML = '';
                     }
+                  }
+                  function trendPath(points, width, height){
+                    if(!points.length) return '';
+                    const min = Math.min(...points);
+                    const max = Math.max(...points);
+                    const span = Math.max(max - min, 1e-9);
+                    return points.map((value, idx) => {
+                      const x = points.length === 1 ? 0 : (idx / (points.length - 1)) * width;
+                      const y = height - (((value - min) / span) * height);
+                      return `${idx === 0 ? 'M' : 'L'} ${x.toFixed(2)} ${y.toFixed(2)}`;
+                    }).join(' ');
                   }
                   function renderQuickTrend(symbol, series){
                     const labelEl = document.getElementById('quickTrendLabel');
-                    const chartCanvas = document.getElementById('quickTrendChart');
-                    if(!labelEl || !chartCanvas){
+                    const graphEl = document.getElementById('quickTrendGraph');
+                    if(!labelEl || !graphEl){
                       return;
                     }
 
                     const values = Array.isArray(series) ? series.filter((v) => Number.isFinite(Number(v))).map((v) => Number(v)) : [];
                     if(values.length < 2){
                       destroyQuickTrendChart();
-                      labelEl.textContent = `Not enough trend history for ${symbol}.`;
-                      labelEl.style.color = '#fca5a5';
+                      labelEl.textContent = '';
                       return;
                     }
 
@@ -156,34 +165,20 @@ const fallbackData = {
 
                     labelEl.textContent = `${escapeHtml(symbol)} · ${trendLabel} (${values.length} sessions)`;
                     labelEl.style.color = trendLabel === 'Near peak' ? '#86efac' : (trendLabel === 'Near dip' ? '#fca5a5' : '#bbf7d0');
-
-                    if(!window.Chart){
+                    destroyQuickTrendChart();
+                    const stroke = isPositive ? '#22c55e' : '#dc2626';
+                    const fill = isPositive ? 'rgba(34,197,94,.16)' : 'rgba(239,68,68,.14)';
+                    const width = 400;
+                    const height = 90;
+                    const linePath = trendPath(values, width, height - 8);
+                    if(!linePath){
                       return;
                     }
-
-                    destroyQuickTrendChart();
-                    quickTrendChart = new Chart(chartCanvas, {
-                      type: 'line',
-                      data: {
-                        labels: values.map((_, idx) => `${idx + 1}`),
-                        datasets: [{
-                          data: values,
-                          borderColor: isPositive ? '#22c55e' : '#dc2626',
-                          borderWidth: 2,
-                          pointRadius: 0,
-                          tension: .32,
-                          fill: true,
-                          backgroundColor: isPositive ? 'rgba(34,197,94,.18)' : 'rgba(239,68,68,.16)',
-                        }],
-                      },
-                      options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        animation: false,
-                        plugins: { legend: { display: false }, tooltip: { enabled: false } },
-                        scales: { x: { display: false }, y: { display: false } },
-                      },
-                    });
+                    const areaPath = `${linePath} L ${width} ${height} L 0 ${height} Z`;
+                    graphEl.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" width="100%" height="100%" aria-label="${escapeHtml(symbol)} 30 day trend graph">
+                      <path d="${areaPath}" fill="${fill}"></path>
+                      <path d="${linePath}" fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"></path>
+                    </svg>`;
                   }
 
                   async function fetchWithFallback(url, key){
