@@ -39,6 +39,21 @@ function status(message, danger = false) {
   statusEl.style.color = danger ? '#991b1b' : '#166534';
 }
 
+function paintToggle() {
+  const toggle = document.getElementById('pushEnabledToggle');
+  const slider = document.getElementById('pushEnabledSlider');
+  const knob = document.getElementById('pushEnabledKnob');
+  if (!toggle || !slider || !knob) {
+    return;
+  }
+  slider.style.background = toggle.checked ? '#16a34a' : '#bbf7d0';
+  slider.style.boxShadow = toggle.disabled
+    ? 'inset 0 0 0 1px #a3a3a3'
+    : `inset 0 0 0 1px ${toggle.checked ? '#15803d' : '#86efac'}`;
+  slider.style.opacity = toggle.disabled ? '0.6' : '1';
+  knob.style.transform = toggle.checked ? 'translateX(24px)' : 'translateX(0)';
+}
+
 function browserPushSupportStatus() {
   const reasons = [];
   const isLocalhost = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
@@ -134,6 +149,7 @@ async function initializeToggle() {
   if (!bootstrap) {
     toggle.disabled = true;
     status('Firebase push is not configured yet. Add Firebase env vars first.', true);
+    paintToggle();
     return;
   }
 
@@ -141,15 +157,18 @@ async function initializeToggle() {
   if (!support.supported) {
     toggle.disabled = true;
     status(`Push unavailable: ${support.reasons.join(' ')}`, true);
+    paintToggle();
     return;
   }
 
   const existingTokens = await listRegisteredTokens();
   toggle.checked = existingTokens.length > 0;
+  paintToggle();
   status(toggle.checked ? 'Push notifications are enabled.' : 'Push notifications are disabled.');
 
   toggle.addEventListener('change', async () => {
     toggle.disabled = true;
+    paintToggle();
     try {
       if (toggle.checked) {
         status('Enabling push notifications...');
@@ -165,6 +184,7 @@ async function initializeToggle() {
       status(err.message || 'Unable to update notification preference.', true);
     } finally {
       toggle.disabled = false;
+      paintToggle();
     }
   });
 }
