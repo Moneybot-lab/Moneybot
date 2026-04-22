@@ -170,3 +170,4 @@ Interpretation:
 Also check Render logs:
 - Repeated `WARNING: AI advisor unavailable, using fallback: ...` indicates timeout/auth/provider failures.
 - No warnings plus `ai_status: "working"` on requests indicates healthy AI responses.
+
