@@ -15,6 +15,11 @@ FEATURE_COLUMNS = [
     "rsi_14",
     "macd_hist",
     "vol_ratio_20d",
+    "news_sentiment_score",
+    "news_headline_count_24h",
+    "news_source_score_72h",
+    "news_momentum_24h",
+    "news_momentum_72h",
 ]
 
 
@@ -78,6 +83,12 @@ def engineer_features(price_df: pd.DataFrame) -> pd.DataFrame:
 
     vol20 = volume.rolling(20).mean().replace(0, np.nan)
     out["vol_ratio_20d"] = volume / vol20
+    # News factors may be pre-populated by snapshot builders. Keep deterministic defaults if absent.
+    out["news_sentiment_score"] = out.get("news_sentiment_score", 0.0)
+    out["news_headline_count_24h"] = out.get("news_headline_count_24h", 0.0)
+    out["news_source_score_72h"] = out.get("news_source_score_72h", 0.0)
+    out["news_momentum_24h"] = out.get("news_momentum_24h", 0.0)
+    out["news_momentum_72h"] = out.get("news_momentum_72h", 0.0)
 
     return out
 
@@ -163,9 +174,9 @@ def default_baseline_artifact() -> BaselineModelArtifact:
     return BaselineModelArtifact(
         version="day1-logreg-v1-fallback",
         feature_columns=list(FEATURE_COLUMNS),
-        means=[0.0, 0.0, 50.0, 0.0, 1.0],
-        stds=[1.0, 1.0, 10.0, 1.0, 1.0],
-        weights=[0.3, 0.2, -0.1, 0.5, 0.1],
+        means=[0.0, 0.0, 50.0, 0.0, 1.0, 0.0, 1.0, 0.7, 0.0, 0.0],
+        stds=[1.0, 1.0, 10.0, 1.0, 1.0, 0.4, 2.0, 0.3, 0.5, 0.5],
+        weights=[0.28, 0.2, -0.1, 0.44, 0.09, 0.12, 0.03, 0.08, 0.09, 0.11],
         bias=0.1,
         decision_threshold=0.55,
     )

@@ -5,6 +5,8 @@ import os
 import time
 from datetime import datetime
 from dataclasses import dataclass
+from urllib.parse import quote_plus
+from xml.etree import ElementTree as ET
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -64,6 +66,152 @@ class MarketDataService:
         self._finnhub_forbidden_symbols: dict[str, float] = {}
         self._finnhub_forbidden_ttl_seconds = int(os.environ.get("FINNHUB_FORBIDDEN_SYMBOL_TTL_SECONDS", "21600"))
         self._twelve_data_backoff_until = 0.0
+
+    def _google_news_headlines(self, symbol: str, company_name: str, limit: int = 3) -> list[Dict[str, str]]:
+        query = quote_plus(f"{symbol} {company_name} stock")
+        url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+        try:
+            response = requests.get(url, timeout=self.timeout_s)
+            response.raise_for_status()
+            root = ET.fromstring(response.text)
+            items = root.findall(".//channel/item")
+            headlines: list[Dict[str, str]] = []
+            seen_titles: set[str] = set()
+            for item in items:
+                title = (item.findtext("title") or "").strip()
+                link = (item.findtext("link") or "").strip()
+                source_node = item.find("source")
+                publisher = (source_node.text or "").strip() if source_node is not None else "Google News"
+                if not title or title.lower() in {"untitled", "no title"}:
+                    continue
+                title_key = title.lower()
+                if title_key in seen_titles:
+                    continue
+                seen_titles.add(title_key)
+                headlines.append(
+                    {
+                        "title": title,
+                        "publisher": publisher or "Google News",
+                        "link": link,
+                    }
+                )
+                if len(headlines) >= max(1, int(limit)):
+                    break
+            return headlines
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Google News RSS fallback failed for %s: %s", symbol, exc)
+            return []
+
+    def _news_source_weight(self, publisher: str) -> float:
+        source = str(publisher or "").strip().lower()
+        trusted = {
+            "reuters": 1.0,
+            "bloomberg": 0.97,
+            "the wall street journal": 0.95,
+            "financial times": 0.95,
+            "cnbc": 0.93,
+            "marketwatch": 0.9,
+            "yahoo finance": 0.88,
+            "benzinga": 0.85,
+            "investing.com": 0.84,
+            "seeking alpha": 0.82,
+            "motley fool": 0.8,
+        }
+        for key, value in trusted.items():
+            if key in source:
+                return value
+        return 0.72
+
+    def _news_relevance_score(self, symbol: str, company_name: str, title: str) -> float:
+        text = str(title or "").lower()
+        symbol_l = symbol.lower()
+        company_tokens = [t.lower() for t in str(company_name or "").replace(",", " ").split() if len(t) > 2]
+        score = 0.45
+        if symbol_l and symbol_l in text:
+            score += 0.3
+        if company_tokens and any(token in text for token in company_tokens):
+            score += 0.2
+        market_keywords = {"earnings", "guidance", "downgrade", "upgrade", "launch", "satellite", "war", "tariff", "lawsuit"}
+        if any(word in text for word in market_keywords):
+            score += 0.1
+        return min(1.0, score)
+
+    def _news_recency_score(self, published_at: str | None) -> float:
+        if not published_at:
+            return 0.45
+        try:
+            published = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+            age_hours = max(0.0, (datetime.now(published.tzinfo) - published).total_seconds() / 3600.0)
+        except Exception:  # noqa: BLE001
+            return 0.45
+        if age_hours <= 6:
+            return 1.0
+        if age_hours <= 24:
+            return 0.85
+        if age_hours <= 72:
+            return 0.65
+        return 0.4
+
+    def _rank_news(self, *, symbol: str, company_name: str, news_items: list[Dict[str, Any]], limit: int = 5) -> list[Dict[str, Any]]:
+        ranked: list[Dict[str, Any]] = []
+        for item in news_items:
+            title = str(item.get("title") or "").strip()
+            publisher = str(item.get("publisher") or "").strip()
+            link = str(item.get("link") or "").strip()
+            published_at = str(item.get("published_at") or "").strip() or None
+            if not title:
+                continue
+            credibility = self._news_source_weight(publisher)
+            relevance = self._news_relevance_score(symbol, company_name, title)
+            recency = self._news_recency_score(published_at)
+            news_score = round((credibility * 0.4) + (relevance * 0.35) + (recency * 0.25), 4)
+            ranked.append(
+                {
+                    "title": title,
+                    "publisher": publisher or "Source unavailable",
+                    "link": link,
+                    "published_at": published_at,
+                    "credibility_score": round(credibility, 4),
+                    "relevance_score": round(relevance, 4),
+                    "recency_score": round(recency, 4),
+                    "news_score": news_score,
+                }
+            )
+        ranked.sort(key=lambda item: float(item.get("news_score") or 0.0), reverse=True)
+        return ranked[: max(1, int(limit))]
+
+    def _headline_sentiment_value(self, title: str) -> float:
+        text = str(title or "").lower()
+        positive = {"beats", "upgrade", "surge", "rally", "wins", "growth", "record", "expands"}
+        negative = {"misses", "downgrade", "lawsuit", "plunge", "drop", "falls", "loss", "delay", "war"}
+        pos = sum(1 for token in positive if token in text)
+        neg = sum(1 for token in negative if token in text)
+        if pos == 0 and neg == 0:
+            return 0.0
+        return max(-1.0, min(1.0, (pos - neg) / max(1, pos + neg)))
+
+    def _sentiment_from_news(self, ranked_news: list[Dict[str, Any]]) -> Dict[str, Any]:
+        if not ranked_news:
+            return {"score": None, "label": "n/a", "headlines": []}
+        weighted_total = 0.0
+        weight_sum = 0.0
+        for item in ranked_news[:5]:
+            title = str(item.get("title") or "")
+            weight = float(item.get("news_score") or 0.5)
+            weighted_total += self._headline_sentiment_value(title) * weight
+            weight_sum += weight
+        score = round(weighted_total / weight_sum, 4) if weight_sum > 0 else 0.0
+        label = "neutral"
+        if score >= 0.2:
+            label = "positive"
+        elif score <= -0.2:
+            label = "negative"
+        return {
+            "score": score,
+            "label": label,
+            "headlines": [str(item.get("title") or "") for item in ranked_news[:5] if item.get("title")],
+            "ranked_headlines": ranked_news[:5],
+        }
 
 
     def _mock_market_indices(self) -> list[Dict[str, Any]]:
@@ -158,7 +306,7 @@ class MarketDataService:
 
         default_name = ticker_symbol
         default_summary = "Company overview unavailable."
-        latest_news: list[Dict[str, str]] = []
+        latest_news: list[Dict[str, Any]] = []
 
         now = time.time()
         if now < self._company_snapshot_backoff_until:
@@ -197,10 +345,37 @@ class MarketDataService:
                         "title": title,
                         "publisher": publisher,
                         "link": str(item.get("link") or ""),
+                        "published_at": (
+                            datetime.utcfromtimestamp(float(item.get("providerPublishTime"))).replace(microsecond=0).isoformat() + "Z"
+                            if item.get("providerPublishTime")
+                            else None
+                        ),
                     }
                 )
                 if len(latest_news) == 3:
                     break
+            if len(latest_news) < 3:
+                fallback_news = self._google_news_headlines(
+                    symbol=ticker_symbol,
+                    company_name=company_name,
+                    limit=3,
+                )
+                existing_titles = {str(news.get("title") or "").strip().lower() for news in latest_news}
+                for fallback_item in fallback_news:
+                    title = str(fallback_item.get("title") or "").strip()
+                    if not title or title.lower() in existing_titles:
+                        continue
+                    latest_news.append(fallback_item)
+                    existing_titles.add(title.lower())
+                    if len(latest_news) == 3:
+                        break
+
+            latest_news = self._rank_news(
+                symbol=ticker_symbol,
+                company_name=company_name,
+                news_items=latest_news,
+                limit=5,
+            )
 
             payload = {
                 "symbol": ticker_symbol,
@@ -916,6 +1091,9 @@ class MarketDataService:
 
         try:
             result = analyze_ticker(cache_key)
+            company_snapshot = self.get_company_snapshot(cache_key)
+            ranked_news = company_snapshot.get("latest_news") if isinstance(company_snapshot.get("latest_news"), list) else []
+            sentiment_payload = self._sentiment_from_news(ranked_news)
             verdict = "STRONG BUY" if (result.score is not None and result.score >= 9) else result.verdict.upper()
             payload = {
                 "symbol": cache_key,
@@ -928,7 +1106,7 @@ class MarketDataService:
                 "macd_hist": result.macd_hist,
                 "volume_today": result.volume_today,
                 "volume_ratio": result.volume_ratio,
-                "sentiment": {"score": None, "label": "n/a", "headlines": []},
+                "sentiment": sentiment_payload,
                 "rationale": result.reasons,
                 "reasons": result.reasons,
                 "quote": quote,

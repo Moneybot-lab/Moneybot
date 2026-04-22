@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +15,7 @@ import yfinance as yf
 
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
+from moneybot.services.runtime_paths import resolve_runtime_dir
 
 
 def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
@@ -40,10 +40,9 @@ def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
 
 
 def main() -> None:
-    base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
-    os.makedirs(base_dir, exist_ok=True)
+    base_dir = resolve_runtime_dir()
     parser = argparse.ArgumentParser(description="Evaluate logged recommendations against later price moves.")
-    parser.add_argument("--input", default=os.path.join(base_dir, "decision_events.jsonl"))
+    parser.add_argument("--input", default=str(base_dir / "decision_events.jsonl"))
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--output", default="")
     args = parser.parse_args()
