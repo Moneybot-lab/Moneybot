@@ -8,14 +8,18 @@ from pathlib import Path
 DEFAULT_RUNTIME_DIR = "data"
 
 
+def _default_runtime_dir() -> Path:
+    """Choose a best-effort durable default path when env vars are not set."""
+    render_disk_root = Path("/var/data")
+    if render_disk_root.exists() and render_disk_root.is_dir():
+        return render_disk_root / "moneybot"
+    return Path(DEFAULT_RUNTIME_DIR)
+
+
 def resolve_runtime_dir() -> Path:
     """Resolve Moneybot runtime data directory from environment."""
-    preferred = (
-        os.environ.get("MONEYBOT_PERSISTENT_DATA_DIR")
-        or os.environ.get("MONEYBOT_RUNTIME_DIR")
-        or DEFAULT_RUNTIME_DIR
-    )
-    path = Path(preferred).expanduser()
+    preferred = os.environ.get("MONEYBOT_PERSISTENT_DATA_DIR") or os.environ.get("MONEYBOT_RUNTIME_DIR")
+    path = Path(preferred).expanduser() if preferred else _default_runtime_dir()
     try:
         path.mkdir(parents=True, exist_ok=True)
         return path
@@ -50,3 +54,11 @@ def day13_calibration_report_path() -> Path:
 
 def day13_recalibration_plan_path() -> Path:
     return resolve_runtime_dir() / "day13_recalibration_plan.json"
+
+
+def day1_training_snapshot_path() -> Path:
+    return resolve_runtime_dir() / "day1_training_snapshot.csv"
+
+
+def day1_baseline_model_path() -> Path:
+    return resolve_runtime_dir() / "day1_baseline_model.json"

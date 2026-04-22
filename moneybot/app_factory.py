@@ -15,6 +15,7 @@ from .services.decision_log import DecisionLogger
 from .services.deterministic_advisor import DeterministicQuickAdvisor
 from .services.market_data import MarketDataService
 from .services.runtime_paths import (
+    day1_baseline_model_path,
     day13_calibration_report_path,
     day13_recalibration_plan_path,
     decision_events_log_path,
@@ -300,6 +301,23 @@ def create_app() -> Flask:
     database_url = _resolve_database_url()
 
     runtime_dir = resolve_runtime_dir()
+    configured_model_path = str(os.environ.get("DETERMINISTIC_MODEL_PATH", "") or "").strip()
+    runtime_model_path = str(day1_baseline_model_path())
+    legacy_model_path = "data/day1_baseline_model.json"
+    runtime_model_exists = Path(runtime_model_path).exists()
+    legacy_model_exists = Path(legacy_model_path).exists()
+
+    default_model_path = runtime_model_path
+    if configured_model_path:
+        if configured_model_path == legacy_model_path:
+            # Keep legacy path if that's where the artifact currently exists; otherwise prefer runtime path.
+            default_model_path = legacy_model_path if legacy_model_exists else runtime_model_path
+        else:
+            default_model_path = configured_model_path
+    elif not runtime_model_exists and legacy_model_exists:
+        # Safety fallback for existing installs that still write to legacy relative path.
+        default_model_path = legacy_model_path
+
     app = Flask(__name__)
     app.url_map.strict_slashes = False
     app.config.update(
@@ -325,7 +343,7 @@ def create_app() -> Flask:
         AI_FAILURE_COOLDOWN_SECONDS=int(os.environ.get("AI_FAILURE_COOLDOWN_SECONDS", "120")),
         AI_RESPONSE_CACHE_TTL_SECONDS=int(os.environ.get("AI_RESPONSE_CACHE_TTL_SECONDS", "300")),
         DETERMINISTIC_QUICK_ENABLED=(os.environ.get("DETERMINISTIC_QUICK_ENABLED", "true").lower() == "true"),
-        DETERMINISTIC_MODEL_PATH=os.environ.get("DETERMINISTIC_MODEL_PATH", "data/day1_baseline_model.json"),
+        DETERMINISTIC_MODEL_PATH=default_model_path,
         DETERMINISTIC_MOMENTUM_ENABLED=(os.environ.get("DETERMINISTIC_MOMENTUM_ENABLED", "true").lower() == "true"),
         DETERMINISTIC_QUICK_BUY_THRESHOLD=(float(os.environ.get("DETERMINISTIC_QUICK_BUY_THRESHOLD", "0.0")) or None),
         DETERMINISTIC_QUICK_STRONG_BUY_THRESHOLD=float(os.environ.get("DETERMINISTIC_QUICK_STRONG_BUY_THRESHOLD", "0.70")),
@@ -353,6 +371,7 @@ def create_app() -> Flask:
             str(day13_calibration_report_path()),
         ),
         DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS=_parse_int_env("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", 43200),
+        DETERMINISTIC_TRAINING_MAX_AGE_HOURS=_parse_int_env("DETERMINISTIC_TRAINING_MAX_AGE_HOURS", 36),
     )
     calibration_report = day13_calibration_report_path()
     recalibration_plan = day13_recalibration_plan_path()
@@ -1015,7 +1034,7 @@ def create_app() -> Flask:
                 </table></div>
               </div>
               <div style="overflow-x:auto"><table style="width:100%;background:#f0fdf4;border-collapse:collapse;min-width:980px">
-                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Today's Gain/Loss</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Trend</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Sentiment</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
+                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Today's Gain/Loss</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Trend</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
                 <tbody id="rows"></tbody>
               </table></div>
               <div id="tickerModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:center;justify-content:center;padding:14px">
@@ -1097,12 +1116,6 @@ def create_app() -> Flask:
               }
               function formatMoney(v){
                 return (typeof v === 'number' && isFinite(v)) ? ('$' + v.toLocaleString(undefined,{maximumFractionDigits:2})) : 'n/a';
-              }
-              function sentimentBadge(value){
-                const sentiment = String(value || 'Neutral').toLowerCase();
-                if(sentiment === 'bullish' || sentiment === 'positive') return '<span style="color:#166534;font-weight:700;white-space:nowrap">▇ Bullish</span>';
-                if(sentiment === 'bearish' || sentiment === 'negative') return '<span style="color:#4d7c0f;font-weight:700;white-space:nowrap">▇ Bearish</span>';
-                return '<span style="color:#3f3f46;font-weight:600;white-space:nowrap">▇ Neutral</span>';
               }
               function adviceBadge(value){
                 const advice = String(value || 'HOLD').toUpperCase();
@@ -1257,7 +1270,7 @@ def create_app() -> Flask:
 
               function renderRows(items){
                 if(!items || !items.length){
-                  rowsEl.innerHTML = '<tr><td colspan="11" style="padding:8px;color:#3f6212">No watchlist entries yet.</td></tr>';
+                  rowsEl.innerHTML = '<tr><td colspan="10" style="padding:8px;color:#3f6212">No watchlist entries yet.</td></tr>';
                   currentPortfolioItems = [];
                   return;
                 }
@@ -1270,8 +1283,8 @@ def create_app() -> Flask:
                 const totalTodayChange = items.reduce((sum, item) => sum + (typeof item.today_change_amount === 'number' ? item.today_change_amount : 0), 0);
                 const totalPerformance = items.reduce((sum, item) => sum + (typeof item.performance_amount === 'number' ? item.performance_amount : 0), 0);
 
-                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${sentimentBadge(i.sentiment)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="del(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Remove</button></div></td></tr>`).join('')
-                + `<tr style="background:#f7fee7;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px;color:#3f3f46;font-size:12px">Click advice badges to see why.</td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
+                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="del(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Remove</button></div></td></tr>`).join('')
+                + `<tr style="background:#f7fee7;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px;color:#3f3f46;font-size:12px">Click advice badges to see why.</td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
                 items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || []));
               }
 
@@ -1282,7 +1295,7 @@ def create_app() -> Flask:
                   const data = await res.json();
                   if(!res.ok){
                     if (res.status === 401) { location.href='/login'; return; }
-                    rowsEl.innerHTML = '<tr><td colspan="11" style="padding:8px;color:#4d7c0f">Unable to load watchlist right now.</td></tr>';
+                    rowsEl.innerHTML = '<tr><td colspan="10" style="padding:8px;color:#4d7c0f">Unable to load watchlist right now.</td></tr>';
                     outEl.textContent = data.error || 'Please try again in a moment.';
                     return;
                   }
