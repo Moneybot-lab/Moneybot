@@ -218,6 +218,23 @@ def test_home_page_includes_model_ops_snapshot(monkeypatch):
     assert "Refresh Ops" in html
     assert "Recent Decisions & Outcomes" in html
     assert "/static/js/home.js" in html
+    assert "/notifications" in html
+
+
+def test_notifications_page_renders_push_toggle(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+
+    app = create_app()
+    client = app.test_client()
+
+    res = client.get("/notifications")
+
+    assert res.status_code == 200
+    html = res.get_data(as_text=True)
+    assert "Enable push notifications" in html
+    assert "pushEnabledToggle" in html
+    assert "/static/js/notifications.js" in html
 
     js_res = client.get("/static/js/home.js")
     assert js_res.status_code == 200
