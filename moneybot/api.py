@@ -25,7 +25,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from advice_engine import compute_user_advice
 
 from .extensions import db
-from .models import SoldTrade, User, WatchlistItem
+from .models import FcmDeviceToken, SoldTrade, User, WatchlistItem
 from .services.decision_log import read_decision_events, summarize_decision_events
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
 from .services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
@@ -337,6 +337,15 @@ def _sold_trade_payload(item: SoldTrade) -> Dict[str, Any]:
     }
 
 
+def _fcm_token_payload(item: FcmDeviceToken) -> Dict[str, Any]:
+    return {
+        "id": item.id,
+        "token": item.token,
+        "created_at": item.created_at.isoformat(),
+        "updated_at": item.updated_at.isoformat(),
+    }
+
+
 def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> Dict[str, Any]:
     action = (signal_data.get("action") or "HOLD").upper()
     technical = signal_data.get("technical") or {}
@@ -597,6 +606,52 @@ def update_security():
 
     db.session.commit()
     return jsonify({"ok": True, "user": _user_payload(user), "request_id": g.request_id})
+
+
+@api_bp.get("/notifications/fcm-tokens")
+@login_required
+def list_fcm_tokens():
+    items = (
+        FcmDeviceToken.query.filter_by(user_id=session["user_id"])
+        .order_by(FcmDeviceToken.updated_at.desc())
+        .all()
+    )
+    return jsonify({"items": [_fcm_token_payload(item) for item in items], "request_id": g.request_id})
+
+
+@api_bp.post("/notifications/fcm-token")
+@login_required
+def register_fcm_token():
+    data = request.get_json(silent=True) or {}
+    token = str(data.get("token") or "").strip()
+    user_agent = str(data.get("user_agent") or request.headers.get("User-Agent") or "").strip()[:512] or None
+    if len(token) < 20:
+        return jsonify({"error": "valid token required", "request_id": g.request_id}), 400
+
+    item = FcmDeviceToken.query.filter_by(token=token).first()
+    if item is None:
+        item = FcmDeviceToken(user_id=session["user_id"], token=token, user_agent=user_agent)
+        db.session.add(item)
+    else:
+        item.user_id = session["user_id"]
+        item.user_agent = user_agent
+    db.session.commit()
+    return jsonify({"item": _fcm_token_payload(item), "request_id": g.request_id}), 201
+
+
+@api_bp.delete("/notifications/fcm-token")
+@login_required
+def unregister_fcm_token():
+    data = request.get_json(silent=True) or {}
+    token = str(data.get("token") or "").strip()
+    if not token:
+        return jsonify({"error": "token required", "request_id": g.request_id}), 400
+    item = FcmDeviceToken.query.filter_by(user_id=session["user_id"], token=token).first()
+    if not item:
+        return jsonify({"ok": True, "removed": False, "request_id": g.request_id})
+    db.session.delete(item)
+    db.session.commit()
+    return jsonify({"ok": True, "removed": True, "request_id": g.request_id})
 
 
 @api_bp.get("/user-watchlist")

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
 import os
 import re
 from pathlib import Path
 
-from flask import Flask, render_template, render_template_string
+from flask import Flask, render_template, render_template_string, send_from_directory
 from flask_cors import CORS
 from .api import api_bp
 from .extensions import db, migrate
@@ -372,6 +373,14 @@ def create_app() -> Flask:
         ),
         DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS=_parse_int_env("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", 43200),
         DETERMINISTIC_TRAINING_MAX_AGE_HOURS=_parse_int_env("DETERMINISTIC_TRAINING_MAX_AGE_HOURS", 36),
+        FIREBASE_API_KEY=os.environ.get("FIREBASE_API_KEY", ""),
+        FIREBASE_AUTH_DOMAIN=os.environ.get("FIREBASE_AUTH_DOMAIN", ""),
+        FIREBASE_PROJECT_ID=os.environ.get("FIREBASE_PROJECT_ID", ""),
+        FIREBASE_STORAGE_BUCKET=os.environ.get("FIREBASE_STORAGE_BUCKET", ""),
+        FIREBASE_MESSAGING_SENDER_ID=os.environ.get("FIREBASE_MESSAGING_SENDER_ID", ""),
+        FIREBASE_APP_ID=os.environ.get("FIREBASE_APP_ID", ""),
+        FIREBASE_MEASUREMENT_ID=os.environ.get("FIREBASE_MEASUREMENT_ID", ""),
+        FIREBASE_VAPID_KEY=os.environ.get("FIREBASE_VAPID_KEY", ""),
     )
     calibration_report = day13_calibration_report_path()
     recalibration_plan = day13_recalibration_plan_path()
@@ -437,7 +446,53 @@ def create_app() -> Flask:
     @app.get("/index.html")
     @app.get("/home")
     def home():
-        return render_template("home.html")
+        def _firebase_template_context():
+            firebase_config = {
+                "apiKey": app.config["FIREBASE_API_KEY"],
+                "authDomain": app.config["FIREBASE_AUTH_DOMAIN"],
+                "projectId": app.config["FIREBASE_PROJECT_ID"],
+                "storageBucket": app.config["FIREBASE_STORAGE_BUCKET"],
+                "messagingSenderId": app.config["FIREBASE_MESSAGING_SENDER_ID"],
+                "appId": app.config["FIREBASE_APP_ID"],
+                "measurementId": app.config["FIREBASE_MEASUREMENT_ID"],
+            }
+            enabled = all(
+                firebase_config[key]
+                for key in ("apiKey", "authDomain", "projectId", "messagingSenderId", "appId")
+            ) and bool(app.config["FIREBASE_VAPID_KEY"])
+            return {
+                "firebase_enabled": enabled,
+                "firebase_config_json": json.dumps(firebase_config),
+                "firebase_vapid_key": app.config["FIREBASE_VAPID_KEY"],
+            }
+
+        return render_template("home.html", **_firebase_template_context())
+
+    @app.get("/notifications")
+    def notifications_page():
+        firebase_config = {
+            "apiKey": app.config["FIREBASE_API_KEY"],
+            "authDomain": app.config["FIREBASE_AUTH_DOMAIN"],
+            "projectId": app.config["FIREBASE_PROJECT_ID"],
+            "storageBucket": app.config["FIREBASE_STORAGE_BUCKET"],
+            "messagingSenderId": app.config["FIREBASE_MESSAGING_SENDER_ID"],
+            "appId": app.config["FIREBASE_APP_ID"],
+            "measurementId": app.config["FIREBASE_MEASUREMENT_ID"],
+        }
+        enabled = all(
+            firebase_config[key]
+            for key in ("apiKey", "authDomain", "projectId", "messagingSenderId", "appId")
+        ) and bool(app.config["FIREBASE_VAPID_KEY"])
+        return render_template(
+            "notifications.html",
+            firebase_enabled=enabled,
+            firebase_config_json=json.dumps(firebase_config),
+            firebase_vapid_key=app.config["FIREBASE_VAPID_KEY"],
+        )
+
+    @app.get("/firebase-messaging-sw.js")
+    def firebase_messaging_service_worker():
+        return send_from_directory(app.static_folder, "firebase-messaging-sw.js")
 
     @app.get("/user-profile")
     def user_profile_page():

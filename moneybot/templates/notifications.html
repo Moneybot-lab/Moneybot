@@ -1,0 +1,30 @@
+<html>
+  <body style="font-family:Inter,Segoe UI,system-ui,sans-serif;padding:24px;background:linear-gradient(180deg,#f7fee7,#ecfdf3);max-width:860px;margin:0 auto;color:#0f172a">
+    <header style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      <h2 style="margin:0">Notifications</h2>
+      <a href="/" style="padding:8px 12px;background:#dcfce7;color:#14532d;border-radius:999px;text-decoration:none;font-weight:700">← Back Home</a>
+    </header>
+
+    <section style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:14px;padding:16px;margin-bottom:12px">
+      <h3 style="margin:0 0 6px 0">Push Alerts</h3>
+      <p style="margin:0 0 12px 0;color:#166534">Enable browser notifications for Moneybot Labs alerts. More options (email/phone) coming later.</p>
+      <label style="display:flex;align-items:center;gap:10px;font-weight:700;color:#14532d;cursor:pointer">
+        <span>Enable push notifications</span>
+        <input id="pushEnabledToggle" type="checkbox" style="width:20px;height:20px;cursor:pointer" />
+      </label>
+      <p id="pushStatus" style="margin-top:10px;color:#166534">Checking current status...</p>
+    </section>
+
+    {% if firebase_enabled %}
+    <script>
+      window.__MONEYBOT_FIREBASE__ = {
+        config: {{ firebase_config_json|safe }},
+        vapidKey: {{ firebase_vapid_key|tojson }},
+      };
+    </script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js"></script>
+    {% endif %}
+    <script src="{{ url_for('static', filename='js/notifications.js') }}"></script>
+  </body>
+</html>
