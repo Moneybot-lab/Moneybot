@@ -1,0 +1,43 @@
+<html>
+  <body style="font-family:Inter,Segoe UI,system-ui,sans-serif;padding:24px;background:linear-gradient(180deg,#f7fee7,#ecfdf3);max-width:860px;margin:0 auto;color:#0f172a">
+    <header style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">
+      <h2 style="margin:0">Notifications</h2>
+      <a href="/" style="padding:8px 12px;background:#dcfce7;color:#14532d;border-radius:999px;text-decoration:none;font-weight:700">← Back Home</a>
+    </header>
+
+    <section style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:14px;padding:16px;margin-bottom:12px">
+      <h3 style="margin:0 0 6px 0">Push Alerts</h3>
+      <p style="margin:0 0 12px 0;color:#166534">Enable browser notifications for Moneybot Labs alerts. More options (email/phone) coming later.</p>
+      <label style="display:flex;align-items:center;justify-content:space-between;gap:10px;font-weight:700;color:#14532d;cursor:pointer;max-width:340px">
+        <span>Enable push notifications</span>
+        <span style="position:relative;display:inline-block;width:54px;height:30px">
+          <input id="pushEnabledToggle" type="checkbox" style="opacity:0;width:0;height:0" />
+          <span id="pushEnabledSlider" style="position:absolute;inset:0;background:#bbf7d0;border-radius:999px;transition:.2s;box-shadow:inset 0 0 0 1px #86efac">
+            <span id="pushEnabledKnob" style="position:absolute;left:3px;top:3px;width:24px;height:24px;background:#fff;border-radius:999px;transition:.2s;box-shadow:0 1px 3px rgba(0,0,0,.25)"></span>
+          </span>
+        </span>
+      </label>
+      <p id="pushStatus" style="margin-top:10px;color:#166534">Checking current status...</p>
+    </section>
+    <section style="background:#fff;border:1px solid #d1fae5;border-radius:14px;padding:16px">
+      <h3 style="margin:0 0 8px 0">How to test push works</h3>
+      <ol style="margin:0;padding-left:20px;color:#14532d;line-height:1.5">
+        <li>Turn the slider on until this page says <strong>Push notifications enabled</strong>.</li>
+        <li>In Firebase Console → Cloud Messaging, send a <strong>test message</strong> to this browser token.</li>
+        <li>Keep this app in background/home screen and confirm notification appears.</li>
+      </ol>
+    </section>
+
+    {% if firebase_enabled %}
+    <script>
+      window.__MONEYBOT_FIREBASE__ = {
+        config: {{ firebase_config_json|safe }},
+        vapidKey: {{ firebase_vapid_key|tojson }},
+      };
+    </script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js"></script>
+    {% endif %}
+    <script src="{{ url_for('static', filename='js/notifications.js') }}"></script>
+  </body>
+</html>
