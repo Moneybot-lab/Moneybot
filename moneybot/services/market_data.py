@@ -5,6 +5,8 @@ import os
 import time
 from datetime import datetime
 from dataclasses import dataclass
+from urllib.parse import quote_plus
+from xml.etree import ElementTree as ET
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -64,6 +66,41 @@ class MarketDataService:
         self._finnhub_forbidden_symbols: dict[str, float] = {}
         self._finnhub_forbidden_ttl_seconds = int(os.environ.get("FINNHUB_FORBIDDEN_SYMBOL_TTL_SECONDS", "21600"))
         self._twelve_data_backoff_until = 0.0
+
+    def _google_news_headlines(self, symbol: str, company_name: str, limit: int = 3) -> list[Dict[str, str]]:
+        query = quote_plus(f"{symbol} {company_name} stock")
+        url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+        try:
+            response = requests.get(url, timeout=self.timeout_s)
+            response.raise_for_status()
+            root = ET.fromstring(response.text)
+            items = root.findall(".//channel/item")
+            headlines: list[Dict[str, str]] = []
+            seen_titles: set[str] = set()
+            for item in items:
+                title = (item.findtext("title") or "").strip()
+                link = (item.findtext("link") or "").strip()
+                source_node = item.find("source")
+                publisher = (source_node.text or "").strip() if source_node is not None else "Google News"
+                if not title or title.lower() in {"untitled", "no title"}:
+                    continue
+                title_key = title.lower()
+                if title_key in seen_titles:
+                    continue
+                seen_titles.add(title_key)
+                headlines.append(
+                    {
+                        "title": title,
+                        "publisher": publisher or "Google News",
+                        "link": link,
+                    }
+                )
+                if len(headlines) >= max(1, int(limit)):
+                    break
+            return headlines
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("Google News RSS fallback failed for %s: %s", symbol, exc)
+            return []
 
 
     def _mock_market_indices(self) -> list[Dict[str, Any]]:
@@ -201,6 +238,21 @@ class MarketDataService:
                 )
                 if len(latest_news) == 3:
                     break
+            if len(latest_news) < 3:
+                fallback_news = self._google_news_headlines(
+                    symbol=ticker_symbol,
+                    company_name=company_name,
+                    limit=3,
+                )
+                existing_titles = {str(news.get("title") or "").strip().lower() for news in latest_news}
+                for fallback_item in fallback_news:
+                    title = str(fallback_item.get("title") or "").strip()
+                    if not title or title.lower() in existing_titles:
+                        continue
+                    latest_news.append(fallback_item)
+                    existing_titles.add(title.lower())
+                    if len(latest_news) == 3:
+                        break
 
             payload = {
                 "symbol": ticker_symbol,
