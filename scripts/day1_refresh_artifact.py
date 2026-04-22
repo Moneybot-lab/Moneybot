@@ -6,8 +6,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from moneybot.services.runtime_paths import day1_baseline_model_path, day1_training_snapshot_path
 
 
 def build_day1_commands(
@@ -64,8 +67,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate the Day-1 training snapshot and retrain the baseline artifact in one command."
     )
-    parser.add_argument("--output-snapshot", default="data/day1_training_snapshot.csv")
-    parser.add_argument("--output-model", default="data/day1_baseline_model.json")
+    parser.add_argument("--output-snapshot", default=str(day1_training_snapshot_path()))
+    parser.add_argument("--output-model", default=str(day1_baseline_model_path()))
     parser.add_argument("--period", default="2y")
     parser.add_argument("--interval", default="1d")
     parser.add_argument("--horizon-days", type=int, default=5)
