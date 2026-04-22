@@ -446,6 +446,30 @@ def create_app() -> Flask:
     @app.get("/index.html")
     @app.get("/home")
     def home():
+        def _firebase_template_context():
+            firebase_config = {
+                "apiKey": app.config["FIREBASE_API_KEY"],
+                "authDomain": app.config["FIREBASE_AUTH_DOMAIN"],
+                "projectId": app.config["FIREBASE_PROJECT_ID"],
+                "storageBucket": app.config["FIREBASE_STORAGE_BUCKET"],
+                "messagingSenderId": app.config["FIREBASE_MESSAGING_SENDER_ID"],
+                "appId": app.config["FIREBASE_APP_ID"],
+                "measurementId": app.config["FIREBASE_MEASUREMENT_ID"],
+            }
+            enabled = all(
+                firebase_config[key]
+                for key in ("apiKey", "authDomain", "projectId", "messagingSenderId", "appId")
+            ) and bool(app.config["FIREBASE_VAPID_KEY"])
+            return {
+                "firebase_enabled": enabled,
+                "firebase_config_json": json.dumps(firebase_config),
+                "firebase_vapid_key": app.config["FIREBASE_VAPID_KEY"],
+            }
+
+        return render_template("home.html", **_firebase_template_context())
+
+    @app.get("/notifications")
+    def notifications_page():
         firebase_config = {
             "apiKey": app.config["FIREBASE_API_KEY"],
             "authDomain": app.config["FIREBASE_AUTH_DOMAIN"],
@@ -460,7 +484,7 @@ def create_app() -> Flask:
             for key in ("apiKey", "authDomain", "projectId", "messagingSenderId", "appId")
         ) and bool(app.config["FIREBASE_VAPID_KEY"])
         return render_template(
-            "home.html",
+            "notifications.html",
             firebase_enabled=enabled,
             firebase_config_json=json.dumps(firebase_config),
             firebase_vapid_key=app.config["FIREBASE_VAPID_KEY"],
