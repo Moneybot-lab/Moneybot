@@ -59,6 +59,68 @@ const fallbackData = {
                     }
                     return fetch(url, Object.assign({}, options, { headers }));
                   }
+                  function getFirebaseBootstrap(){
+                    const bootstrap = window.__MONEYBOT_FIREBASE__;
+                    if(!bootstrap || !bootstrap.config || !bootstrap.vapidKey){
+                      return null;
+                    }
+                    if(!window.firebase || typeof window.firebase.initializeApp !== 'function'){
+                      return null;
+                    }
+                    return bootstrap;
+                  }
+                  async function registerPushToken(token){
+                    if(!token){
+                      return;
+                    }
+                    await apiFetch('/api/notifications/fcm-token', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ token, user_agent: navigator.userAgent || '' }),
+                    });
+                  }
+                  async function setupPushNotifications(){
+                    const pushBtn = document.getElementById('enablePushBtn');
+                    const bootstrap = getFirebaseBootstrap();
+                    if(!pushBtn || !bootstrap){
+                      return;
+                    }
+                    pushBtn.style.display = 'inline-flex';
+                    pushBtn.addEventListener('click', async () => {
+                      try {
+                        pushBtn.disabled = true;
+                        pushBtn.textContent = 'Enabling...';
+                        if(!('Notification' in window) || !('serviceWorker' in navigator)){
+                          pushBtn.textContent = 'Push not supported';
+                          return;
+                        }
+                        const permission = await Notification.requestPermission();
+                        if(permission !== 'granted'){
+                          pushBtn.textContent = 'Permission denied';
+                          return;
+                        }
+                        const app = window.firebase.apps?.length
+                          ? window.firebase.app()
+                          : window.firebase.initializeApp(bootstrap.config);
+                        const messaging = window.firebase.messaging(app);
+                        const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+                        const token = await messaging.getToken({
+                          vapidKey: bootstrap.vapidKey,
+                          serviceWorkerRegistration: registration,
+                        });
+                        if(!token){
+                          pushBtn.textContent = 'No token received';
+                          return;
+                        }
+                        await registerPushToken(token);
+                        pushBtn.textContent = 'Push alerts enabled';
+                      } catch (err) {
+                        pushBtn.textContent = 'Enable failed';
+                      } finally {
+                        pushBtn.disabled = false;
+                      }
+                    });
+                  }
                   function initialsFromName(name){
                     const tokens = String(name || '').trim().replaceAll('-', ' ').split(/\s+/).filter(Boolean);
                     return tokens.slice(0,2).map((part) => part[0]).join('').toUpperCase() || 'U';
@@ -542,7 +604,10 @@ const fallbackData = {
 
                   async function init(){
                     setMenuState(false);
-                    await refreshCurrentUser();
+                    const currentUser = await refreshCurrentUser();
+                    if(currentUser){
+                      await setupPushNotifications();
+                    }
                     const market = await fetchWithFallback('/api/market-overview', 'market');
                     renderMarket(market);
                     await refreshTab('stable');
