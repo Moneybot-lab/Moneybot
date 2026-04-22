@@ -39,8 +39,25 @@ function status(message, danger = false) {
   statusEl.style.color = danger ? '#991b1b' : '#166534';
 }
 
-function supportsBrowserPush() {
-  return 'Notification' in window && 'serviceWorker' in navigator;
+function browserPushSupportStatus() {
+  const reasons = [];
+  const isLocalhost = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
+  if (!window.isSecureContext && !isLocalhost) {
+    reasons.push('Push requires HTTPS (or localhost for local development).');
+  }
+  if (!('Notification' in window)) {
+    reasons.push('Notification API is unavailable in this browser/environment.');
+  }
+  if (!('serviceWorker' in navigator)) {
+    reasons.push('Service workers are unavailable in this browser/environment.');
+  }
+  if (!('PushManager' in window)) {
+    reasons.push('PushManager is unavailable in this browser/environment.');
+  }
+  return {
+    supported: reasons.length === 0,
+    reasons,
+  };
 }
 
 async function listRegisteredTokens() {
@@ -54,8 +71,9 @@ async function registerPushToken() {
   if (!bootstrap) {
     throw new Error('firebase not configured');
   }
-  if (!supportsBrowserPush()) {
-    throw new Error('push not supported in this browser');
+  const support = browserPushSupportStatus();
+  if (!support.supported) {
+    throw new Error(`push not supported: ${support.reasons.join(' ')}`);
   }
 
   const permission = await Notification.requestPermission();
@@ -119,9 +137,10 @@ async function initializeToggle() {
     return;
   }
 
-  if (!supportsBrowserPush()) {
+  const support = browserPushSupportStatus();
+  if (!support.supported) {
     toggle.disabled = true;
-    status('This browser does not support web push notifications.', true);
+    status(`Push unavailable: ${support.reasons.join(' ')}`, true);
     return;
   }
 
