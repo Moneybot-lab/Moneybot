@@ -12,3 +12,4 @@ requests
 beautifulsoup4
 pytest
 vaderSentiment
+firebase-admin
