@@ -644,6 +644,37 @@ def create_app() -> Flask:
             methods=["GET"],
         )
 
+    def _has_url_rule(rule: str) -> bool:
+        return any(existing.rule == rule for existing in app.url_map.iter_rules())
+
+    if not _has_url_rule("/notifications"):
+        @app.get("/notifications", endpoint="web_notifications_page")
+        def notifications_settings_page():
+            firebase_config = {
+                "apiKey": app.config["FIREBASE_API_KEY"],
+                "authDomain": app.config["FIREBASE_AUTH_DOMAIN"],
+                "projectId": app.config["FIREBASE_PROJECT_ID"],
+                "storageBucket": app.config["FIREBASE_STORAGE_BUCKET"],
+                "messagingSenderId": app.config["FIREBASE_MESSAGING_SENDER_ID"],
+                "appId": app.config["FIREBASE_APP_ID"],
+                "measurementId": app.config["FIREBASE_MEASUREMENT_ID"],
+            }
+            enabled = all(
+                firebase_config[key]
+                for key in ("apiKey", "authDomain", "projectId", "messagingSenderId", "appId")
+            ) and bool(app.config["FIREBASE_VAPID_KEY"])
+            return render_template(
+                "notifications.html",
+                firebase_enabled=enabled,
+                firebase_config_json=json.dumps(firebase_config),
+                firebase_vapid_key=app.config["FIREBASE_VAPID_KEY"],
+            )
+
+    if not _has_url_rule("/firebase-messaging-sw.js"):
+        @app.get("/firebase-messaging-sw.js")
+        def firebase_messaging_service_worker():
+            return send_from_directory(app.static_folder, "firebase-messaging-sw.js")
+
     @app.get("/user-profile")
     def user_profile_page():
         return render_template_string(
