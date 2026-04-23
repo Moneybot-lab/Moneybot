@@ -32,6 +32,12 @@ class User(db.Model):
         cascade="all, delete-orphan",
         lazy=True,
     )
+    fcm_device_tokens = db.relationship(
+        "FcmDeviceToken",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy=True,
+    )
 
 
 class WatchlistItem(db.Model):
@@ -65,3 +71,21 @@ class SoldTrade(db.Model):
     sold_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     user = db.relationship("User", back_populates="sold_trades")
+
+
+class FcmDeviceToken(db.Model):
+    __tablename__ = "fcm_device_tokens"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    token = db.Column(db.String(255), nullable=False, unique=True, index=True)
+    user_agent = db.Column(db.String(512), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    user = db.relationship("User", back_populates="fcm_device_tokens")
