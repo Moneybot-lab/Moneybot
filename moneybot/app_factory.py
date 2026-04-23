@@ -521,7 +521,7 @@ def create_app() -> Flask:
         return send_from_directory(app.static_folder, "firebase-messaging-sw.js")
 
     @app.get("/notifications", endpoint="web_notifications_page")
-    def notifications_page():
+    def notifications_settings_page():
         firebase_config = {
             "apiKey": app.config["FIREBASE_API_KEY"],
             "authDomain": app.config["FIREBASE_AUTH_DOMAIN"],
