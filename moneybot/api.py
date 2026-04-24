@@ -25,7 +25,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from advice_engine import compute_user_advice
 
 from .extensions import db
-from .models import SoldTrade, User, WatchlistItem
+from .models import FcmDeviceToken, SoldTrade, User, WatchlistItem
 from .services.decision_log import read_decision_events, summarize_decision_events
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
 from .services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
@@ -337,6 +337,64 @@ def _sold_trade_payload(item: SoldTrade) -> Dict[str, Any]:
     }
 
 
+def _fcm_token_payload(item: FcmDeviceToken) -> Dict[str, Any]:
+    return {
+        "id": item.id,
+        "token": item.token,
+        "created_at": item.created_at.isoformat(),
+        "updated_at": item.updated_at.isoformat(),
+    }
+
+
+def _firebase_admin_service_account_info() -> dict[str, str] | None:
+    project_id = str(os.environ.get("FIREBASE_SERVICE_ACCOUNT_PROJECT_ID") or "").strip()
+    client_email = str(os.environ.get("FIREBASE_SERVICE_ACCOUNT_CLIENT_EMAIL") or "").strip()
+    private_key = str(os.environ.get("FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY") or "").strip()
+    if not project_id or not client_email or not private_key:
+        return None
+    normalized_private_key = private_key.replace("\\n", "\n")
+    return {
+        "type": "service_account",
+        "project_id": project_id,
+        "private_key": normalized_private_key,
+        "client_email": client_email,
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+
+
+def _firebase_admin_app():
+    cached = current_app.extensions.get("firebase_admin_app")
+    if cached is not None:
+        return cached
+
+    import firebase_admin
+    from firebase_admin import credentials
+
+    app_name = "moneybot-firebase-admin"
+    try:
+        firebase_app = firebase_admin.get_app(app_name)
+    except ValueError:
+        info = _firebase_admin_service_account_info()
+        if info is not None:
+            firebase_app = firebase_admin.initialize_app(credentials.Certificate(info), name=app_name)
+        else:
+            firebase_app = firebase_admin.initialize_app(name=app_name)
+    current_app.extensions["firebase_admin_app"] = firebase_app
+    return firebase_app
+
+
+def _send_firebase_push_to_token(*, token: str, title: str, body: str, data: dict[str, str]) -> str:
+    from firebase_admin import messaging
+
+    firebase_app = _firebase_admin_app()
+    message = messaging.Message(
+        token=token,
+        notification=messaging.Notification(title=title, body=body),
+        data=data,
+    )
+    return messaging.send(message, app=firebase_app)
+
+
 def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> Dict[str, Any]:
     action = (signal_data.get("action") or "HOLD").upper()
     technical = signal_data.get("technical") or {}
@@ -597,6 +655,115 @@ def update_security():
 
     db.session.commit()
     return jsonify({"ok": True, "user": _user_payload(user), "request_id": g.request_id})
+
+
+@api_bp.get("/notifications/fcm-tokens")
+@login_required
+def list_fcm_tokens():
+    items = (
+        FcmDeviceToken.query.filter_by(user_id=session["user_id"])
+        .order_by(FcmDeviceToken.updated_at.desc())
+        .all()
+    )
+    return jsonify({"items": [_fcm_token_payload(item) for item in items], "request_id": g.request_id})
+
+
+@api_bp.post("/notifications/fcm-token")
+@login_required
+def register_fcm_token():
+    data = request.get_json(silent=True) or {}
+    token = str(data.get("token") or "").strip()
+    user_agent = str(data.get("user_agent") or request.headers.get("User-Agent") or "").strip()[:512] or None
+    if len(token) < 20:
+        return jsonify({"error": "valid token required", "request_id": g.request_id}), 400
+
+    item = FcmDeviceToken.query.filter_by(token=token).first()
+    if item is None:
+        item = FcmDeviceToken(user_id=session["user_id"], token=token, user_agent=user_agent)
+        db.session.add(item)
+    else:
+        item.user_id = session["user_id"]
+        item.user_agent = user_agent
+    db.session.commit()
+    return jsonify({"item": _fcm_token_payload(item), "request_id": g.request_id}), 201
+
+
+@api_bp.delete("/notifications/fcm-token")
+@login_required
+def unregister_fcm_token():
+    data = request.get_json(silent=True) or {}
+    token = str(data.get("token") or "").strip()
+    if not token:
+        return jsonify({"error": "token required", "request_id": g.request_id}), 400
+    item = FcmDeviceToken.query.filter_by(user_id=session["user_id"], token=token).first()
+    if not item:
+        return jsonify({"ok": True, "removed": False, "request_id": g.request_id})
+    db.session.delete(item)
+    db.session.commit()
+    return jsonify({"ok": True, "removed": True, "request_id": g.request_id})
+
+
+@api_bp.post("/notifications/test-push")
+@login_required
+def send_test_push_notification():
+    user = db.session.get(User, session["user_id"])
+    if not user:
+        session.clear()
+        return jsonify({"error": "user not found", "request_id": g.request_id}), 404
+
+    tokens = (
+        FcmDeviceToken.query.filter_by(user_id=user.id)
+        .order_by(FcmDeviceToken.updated_at.desc())
+        .all()
+    )
+    if not tokens:
+        return jsonify({"error": "no fcm tokens registered", "request_id": g.request_id}), 400
+
+    payload = request.get_json(silent=True) or {}
+    title = str(payload.get("title") or "Moneybot Labs Test").strip()[:120] or "Moneybot Labs Test"
+    body = str(payload.get("body") or "Push notifications are connected.").strip()[:240] or "Push notifications are connected."
+    extra_data = payload.get("data")
+    data: dict[str, str] = {}
+    if isinstance(extra_data, dict):
+        data = {str(k): str(v) for k, v in extra_data.items()}
+    data.setdefault("kind", "test_push")
+    data.setdefault("request_id", str(g.request_id))
+
+    sent: list[dict[str, str]] = []
+    failed: list[dict[str, str]] = []
+    for item in tokens:
+        try:
+            message_id = _send_firebase_push_to_token(
+                token=item.token,
+                title=title,
+                body=body,
+                data=data,
+            )
+            sent.append({"token": item.token, "message_id": message_id})
+        except Exception as exc:  # noqa: BLE001
+            logging.exception("Failed to send test push notification token_id=%s", item.id)
+            failed.append({"token": item.token, "error": str(exc)})
+
+    if sent and failed:
+        status = 207
+    elif sent:
+        status = 200
+    else:
+        status = 502
+
+    return (
+        jsonify(
+            {
+                "ok": bool(sent),
+                "sent_count": len(sent),
+                "failed_count": len(failed),
+                "sent": sent,
+                "failed": failed,
+                "request_id": g.request_id,
+            }
+        ),
+        status,
+    )
 
 
 @api_bp.get("/user-watchlist")
