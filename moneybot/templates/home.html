@@ -6,6 +6,7 @@
                     <img src="/static/moneybot-pro-logo.svg" alt="MoneyBot Pro logo" style="display:block;width:100%;max-width:860px;height:auto"/>
                   </div>
                   <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:flex-end">
+                    <button id="enablePushBtn" type="button" style="display:none;padding:8px 12px;background:#0f766e;color:#ecfeff;border-radius:999px;border:none;font-weight:700;cursor:pointer">Enable Push Alerts</button>
                     <a id="loginLink" href="/login" style="padding:8px 12px;background:#dcfce7;color:#000;border-radius:999px;text-decoration:none;font-weight:600">Login</a>
                     <a id="signupLink" href="/signup" style="padding:8px 12px;background:#dcfce7;color:#000;border-radius:999px;text-decoration:none;font-weight:600">Sign up</a>
                     <a id="portfolioLink" href="/portfolio" style="padding:8px 12px;background:#166534;color:#f0fdf4;border-radius:999px;text-decoration:none;font-weight:700">User Portfolio</a>
@@ -169,6 +170,16 @@
                 <p style="color:#3f6212">Rule-based guidance; not financial advice.</p>
 
                 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+                {% if firebase_enabled %}
+                <script>
+                  window.__MONEYBOT_FIREBASE__ = {
+                    config: {{ firebase_config_json|safe }},
+                    vapidKey: {{ firebase_vapid_key|tojson }},
+                  };
+                </script>
+                <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+                <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js"></script>
+                {% endif %}
                 <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
                 <script src="{{ url_for('static', filename='js/home.js') }}"></script>
               </body>

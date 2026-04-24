@@ -446,7 +446,234 @@ def create_app() -> Flask:
     @app.get("/index.html")
     @app.get("/home")
     def home():
-        return render_template("home.html")
+        def _firebase_template_context():
+            firebase_config = {
+                "apiKey": app.config["FIREBASE_API_KEY"],
+                "authDomain": app.config["FIREBASE_AUTH_DOMAIN"],
+                "projectId": app.config["FIREBASE_PROJECT_ID"],
+                "storageBucket": app.config["FIREBASE_STORAGE_BUCKET"],
+                "messagingSenderId": app.config["FIREBASE_MESSAGING_SENDER_ID"],
+                "appId": app.config["FIREBASE_APP_ID"],
+                "measurementId": app.config["FIREBASE_MEASUREMENT_ID"],
+            }
+            enabled = all(
+                firebase_config[key]
+                for key in ("apiKey", "authDomain", "projectId", "messagingSenderId", "appId")
+            ) and bool(app.config["FIREBASE_VAPID_KEY"])
+            return {
+                "firebase_enabled": enabled,
+                "firebase_config_json": json.dumps(firebase_config),
+                "firebase_vapid_key": app.config["FIREBASE_VAPID_KEY"],
+            }
+
+        return render_template("home.html", **_firebase_template_context())
+
+    @app.get("/notifications")
+    def notifications_page():
+        firebase_config = {
+            "apiKey": app.config["FIREBASE_API_KEY"],
+            "authDomain": app.config["FIREBASE_AUTH_DOMAIN"],
+            "projectId": app.config["FIREBASE_PROJECT_ID"],
+            "storageBucket": app.config["FIREBASE_STORAGE_BUCKET"],
+            "messagingSenderId": app.config["FIREBASE_MESSAGING_SENDER_ID"],
+            "appId": app.config["FIREBASE_APP_ID"],
+            "measurementId": app.config["FIREBASE_MEASUREMENT_ID"],
+        }
+        enabled = all(
+            firebase_config[key]
+            for key in ("apiKey", "authDomain", "projectId", "messagingSenderId", "appId")
+        ) and bool(app.config["FIREBASE_VAPID_KEY"])
+        return render_template(
+            "notifications.html",
+            firebase_enabled=enabled,
+            firebase_config_json=json.dumps(firebase_config),
+            firebase_vapid_key=app.config["FIREBASE_VAPID_KEY"],
+        )
+
+    @app.get("/firebase-messaging-sw.js")
+    def firebase_messaging_service_worker():
+        return send_from_directory(app.static_folder, "firebase-messaging-sw.js")
+
+    @app.get("/notifications")
+    def notifications_page():
+        firebase_config = {
+            "apiKey": app.config["FIREBASE_API_KEY"],
+            "authDomain": app.config["FIREBASE_AUTH_DOMAIN"],
+            "projectId": app.config["FIREBASE_PROJECT_ID"],
+            "storageBucket": app.config["FIREBASE_STORAGE_BUCKET"],
+            "messagingSenderId": app.config["FIREBASE_MESSAGING_SENDER_ID"],
+            "appId": app.config["FIREBASE_APP_ID"],
+            "measurementId": app.config["FIREBASE_MEASUREMENT_ID"],
+        }
+        enabled = all(
+            firebase_config[key]
+            for key in ("apiKey", "authDomain", "projectId", "messagingSenderId", "appId")
+        ) and bool(app.config["FIREBASE_VAPID_KEY"])
+        return render_template(
+            "notifications.html",
+            firebase_enabled=enabled,
+            firebase_config_json=json.dumps(firebase_config),
+            firebase_vapid_key=app.config["FIREBASE_VAPID_KEY"],
+        )
+
+    @app.get("/firebase-messaging-sw.js")
+    def firebase_messaging_service_worker():
+        return send_from_directory(app.static_folder, "firebase-messaging-sw.js")
+
+    @app.get("/notifications", endpoint="web_notifications_page")
+    def notifications_settings_page():
+        firebase_config = {
+            "apiKey": app.config["FIREBASE_API_KEY"],
+            "authDomain": app.config["FIREBASE_AUTH_DOMAIN"],
+            "projectId": app.config["FIREBASE_PROJECT_ID"],
+            "storageBucket": app.config["FIREBASE_STORAGE_BUCKET"],
+            "messagingSenderId": app.config["FIREBASE_MESSAGING_SENDER_ID"],
+            "appId": app.config["FIREBASE_APP_ID"],
+            "measurementId": app.config["FIREBASE_MEASUREMENT_ID"],
+        }
+        enabled = all(
+            firebase_config[key]
+            for key in ("apiKey", "authDomain", "projectId", "messagingSenderId", "appId")
+        ) and bool(app.config["FIREBASE_VAPID_KEY"])
+        return render_template(
+            "notifications.html",
+            firebase_enabled=enabled,
+            firebase_config_json=json.dumps(firebase_config),
+            firebase_vapid_key=app.config["FIREBASE_VAPID_KEY"],
+        )
+
+    @app.get("/firebase-messaging-sw.js")
+    def firebase_messaging_service_worker():
+        return send_from_directory(app.static_folder, "firebase-messaging-sw.js")
+
+    @app.get("/notifications", endpoint="web_notifications_page")
+    def notifications_settings_page():
+        firebase_config = {
+            "apiKey": app.config["FIREBASE_API_KEY"],
+            "authDomain": app.config["FIREBASE_AUTH_DOMAIN"],
+            "projectId": app.config["FIREBASE_PROJECT_ID"],
+            "storageBucket": app.config["FIREBASE_STORAGE_BUCKET"],
+            "messagingSenderId": app.config["FIREBASE_MESSAGING_SENDER_ID"],
+            "appId": app.config["FIREBASE_APP_ID"],
+            "measurementId": app.config["FIREBASE_MEASUREMENT_ID"],
+        }
+        enabled = all(
+            firebase_config[key]
+            for key in ("apiKey", "authDomain", "projectId", "messagingSenderId", "appId")
+        ) and bool(app.config["FIREBASE_VAPID_KEY"])
+        return render_template(
+            "notifications.html",
+            firebase_enabled=enabled,
+            firebase_config_json=json.dumps(firebase_config),
+            firebase_vapid_key=app.config["FIREBASE_VAPID_KEY"],
+        )
+
+    @app.get("/firebase-messaging-sw.js")
+    def firebase_messaging_service_worker():
+        return send_from_directory(app.static_folder, "firebase-messaging-sw.js")
+
+    if "web_notifications_page" not in app.view_functions:
+        @app.get("/notifications", endpoint="web_notifications_page")
+        def notifications_settings_page():
+            firebase_config = {
+                "apiKey": app.config["FIREBASE_API_KEY"],
+                "authDomain": app.config["FIREBASE_AUTH_DOMAIN"],
+                "projectId": app.config["FIREBASE_PROJECT_ID"],
+                "storageBucket": app.config["FIREBASE_STORAGE_BUCKET"],
+                "messagingSenderId": app.config["FIREBASE_MESSAGING_SENDER_ID"],
+                "appId": app.config["FIREBASE_APP_ID"],
+                "measurementId": app.config["FIREBASE_MEASUREMENT_ID"],
+            }
+            enabled = all(
+                firebase_config[key]
+                for key in ("apiKey", "authDomain", "projectId", "messagingSenderId", "appId")
+            ) and bool(app.config["FIREBASE_VAPID_KEY"])
+            return render_template(
+                "notifications.html",
+                firebase_enabled=enabled,
+                firebase_config_json=json.dumps(firebase_config),
+                firebase_vapid_key=app.config["FIREBASE_VAPID_KEY"],
+            )
+
+    if "firebase_messaging_service_worker" not in app.view_functions:
+        @app.get("/firebase-messaging-sw.js")
+        def firebase_messaging_service_worker():
+            return send_from_directory(app.static_folder, "firebase-messaging-sw.js")
+
+    def notifications_settings_page():
+        firebase_config = {
+            "apiKey": app.config["FIREBASE_API_KEY"],
+            "authDomain": app.config["FIREBASE_AUTH_DOMAIN"],
+            "projectId": app.config["FIREBASE_PROJECT_ID"],
+            "storageBucket": app.config["FIREBASE_STORAGE_BUCKET"],
+            "messagingSenderId": app.config["FIREBASE_MESSAGING_SENDER_ID"],
+            "appId": app.config["FIREBASE_APP_ID"],
+            "measurementId": app.config["FIREBASE_MEASUREMENT_ID"],
+        }
+        enabled = all(
+            firebase_config[key]
+            for key in ("apiKey", "authDomain", "projectId", "messagingSenderId", "appId")
+        ) and bool(app.config["FIREBASE_VAPID_KEY"])
+        return render_template(
+            "notifications.html",
+            firebase_enabled=enabled,
+            firebase_config_json=json.dumps(firebase_config),
+            firebase_vapid_key=app.config["FIREBASE_VAPID_KEY"],
+        )
+
+    has_notifications_rule = any(rule.rule == "/notifications" for rule in app.url_map.iter_rules())
+    if "web_notifications_page" not in app.view_functions and not has_notifications_rule:
+        app.add_url_rule(
+            "/notifications",
+            endpoint="web_notifications_page",
+            view_func=notifications_settings_page,
+            methods=["GET"],
+        )
+
+    def firebase_messaging_service_worker():
+        return send_from_directory(app.static_folder, "firebase-messaging-sw.js")
+
+    has_fcm_worker_rule = any(
+        rule.rule == "/firebase-messaging-sw.js" for rule in app.url_map.iter_rules()
+    )
+    if "firebase_messaging_service_worker" not in app.view_functions and not has_fcm_worker_rule:
+        app.add_url_rule(
+            "/firebase-messaging-sw.js",
+            endpoint="firebase_messaging_service_worker",
+            view_func=firebase_messaging_service_worker,
+            methods=["GET"],
+        )
+
+    def _has_url_rule(rule: str) -> bool:
+        return any(existing.rule == rule for existing in app.url_map.iter_rules())
+
+    if not _has_url_rule("/notifications"):
+        @app.get("/notifications", endpoint="web_notifications_page")
+        def notifications_settings_page():
+            firebase_config = {
+                "apiKey": app.config["FIREBASE_API_KEY"],
+                "authDomain": app.config["FIREBASE_AUTH_DOMAIN"],
+                "projectId": app.config["FIREBASE_PROJECT_ID"],
+                "storageBucket": app.config["FIREBASE_STORAGE_BUCKET"],
+                "messagingSenderId": app.config["FIREBASE_MESSAGING_SENDER_ID"],
+                "appId": app.config["FIREBASE_APP_ID"],
+                "measurementId": app.config["FIREBASE_MEASUREMENT_ID"],
+            }
+            enabled = all(
+                firebase_config[key]
+                for key in ("apiKey", "authDomain", "projectId", "messagingSenderId", "appId")
+            ) and bool(app.config["FIREBASE_VAPID_KEY"])
+            return render_template(
+                "notifications.html",
+                firebase_enabled=enabled,
+                firebase_config_json=json.dumps(firebase_config),
+                firebase_vapid_key=app.config["FIREBASE_VAPID_KEY"],
+            )
+
+    if not _has_url_rule("/firebase-messaging-sw.js"):
+        @app.get("/firebase-messaging-sw.js")
+        def firebase_messaging_service_worker():
+            return send_from_directory(app.static_folder, "firebase-messaging-sw.js")
 
     def notifications_settings_page():
         firebase_config = {
