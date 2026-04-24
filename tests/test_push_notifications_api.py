@@ -1,5 +1,6 @@
 import os
 
+import moneybot.api as api_module
 from moneybot.app_factory import create_app
 
 
@@ -55,3 +56,42 @@ def test_register_and_list_and_delete_fcm_token_flow():
     listed_after = client.get('/api/notifications/fcm-tokens')
     assert listed_after.status_code == 200
     assert listed_after.get_json()['items'] == []
+
+
+def test_send_test_push_requires_authentication():
+    client = _client()
+
+    response = client.post('/api/notifications/test-push')
+
+    assert response.status_code == 401
+
+
+def test_send_test_push_to_logged_in_users_tokens(monkeypatch):
+    client = _client()
+    signup = _signup(client, email='push-send@example.com', username='push_sender')
+    assert signup.status_code == 201
+
+    token = 'fcm_token_' + ('b' * 48)
+    register = client.post('/api/notifications/fcm-token', json={'token': token})
+    assert register.status_code == 201
+
+    sent_calls: list[dict[str, object]] = []
+
+    def _fake_send(*, token, title, body, data):
+        sent_calls.append({'token': token, 'title': title, 'body': body, 'data': data})
+        return 'mock-message-id'
+
+    monkeypatch.setattr(api_module, '_send_firebase_push_to_token', _fake_send)
+
+    response = client.post(
+        '/api/notifications/test-push',
+        json={'title': 'Smoke test', 'body': 'Notification plumbing works.'},
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload['ok'] is True
+    assert payload['sent_count'] == 1
+    assert payload['failed_count'] == 0
+    assert payload['sent'][0]['token'] == token
+    assert sent_calls[0]['token'] == token
+    assert sent_calls[0]['title'] == 'Smoke test'
