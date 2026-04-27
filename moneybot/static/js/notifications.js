@@ -179,26 +179,34 @@ async function initializeToggle() {
 }
 
 async function loadTriggerPreferences() {
-  const response = await apiFetch('/api/notifications/triggers');
-  if (!response.ok) {
-    const payload = await response.json();
-    throw new Error(payload.error || 'failed to load trigger settings');
+  let response;
+  try {
+    response = await apiFetch('/api/notifications/triggers');
+  } catch (_err) {
+    throw new Error('Unable to reach trigger settings API.');
   }
-  const payload = await response.json();
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `failed to load trigger settings (${response.status})`);
+  }
   return payload.item || {};
 }
 
 async function saveTriggerPreferences(patch) {
-  const response = await apiFetch('/api/notifications/triggers', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch),
-  });
-  if (!response.ok) {
-    const payload = await response.json();
-    throw new Error(payload.error || 'failed to save trigger settings');
+  let response;
+  try {
+    response = await apiFetch('/api/notifications/triggers', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+  } catch (_err) {
+    throw new Error('Unable to reach trigger settings API.');
   }
-  const payload = await response.json();
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `failed to save trigger settings (${response.status})`);
+  }
   return payload.item || {};
 }
 

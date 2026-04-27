@@ -81,6 +81,57 @@ def _ensure_user_profile_schema() -> None:
     db.session.commit()
 
 
+def _ensure_notification_trigger_schema() -> None:
+    inspector = db.inspect(db.engine)
+    if "notification_trigger_preferences" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("notification_trigger_preferences")}
+    if "portfolio_sell_advice_change" not in columns:
+        db.session.execute(
+            db.text(
+                "ALTER TABLE notification_trigger_preferences ADD COLUMN portfolio_sell_advice_change BOOLEAN DEFAULT TRUE",
+            ),
+        )
+    if "portfolio_buy_advice_change" not in columns:
+        db.session.execute(
+            db.text(
+                "ALTER TABLE notification_trigger_preferences ADD COLUMN portfolio_buy_advice_change BOOLEAN DEFAULT TRUE",
+            ),
+        )
+    if "hot_momentum_score_crosses_8" not in columns:
+        db.session.execute(
+            db.text(
+                "ALTER TABLE notification_trigger_preferences ADD COLUMN hot_momentum_score_crosses_8 BOOLEAN DEFAULT TRUE",
+            ),
+        )
+    if "whale_top_investor_added" not in columns:
+        db.session.execute(
+            db.text(
+                "ALTER TABLE notification_trigger_preferences ADD COLUMN whale_top_investor_added BOOLEAN DEFAULT TRUE",
+            ),
+        )
+    if "whales_top_stock_list_changes" not in columns:
+        db.session.execute(
+            db.text(
+                "ALTER TABLE notification_trigger_preferences ADD COLUMN whales_top_stock_list_changes BOOLEAN DEFAULT TRUE",
+            ),
+        )
+    db.session.commit()
+
+    db.session.execute(
+        db.text(
+            "UPDATE notification_trigger_preferences SET "
+            "portfolio_sell_advice_change=COALESCE(portfolio_sell_advice_change, TRUE), "
+            "portfolio_buy_advice_change=COALESCE(portfolio_buy_advice_change, TRUE), "
+            "hot_momentum_score_crosses_8=COALESCE(hot_momentum_score_crosses_8, TRUE), "
+            "whale_top_investor_added=COALESCE(whale_top_investor_added, TRUE), "
+            "whales_top_stock_list_changes=COALESCE(whales_top_stock_list_changes, TRUE)",
+        ),
+    )
+    db.session.commit()
+
+
 def _parse_symbol_set(raw: str | None) -> set[str]:
     return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
 
@@ -441,6 +492,7 @@ def create_app() -> Flask:
     with app.app_context():
         db.create_all()
         _ensure_user_profile_schema()
+        _ensure_notification_trigger_schema()
 
     @app.get("/")
     @app.get("/index.html")
