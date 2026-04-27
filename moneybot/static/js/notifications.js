@@ -208,6 +208,7 @@ async function initializeTriggerToggles() {
     { id: 'triggerPortfolioBuy', field: 'portfolio_buy_advice_change', label: 'Portfolio BUY advice changes' },
     { id: 'triggerMomentum8', field: 'hot_momentum_score_crosses_8', label: 'Hot momentum score > 8' },
     { id: 'triggerWhaleAdded', field: 'whale_top_investor_added', label: 'Whale/top investor added' },
+    { id: 'triggerWhalesTopStocks', field: 'whales_top_stock_list_changes', label: 'Changes to whales top stock list' },
   ];
   const controls = fieldConfig
     .map((cfg) => ({ ...cfg, el: document.getElementById(cfg.id) }))

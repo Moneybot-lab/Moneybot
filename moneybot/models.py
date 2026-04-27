@@ -107,6 +107,7 @@ class NotificationTriggerPreference(db.Model):
     portfolio_buy_advice_change = db.Column(db.Boolean, nullable=False, default=True)
     hot_momentum_score_crosses_8 = db.Column(db.Boolean, nullable=False, default=True)
     whale_top_investor_added = db.Column(db.Boolean, nullable=False, default=True)
+    whales_top_stock_list_changes = db.Column(db.Boolean, nullable=False, default=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(
         db.DateTime,

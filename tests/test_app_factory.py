@@ -239,6 +239,7 @@ def test_notifications_page_renders_push_toggle(monkeypatch):
     assert "triggerPortfolioBuy" in html
     assert "triggerMomentum8" in html
     assert "triggerWhaleAdded" in html
+    assert "triggerWhalesTopStocks" in html
     assert "/static/js/notifications.js" in html
 
     js_res = client.get("/static/js/home.js")

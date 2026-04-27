@@ -352,6 +352,7 @@ def _notification_trigger_payload(item: NotificationTriggerPreference) -> Dict[s
         "portfolio_buy_advice_change": bool(item.portfolio_buy_advice_change),
         "hot_momentum_score_crosses_8": bool(item.hot_momentum_score_crosses_8),
         "whale_top_investor_added": bool(item.whale_top_investor_added),
+        "whales_top_stock_list_changes": bool(item.whales_top_stock_list_changes),
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }
 
@@ -704,6 +705,7 @@ def update_notification_triggers():
         "portfolio_buy_advice_change",
         "hot_momentum_score_crosses_8",
         "whale_top_investor_added",
+        "whales_top_stock_list_changes",
     )
     for field in allowed_fields:
         if field in data:

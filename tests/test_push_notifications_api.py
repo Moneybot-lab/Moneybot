@@ -69,6 +69,7 @@ def test_notification_triggers_default_and_update_flow():
     assert defaults['portfolio_buy_advice_change'] is True
     assert defaults['hot_momentum_score_crosses_8'] is True
     assert defaults['whale_top_investor_added'] is True
+    assert defaults['whales_top_stock_list_changes'] is True
 
     update_res = client.put(
         '/api/notifications/triggers',
@@ -77,6 +78,7 @@ def test_notification_triggers_default_and_update_flow():
             'portfolio_buy_advice_change': True,
             'hot_momentum_score_crosses_8': False,
             'whale_top_investor_added': False,
+            'whales_top_stock_list_changes': False,
         },
     )
     assert update_res.status_code == 200
@@ -85,6 +87,7 @@ def test_notification_triggers_default_and_update_flow():
     assert updated['portfolio_buy_advice_change'] is True
     assert updated['hot_momentum_score_crosses_8'] is False
     assert updated['whale_top_investor_added'] is False
+    assert updated['whales_top_stock_list_changes'] is False
 
 
 def test_notification_triggers_reject_non_boolean_updates():
