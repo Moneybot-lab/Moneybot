@@ -39,6 +39,15 @@ function status(message, danger = false) {
   statusEl.style.color = danger ? '#991b1b' : '#166534';
 }
 
+function triggerStatus(message, danger = false) {
+  const statusEl = document.getElementById('triggerStatus');
+  if (!statusEl) {
+    return;
+  }
+  statusEl.textContent = message;
+  statusEl.style.color = danger ? '#991b1b' : '#166534';
+}
+
 function browserPushSupportStatus() {
   const reasons = [];
   const isLocalhost = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
@@ -169,4 +178,76 @@ async function initializeToggle() {
   });
 }
 
+async function loadTriggerPreferences() {
+  const response = await apiFetch('/api/notifications/triggers');
+  if (!response.ok) {
+    const payload = await response.json();
+    throw new Error(payload.error || 'failed to load trigger settings');
+  }
+  const payload = await response.json();
+  return payload.item || {};
+}
+
+async function saveTriggerPreferences(patch) {
+  const response = await apiFetch('/api/notifications/triggers', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!response.ok) {
+    const payload = await response.json();
+    throw new Error(payload.error || 'failed to save trigger settings');
+  }
+  const payload = await response.json();
+  return payload.item || {};
+}
+
+async function initializeTriggerToggles() {
+  const fieldConfig = [
+    { id: 'triggerPortfolioSell', field: 'portfolio_sell_advice_change', label: 'Portfolio SELL advice changes' },
+    { id: 'triggerPortfolioBuy', field: 'portfolio_buy_advice_change', label: 'Portfolio BUY advice changes' },
+    { id: 'triggerMomentum8', field: 'hot_momentum_score_crosses_8', label: 'Hot momentum score > 8' },
+    { id: 'triggerWhaleAdded', field: 'whale_top_investor_added', label: 'Whale/top investor added' },
+  ];
+  const controls = fieldConfig
+    .map((cfg) => ({ ...cfg, el: document.getElementById(cfg.id) }))
+    .filter((cfg) => !!cfg.el);
+
+  if (!controls.length) {
+    return;
+  }
+
+  try {
+    const current = await loadTriggerPreferences();
+    controls.forEach(({ el, field }) => {
+      el.checked = Boolean(current[field]);
+    });
+    triggerStatus('Trigger settings are up to date.');
+  } catch (err) {
+    controls.forEach(({ el }) => {
+      el.disabled = true;
+    });
+    triggerStatus(err.message || 'Unable to load trigger settings.', true);
+    return;
+  }
+
+  controls.forEach(({ el, field, label }) => {
+    el.addEventListener('change', async () => {
+      const previous = !el.checked;
+      el.disabled = true;
+      triggerStatus(`Saving ${label}...`);
+      try {
+        await saveTriggerPreferences({ [field]: el.checked });
+        triggerStatus('Trigger settings saved.');
+      } catch (err) {
+        el.checked = previous;
+        triggerStatus(err.message || 'Unable to save trigger settings.', true);
+      } finally {
+        el.disabled = false;
+      }
+    });
+  });
+}
+
 initializeToggle();
+initializeTriggerToggles();

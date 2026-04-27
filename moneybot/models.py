@@ -38,6 +38,13 @@ class User(db.Model):
         cascade="all, delete-orphan",
         lazy=True,
     )
+    notification_trigger_preferences = db.relationship(
+        "NotificationTriggerPreference",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy=True,
+        uselist=False,
+    )
 
 
 class WatchlistItem(db.Model):
@@ -89,3 +96,23 @@ class FcmDeviceToken(db.Model):
     )
 
     user = db.relationship("User", back_populates="fcm_device_tokens")
+
+
+class NotificationTriggerPreference(db.Model):
+    __tablename__ = "notification_trigger_preferences"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, unique=True, index=True)
+    portfolio_sell_advice_change = db.Column(db.Boolean, nullable=False, default=True)
+    portfolio_buy_advice_change = db.Column(db.Boolean, nullable=False, default=True)
+    hot_momentum_score_crosses_8 = db.Column(db.Boolean, nullable=False, default=True)
+    whale_top_investor_added = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    user = db.relationship("User", back_populates="notification_trigger_preferences")
