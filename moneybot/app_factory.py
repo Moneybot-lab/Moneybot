@@ -7,7 +7,7 @@ import os
 import re
 from pathlib import Path
 
-from flask import Flask, render_template, render_template_string, send_from_directory
+from flask import Flask, redirect, render_template, render_template_string, send_from_directory
 from flask_cors import CORS
 from .api import api_bp
 from .extensions import db, migrate
@@ -545,6 +545,11 @@ def create_app() -> Flask:
     @app.get("/firebase-messaging-sw.js")
     def firebase_messaging_service_worker():
         return send_from_directory(app.static_folder, "firebase-messaging-sw.js")
+
+    @app.post("/run-notification-triggers")
+    @app.post("/run-notification-triggers/")
+    def run_notification_triggers_alias():
+        return redirect("/api/run-notification-triggers", code=307)
 
     @app.get("/user-profile")
     def user_profile_page():
