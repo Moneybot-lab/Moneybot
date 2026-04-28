@@ -1431,6 +1431,26 @@ def run_daily_ops():
         ), 500
 
 
+@api_bp.post("/run-notification-triggers")
+def run_notification_triggers():
+    expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
+    provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
+    if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
+
+    return jsonify(
+        {
+            "data": {
+                "success": True,
+                "checked_at_utc": datetime.now(timezone.utc).isoformat(),
+                "sent_count": 0,
+                "message": "Notification trigger cron endpoint is reachable.",
+            },
+            "request_id": g.request_id,
+        }
+    )
+
+
 @api_bp.post("/run-weekly-model-refresh")
 def run_weekly_model_refresh():
     expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()

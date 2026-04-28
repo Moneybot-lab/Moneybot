@@ -3,9 +3,13 @@ import os
 from moneybot.app_factory import create_app
 
 
-def _client():
+def _client(*, daily_ops_token: str | None = None):
     os.environ['MONEYBOT_SECRET_KEY'] = 'test-secret'
     os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
+    if daily_ops_token is None:
+        os.environ.pop('DAILY_OPS_TOKEN', None)
+    else:
+        os.environ['DAILY_OPS_TOKEN'] = daily_ops_token
     app = create_app()
     return app.test_client()
 
@@ -98,3 +102,22 @@ def test_notification_triggers_reject_non_boolean_updates():
     res = client.put('/api/notifications/triggers', json={'portfolio_buy_advice_change': 'yes'})
     assert res.status_code == 400
     assert 'must be a boolean' in res.get_json()['error']
+
+
+def test_run_notification_triggers_requires_token():
+    client = _client(daily_ops_token='cron-secret')
+
+    res = client.post('/api/run-notification-triggers')
+
+    assert res.status_code == 401
+
+
+def test_run_notification_triggers_returns_success_with_token():
+    client = _client(daily_ops_token='cron-secret')
+
+    res = client.post('/api/run-notification-triggers', headers={'X-Daily-Ops-Token': 'cron-secret'})
+
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload['data']['success'] is True
+    assert payload['data']['sent_count'] == 0
