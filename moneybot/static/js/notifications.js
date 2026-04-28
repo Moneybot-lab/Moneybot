@@ -50,9 +50,15 @@ function triggerStatus(message, danger = false) {
 
 function browserPushSupportStatus() {
   const reasons = [];
+  const ua = String(navigator.userAgent || '');
+  const isIos = /iPhone|iPad|iPod/i.test(ua);
+  const isStandalone = window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator.standalone === true;
   const isLocalhost = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
   if (!window.isSecureContext && !isLocalhost) {
     reasons.push('Push requires HTTPS (or localhost for local development).');
+  }
+  if (isIos && !isStandalone) {
+    reasons.push('On iPhone/iPad, push works from the Home Screen app (Add to Home Screen).');
   }
   if (!('Notification' in window)) {
     reasons.push('Notification API is unavailable in this browser/environment.');
@@ -66,6 +72,7 @@ function browserPushSupportStatus() {
   return {
     supported: reasons.length === 0,
     reasons,
+    requiresInstall: isIos && !isStandalone,
   };
 }
 
@@ -149,7 +156,11 @@ async function initializeToggle() {
   const support = browserPushSupportStatus();
   if (!support.supported) {
     toggle.disabled = true;
-    status(`Push unavailable: ${support.reasons.join(' ')}`, true);
+    if (support.requiresInstall) {
+      status('Push on iPhone/iPad works from the Home Screen app. Tap Share → Add to Home Screen, then reopen the app.', false);
+    } else {
+      status(`Push unavailable: ${support.reasons.join(' ')}`, true);
+    }
     return;
   }
 
