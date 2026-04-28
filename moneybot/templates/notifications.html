@@ -15,6 +15,34 @@
       <p id="pushStatus" style="margin-top:10px;color:#166534">Checking current status...</p>
     </section>
 
+    <section style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:14px;padding:16px;margin-bottom:12px">
+      <h3 style="margin:0 0 6px 0">Alert Triggers</h3>
+      <p style="margin:0 0 12px 0;color:#166534">Choose which events should trigger notifications.</p>
+      <div style="display:flex;flex-direction:column;gap:10px;color:#14532d">
+        <label style="display:flex;align-items:center;gap:10px;font-weight:700;cursor:pointer">
+          <input id="triggerPortfolioSell" type="checkbox" style="width:18px;height:18px;cursor:pointer" />
+          <span>User portfolio: stock advice changes to <strong>SELL</strong></span>
+        </label>
+        <label style="display:flex;align-items:center;gap:10px;font-weight:700;cursor:pointer">
+          <input id="triggerPortfolioBuy" type="checkbox" style="width:18px;height:18px;cursor:pointer" />
+          <span>User portfolio: stock advice changes to <strong>BUY</strong></span>
+        </label>
+        <label style="display:flex;align-items:center;gap:10px;font-weight:700;cursor:pointer">
+          <input id="triggerMomentum8" type="checkbox" style="width:18px;height:18px;cursor:pointer" />
+          <span>Hot Momentum Buys: score crosses <strong>&gt; 8</strong></span>
+        </label>
+        <label style="display:flex;align-items:center;gap:10px;font-weight:700;cursor:pointer">
+          <input id="triggerWhaleAdded" type="checkbox" style="width:18px;height:18px;cursor:pointer" />
+          <span>Whale/top investor added to Whales of Wall Street</span>
+        </label>
+        <label style="display:flex;align-items:center;gap:10px;font-weight:700;cursor:pointer">
+          <input id="triggerWhalesTopStocks" type="checkbox" style="width:18px;height:18px;cursor:pointer" />
+          <span>Changes to Whales top stock list</span>
+        </label>
+      </div>
+      <p id="triggerStatus" style="margin-top:10px;color:#166534">Loading trigger settings...</p>
+    </section>
+
     {% if firebase_enabled %}
     <script>
       window.__MONEYBOT_FIREBASE__ = {
