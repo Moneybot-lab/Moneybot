@@ -234,6 +234,12 @@ def test_notifications_page_renders_push_toggle(monkeypatch):
     html = res.get_data(as_text=True)
     assert "Enable push notifications" in html
     assert "pushEnabledToggle" in html
+    assert "Alert Triggers" in html
+    assert "triggerPortfolioSell" in html
+    assert "triggerPortfolioBuy" in html
+    assert "triggerMomentum8" in html
+    assert "triggerWhaleAdded" in html
+    assert "triggerWhalesTopStocks" in html
     assert "/static/js/notifications.js" in html
 
     js_res = client.get("/static/js/home.js")
@@ -241,3 +247,16 @@ def test_notifications_page_renders_push_toggle(monkeypatch):
     js = js_res.get_data(as_text=True)
     assert "/api/decision-log-summary?limit=50" in js
     assert "/api/decision-outcomes?limit=20" in js
+
+
+def test_run_notification_triggers_alias_redirects_to_api(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+
+    app = create_app()
+    client = app.test_client()
+
+    res = client.post("/run-notification-triggers")
+
+    assert res.status_code == 307
+    assert res.headers["Location"].endswith("/api/run-notification-triggers")
