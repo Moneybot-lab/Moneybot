@@ -366,6 +366,57 @@ def _ensure_notification_trigger_preferences(user_id: int) -> NotificationTrigge
     return item
 
 
+def _notification_trigger_state_path() -> str:
+    return _runtime_data_path("notification_trigger_state.json")
+
+
+def _load_notification_trigger_state() -> dict[str, Any]:
+    path = Path(_notification_trigger_state_path())
+    if not path.exists():
+        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}}
+    if not isinstance(payload, dict):
+        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}}
+    return {
+        "portfolio_advice": payload.get("portfolio_advice") if isinstance(payload.get("portfolio_advice"), dict) else {},
+        "momentum_scores": payload.get("momentum_scores") if isinstance(payload.get("momentum_scores"), dict) else {},
+        "wells_snapshot": payload.get("wells_snapshot") if isinstance(payload.get("wells_snapshot"), dict) else {},
+    }
+
+
+def _save_notification_trigger_state(state: dict[str, Any]) -> None:
+    path = Path(_notification_trigger_state_path())
+    try:
+        path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+    except OSError:
+        logging.exception("Failed to save notification trigger state path=%s", path)
+
+
+def _normalize_wells_snapshot(items: list[dict[str, Any]]) -> dict[str, list[str]]:
+    snapshot: dict[str, list[str]] = {}
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        investor = str(row.get("investor") or "").strip()
+        if not investor:
+            continue
+        stocks = row.get("stocks")
+        out: list[str] = []
+        if isinstance(stocks, list):
+            for entry in stocks:
+                if isinstance(entry, dict):
+                    ticker = str(entry.get("ticker") or "").strip().upper()
+                else:
+                    ticker = str(entry or "").strip().upper()
+                if ticker:
+                    out.append(ticker)
+        snapshot[investor] = sorted(set(out))
+    return snapshot
+
+
 def _firebase_admin_service_account_info() -> dict[str, str] | None:
     project_id = str(os.environ.get("FIREBASE_SERVICE_ACCOUNT_PROJECT_ID") or "").strip()
     client_email = str(os.environ.get("FIREBASE_SERVICE_ACCOUNT_CLIENT_EMAIL") or "").strip()
@@ -1438,13 +1489,211 @@ def run_notification_triggers():
     if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
         return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
 
+    svc = current_app.extensions.get("market_data_service")
+    if svc is None:
+        return jsonify({"error": "market data service unavailable", "request_id": g.request_id}), 503
+
+    state = _load_notification_trigger_state()
+    portfolio_state: dict[str, str] = {
+        str(k): str(v).upper() for k, v in (state.get("portfolio_advice") or {}).items() if str(k)
+    }
+    momentum_scores: dict[str, float] = {}
+    for key, value in (state.get("momentum_scores") or {}).items():
+        try:
+            momentum_scores[str(key).upper()] = float(value)
+        except (TypeError, ValueError):
+            continue
+    wells_prev = {
+        str(k): [str(t).upper() for t in v if str(t).strip()]
+        for k, v in (state.get("wells_snapshot") or {}).items()
+        if isinstance(v, list)
+    }
+
+    users = User.query.order_by(User.id.asc()).all()
+    pref_cache: dict[int, NotificationTriggerPreference] = {}
+    events_queued = 0
+    sent_count = 0
+    failed_count = 0
+    per_user_events: dict[int, list[dict[str, str]]] = {}
+
+    def queue_user_event(user_id: int, *, title: str, body: str, kind: str, symbol: str = "") -> None:
+        nonlocal events_queued
+        per_user_events.setdefault(user_id, []).append({
+            "title": title[:120],
+            "body": body[:240],
+            "kind": kind,
+            "symbol": symbol.upper()[:12],
+        })
+        events_queued += 1
+
+    for user in users:
+        prefs = _ensure_notification_trigger_preferences(user.id)
+        pref_cache[user.id] = prefs
+        watchlist_items = (
+            WatchlistItem.query.filter_by(user_id=user.id)
+            .order_by(WatchlistItem.symbol.asc())
+            .all()
+        )
+        for item in watchlist_items:
+            symbol = str(item.symbol or "").strip().upper()
+            if not symbol:
+                continue
+            advice = "HOLD"
+            try:
+                signal = svc.get_signal(symbol) or {}
+            except Exception:  # noqa: BLE001
+                signal = {}
+            action = str(signal.get("action") or "").upper()
+            if action in {"STRONG BUY", "BUY"}:
+                advice = "BUY"
+            elif action == "SELL":
+                advice = "SELL"
+
+            state_key = f"{user.id}:{symbol}"
+            previous = portfolio_state.get(state_key, "")
+            portfolio_state[state_key] = advice
+            if advice == previous:
+                continue
+            if advice == "SELL" and prefs.portfolio_sell_advice_change:
+                queue_user_event(
+                    user.id,
+                    title=f"{symbol}: Advice changed to SELL",
+                    body=f"Portfolio advice for {symbol} changed from {previous or 'N/A'} to SELL.",
+                    kind="portfolio_sell_advice_change",
+                    symbol=symbol,
+                )
+            if advice == "BUY" and prefs.portfolio_buy_advice_change:
+                queue_user_event(
+                    user.id,
+                    title=f"{symbol}: Advice changed to BUY",
+                    body=f"Portfolio advice for {symbol} changed from {previous or 'N/A'} to BUY.",
+                    kind="portfolio_buy_advice_change",
+                    symbol=symbol,
+                )
+
+    momentum_items = []
+    try:
+        momentum_items = svc.get_hot_momentum_buys() or []
+    except Exception:  # noqa: BLE001
+        momentum_items = []
+    for row in momentum_items:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        try:
+            score = float(row.get("score") or 0.0)
+        except (TypeError, ValueError):
+            score = 0.0
+        previous = momentum_scores.get(symbol, 0.0)
+        momentum_scores[symbol] = score
+        if previous <= 8.0 < score:
+            for user in users:
+                prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
+                if not prefs.hot_momentum_score_crosses_8:
+                    continue
+                queue_user_event(
+                    user.id,
+                    title=f"{symbol}: Hot Momentum > 8",
+                    body=f"{symbol} momentum score crossed above 8 (now {score:.2f}).",
+                    kind="hot_momentum_score_crosses_8",
+                    symbol=symbol,
+                )
+
+    wells_items = []
+    try:
+        wells_items = svc.get_wells_picks() or []
+    except Exception:  # noqa: BLE001
+        wells_items = []
+    wells_now = _normalize_wells_snapshot(wells_items)
+    added_holdings: list[tuple[str, str]] = []
+    list_changed = False
+    for investor, current_stocks in wells_now.items():
+        previous_stocks = set(wells_prev.get(investor) or [])
+        current_set = set(current_stocks)
+        if current_set != previous_stocks:
+            list_changed = True
+        for ticker in sorted(current_set - previous_stocks):
+            added_holdings.append((investor, ticker))
+    if added_holdings:
+        for user in users:
+            prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
+            if not prefs.whale_top_investor_added:
+                continue
+            investor, ticker = added_holdings[0]
+            queue_user_event(
+                user.id,
+                title=f"{investor} added {ticker}",
+                body=f"Whale/top investor added {ticker} to Whales of Wall Street.",
+                kind="whale_top_investor_added",
+                symbol=ticker,
+            )
+    if list_changed:
+        for user in users:
+            prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
+            if not prefs.whales_top_stock_list_changes:
+                continue
+            queue_user_event(
+                user.id,
+                title="Whales top stock list changed",
+                body="At least one Whales of Wall Street top stock list changed since the last check.",
+                kind="whales_top_stock_list_changes",
+            )
+
+    for user in users:
+        user_events = per_user_events.get(user.id) or []
+        if not user_events:
+            continue
+        tokens = (
+            FcmDeviceToken.query.filter_by(user_id=user.id)
+            .order_by(FcmDeviceToken.updated_at.desc())
+            .all()
+        )
+        if not tokens:
+            continue
+        for event in user_events:
+            for token_item in tokens:
+                try:
+                    _send_firebase_push_to_token(
+                        token=token_item.token,
+                        title=event["title"],
+                        body=event["body"],
+                        data={
+                            "kind": event["kind"],
+                            "symbol": event["symbol"],
+                            "request_id": str(g.request_id),
+                        },
+                    )
+                    sent_count += 1
+                except Exception:  # noqa: BLE001
+                    failed_count += 1
+                    logging.exception(
+                        "Failed to send trigger notification user_id=%s token_id=%s kind=%s",
+                        user.id,
+                        token_item.id,
+                        event["kind"],
+                    )
+
+    _save_notification_trigger_state(
+        {
+            "portfolio_advice": portfolio_state,
+            "momentum_scores": momentum_scores,
+            "wells_snapshot": wells_now,
+            "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
     return jsonify(
         {
             "data": {
                 "success": True,
                 "checked_at_utc": datetime.now(timezone.utc).isoformat(),
-                "sent_count": 0,
-                "message": "Notification trigger cron endpoint is reachable.",
+                "sent_count": sent_count,
+                "failed_count": failed_count,
+                "events_queued": events_queued,
+                "users_checked": len(users),
+                "message": "Notification trigger cron check completed.",
             },
             "request_id": g.request_id,
         }
