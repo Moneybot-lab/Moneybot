@@ -25,7 +25,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from advice_engine import compute_user_advice
 
 from .extensions import db
-from .models import FcmDeviceToken, SoldTrade, User, WatchlistItem
+from .models import FcmDeviceToken, NotificationTriggerPreference, SoldTrade, User, WatchlistItem
 from .services.decision_log import read_decision_events, summarize_decision_events
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
 from .services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
@@ -344,6 +344,26 @@ def _fcm_token_payload(item: FcmDeviceToken) -> Dict[str, Any]:
         "created_at": item.created_at.isoformat(),
         "updated_at": item.updated_at.isoformat(),
     }
+
+
+def _notification_trigger_payload(item: NotificationTriggerPreference) -> Dict[str, Any]:
+    return {
+        "portfolio_sell_advice_change": bool(item.portfolio_sell_advice_change),
+        "portfolio_buy_advice_change": bool(item.portfolio_buy_advice_change),
+        "hot_momentum_score_crosses_8": bool(item.hot_momentum_score_crosses_8),
+        "whale_top_investor_added": bool(item.whale_top_investor_added),
+        "whales_top_stock_list_changes": bool(item.whales_top_stock_list_changes),
+        "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+    }
+
+
+def _ensure_notification_trigger_preferences(user_id: int) -> NotificationTriggerPreference:
+    item = NotificationTriggerPreference.query.filter_by(user_id=user_id).first()
+    if item is None:
+        item = NotificationTriggerPreference(user_id=user_id)
+        db.session.add(item)
+        db.session.commit()
+    return item
 
 
 def _firebase_admin_service_account_info() -> dict[str, str] | None:
@@ -666,6 +686,41 @@ def list_fcm_tokens():
         .all()
     )
     return jsonify({"items": [_fcm_token_payload(item) for item in items], "request_id": g.request_id})
+
+
+@api_bp.get("/notifications/triggers")
+@login_required
+def get_notification_triggers():
+    item = _ensure_notification_trigger_preferences(session["user_id"])
+    return jsonify({"item": _notification_trigger_payload(item), "request_id": g.request_id})
+
+
+@api_bp.put("/notifications/triggers")
+@login_required
+def update_notification_triggers():
+    data = request.get_json(silent=True) or {}
+    updates: dict[str, bool] = {}
+    allowed_fields = (
+        "portfolio_sell_advice_change",
+        "portfolio_buy_advice_change",
+        "hot_momentum_score_crosses_8",
+        "whale_top_investor_added",
+        "whales_top_stock_list_changes",
+    )
+    for field in allowed_fields:
+        if field in data:
+            value = data.get(field)
+            if not isinstance(value, bool):
+                return jsonify({"error": f"{field} must be a boolean", "request_id": g.request_id}), 400
+            updates[field] = value
+    if not updates:
+        return jsonify({"error": "no trigger updates provided", "request_id": g.request_id}), 400
+
+    item = _ensure_notification_trigger_preferences(session["user_id"])
+    for key, value in updates.items():
+        setattr(item, key, value)
+    db.session.commit()
+    return jsonify({"item": _notification_trigger_payload(item), "request_id": g.request_id})
 
 
 @api_bp.post("/notifications/fcm-token")
@@ -1374,6 +1429,26 @@ def run_daily_ops():
                 "request_id": g.request_id,
             }
         ), 500
+
+
+@api_bp.post("/run-notification-triggers")
+def run_notification_triggers():
+    expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
+    provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
+    if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
+
+    return jsonify(
+        {
+            "data": {
+                "success": True,
+                "checked_at_utc": datetime.now(timezone.utc).isoformat(),
+                "sent_count": 0,
+                "message": "Notification trigger cron endpoint is reachable.",
+            },
+            "request_id": g.request_id,
+        }
+    )
 
 
 @api_bp.post("/run-weekly-model-refresh")
