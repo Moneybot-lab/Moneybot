@@ -39,11 +39,26 @@ function status(message, danger = false) {
   statusEl.style.color = danger ? '#991b1b' : '#166534';
 }
 
+function triggerStatus(message, danger = false) {
+  const statusEl = document.getElementById('triggerStatus');
+  if (!statusEl) {
+    return;
+  }
+  statusEl.textContent = message;
+  statusEl.style.color = danger ? '#991b1b' : '#166534';
+}
+
 function browserPushSupportStatus() {
   const reasons = [];
+  const ua = String(navigator.userAgent || '');
+  const isIos = /iPhone|iPad|iPod/i.test(ua);
+  const isStandalone = window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator.standalone === true;
   const isLocalhost = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
   if (!window.isSecureContext && !isLocalhost) {
     reasons.push('Push requires HTTPS (or localhost for local development).');
+  }
+  if (isIos && !isStandalone) {
+    reasons.push('On iPhone/iPad, push works from the Home Screen app (Add to Home Screen).');
   }
   if (!('Notification' in window)) {
     reasons.push('Notification API is unavailable in this browser/environment.');
@@ -57,6 +72,7 @@ function browserPushSupportStatus() {
   return {
     supported: reasons.length === 0,
     reasons,
+    requiresInstall: isIos && !isStandalone,
   };
 }
 
@@ -140,7 +156,11 @@ async function initializeToggle() {
   const support = browserPushSupportStatus();
   if (!support.supported) {
     toggle.disabled = true;
-    status(`Push unavailable: ${support.reasons.join(' ')}`, true);
+    if (support.requiresInstall) {
+      status('Push on iPhone/iPad works from the Home Screen app. Tap Share → Add to Home Screen, then reopen the app.', false);
+    } else {
+      status(`Push unavailable: ${support.reasons.join(' ')}`, true);
+    }
     return;
   }
 
@@ -169,4 +189,85 @@ async function initializeToggle() {
   });
 }
 
+async function loadTriggerPreferences() {
+  let response;
+  try {
+    response = await apiFetch('/api/notifications/triggers');
+  } catch (_err) {
+    throw new Error('Unable to reach trigger settings API.');
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `failed to load trigger settings (${response.status})`);
+  }
+  return payload.item || {};
+}
+
+async function saveTriggerPreferences(patch) {
+  let response;
+  try {
+    response = await apiFetch('/api/notifications/triggers', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+  } catch (_err) {
+    throw new Error('Unable to reach trigger settings API.');
+  }
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `failed to save trigger settings (${response.status})`);
+  }
+  return payload.item || {};
+}
+
+async function initializeTriggerToggles() {
+  const fieldConfig = [
+    { id: 'triggerPortfolioSell', field: 'portfolio_sell_advice_change', label: 'Portfolio SELL advice changes' },
+    { id: 'triggerPortfolioBuy', field: 'portfolio_buy_advice_change', label: 'Portfolio BUY advice changes' },
+    { id: 'triggerMomentum8', field: 'hot_momentum_score_crosses_8', label: 'Hot momentum score > 8' },
+    { id: 'triggerWhaleAdded', field: 'whale_top_investor_added', label: 'Whale/top investor added' },
+    { id: 'triggerWhalesTopStocks', field: 'whales_top_stock_list_changes', label: 'Changes to whales top stock list' },
+  ];
+  const controls = fieldConfig
+    .map((cfg) => ({ ...cfg, el: document.getElementById(cfg.id) }))
+    .filter((cfg) => !!cfg.el);
+
+  if (!controls.length) {
+    return;
+  }
+
+  try {
+    const current = await loadTriggerPreferences();
+    controls.forEach(({ el, field }) => {
+      el.checked = Boolean(current[field]);
+    });
+    triggerStatus('Trigger settings are up to date.');
+  } catch (err) {
+    controls.forEach(({ el }) => {
+      el.disabled = true;
+    });
+    triggerStatus(err.message || 'Unable to load trigger settings.', true);
+    return;
+  }
+
+  controls.forEach(({ el, field, label }) => {
+    el.addEventListener('change', async () => {
+      const previous = !el.checked;
+      el.disabled = true;
+      triggerStatus(`Saving ${label}...`);
+      try {
+        await saveTriggerPreferences({ [field]: el.checked });
+        triggerStatus('Trigger settings saved.');
+      } catch (err) {
+        el.checked = previous;
+        triggerStatus(err.message || 'Unable to save trigger settings.', true);
+      } finally {
+        el.disabled = false;
+      }
+    });
+  });
+}
+
 initializeToggle();
+initializeTriggerToggles();
