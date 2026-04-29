@@ -1133,8 +1133,8 @@ def create_app() -> Flask:
                 <button type="submit" style="border:none;background:#16a34a;color:#f0fdf4;padding:9px 14px;border-radius:8px;font-weight:700;cursor:pointer">Add</button>
               </form>
               <div id="out" style="margin:10px 0;color:#166534"></div>
-              <div id="loadingState" style="display:none;align-items:center;gap:10px;margin:12px 0;color:#14532d;font-weight:600">
-                <span style="width:16px;height:16px;border:2px solid #86efac;border-top-color:#16a34a;border-radius:999px;display:inline-block;animation:spin .8s linear infinite"></span>
+              <div id="loadingState" style="display:none;align-items:center;justify-content:center;gap:14px;position:fixed;inset:0;background:rgba(247,254,231,.72);z-index:120;color:#14532d;font-weight:700;font-size:1.15rem">
+                <span style="width:34px;height:34px;border:4px solid #86efac;border-top-color:#16a34a;border-radius:999px;display:inline-block;animation:spin .8s linear infinite"></span>
                 Loading latest portfolio stock data...
               </div>
               <button id="toggleLifetimeBtn" onclick="toggleLifetime()" style="border:none;background:#14532d;color:#f0fdf4;padding:9px 14px;border-radius:8px;font-weight:700;cursor:pointer;margin-bottom:10px">Show Lifetime Gains/Losses</button>

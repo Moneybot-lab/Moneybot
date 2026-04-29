@@ -8,6 +8,7 @@ import subprocess
 import time
 import uuid
 import hmac
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -876,23 +877,26 @@ def user_watchlist():
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
     decision_logger = current_app.extensions.get("decision_logger")
     enriched_items: list[Dict[str, Any]] = []
+
+    def _load_market_inputs(symbol: str) -> tuple[dict[str, Any], dict[str, Any], list[float]]:
+        if svc is None:
+            return {}, {}, []
+
+        def _safe_call(fn, fallback):
+            try:
+                result = fn()
+                return result if result is not None else fallback
+            except Exception:  # noqa: BLE001
+                return fallback
+
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            signal_future = pool.submit(lambda: _safe_call(lambda: svc.get_signal(symbol), {}))
+            quote_future = pool.submit(lambda: _safe_call(lambda: svc.get_quote(symbol), {}))
+            history_future = pool.submit(lambda: _safe_call(lambda: svc.get_price_history(symbol, days=30), []))
+            return signal_future.result(), quote_future.result(), history_future.result()
+
     for item in base_items:
-        signal = {}
-        quote = {}
-        history30: list[float] = []
-        if svc is not None:
-            try:
-                signal = svc.get_signal(item["symbol"]) or {}
-            except Exception:  # noqa: BLE001
-                signal = {}
-            try:
-                quote = svc.get_quote(item["symbol"]) or {}
-            except Exception:  # noqa: BLE001
-                quote = {}
-            try:
-                history30 = svc.get_price_history(item["symbol"], days=30)
-            except Exception:  # noqa: BLE001
-                history30 = []
+        signal, quote, history30 = _load_market_inputs(item["symbol"])
 
         sentiment_label = str((signal.get("sentiment") or {}).get("label") or "neutral").lower()
         if sentiment_label in {"positive", "bullish"}:
