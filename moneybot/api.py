@@ -25,6 +25,8 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from advice_engine import compute_user_advice
 
 from .extensions import db
+from sqlalchemy import or_
+
 from .models import FcmDeviceToken, NotificationTriggerPreference, SoldTrade, User, WatchlistItem
 from .services.decision_log import read_decision_events, summarize_decision_events
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
@@ -585,12 +587,12 @@ def signup():
 @api_bp.post("/auth/login")
 def login():
     data = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
+    login_identifier = (data.get("email") or data.get("username") or "").strip().lower()
     password = data.get("password") or ""
     tab_session_id = (data.get("tab_session_id") or "").strip()
 
 
-    user = User.query.filter_by(email=email).first()
+    user = User.query.filter(or_(User.email == login_identifier, User.username == login_identifier)).first()
     if not user or not check_password_hash(user.password_hash, password):
         return jsonify({"error": "invalid credentials", "request_id": g.request_id}), 401
 
