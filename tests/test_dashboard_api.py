@@ -860,6 +860,15 @@ def test_me_security_updates_email_and_password():
     assert new_login.status_code == 200
 
 
+def test_login_accepts_username_identifier():
+    client = _client()
+    signup = client.post("/api/auth/signup", json=_signup_payload("identifier@b.com", password="pw123"))
+    assert signup.status_code == 201
+
+    login = client.post("/api/auth/login", json={"email": "testuser", "password": "pw123"})
+    assert login.status_code == 200
+
+
 def test_user_watchlist_exposes_quote_source_diagnostics():
     client = _client()
     signup = client.post("/api/auth/signup", json=_signup_payload("a@b.com"))
