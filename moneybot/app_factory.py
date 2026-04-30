@@ -693,7 +693,7 @@ def create_app() -> Flask:
                 try {
                   const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,tab_session_id:getOrCreateTabSessionId()})});
                   const data = await res.json();
-                  if(res.ok){ outEl.textContent='Login successful. Redirecting...'; location.href='/portfolio'; }
+                  if(res.ok){ outEl.textContent='Login successful. Redirecting...'; location.href='/'; }
                   else { outEl.textContent = data.error || 'Login failed. Please verify your credentials.'; }
                 } catch (err) {
                   outEl.textContent = 'Unable to login right now. Please retry.';
@@ -1133,7 +1133,7 @@ def create_app() -> Flask:
                 <button type="submit" style="border:none;background:#16a34a;color:#f0fdf4;padding:9px 14px;border-radius:8px;font-weight:700;cursor:pointer">Add</button>
               </form>
               <div id="out" style="margin:10px 0;color:#166534"></div>
-              <div id="loadingState" style="display:none;align-items:center;justify-content:center;gap:14px;position:fixed;inset:0;background:rgba(247,254,231,.72);z-index:120;color:#14532d;font-weight:700;font-size:1.15rem">
+              <div id="loadingState" style="display:none;align-items:center;justify-content:center;gap:10px;position:fixed;top:16px;right:16px;background:rgba(236,252,203,.95);border:1px solid #bef264;border-radius:999px;padding:10px 14px;z-index:40;color:#14532d;font-weight:700;font-size:.95rem;pointer-events:none">
                 <span style="width:34px;height:34px;border:4px solid #86efac;border-top-color:#16a34a;border-radius:999px;display:inline-block;animation:spin .8s linear infinite"></span>
                 Loading latest portfolio stock data...
               </div>
