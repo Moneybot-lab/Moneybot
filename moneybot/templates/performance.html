@@ -1,0 +1,58 @@
+<html>
+  <body style="font-family:Inter,Segoe UI,system-ui,sans-serif;padding:24px;background:linear-gradient(180deg,#f7fee7,#ecfdf3);max-width:1120px;margin:0 auto;color:#0f172a">
+    <header style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+      <h2 style="margin:0">Performance</h2>
+      <a href="/" style="text-decoration:none;background:#dcfce7;color:#14532d;padding:10px 14px;border-radius:999px;font-weight:700">← Back Home</a>
+    </header>
+
+    <section style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:14px;padding:16px;margin-bottom:18px;box-shadow:0 8px 20px rgba(15,23,42,.08)">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:12px">
+        <div>
+          <h3 style="margin:0 0 6px 0;color:#0f172a">AI Backtest Results (Wireframe)</h3>
+          <p style="margin:0;color:#334155">Placeholder layout for performance storytelling. Replace with audited live metrics and disclosures.</p>
+        </div>
+        <span style="padding:6px 10px;background:#e2e8f0;color:#334155;border-radius:999px;font-weight:700;font-size:12px">WIREFRAME ONLY</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:12px">
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:10px"><div style="font-size:12px;color:#166534;font-weight:700">Backtest CAGR</div><div style="font-size:1.3rem;font-weight:900;color:#14532d">+18.4%</div><div style="font-size:12px;color:#3f6212">vs benchmark +11.1%</div></div>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:10px"><div style="font-size:12px;color:#166534;font-weight:700">Hit Rate</div><div style="font-size:1.3rem;font-weight:900;color:#14532d">62.7%</div><div style="font-size:12px;color:#3f6212">1D directional accuracy</div></div>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:10px"><div style="font-size:12px;color:#166534;font-weight:700">Max Drawdown</div><div style="font-size:1.3rem;font-weight:900;color:#14532d">-9.8%</div><div style="font-size:12px;color:#3f6212">capital protection focus</div></div>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:10px"><div style="font-size:12px;color:#166534;font-weight:700">Sharpe Ratio</div><div style="font-size:1.3rem;font-weight:900;color:#14532d">1.42</div><div style="font-size:12px;color:#3f6212">risk-adjusted returns</div></div>
+      </div>
+    </section>
+
+    <section style="background:#ecfccb;border:1px solid #bef264;border-radius:12px;padding:16px;margin-top:18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+        <div><h3 style="margin:0 0 4px 0">Model Ops Snapshot</h3><p style="margin:0;color:#3f6212">Live rollout status for model health and recent decision telemetry.</p></div>
+        <button type="button" onclick="refreshOps()" style="padding:8px 12px;border:1px solid #84cc16;background:#f7fee7;color:#365314;border-radius:999px;font-weight:700;cursor:pointer">Refresh Ops</button>
+      </div>
+      <div id="opsLoading" style="display:none;align-items:center;gap:8px;margin-bottom:10px;color:#3f6212;font-weight:600">Loading model ops snapshot...</div>
+      <div id="opsCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px"></div>
+      <div id="opsTopSymbols" style="margin-top:12px"></div>
+      <div id="opsLatestEvent" style="margin-top:12px"></div>
+    </section>
+
+    <section style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;padding:16px;margin-top:18px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px">
+        <div><h3 style="margin:0 0 4px 0">Recent Decisions & Outcomes</h3><p style="margin:0;color:#166534">Latest logged actions, model source, and 1D / 5D outcomes.</p></div>
+        <button type="button" onclick="refreshOutcomes()" style="padding:8px 12px;border:1px solid #16a34a;background:#dcfce7;color:#14532d;border-radius:999px;font-weight:700;cursor:pointer">Refresh Outcomes</button>
+      </div>
+      <div id="outcomesLoading" style="display:none;align-items:center;gap:8px;margin-bottom:10px;color:#166534;font-weight:600">Loading recent decision outcomes...</div>
+      <div id="outcomesSummary" style="margin-bottom:12px"></div>
+      <div id="outcomesTable"></div>
+    </section>
+
+<script>
+function escapeHtml(v){return String(v||'').replace(/[&<>"']/g,(ch)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]||ch));}
+async function fetchOpsData(){const [h,s]=await Promise.all([fetch('/api/model-health'),fetch('/api/decision-log-summary?limit=50')]); if(!h.ok||!s.ok) throw new Error(); const hp=await h.json(); const sp=await s.json(); return {health:hp.data||{},summary:sp.data||{}};}
+async function fetchOutcomesData(){const r=await fetch('/api/decision-outcomes?limit=20'); if(!r.ok) throw new Error(); const p=await r.json(); return p.data||{};}
+function setOpsLoading(v){document.getElementById('opsLoading').style.display=v?'flex':'none';}
+function setOutcomesLoading(v){document.getElementById('outcomesLoading').style.display=v?'flex':'none';}
+function renderOps(data){const health=data.health||{}; const summary=data.summary||{}; const rows=[['Model', health.model_loaded ? `Loaded · ${health.model_version||'unknown'}` : 'Not loaded'],['Events considered', String(summary.events_considered||0)],['Decision logging', (health.decision_logging&&health.decision_logging.enabled)?'Enabled':'Disabled']]; document.getElementById('opsCards').innerHTML=rows.map(r=>`<article style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:12px"><div style="font-size:12px;font-weight:800;color:#4d7c0f;text-transform:uppercase;margin-bottom:6px">${escapeHtml(r[0])}</div><div style="font-size:1.1rem;font-weight:800;color:#14532d">${escapeHtml(r[1])}</div></article>`).join(''); const top=(summary.top_symbols||[]); document.getElementById('opsTopSymbols').innerHTML=`<div style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:12px">Top recent symbols: ${top.length?top.map(i=>`${escapeHtml(i.symbol)}×${escapeHtml(i.count)}`).join(', '):'none'}</div>`; const latest=summary.latest_event||{}; document.getElementById('opsLatestEvent').innerHTML=`<div style="background:#f7fee7;border:1px solid #d9f99d;border-radius:12px;padding:12px">Latest logged decision: ${latest.symbol?`${escapeHtml(latest.symbol)} via ${escapeHtml(latest.endpoint||'unknown')} · ${escapeHtml(latest.decision_source||'unknown')}`:'none'}</div>`;}
+function renderOutcomes(data){const s1=data.summary_1d||{}; const s5=data.summary_5d||{}; document.getElementById('outcomesSummary').innerHTML=`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px"><article style="background:#ecfdf5;border:1px solid #bbf7d0;border-radius:12px;padding:12px"><div style="font-size:12px;font-weight:800;color:#166534;text-transform:uppercase;margin-bottom:6px">1D accuracy</div><div style="font-size:1.5rem;font-weight:800;color:#14532d">${s1.accuracy!=null?(s1.accuracy*100).toFixed(1)+'%':'n/a'}</div></article><article style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px;padding:12px"><div style="font-size:12px;font-weight:800;color:#1d4ed8;text-transform:uppercase;margin-bottom:6px">5D accuracy</div><div style="font-size:1.5rem;font-weight:800;color:#1e3a8a">${s5.accuracy!=null?(s5.accuracy*100).toFixed(1)+'%':'n/a'}</div></article></div>`; const rows=Array.isArray(data.rows)?data.rows:[]; document.getElementById('outcomesTable').innerHTML=rows.length?`<div style="overflow:auto"><table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Symbol</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Endpoint</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Source</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Action</th></tr></thead><tbody>${rows.map(r=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${escapeHtml(r.symbol||'')}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${escapeHtml(r.endpoint||'n/a')}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${escapeHtml(r.decision_source||'n/a')}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${escapeHtml(r.action||'n/a')}</td></tr>`).join('')}</tbody></table></div>`:'<div style="color:#475569">No outcomes yet.</div>';}
+async function refreshOps(){setOpsLoading(true); try{renderOps(await fetchOpsData());}catch(e){document.getElementById('opsCards').innerHTML='<div style="color:#7f1d1d">Unable to load ops data.</div>';} finally{setOpsLoading(false);}}
+async function refreshOutcomes(){setOutcomesLoading(true); try{renderOutcomes(await fetchOutcomesData());}catch(e){document.getElementById('outcomesTable').innerHTML='<div style="color:#7f1d1d">Unable to load outcomes data.</div>';} finally{setOutcomesLoading(false);}}
+refreshOps(); refreshOutcomes();
+</script>
+  </body>
+</html>

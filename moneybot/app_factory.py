@@ -542,6 +542,11 @@ def create_app() -> Flask:
             firebase_vapid_key=app.config["FIREBASE_VAPID_KEY"],
         )
 
+    @app.get("/performance")
+    @app.get("/performance/")
+    def performance_page():
+        return render_template("performance.html")
+
     @app.get("/firebase-messaging-sw.js")
     def firebase_messaging_service_worker():
         return send_from_directory(app.static_folder, "firebase-messaging-sw.js")
