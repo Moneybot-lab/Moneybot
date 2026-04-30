@@ -1395,7 +1395,7 @@ def create_app() -> Flask:
                 const totalTodayChange = items.reduce((sum, item) => sum + (typeof item.today_change_amount === 'number' ? item.today_change_amount : 0), 0);
                 const totalPerformance = items.reduce((sum, item) => sum + (typeof item.performance_amount === 'number' ? item.performance_amount : 0), 0);
 
-                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="del(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Remove</button></div></td></tr>`).join('')
+                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="editRow(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Edit</button></div></td></tr>`).join('')
                 + `<tr style="background:#f7fee7;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px;color:#3f3f46;font-size:12px">Click advice badges to see why.</td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
                 items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || []));
               }
@@ -1559,7 +1559,59 @@ def create_app() -> Flask:
                 await load();
               }
 
-              async function del(id){ await apiFetch('/api/user-watchlist/'+id,{method:'DELETE'}); await load(); }
+              async function del(id){
+                const res = await apiFetch('/api/user-watchlist/'+id,{method:'DELETE'});
+                if(!res.ok){
+                  const data = await res.json();
+                  outEl.textContent = data.error || 'Unable to remove this row.';
+                  return;
+                }
+                outEl.textContent = 'Row deleted.';
+                await load();
+              }
+              async function editRow(id){
+                const item = currentPortfolioItems.find((entry)=> entry.id === id);
+                if(!item){
+                  outEl.textContent = 'Unable to find portfolio item.';
+                  return;
+                }
+                const mode = (prompt('Type UPDATE to edit row, or DELETE to remove it.', 'UPDATE') || '').trim().toUpperCase();
+                if(!mode) return;
+                if(mode === 'DELETE'){
+                  if(!confirm(`Delete ${item.symbol} from your portfolio?`)) return;
+                  await del(id);
+                  return;
+                }
+                if(mode !== 'UPDATE'){
+                  outEl.textContent = 'No changes made.';
+                  return;
+                }
+                const nextSymbol = (prompt('Ticker symbol:', String(item.symbol || '')) || '').trim().toUpperCase();
+                if(!nextSymbol){
+                  outEl.textContent = 'Ticker symbol is required.';
+                  return;
+                }
+                const nextEntryRaw = (prompt('Entry price (blank clears value):', item.entry_price ?? '') || '').trim();
+                const nextSharesRaw = (prompt('Shares (blank clears value):', item.shares ?? '') || '').trim();
+                const nextEntry = nextEntryRaw === '' ? null : Number(nextEntryRaw);
+                const nextShares = nextSharesRaw === '' ? null : Number(nextSharesRaw);
+                if((nextEntryRaw !== '' && (!Number.isFinite(nextEntry) || nextEntry <= 0)) || (nextSharesRaw !== '' && (!Number.isFinite(nextShares) || nextShares <= 0))){
+                  outEl.textContent = 'Entry price and shares must be positive numbers when provided.';
+                  return;
+                }
+                const res = await apiFetch('/api/user-watchlist/' + id, {
+                  method:'PATCH',
+                  headers:{'Content-Type':'application/json'},
+                  body:JSON.stringify({ symbol: nextSymbol, buy_price: nextEntry, shares: nextShares })
+                });
+                const data = await res.json();
+                if(!res.ok){
+                  outEl.textContent = data.error || 'Unable to update row.';
+                  return;
+                }
+                outEl.textContent = 'Row updated.';
+                await load();
+              }
               document.getElementById('tickerModal').addEventListener('click', (event) => { if(event.target.id==='tickerModal'){ closeModal(); }});
               document.getElementById('adviceModal').addEventListener('click', (event) => { if(event.target.id==='adviceModal'){ closeAdviceModal(); }});
               load();
