@@ -507,6 +507,7 @@ const fallbackData = {
                   }
 
                   async function refreshOps(){
+                    if(!document.getElementById('opsCards')) return;
                     setOpsLoading(true);
                     try {
                       renderOps(await fetchOpsData());
@@ -516,6 +517,7 @@ const fallbackData = {
                   }
 
                   async function refreshOutcomes(){
+                    if(!document.getElementById('outcomesTable')) return;
                     setOutcomesLoading(true);
                     try {
                       renderOutcomes(await fetchOutcomesData());
@@ -542,13 +544,18 @@ const fallbackData = {
                   });
 
                   async function init(){
+                    const backtestHeading = Array.from(document.querySelectorAll('h1,h2,h3,h4')).find((el) => (el.textContent || '').trim() === 'AI Backtest Results (Wireframe)');
+                    if (backtestHeading) {
+                      const backtestSection = backtestHeading.closest('section');
+                      if (backtestSection) {
+                        backtestSection.remove();
+                      }
+                    }
                     setMenuState(false);
                     await refreshCurrentUser();
                     const market = await fetchWithFallback('/api/market-overview', 'market');
                     renderMarket(market);
                     await refreshTab('stable');
-                    await refreshOps();
-                    await refreshOutcomes();
                   }
 
                   init();
