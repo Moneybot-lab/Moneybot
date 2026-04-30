@@ -507,6 +507,7 @@ const fallbackData = {
                   }
 
                   async function refreshOps(){
+                    if(!document.getElementById('opsCards')) return;
                     setOpsLoading(true);
                     try {
                       renderOps(await fetchOpsData());
@@ -516,6 +517,7 @@ const fallbackData = {
                   }
 
                   async function refreshOutcomes(){
+                    if(!document.getElementById('outcomesTable')) return;
                     setOutcomesLoading(true);
                     try {
                       renderOutcomes(await fetchOutcomesData());
@@ -547,8 +549,6 @@ const fallbackData = {
                     const market = await fetchWithFallback('/api/market-overview', 'market');
                     renderMarket(market);
                     await refreshTab('stable');
-                    await refreshOps();
-                    await refreshOutcomes();
                   }
 
                   init();
