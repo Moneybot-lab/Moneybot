@@ -118,7 +118,7 @@ def main() -> None:
     parser.add_argument("--summary-limit", type=int, default=200)
     parser.add_argument("--outcomes-limit", type=int, default=2000)
     parser.add_argument("--outcomes-rows-limit", type=int, default=20)
-    parser.add_argument("--calibration-limit", type=int, default=1000)
+    parser.add_argument("--calibration-limit", type=int, default=5000)
     parser.add_argument("--horizon-days", type=int, default=5)
     parser.add_argument(
         "--skip-day1-refresh",
