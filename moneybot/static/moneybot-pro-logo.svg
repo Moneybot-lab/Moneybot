@@ -1,4 +1,4 @@
-<svg width="1220" height="142" viewBox="0 0 1220 142" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="MoneyBot Labs logo">
+<svg width="1280" height="150" viewBox="0 0 1280 150" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="MoneyBot Labs logo">
   <defs>
     <linearGradient id="mbp-grad" x1="18" y1="14" x2="66" y2="70" gradientUnits="userSpaceOnUse">
       <stop stop-color="#86EFAC"/>
@@ -12,6 +12,7 @@
   <rect x="6" y="8" width="88" height="84" rx="20" fill="#0F172A"/>
   <path d="M24 62L40 47L53 56L72 34" stroke="url(#mbp-grad)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="72" cy="34" r="6" fill="#86EFAC"/>
-  <text x="112" y="68" font-size="56" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="900" letter-spacing="0.5" fill="url(#text-grad)">MoneyBot Labs</text>
-  <text x="114" y="108" font-size="24" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" letter-spacing="1.2" fill="#3F6212">HIGH POWERED AI MARKET ADVICE</text>
+  <text x="112" y="70" font-size="60" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="900" letter-spacing="0.5" fill="url(#text-grad)">MoneyBot</text>
+  <text x="405" y="70" font-size="60" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="900" fill="#16A34A">Labs</text>
+  <text x="114" y="114" font-size="26" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" letter-spacing="1.2" fill="#3F6212">HIGH POWERED AI MARKET ADVICE</text>
 </svg>
