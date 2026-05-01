@@ -151,17 +151,29 @@ def main() -> None:
     parser.add_argument("--input", default=str(decision_events_log_path()))
     parser.add_argument("--output", default=str(day13_calibration_report_path()))
     parser.add_argument("--limit", type=int, default=1000)
+    parser.add_argument("--read-cap", type=int, default=50000)
     parser.add_argument("--horizon-days", type=int, default=5)
     parser.add_argument("--bins", type=int, default=10)
     args = parser.parse_args()
 
-    events = read_decision_events(args.input, limit=max(1, args.limit))
-    rows = calibration_rows_from_events(events, horizon_days=max(1, args.horizon_days))
+    read_cap = max(1, int(args.read_cap))
+    read_limit = min(max(1, int(args.limit)), read_cap)
+    events = []
+    rows: list[dict] = []
+    while True:
+        events = read_decision_events(args.input, limit=read_limit)
+        rows = calibration_rows_from_events(events, horizon_days=max(1, args.horizon_days))
+        if rows or read_limit >= read_cap:
+            break
+        read_limit = min(read_limit * 2, read_cap)
     summary = calibration_summary(rows, bins=max(2, args.bins))
     payload = {
         "schema_version": "calibration_report.v1",
         "computed_at_utc": datetime.now(timezone.utc).isoformat(),
         "input_path": args.input,
+        "rows_scanned": len(events),
+        "scan_limit_used": read_limit,
+        "scan_cap": read_cap,
         "horizon_days": max(1, args.horizon_days),
         **summary,
     }
