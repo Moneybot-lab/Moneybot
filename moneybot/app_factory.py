@@ -746,7 +746,42 @@ def create_app() -> Flask:
 
     @app.get("/disclaimer")
     def disclaimer_page():
-        return _simple_page("Disclaimer")
+        return render_template_string(
+            """
+            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;background:#f7fee7;padding:24px;box-sizing:border-box;color:#14532d">
+              <main style="max-width:900px;margin:0 auto;background:#f0fdf4;padding:28px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08);line-height:1.6">
+                <h1 style="margin-top:0">Disclaimer</h1>
+                <p><strong>Effective Date: April 30, 2026</strong></p>
+                <p>The information provided by MoneyBot Labs is for informational and educational purposes only.</p>
+
+                <h2>1. Not Investment Advice</h2>
+                <p>MoneyBot Labs does not provide personalized investment advice, financial advice, legal advice, tax advice, or other professional advice. Nothing on our platform, website, reports, alerts, AI outputs, commentary, stock ratings, or related materials should be interpreted as a recommendation or solicitation to buy, sell, or hold any security.</p>
+                <p>All investment decisions involve risk, and you are solely responsible for your own decisions.</p>
+
+                <h2>2. No Guarantee of Results</h2>
+                <p>Past performance does not guarantee future results. Any projections, forecasts, probabilities, backtests, model outputs, or forward-looking statements are inherently uncertain and may not reflect actual future performance.</p>
+                <p>MoneyBot Labs makes no guarantee that any stock, strategy, signal, alert, or AI-generated insight will be profitable or successful.</p>
+
+                <h2>3. AI and Automated Analysis Limitations</h2>
+                <p>Our platform may use automated models, scoring systems, external data feeds, and AI-generated analysis. These systems can produce incomplete, outdated, inaccurate, or misleading results. Outputs may change as data changes, models are updated, or market conditions shift.</p>
+                <p>You should not rely solely on automated outputs when making financial decisions.</p>
+
+                <h2>4. Third-Party Data</h2>
+                <p>MoneyBot Labs may use third-party data sources such as market data providers, financial statement sources, news services, and analytics providers. We do not warrant the accuracy, timeliness, completeness, or availability of any third-party information.</p>
+
+                <h2>5. No Professional Relationship</h2>
+                <p>Your use of MoneyBot Labs does not create an adviser-client, fiduciary, brokerage, agency, or other professional relationship between you and MoneyBot Labs.</p>
+
+                <h2>6. Use at Your Own Risk</h2>
+                <p>By using MoneyBot Labs, you acknowledge that you do so at your own risk. You are responsible for conducting your own due diligence and consulting qualified professionals before making financial, legal, or tax decisions.</p>
+
+                <h2>7. Contact</h2>
+                <p>If you have questions about this Disclaimer, contact:</p>
+                <p>MoneyBot Labs<br />Email: <a href="mailto:support@moneybotlabs.com">support@moneybotlabs.com</a></p>
+              </main>
+            </body></html>
+            """
+        )
 
     @app.get("/login")
     @app.get("/login/")
