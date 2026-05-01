@@ -1983,7 +1983,9 @@ def decision_outcomes():
             if isinstance(row.get("return_1d"), (int, float)) or isinstance(row.get("return_5d"), (int, float))
         ]
         evaluated_rows_5d = [row for row in rows if isinstance(row.get("return_5d"), (int, float))]
-        if include_skipped or len(evaluated_rows_5d) >= limit or len(evaluated_rows) >= limit or read_limit >= read_cap:
+        # Keep widening until we either have enough 5D-evaluable rows or hit the cap.
+        # Do not stop early just because 1D rows are available; that can hide older 5D rows.
+        if include_skipped or len(evaluated_rows_5d) >= limit or read_limit >= read_cap:
             break
         read_limit = min(read_limit * 2, read_cap)
     used_unevaluated_fallback = False
