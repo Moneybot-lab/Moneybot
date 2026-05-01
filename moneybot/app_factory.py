@@ -738,7 +738,91 @@ def create_app() -> Flask:
 
     @app.get("/terms")
     def terms_page():
-        return _simple_page("Terms")
+        return render_template_string(
+            """
+            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;background:#f7fee7;padding:24px;box-sizing:border-box;color:#14532d">
+              <main style="max-width:900px;margin:0 auto;background:#f0fdf4;padding:28px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08);line-height:1.6">
+                <h1 style="margin-top:0">Terms of Service</h1>
+                <p><strong>Effective Date: April 30, 2026</strong></p>
+                <p>Welcome to MoneyBot Labs. These Terms of Service (“Terms”) govern your access to and use of the MoneyBot Labs website, platform, tools, features, and services (collectively, the “Services”). By using our Services, you agree to these Terms. If you do not agree, do not use the Services.</p>
+
+                <h2>1. Who We Are</h2>
+                <p>MoneyBot Labs (“MoneyBot Labs,” “we,” “our,” or “us”) provides AI-powered stock analysis, market insights, watchlist tools, portfolio-related features, and related informational services.</p>
+
+                <h2>2. Eligibility</h2>
+                <p>You must be at least 18 years old, or the age of majority in your jurisdiction, to use our Services. By using MoneyBot Labs, you represent that you have the legal capacity to enter into these Terms.</p>
+
+                <h2>3. Informational Use Only</h2>
+                <p>MoneyBot Labs provides informational and educational content only. Our Services do not provide personalized investment advice, legal advice, tax advice, or financial planning services. Nothing on the platform should be interpreted as a recommendation to buy, sell, or hold any security for your specific situation.</p>
+                <p>You remain solely responsible for your investment decisions, trades, research, and evaluation of risk.</p>
+
+                <h2>4. No Broker, Dealer, or Investment Adviser Relationship</h2>
+                <p>MoneyBot Labs is not a registered broker-dealer, investment adviser, or financial institution unless expressly stated otherwise. Use of the Services does not create any fiduciary, advisory, or client relationship between you and MoneyBot Labs.</p>
+
+                <h2>5. User Accounts</h2>
+                <p>To access some features, you may need to create an account. You agree to provide accurate information and keep it updated. You are responsible for maintaining the confidentiality of your login credentials and for all activity under your account.</p>
+                <p>You agree to notify us promptly of any unauthorized use of your account.</p>
+
+                <h2>6. User Content</h2>
+                <p>You may submit information such as portfolio holdings, watchlists, stock symbols, purchase prices, profile information, and other content (“User Content”). You retain ownership of your User Content, but you grant MoneyBot Labs a non-exclusive, worldwide, royalty-free license to use, host, store, process, and display that content solely to operate, improve, and provide the Services.</p>
+                <p>You are responsible for ensuring that your User Content is accurate and that you have the rights to submit it.</p>
+
+                <h2>7. Acceptable Use</h2>
+                <p>You agree not to:</p>
+                <ul>
+                  <li>use the Services for unlawful, fraudulent, or misleading purposes</li>
+                  <li>interfere with platform security or operations</li>
+                  <li>attempt to gain unauthorized access to accounts, systems, or data</li>
+                  <li>scrape, copy, reverse engineer, or exploit the Services except as allowed by law</li>
+                  <li>upload malicious code, bots, or harmful material</li>
+                  <li>misuse AI outputs as guaranteed facts or professional advice</li>
+                  <li>use the Services in a way that infringes another party’s rights</li>
+                </ul>
+                <p>We may suspend or terminate access for conduct that violates these Terms or harms the platform or other users.</p>
+
+                <h2>8. AI-Generated Content</h2>
+                <p>MoneyBot Labs may generate stock ratings, commentary, summaries, forecasts, alerts, or similar outputs using automated systems and AI models. These outputs may be incomplete, inaccurate, delayed, or wrong. Market conditions can change rapidly, and data sources may contain errors or interruptions.</p>
+                <p>You should independently verify all information before acting on it.</p>
+
+                <h2>9. Market Data and Third-Party Sources</h2>
+                <p>Our Services may rely on third-party market data providers, news sources, analytics vendors, hosting providers, and other external services. We do not guarantee the accuracy, completeness, timeliness, or availability of third-party data.</p>
+                <p>We are not responsible for losses or damages arising from delayed quotes, incomplete news coverage, inaccurate data feeds, outages, or third-party service failures.</p>
+
+                <h2>10. Payments and Paid Features</h2>
+                <p>Some features may require payment or subscription. If paid plans are offered, pricing, billing frequency, renewal terms, and cancellation details will be presented at the time of purchase. Unless otherwise stated, fees are non-refundable to the fullest extent allowed by law.</p>
+                <p>We may change pricing or features at any time, but changes will apply prospectively.</p>
+
+                <h2>11. Intellectual Property</h2>
+                <p>The Services, including software, branding, logos, design, text, graphics, AI workflows, and platform content created by MoneyBot Labs, are owned by or licensed to MoneyBot Labs and are protected by applicable intellectual property laws.</p>
+                <p>Except for limited personal use of the Services, you may not copy, distribute, modify, sell, or create derivative works from our content without prior written permission.</p>
+
+                <h2>12. Disclaimer of Warranties</h2>
+                <p>The Services are provided on an “as is” and “as available” basis. To the fullest extent permitted by law, MoneyBot Labs disclaims all warranties, express or implied, including warranties of merchantability, fitness for a particular purpose, title, non-infringement, accuracy, and availability.</p>
+                <p>We do not guarantee that the Services will be uninterrupted, error-free, secure, or suitable for your needs.</p>
+
+                <h2>13. Limitation of Liability</h2>
+                <p>To the fullest extent permitted by law, MoneyBot Labs and its officers, owners, employees, contractors, affiliates, and service providers will not be liable for any indirect, incidental, special, consequential, exemplary, or punitive damages, or for any loss of profits, trading losses, lost data, business interruption, or loss of goodwill arising out of or related to your use of the Services.</p>
+                <p>Our total liability for any claim arising out of or relating to the Services will not exceed the amount you paid us, if any, in the 12 months before the event giving rise to the claim.</p>
+
+                <h2>14. Indemnification</h2>
+                <p>You agree to defend, indemnify, and hold harmless MoneyBot Labs and its affiliates, officers, employees, and service providers from any claims, liabilities, damages, losses, and expenses arising out of your use of the Services, your User Content, your violation of these Terms, or your violation of any rights of another person or entity.</p>
+
+                <h2>15. Termination</h2>
+                <p>We may suspend or terminate your access to the Services at any time, with or without notice, if we believe you violated these Terms, created risk for the platform, or if continued service is no longer commercially or legally feasible.</p>
+
+                <h2>16. Changes to the Services or Terms</h2>
+                <p>We may update the Services or these Terms from time to time. When we do, we will update the Effective Date above. Your continued use of the Services after changes become effective means you accept the revised Terms.</p>
+
+                <h2>17. Governing Law</h2>
+                <p>These Terms will be governed by and construed in accordance with the laws of the applicable jurisdiction in which MoneyBot Labs operates, without regard to conflict of law principles.</p>
+
+                <h2>18. Contact</h2>
+                <p>If you have questions about these Terms, contact:</p>
+                <p>MoneyBot Labs<br />Email: <a href="mailto:support@moneybotlabs.com">support@moneybotlabs.com</a></p>
+              </main>
+            </body></html>
+            """
+        )
 
     @app.get("/help")
     def help_page():
