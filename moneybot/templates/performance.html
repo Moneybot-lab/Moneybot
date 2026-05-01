@@ -65,7 +65,10 @@
         </div>
         <button type="button" onclick="refreshOutcomes()" style="padding:8px 12px;border:1px solid #16a34a;background:#dcfce7;color:#14532d;border-radius:999px;font-weight:700;cursor:pointer">Refresh Outcomes</button>
       </div>
-      <div id="outcomesLoading" style="display:none;align-items:center;gap:8px;margin-bottom:10px;color:#166534;font-weight:600">Loading recent decision outcomes...</div>
+      <div id="outcomesLoading" style="display:none;align-items:center;gap:8px;margin-bottom:10px;color:#166534;font-weight:600">
+        <span style="display:inline-block;width:14px;height:14px;border:2px solid #86efac;border-top-color:#16a34a;border-radius:9999px;animation:spin .7s linear infinite"></span>
+        Loading recent decision outcomes...
+      </div>
       <div id="outcomesSummary" style="margin-bottom:12px"></div>
       <div id="outcomesTable1d" style="margin-bottom:14px"></div>
       <div id="outcomesTable5d"></div>
@@ -87,5 +90,6 @@ async function refreshOps(){setOpsLoading(true);try{renderOps(await fetchOpsData
 async function refreshOutcomes(){setOutcomesLoading(true);try{renderOutcomes(await fetchOutcomesData());}finally{setOutcomesLoading(false);}}
 refreshOps();refreshOutcomes();
 </script>
+<style>@keyframes spin { to { transform: rotate(360deg); } }</style>
   </body>
 </html>
