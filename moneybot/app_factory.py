@@ -826,7 +826,109 @@ def create_app() -> Flask:
 
     @app.get("/help")
     def help_page():
-        return _simple_page("Help")
+        return render_template_string(
+            """
+            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;background:#f7fee7;padding:24px;box-sizing:border-box;color:#14532d">
+              <main style="max-width:980px;margin:0 auto;background:#f0fdf4;padding:28px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08);line-height:1.65">
+                <h1 style="margin-top:0">Help Center</h1>
+                <p>Welcome to MoneyBot Labs. This guide explains how to use each major feature across the website.</p>
+
+                <h2>1. Create an Account</h2>
+                <ol>
+                  <li>Go to <strong>Sign Up</strong> from the home page navigation.</li>
+                  <li>Enter your email, username, and password.</li>
+                  <li>Submit the form and follow any verification steps shown on screen.</li>
+                  <li>After signup, log in to access dashboard features.</li>
+                </ol>
+
+                <h2>2. Log In and Session Security</h2>
+                <ol>
+                  <li>Open the <strong>Login</strong> page.</li>
+                  <li>Sign in using your email/username and password.</li>
+                  <li>If you forget your password, use the <strong>Forgot Password</strong> option.</li>
+                  <li>For best security, log out when finished—especially on shared devices.</li>
+                </ol>
+
+                <h2>3. Home Dashboard Overview</h2>
+                <p>The home dashboard is your command center for market insights and account navigation.</p>
+                <ul>
+                  <li>Use quick links to access Privacy, Terms, Disclaimer, Notifications, and Account pages.</li>
+                  <li>Review featured cards/widgets for current platform insights.</li>
+                  <li>Use action buttons to move directly into portfolio and analysis workflows.</li>
+                </ul>
+
+                <h2>4. Portfolio Features</h2>
+                <ol>
+                  <li>Add holdings by entering stock ticker, share quantity, and purchase price.</li>
+                  <li>Save positions to track portfolio-level performance and context for model outputs.</li>
+                  <li>Update or remove positions as your holdings change.</li>
+                  <li>Use your portfolio data to compare AI insights against your current exposure.</li>
+                </ol>
+
+                <h2>5. Watchlists</h2>
+                <ol>
+                  <li>Create one or more watchlists for symbols you want to monitor.</li>
+                  <li>Add tickers to each watchlist from symbol input controls.</li>
+                  <li>Reorder or edit watchlist entries to prioritize names you track most often.</li>
+                  <li>Use watchlists alongside alerts and AI analysis for faster daily review.</li>
+                </ol>
+
+                <h2>6. AI Stock Analysis and Insights</h2>
+                <ol>
+                  <li>Select a ticker from your watchlist or portfolio.</li>
+                  <li>Request AI-generated analysis, ratings, or commentary.</li>
+                  <li>Review the output for trend context, signal summaries, and risk notes.</li>
+                  <li>Independently verify results before making any financial decisions.</li>
+                </ol>
+                <p><strong>Important:</strong> AI outputs are informational and may be incomplete or incorrect in changing market conditions.</p>
+
+                <h2>7. Alerts and Notifications</h2>
+                <ol>
+                  <li>Open the <strong>Notifications</strong> page.</li>
+                  <li>Enable browser/device notifications when prompted.</li>
+                  <li>Configure alert preferences (such as watchlist activity or platform notices).</li>
+                  <li>Test notifications to confirm delivery.</li>
+                </ol>
+
+                <h2>8. Account Settings</h2>
+                <ol>
+                  <li>Go to the <strong>Account</strong> page.</li>
+                  <li>Update your email or password in the security form.</li>
+                  <li>Enter your current password to authorize changes.</li>
+                  <li>Save updates and confirm success messages.</li>
+                </ol>
+
+                <h2>9. Performance and Reports</h2>
+                <ol>
+                  <li>Use the <strong>Performance</strong> area to review model and platform outcomes.</li>
+                  <li>Read daily/periodic report summaries where available.</li>
+                  <li>Compare signal behavior and outcome history over time.</li>
+                  <li>Use this data as one input in your broader research workflow.</li>
+                </ol>
+
+                <h2>10. Troubleshooting</h2>
+                <ul>
+                  <li><strong>Can’t log in:</strong> Recheck credentials and try password reset.</li>
+                  <li><strong>No notification prompts:</strong> Check browser permissions and HTTPS settings.</li>
+                  <li><strong>Missing data:</strong> Refresh the page and retry after a short delay.</li>
+                  <li><strong>Unexpected output:</strong> Re-run analysis and validate with independent sources.</li>
+                </ul>
+
+                <h2>11. Best Practices</h2>
+                <ul>
+                  <li>Keep watchlists focused on names you actively track.</li>
+                  <li>Update portfolio entries promptly after trades.</li>
+                  <li>Use alerts for awareness, not automated decision-making.</li>
+                  <li>Treat AI analysis as research support—not professional advice.</li>
+                </ul>
+
+                <h2>12. Contact Support</h2>
+                <p>If you need help with account access, bugs, or feature questions, contact:</p>
+                <p>MoneyBot Labs<br />Email: <a href="mailto:support@moneybotlabs.com">support@moneybotlabs.com</a></p>
+              </main>
+            </body></html>
+            """
+        )
 
     @app.get("/disclaimer")
     def disclaimer_page():
