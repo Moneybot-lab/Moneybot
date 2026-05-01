@@ -13,6 +13,6 @@
   <path d="M24 62L40 47L53 56L72 34" stroke="url(#mbp-grad)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
   <circle cx="72" cy="34" r="6" fill="#86EFAC"/>
   <text x="112" y="70" font-size="60" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="900" letter-spacing="0.5" fill="url(#text-grad)">MoneyBot</text>
-  <text x="405" y="70" font-size="60" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="900" fill="#16A34A">Labs</text>
+  <text x="440" y="70" font-size="60" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="900" fill="#16A34A">Labs</text>
   <text x="114" y="114" font-size="26" font-family="Segoe UI, Inter, Arial, sans-serif" font-weight="600" letter-spacing="1.2" fill="#3F6212">HIGH POWERED AI MARKET ADVICE</text>
 </svg>
