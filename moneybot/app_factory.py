@@ -833,101 +833,55 @@ def create_app() -> Flask:
             <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;background:#f7fee7;padding:24px;box-sizing:border-box;color:#14532d">
               <main style="max-width:980px;margin:0 auto;background:#f0fdf4;padding:28px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08);line-height:1.65">
                 <p style="margin:0 0 12px"><a href="/" style="display:inline-block;text-decoration:none;background:#dcfce7;color:#14532d;padding:8px 12px;border-radius:999px;font-weight:700">← Back</a></p>
-                <h1 style="margin-top:0">Help Center</h1>
-                <p>Welcome to MoneyBot Labs. This guide explains how to use each major feature across the website.</p>
-
-                <h2>1. Create an Account</h2>
-                <ol>
-                  <li>Go to <strong>Sign Up</strong> from the home page navigation.</li>
-                  <li>Enter your email, username, and password.</li>
-                  <li>Submit the form and follow any verification steps shown on screen.</li>
-                  <li>After signup, log in to access dashboard features.</li>
-                </ol>
-
-                <h2>2. Log In and Session Security</h2>
-                <ol>
-                  <li>Open the <strong>Login</strong> page.</li>
-                  <li>Sign in using your email/username and password.</li>
-                  <li>If you forget your password, use the <strong>Forgot Password</strong> option.</li>
-                  <li>For best security, log out when finished—especially on shared devices.</li>
-                </ol>
-
-                <h2>3. Home Dashboard Overview</h2>
-                <p>The home dashboard is your command center for market insights and account navigation.</p>
-                <ul>
-                  <li>Use quick links to access Privacy, Terms, Disclaimer, Notifications, and Account pages.</li>
-                  <li>Review featured cards/widgets for current platform insights.</li>
-                  <li>Use action buttons to move directly into portfolio and analysis workflows.</li>
-                </ul>
-
-                <h2>4. Portfolio Features</h2>
-                <ol>
-                  <li>Add holdings by entering stock ticker, share quantity, and purchase price.</li>
-                  <li>Save positions to track portfolio-level performance and context for model outputs.</li>
-                  <li>Update or remove positions as your holdings change.</li>
-                  <li>Use your portfolio data to compare AI insights against your current exposure.</li>
-                </ol>
-
-                <h2>5. Watchlists</h2>
-                <ol>
-                  <li>Create one or more watchlists for symbols you want to monitor.</li>
-                  <li>Add tickers to each watchlist from symbol input controls.</li>
-                  <li>Reorder or edit watchlist entries to prioritize names you track most often.</li>
-                  <li>Use watchlists alongside alerts and AI analysis for faster daily review.</li>
-                </ol>
-
-                <h2>6. AI Stock Analysis and Insights</h2>
-                <ol>
-                  <li>Select a ticker from your watchlist or portfolio.</li>
-                  <li>Request AI-generated analysis, ratings, or commentary.</li>
-                  <li>Review the output for trend context, signal summaries, and risk notes.</li>
-                  <li>Independently verify results before making any financial decisions.</li>
-                </ol>
-                <p><strong>Important:</strong> AI outputs are informational and may be incomplete or incorrect in changing market conditions.</p>
-
-                <h2>7. Alerts and Notifications</h2>
-                <ol>
-                  <li>Open the <strong>Notifications</strong> page.</li>
-                  <li>Enable browser/device notifications when prompted.</li>
-                  <li>Configure alert preferences (such as watchlist activity or platform notices).</li>
-                  <li>Test notifications to confirm delivery.</li>
-                </ol>
-
-                <h2>8. Account Settings</h2>
-                <ol>
-                  <li>Go to the <strong>Account</strong> page.</li>
-                  <li>Update your email or password in the security form.</li>
-                  <li>Enter your current password to authorize changes.</li>
-                  <li>Save updates and confirm success messages.</li>
-                </ol>
-
-                <h2>9. Performance and Reports</h2>
-                <ol>
-                  <li>Use the <strong>Performance</strong> area to review model and platform outcomes.</li>
-                  <li>Read daily/periodic report summaries where available.</li>
-                  <li>Compare signal behavior and outcome history over time.</li>
-                  <li>Use this data as one input in your broader research workflow.</li>
-                </ol>
-
-                <h2>10. Troubleshooting</h2>
-                <ul>
-                  <li><strong>Can’t log in:</strong> Recheck credentials and try password reset.</li>
-                  <li><strong>No notification prompts:</strong> Check browser permissions and HTTPS settings.</li>
-                  <li><strong>Missing data:</strong> Refresh the page and retry after a short delay.</li>
-                  <li><strong>Unexpected output:</strong> Re-run analysis and validate with independent sources.</li>
-                </ul>
-
-                <h2>11. Best Practices</h2>
-                <ul>
-                  <li>Keep watchlists focused on names you actively track.</li>
-                  <li>Update portfolio entries promptly after trades.</li>
-                  <li>Use alerts for awareness, not automated decision-making.</li>
-                  <li>Treat AI analysis as research support—not professional advice.</li>
-                </ul>
-
-                <h2>12. Contact Support</h2>
-                <p>If you need help with account access, bugs, or feature questions, contact:</p>
-                <p>MoneyBot Labs<br />Email: <a href="mailto:support@moneybotlabs.com">support@moneybotlabs.com</a></p>
+                <h1 style="margin-top:0">MoneyBot Labs Help Center</h1>
+                <h2>Welcome to MoneyBot Labs</h2>
+                <p>MoneyBot Labs is an AI-assisted stock research website built to help users review market data, compare stock signals, track a personal portfolio, and understand why a recommendation was generated.</p>
+                <p>MoneyBot Labs does not place trades for you. It provides research, signal summaries, AI explanations, market context, and portfolio tracking tools so you can make better-informed decisions.</p>
+                <h2>Main Menu</h2>
+                <p>Use the Menu button in the top-right corner of the homepage to open the navigation sidebar.</p>
+                <p>From the menu, you can access:</p>
+                <table style="width:100%;border-collapse:collapse"><tr><th align="left">Menu Item</th><th align="left">What It Does</th></tr>
+                <tr><td>User Portfolio</td><td>Track stocks you own, entry price, shares, current value, gains/losses, and AI advice.</td></tr>
+                <tr><td>Security</td><td>Update your email address or password.</td></tr>
+                <tr><td>Notifications</td><td>Manage push alert settings for portfolio and stock signal changes.</td></tr>
+                <tr><td>AI Performance</td><td>View model health, decision tracking, outcome testing, and backtested result summaries.</td></tr>
+                <tr><td>Account</td><td>General account area.</td></tr>
+                <tr><td>Privacy</td><td>Read how user data is handled.</td></tr>
+                <tr><td>Terms</td><td>Review the website terms of use.</td></tr>
+                <tr><td>Help</td><td>Learn how to use the website features.</td></tr>
+                <tr><td>Disclaimer</td><td>Review the financial disclaimer and risk notice.</td></tr></table>
+                <h2>Quick Ask</h2><p>The Quick Ask tool lets you enter a stock ticker and receive an instant AI-assisted signal.</p>
+                <h3>How to use Quick Ask</h3><ol><li>Go to the homepage.</li><li>Find the Quick Ask section.</li><li>Enter a ticker symbol, such as AAPL, TSLA, NVDA, or SOFI.</li><li>Click Analyze.</li><li>Review the recommendation, current price, short rationale, trend chart, and AI key points.</li></ol>
+                <h3>What the recommendation means</h3>
+                <table style="width:100%;border-collapse:collapse"><tr><th align="left">Signal</th><th align="left">Meaning</th></tr>
+                <tr><td>Strong Buy</td><td>The system sees a stronger buying setup based on current indicators.</td></tr>
+                <tr><td>Buy</td><td>The stock may be reasonable to consider, but you should still review risk.</td></tr>
+                <tr><td>Hold</td><td>The system does not see a strong reason to buy or sell immediately.</td></tr>
+                <tr><td>Hold Off For Now</td><td>The system suggests waiting instead of buying right now.</td></tr>
+                <tr><td>Sell</td><td>The system may see conditions where reducing or exiting the position could be worth considering.</td></tr></table>
+                <h3>AI Key Points</h3><ul><li>A short explanation of the signal.</li><li>Risk notes.</li><li>Next checks to review before making a decision.</li><li>Whether the signal came from the AI model, deterministic model, or rule-based logic.</li></ul>
+                <h2>Market Indices</h2><p>The homepage includes a Market Indices section that shows broad market context.</p><p>This section may include: Dow, S&amp;P 500, Nasdaq, Gold, Bitcoin.</p><p>Each market card may show the latest price, daily change percentage, and a small trend chart. This helps users understand whether the broader market is moving up, down, or sideways before reviewing individual stock picks.</p>
+                <h2>Buyer’s Guide</h2><p>The Buyer’s Guide explains the main stock research categories on the homepage.</p>
+                <h3>Stable Watchlist</h3><p>The Stable Watchlist focuses on lower-risk, long-term style stocks. These are generally meant for users who want steadier companies instead of highly speculative trades.</p><p>Stable Watchlist rows may include: Ticker, Price, Signal score, Transparency note explaining why the stock appears on the list.</p>
+                <h3>Hot Momentum Buys</h3><p>The Hot Momentum Buys section focuses on higher-risk stocks that may have stronger short-term momentum.</p><p>These stocks can move fast in either direction. The section is designed for users who want to review aggressive opportunities, not guaranteed winners.</p><p>Hot Momentum rows may include: Ticker, Price, Score, Signal source, Transparency or rationale.</p>
+                <h3>Whales of Wall Street</h3><p>The Whales of Wall Street section shows stock ideas connected to well-known investors or large investor-style portfolios.</p><p>This section helps users see what major investors are associated with certain holdings. It is not a recommendation to copy them blindly. It is a research starting point.</p>
+                <h2>Clicking a Ticker Symbol</h2><p>Many ticker symbols on MoneyBot Labs are clickable.</p><p>When you click a ticker, a Company Details window opens.</p><p>The Company Details window may show: Company name, Ticker symbol, Short business summary, Recent headlines (when available), and Basic company context.</p><p>Use this feature when you want to understand what the business actually does before looking at the AI signal.</p>
+                <h3>Example</h3><p>Instead of only seeing AAPL, you can click the ticker and see more context about Apple as a business, including a short company overview and available news context.</p><p>This helps users avoid buying a stock based only on a score or ticker name.</p>
+                <h2>User Portfolio</h2><p>The User Portfolio page helps you track stocks you own or want to monitor closely.</p><p>To open it, click User Portfolio from the homepage or menu.</p><h3>What you can enter</h3><p>For each stock, you may enter: Stock symbol, Entry price, Number of shares.</p><p>The portfolio then uses that information to help calculate your position performance.</p>
+                <h3>Portfolio table columns</h3><table style="width:100%;border-collapse:collapse"><tr><th align="left">Column</th><th align="left">What It Means</th></tr><tr><td>Symbol</td><td>The ticker for the stock.</td></tr><tr><td>Entry</td><td>The price you paid or entered for the position.</td></tr><tr><td>Shares</td><td>The number of shares you own.</td></tr><tr><td>Current Price</td><td>The latest available price.</td></tr><tr><td>Today’s Gain/Loss</td><td>The estimated daily movement for your position.</td></tr><tr><td>Performance</td><td>How the position is performing compared with your entry price.</td></tr><tr><td>Trend Score</td><td>A signal score based on recent movement and indicators.</td></tr><tr><td>Advice</td><td>AI-assisted guidance for that position.</td></tr><tr><td>Action</td><td>Portfolio actions such as selling or removing a position.</td></tr></table>
+                <h3>Clicking Portfolio Advice for an Explanation</h3><p>In the User Portfolio, the advice field is clickable. When you click the advice, MoneyBot Labs opens an Advice Reasoning window.</p><p>This window is designed to explain the recommendation in plain English.</p><p>It may include: Why the system gave that advice; whether the position looks strong, weak, or mixed; risk notes; what to check next; recent headlines; and a button to explain the recommendation in simpler language.</p><p>Why this matters: a basic label like Buy, Hold, or Sell is not enough by itself. The explanation window helps users understand the reasoning behind the signal so they are not blindly following a recommendation.</p>
+                <h3>Lifetime Gains and Losses</h3><p>The User Portfolio page includes a Show Lifetime Gains/Losses option. This area is used to track sold trades and realized gains or losses.</p><p>When available, it may show sold symbol, entry price, sold price, shares sold, realized gain/loss, and lifetime total.</p><p>This helps users separate unrealized gains/losses from stocks they still hold and realized gains/losses from positions they already sold.</p>
+                <h2>Account Creation and Login</h2><p>Users can create an account using the Sign Up page.</p><p>During signup, users may be asked for display name, username, email address, password, and optional profile picture.</p><p>If a profile picture is not added, MoneyBot Labs can display initials inside a basic profile circle.</p><p>Users can log in with their account credentials and access profile, portfolio, notification, and security features.</p>
+                <h2>Profile and Account Settings</h2><p>The Profile / Account Settings area lets users update basic profile information: display name, username, and profile picture.</p><p>The profile image tool may include crop-style controls such as zoom, horizontal position, and vertical position before saving the picture.</p>
+                <h2>Security</h2><p>The Security page lets users update sensitive account information, including email address and password.</p><p>For protection, MoneyBot Labs may require the current password before saving security changes.</p>
+                <h2>Password Recovery</h2><p>If you forget your password, use the Forgot Password option on the login page.</p><p>MoneyBot Labs may send password recovery instructions to the email address on the account, if email delivery is configured.</p><p>For security, the website may show the same general message whether or not an email exists. This helps protect user privacy.</p>
+                <h2>Notifications</h2><p>The Notifications page is used to manage push alerts.</p><p>Depending on browser and device support, users may enable push notifications for certain MoneyBot activity.</p><p>Possible notification types include portfolio advice changes, buy advice changes, sell advice changes, hot momentum score changes, whale investor list changes, and new whale-related stock activity.</p><p>To receive notifications, the browser may ask for permission. If permission is blocked, users may need to adjust browser or device notification settings.</p>
+                <h2>AI Performance</h2><p>The AI Performance page is designed to show how the system is performing over time.</p><p>This section may include model health, whether the model is loaded, decision logging status, recent decision counts, one-day and five-day outcome tracking, calibration status, and backtested/historical performance summaries.</p>
+                <h3>What backtested results mean</h3><p>Backtested results compare past AI signals against later market outcomes. Backtesting helps show whether the system is improving, but it does not guarantee future results.</p>
+                <h2>Understanding AI Recommendations</h2><table style="width:100%;border-collapse:collapse"><tr><th align="left">Signal Source</th><th align="left">Meaning</th></tr><tr><td>AI-assisted explanation</td><td>A plain-English explanation generated from available stock context.</td></tr><tr><td>Deterministic model</td><td>A structured model that applies repeatable thresholds and learned signal behavior.</td></tr><tr><td>Rule-based logic</td><td>A fallback system based on indicators, price movement, and simple signal rules.</td></tr><tr><td>Market data checks</td><td>Current price, recent history, trend movement, and available company context.</td></tr><tr><td>News context</td><td>Recent headlines or company-related news when available.</td></tr></table><p>The goal is to make the stock signal easier to understand, not to guarantee a profitable trade.</p>
+                <h2>Important Risk Reminder</h2><p>MoneyBot Labs provides AI-assisted stock research and educational information only. It is not a licensed financial advisor, broker, or investment manager.</p><p>Before making any trade, users should do their own research, review company fundamentals, consider risk tolerance, avoid investing money they cannot afford to lose, understand that stocks can lose value quickly, and treat AI signals as research support—not guaranteed instructions.</p>
+                <h2>Common Questions</h2><h3>Does MoneyBot Labs buy or sell stocks for me?</h3><p>No. MoneyBot Labs does not place trades. It only provides research, signals, explanations, and tracking tools.</p><h3>Are the AI recommendations guaranteed?</h3><p>No. No AI stock prediction is guaranteed. Market conditions can change quickly.</p><h3>Why does a stock show Hold Off For Now?</h3><p>Hold Off For Now means the system does not currently see a strong enough setup to support buying. It may be due to weak trend, mixed indicators, risk, price pressure, or lack of confirmation.</p><h3>Why should I click the ticker?</h3><p>Clicking the ticker helps you understand the company behind the stock. A stock score is more useful when you also know what the business does.</p><h3>Why should I click the portfolio advice?</h3><p>Clicking the advice opens the reasoning window. This explains why the system gave the recommendation and what risk factors or next checks matter.</p><h3>Why do some items say data is unavailable?</h3><p>Market data, company summaries, or news may occasionally be unavailable because of provider limits, temporary API issues, unsupported tickers, or market data delays.</p><h3>Is this financial advice?</h3><p>No. MoneyBot Labs provides AI-assisted research and educational information only.</p>
+                <h2>Best Way to Use MoneyBot Labs</h2><p>A good workflow is:</p><ol><li>Start with Market Indices to understand the broader market.</li><li>Use Quick Ask to analyze a ticker.</li><li>Click the ticker symbol to learn about the company.</li><li>Review Stable Watchlist, Hot Momentum Buys, or Whales of Wall Street for ideas.</li><li>Add stocks you own to User Portfolio.</li><li>Click the Advice field in your portfolio to understand the recommendation.</li><li>Review risk before making any decision.</li><li>Track results over time instead of relying on one signal.</li></ol>
               </main>
             </body></html>
             """
