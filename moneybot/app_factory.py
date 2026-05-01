@@ -643,7 +643,98 @@ def create_app() -> Flask:
 
     @app.get("/privacy")
     def privacy_page():
-        return _simple_page("Privacy")
+        return render_template_string(
+            """
+            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;background:#f7fee7;padding:24px;box-sizing:border-box;color:#14532d">
+              <main style="max-width:900px;margin:0 auto;background:#f0fdf4;padding:28px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08);line-height:1.6">
+                <h1 style="margin-top:0">Privacy Policy</h1>
+                <p><strong>Effective Date: April 30, 2026</strong></p>
+                <p>MoneyBot Labs (“MoneyBot Labs,” “we,” “our,” or “us”) respects your privacy. This Privacy Policy explains how we collect, use, disclose, and protect your information when you use our website, platform, and related services.</p>
+                <p>By using MoneyBot Labs, you agree to this Privacy Policy.</p>
+
+                <h2>1. Information We Collect</h2>
+                <p>We may collect the following types of information:</p>
+                <h3>Personal Information</h3>
+                <p>When you create an account or contact us, we may collect your name, username, email address, password, profile image, and other information you choose to provide.</p>
+                <h3>Portfolio and Investment Information</h3>
+                <p>If you use portfolio or stock-related features, we may collect information you enter, such as stock tickers, watchlists, share quantities, purchase prices, and investment preferences.</p>
+                <h3>Usage Information</h3>
+                <p>We may automatically collect information about your use of the Services, including IP address, browser type, device information, operating system, referral pages, pages visited, session activity, clicks, and feature usage.</p>
+                <h3>Cookies and Similar Technologies</h3>
+                <p>We may use cookies, local storage, pixels, and similar technologies to remember preferences, maintain sessions, analyze usage, improve performance, and support security.</p>
+                <h3>Communications</h3>
+                <p>If you contact us, we may collect and retain your messages, support requests, feedback, and related contact details.</p>
+
+                <h2>2. How We Use Information</h2>
+                <p>We may use your information to:</p>
+                <ul>
+                  <li>provide, maintain, and improve the Services</li>
+                  <li>create and manage accounts</li>
+                  <li>deliver stock analysis, AI insights, watchlists, alerts, and portfolio-related features</li>
+                  <li>personalize user experience</li>
+                  <li>monitor performance, reliability, and security</li>
+                  <li>respond to support requests and communications</li>
+                  <li>send service-related messages such as login alerts, password resets, and account notices</li>
+                  <li>develop new features and analyze platform usage</li>
+                  <li>detect fraud, abuse, misuse, and unauthorized access</li>
+                  <li>comply with legal obligations and enforce our policies</li>
+                </ul>
+
+                <h2>3. How We Share Information</h2>
+                <p>We do not sell your personal information.</p>
+                <p>We may share information in the following circumstances:</p>
+                <h3>Service Providers</h3>
+                <p>We may share information with vendors and contractors that help us host, maintain, secure, analyze, or operate the Services.</p>
+                <h3>Legal Requirements</h3>
+                <p>We may disclose information if required by law, regulation, court order, subpoena, or governmental request, or if necessary to protect rights, safety, or property.</p>
+                <h3>Business Transfers</h3>
+                <p>We may share or transfer information in connection with a merger, financing, acquisition, reorganization, or sale of assets.</p>
+                <h3>Platform Protection</h3>
+                <p>We may share information when necessary to investigate fraud, abuse, security incidents, or violations of our Terms.</p>
+                <h3>With Your Direction</h3>
+                <p>We may share information when you direct us to do so or use features that inherently involve sharing.</p>
+
+                <h2>4. Data Retention</h2>
+                <p>We retain information for as long as reasonably necessary to provide the Services, comply with legal obligations, resolve disputes, enforce agreements, maintain records, and support security and operational needs.</p>
+
+                <h2>5. Data Security</h2>
+                <p>We use reasonable administrative, technical, and organizational safeguards designed to protect your information. However, no system is completely secure, and we cannot guarantee absolute security.</p>
+
+                <h2>6. Your Choices and Rights</h2>
+                <p>Depending on your location, you may have rights to access, correct, update, delete, or request a copy of certain personal information. You may also have the right to object to or restrict certain processing.</p>
+                <p>You may also:</p>
+                <ul>
+                  <li>update certain account information through your settings, if available</li>
+                  <li>disable cookies through your browser settings</li>
+                  <li>unsubscribe from non-essential emails through the unsubscribe link, where applicable</li>
+                </ul>
+                <p>To make a privacy-related request, contact us at the email below.</p>
+
+                <h2>7. Children’s Privacy</h2>
+                <p>MoneyBot Labs is not intended for children under 13, and we do not knowingly collect personal information from children under 13. If we learn that we collected such information, we will take reasonable steps to delete it.</p>
+
+                <h2>8. Third-Party Services</h2>
+                <p>Our Services may link to or rely on third-party websites, services, APIs, payment processors, analytics tools, market data providers, or integrations. We are not responsible for the privacy practices of third parties.</p>
+
+                <h2>9. AI and Financial Information</h2>
+                <p>MoneyBot Labs may use automated systems and AI-generated outputs to provide stock analysis and related insights. These features are informational only and are not personalized financial advice. You are responsible for evaluating and using any information provided by the platform.</p>
+
+                <h2>10. State Privacy Rights</h2>
+                <p>If you live in a state with applicable privacy laws, including California, you may have additional legal rights regarding your personal information. We will honor applicable rights as required by law.</p>
+
+                <h2>11. International Users</h2>
+                <p>If you access the Services from outside the United States, you understand that your information may be processed and stored in the United States or other jurisdictions where our providers operate.</p>
+
+                <h2>12. Changes to This Privacy Policy</h2>
+                <p>We may update this Privacy Policy from time to time. When we do, we will revise the Effective Date above. Your continued use of the Services after changes become effective means you accept the updated Privacy Policy.</p>
+
+                <h2>13. Contact</h2>
+                <p>If you have questions about this Privacy Policy or our data practices, contact:</p>
+                <p>MoneyBot Labs<br />Email: <a href="mailto:support@moneybotlabs.com">support@moneybotlabs.com</a></p>
+              </main>
+            </body></html>
+            """
+        )
 
     @app.get("/terms")
     def terms_page():
@@ -655,7 +746,42 @@ def create_app() -> Flask:
 
     @app.get("/disclaimer")
     def disclaimer_page():
-        return _simple_page("Disclaimer")
+        return render_template_string(
+            """
+            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;background:#f7fee7;padding:24px;box-sizing:border-box;color:#14532d">
+              <main style="max-width:900px;margin:0 auto;background:#f0fdf4;padding:28px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08);line-height:1.6">
+                <h1 style="margin-top:0">Disclaimer</h1>
+                <p><strong>Effective Date: April 30, 2026</strong></p>
+                <p>The information provided by MoneyBot Labs is for informational and educational purposes only.</p>
+
+                <h2>1. Not Investment Advice</h2>
+                <p>MoneyBot Labs does not provide personalized investment advice, financial advice, legal advice, tax advice, or other professional advice. Nothing on our platform, website, reports, alerts, AI outputs, commentary, stock ratings, or related materials should be interpreted as a recommendation or solicitation to buy, sell, or hold any security.</p>
+                <p>All investment decisions involve risk, and you are solely responsible for your own decisions.</p>
+
+                <h2>2. No Guarantee of Results</h2>
+                <p>Past performance does not guarantee future results. Any projections, forecasts, probabilities, backtests, model outputs, or forward-looking statements are inherently uncertain and may not reflect actual future performance.</p>
+                <p>MoneyBot Labs makes no guarantee that any stock, strategy, signal, alert, or AI-generated insight will be profitable or successful.</p>
+
+                <h2>3. AI and Automated Analysis Limitations</h2>
+                <p>Our platform may use automated models, scoring systems, external data feeds, and AI-generated analysis. These systems can produce incomplete, outdated, inaccurate, or misleading results. Outputs may change as data changes, models are updated, or market conditions shift.</p>
+                <p>You should not rely solely on automated outputs when making financial decisions.</p>
+
+                <h2>4. Third-Party Data</h2>
+                <p>MoneyBot Labs may use third-party data sources such as market data providers, financial statement sources, news services, and analytics providers. We do not warrant the accuracy, timeliness, completeness, or availability of any third-party information.</p>
+
+                <h2>5. No Professional Relationship</h2>
+                <p>Your use of MoneyBot Labs does not create an adviser-client, fiduciary, brokerage, agency, or other professional relationship between you and MoneyBot Labs.</p>
+
+                <h2>6. Use at Your Own Risk</h2>
+                <p>By using MoneyBot Labs, you acknowledge that you do so at your own risk. You are responsible for conducting your own due diligence and consulting qualified professionals before making financial, legal, or tax decisions.</p>
+
+                <h2>7. Contact</h2>
+                <p>If you have questions about this Disclaimer, contact:</p>
+                <p>MoneyBot Labs<br />Email: <a href="mailto:support@moneybotlabs.com">support@moneybotlabs.com</a></p>
+              </main>
+            </body></html>
+            """
+        )
 
     @app.get("/login")
     @app.get("/login/")
