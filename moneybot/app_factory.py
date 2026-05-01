@@ -647,6 +647,7 @@ def create_app() -> Flask:
             """
             <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;background:#f7fee7;padding:24px;box-sizing:border-box;color:#14532d">
               <main style="max-width:900px;margin:0 auto;background:#f0fdf4;padding:28px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08);line-height:1.6">
+                <p style="margin:0 0 12px"><a href="/" style="display:inline-block;text-decoration:none;background:#dcfce7;color:#14532d;padding:8px 12px;border-radius:999px;font-weight:700">← Back</a></p>
                 <h1 style="margin-top:0">Privacy Policy</h1>
                 <p><strong>Effective Date: April 30, 2026</strong></p>
                 <p>MoneyBot Labs (“MoneyBot Labs,” “we,” “our,” or “us”) respects your privacy. This Privacy Policy explains how we collect, use, disclose, and protect your information when you use our website, platform, and related services.</p>
@@ -742,6 +743,7 @@ def create_app() -> Flask:
             """
             <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;background:#f7fee7;padding:24px;box-sizing:border-box;color:#14532d">
               <main style="max-width:900px;margin:0 auto;background:#f0fdf4;padding:28px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08);line-height:1.6">
+                <p style="margin:0 0 12px"><a href="/" style="display:inline-block;text-decoration:none;background:#dcfce7;color:#14532d;padding:8px 12px;border-radius:999px;font-weight:700">← Back</a></p>
                 <h1 style="margin-top:0">Terms of Service</h1>
                 <p><strong>Effective Date: April 30, 2026</strong></p>
                 <p>Welcome to MoneyBot Labs. These Terms of Service (“Terms”) govern your access to and use of the MoneyBot Labs website, platform, tools, features, and services (collectively, the “Services”). By using our Services, you agree to these Terms. If you do not agree, do not use the Services.</p>
@@ -830,6 +832,7 @@ def create_app() -> Flask:
             """
             <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;background:#f7fee7;padding:24px;box-sizing:border-box;color:#14532d">
               <main style="max-width:980px;margin:0 auto;background:#f0fdf4;padding:28px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08);line-height:1.65">
+                <p style="margin:0 0 12px"><a href="/" style="display:inline-block;text-decoration:none;background:#dcfce7;color:#14532d;padding:8px 12px;border-radius:999px;font-weight:700">← Back</a></p>
                 <h1 style="margin-top:0">Help Center</h1>
                 <p>Welcome to MoneyBot Labs. This guide explains how to use each major feature across the website.</p>
 
@@ -936,6 +939,7 @@ def create_app() -> Flask:
             """
             <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;background:#f7fee7;padding:24px;box-sizing:border-box;color:#14532d">
               <main style="max-width:900px;margin:0 auto;background:#f0fdf4;padding:28px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08);line-height:1.6">
+                <p style="margin:0 0 12px"><a href="/" style="display:inline-block;text-decoration:none;background:#dcfce7;color:#14532d;padding:8px 12px;border-radius:999px;font-weight:700">← Back</a></p>
                 <h1 style="margin-top:0">Disclaimer</h1>
                 <p><strong>Effective Date: April 30, 2026</strong></p>
                 <p>The information provided by MoneyBot Labs is for informational and educational purposes only.</p>
