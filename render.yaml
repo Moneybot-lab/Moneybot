@@ -19,3 +19,9 @@ services:
         sync: false
       - key: DATA_PROVIDER
         value: yfinance
+      - key: DETERMINISTIC_CALIBRATION_ENABLED
+        value: "true"
+      - key: DETERMINISTIC_CALIBRATION_SLOPE
+        value: "0.9"
+      - key: DETERMINISTIC_CALIBRATION_INTERCEPT
+        value: "-0.35"
