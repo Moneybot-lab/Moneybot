@@ -138,137 +138,24 @@ def _parse_symbol_set(raw: str | None) -> set[str]:
 
 def _parse_int_env(name: str, default: int) -> int:
     raw = str(os.environ.get(name, default)).strip()
+    normalized = raw.replace(",", "").replace("_", "").strip()
     try:
-        return int(raw)
+        return int(normalized)
     except ValueError:
         if "=" in raw:
-            maybe_value = raw.rsplit("=", 1)[-1].strip()
+            maybe_value = raw.rsplit("=", 1)[-1].strip().replace(",", "").replace("_", "")
             if maybe_value:
                 try:
                     return int(maybe_value)
                 except ValueError:
                     pass
         raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
-
-
-def _parse_symbol_set(raw: str | None) -> set[str]:
-    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
-
-
-def _parse_int_env(name: str, default: int) -> int:
-    raw = str(os.environ.get(name, default)).strip()
-    try:
-        return int(raw)
-    except ValueError:
-        if "=" in raw:
-            maybe_value = raw.rsplit("=", 1)[-1].strip()
-            if maybe_value:
-                try:
-                    return int(maybe_value)
-                except ValueError:
-                    pass
-        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
-
-
-def _parse_symbol_set(raw: str | None) -> set[str]:
-    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
-
-
-def _parse_int_env(name: str, default: int) -> int:
-    raw = str(os.environ.get(name, default)).strip()
-    try:
-        return int(raw)
-    except ValueError:
-        if "=" in raw:
-            maybe_value = raw.rsplit("=", 1)[-1].strip()
-            if maybe_value:
-                try:
-                    return int(maybe_value)
-                except ValueError:
-                    pass
-        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
-
-
-def _parse_symbol_set(raw: str | None) -> set[str]:
-    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
-
-
-def _parse_int_env(name: str, default: int) -> int:
-    raw = str(os.environ.get(name, default)).strip()
-    try:
-        return int(raw)
-    except ValueError:
-        if "=" in raw:
-            maybe_value = raw.rsplit("=", 1)[-1].strip()
-            if maybe_value:
-                try:
-                    return int(maybe_value)
-                except ValueError:
-                    pass
-        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
-
-
-def _parse_symbol_set(raw: str | None) -> set[str]:
-    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
-
-
-def _parse_int_env(name: str, default: int) -> int:
-    raw = str(os.environ.get(name, default)).strip()
-    try:
-        return int(raw)
-    except ValueError:
-        if "=" in raw:
-            maybe_value = raw.rsplit("=", 1)[-1].strip()
-            if maybe_value:
-                try:
-                    return int(maybe_value)
-                except ValueError:
-                    pass
-        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
-
-
-def _parse_symbol_set(raw: str | None) -> set[str]:
-    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
-
-
-def _parse_int_env(name: str, default: int) -> int:
-    raw = str(os.environ.get(name, default)).strip()
-    try:
-        return int(raw)
-    except ValueError:
-        if "=" in raw:
-            maybe_value = raw.rsplit("=", 1)[-1].strip()
-            if maybe_value:
-                try:
-                    return int(maybe_value)
-                except ValueError:
-                    pass
-        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
-
-
-def _parse_symbol_set(raw: str | None) -> set[str]:
-    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
 
 
 def _runtime_data_path(filename: str) -> str:
     base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
     os.makedirs(base_dir, exist_ok=True)
     return os.path.join(base_dir, filename)
-
-
-def _parse_int_env(name: str, default: int) -> int:
-    raw = str(os.environ.get(name, default)).strip()
-    try:
-        return int(raw)
-    except ValueError:
-        if "=" in raw:
-            maybe_value = raw.rsplit("=", 1)[-1].strip()
-            if maybe_value:
-                try:
-                    return int(maybe_value)
-                except ValueError:
-                    pass
-        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
 
 
 def _resolve_database_url() -> str:
