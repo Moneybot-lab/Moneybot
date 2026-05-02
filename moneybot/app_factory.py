@@ -138,137 +138,24 @@ def _parse_symbol_set(raw: str | None) -> set[str]:
 
 def _parse_int_env(name: str, default: int) -> int:
     raw = str(os.environ.get(name, default)).strip()
+    normalized = raw.replace(",", "").replace("_", "").strip()
     try:
-        return int(raw)
+        return int(normalized)
     except ValueError:
         if "=" in raw:
-            maybe_value = raw.rsplit("=", 1)[-1].strip()
+            maybe_value = raw.rsplit("=", 1)[-1].strip().replace(",", "").replace("_", "")
             if maybe_value:
                 try:
                     return int(maybe_value)
                 except ValueError:
                     pass
         raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
-
-
-def _parse_symbol_set(raw: str | None) -> set[str]:
-    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
-
-
-def _parse_int_env(name: str, default: int) -> int:
-    raw = str(os.environ.get(name, default)).strip()
-    try:
-        return int(raw)
-    except ValueError:
-        if "=" in raw:
-            maybe_value = raw.rsplit("=", 1)[-1].strip()
-            if maybe_value:
-                try:
-                    return int(maybe_value)
-                except ValueError:
-                    pass
-        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
-
-
-def _parse_symbol_set(raw: str | None) -> set[str]:
-    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
-
-
-def _parse_int_env(name: str, default: int) -> int:
-    raw = str(os.environ.get(name, default)).strip()
-    try:
-        return int(raw)
-    except ValueError:
-        if "=" in raw:
-            maybe_value = raw.rsplit("=", 1)[-1].strip()
-            if maybe_value:
-                try:
-                    return int(maybe_value)
-                except ValueError:
-                    pass
-        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
-
-
-def _parse_symbol_set(raw: str | None) -> set[str]:
-    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
-
-
-def _parse_int_env(name: str, default: int) -> int:
-    raw = str(os.environ.get(name, default)).strip()
-    try:
-        return int(raw)
-    except ValueError:
-        if "=" in raw:
-            maybe_value = raw.rsplit("=", 1)[-1].strip()
-            if maybe_value:
-                try:
-                    return int(maybe_value)
-                except ValueError:
-                    pass
-        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
-
-
-def _parse_symbol_set(raw: str | None) -> set[str]:
-    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
-
-
-def _parse_int_env(name: str, default: int) -> int:
-    raw = str(os.environ.get(name, default)).strip()
-    try:
-        return int(raw)
-    except ValueError:
-        if "=" in raw:
-            maybe_value = raw.rsplit("=", 1)[-1].strip()
-            if maybe_value:
-                try:
-                    return int(maybe_value)
-                except ValueError:
-                    pass
-        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
-
-
-def _parse_symbol_set(raw: str | None) -> set[str]:
-    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
-
-
-def _parse_int_env(name: str, default: int) -> int:
-    raw = str(os.environ.get(name, default)).strip()
-    try:
-        return int(raw)
-    except ValueError:
-        if "=" in raw:
-            maybe_value = raw.rsplit("=", 1)[-1].strip()
-            if maybe_value:
-                try:
-                    return int(maybe_value)
-                except ValueError:
-                    pass
-        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
-
-
-def _parse_symbol_set(raw: str | None) -> set[str]:
-    return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
 
 
 def _runtime_data_path(filename: str) -> str:
     base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
     os.makedirs(base_dir, exist_ok=True)
     return os.path.join(base_dir, filename)
-
-
-def _parse_int_env(name: str, default: int) -> int:
-    raw = str(os.environ.get(name, default)).strip()
-    try:
-        return int(raw)
-    except ValueError:
-        if "=" in raw:
-            maybe_value = raw.rsplit("=", 1)[-1].strip()
-            if maybe_value:
-                try:
-                    return int(maybe_value)
-                except ValueError:
-                    pass
-        raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
 
 
 def _resolve_database_url() -> str:
@@ -422,7 +309,7 @@ def create_app() -> Flask:
             "DETERMINISTIC_CALIBRATION_REPORT_PATH",
             str(day13_calibration_report_path()),
         ),
-        DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS=_parse_int_env("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", 43200),
+        DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS=_parse_int_env("DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS", 604800),
         DETERMINISTIC_TRAINING_MAX_AGE_HOURS=_parse_int_env("DETERMINISTIC_TRAINING_MAX_AGE_HOURS", 36),
         FIREBASE_API_KEY=os.environ.get("FIREBASE_API_KEY", ""),
         FIREBASE_AUTH_DOMAIN=os.environ.get("FIREBASE_AUTH_DOMAIN", ""),
@@ -643,19 +530,289 @@ def create_app() -> Flask:
 
     @app.get("/privacy")
     def privacy_page():
-        return _simple_page("Privacy")
+        return render_template_string(
+            """
+            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;background:#f7fee7;padding:24px;box-sizing:border-box;color:#14532d">
+              <main style="max-width:900px;margin:0 auto;background:#f0fdf4;padding:28px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08);line-height:1.6">
+                <p style="margin:0 0 12px"><a href="/" style="display:inline-block;text-decoration:none;background:#dcfce7;color:#14532d;padding:8px 12px;border-radius:999px;font-weight:700">← Back</a></p>
+                <h1 style="margin-top:0">Privacy Policy</h1>
+                <p><strong>Effective Date: April 30, 2026</strong></p>
+                <p>MoneyBot Labs (“MoneyBot Labs,” “we,” “our,” or “us”) respects your privacy. This Privacy Policy explains how we collect, use, disclose, and protect your information when you use our website, platform, and related services.</p>
+                <p>By using MoneyBot Labs, you agree to this Privacy Policy.</p>
+
+                <h2>1. Information We Collect</h2>
+                <p>We may collect the following types of information:</p>
+                <h3>Personal Information</h3>
+                <p>When you create an account or contact us, we may collect your name, username, email address, password, profile image, and other information you choose to provide.</p>
+                <h3>Portfolio and Investment Information</h3>
+                <p>If you use portfolio or stock-related features, we may collect information you enter, such as stock tickers, watchlists, share quantities, purchase prices, and investment preferences.</p>
+                <h3>Usage Information</h3>
+                <p>We may automatically collect information about your use of the Services, including IP address, browser type, device information, operating system, referral pages, pages visited, session activity, clicks, and feature usage.</p>
+                <h3>Cookies and Similar Technologies</h3>
+                <p>We may use cookies, local storage, pixels, and similar technologies to remember preferences, maintain sessions, analyze usage, improve performance, and support security.</p>
+                <h3>Communications</h3>
+                <p>If you contact us, we may collect and retain your messages, support requests, feedback, and related contact details.</p>
+
+                <h2>2. How We Use Information</h2>
+                <p>We may use your information to:</p>
+                <ul>
+                  <li>provide, maintain, and improve the Services</li>
+                  <li>create and manage accounts</li>
+                  <li>deliver stock analysis, AI insights, watchlists, alerts, and portfolio-related features</li>
+                  <li>personalize user experience</li>
+                  <li>monitor performance, reliability, and security</li>
+                  <li>respond to support requests and communications</li>
+                  <li>send service-related messages such as login alerts, password resets, and account notices</li>
+                  <li>develop new features and analyze platform usage</li>
+                  <li>detect fraud, abuse, misuse, and unauthorized access</li>
+                  <li>comply with legal obligations and enforce our policies</li>
+                </ul>
+
+                <h2>3. How We Share Information</h2>
+                <p>We do not sell your personal information.</p>
+                <p>We may share information in the following circumstances:</p>
+                <h3>Service Providers</h3>
+                <p>We may share information with vendors and contractors that help us host, maintain, secure, analyze, or operate the Services.</p>
+                <h3>Legal Requirements</h3>
+                <p>We may disclose information if required by law, regulation, court order, subpoena, or governmental request, or if necessary to protect rights, safety, or property.</p>
+                <h3>Business Transfers</h3>
+                <p>We may share or transfer information in connection with a merger, financing, acquisition, reorganization, or sale of assets.</p>
+                <h3>Platform Protection</h3>
+                <p>We may share information when necessary to investigate fraud, abuse, security incidents, or violations of our Terms.</p>
+                <h3>With Your Direction</h3>
+                <p>We may share information when you direct us to do so or use features that inherently involve sharing.</p>
+
+                <h2>4. Data Retention</h2>
+                <p>We retain information for as long as reasonably necessary to provide the Services, comply with legal obligations, resolve disputes, enforce agreements, maintain records, and support security and operational needs.</p>
+
+                <h2>5. Data Security</h2>
+                <p>We use reasonable administrative, technical, and organizational safeguards designed to protect your information. However, no system is completely secure, and we cannot guarantee absolute security.</p>
+
+                <h2>6. Your Choices and Rights</h2>
+                <p>Depending on your location, you may have rights to access, correct, update, delete, or request a copy of certain personal information. You may also have the right to object to or restrict certain processing.</p>
+                <p>You may also:</p>
+                <ul>
+                  <li>update certain account information through your settings, if available</li>
+                  <li>disable cookies through your browser settings</li>
+                  <li>unsubscribe from non-essential emails through the unsubscribe link, where applicable</li>
+                </ul>
+                <p>To make a privacy-related request, contact us at the email below.</p>
+
+                <h2>7. Children’s Privacy</h2>
+                <p>MoneyBot Labs is not intended for children under 13, and we do not knowingly collect personal information from children under 13. If we learn that we collected such information, we will take reasonable steps to delete it.</p>
+
+                <h2>8. Third-Party Services</h2>
+                <p>Our Services may link to or rely on third-party websites, services, APIs, payment processors, analytics tools, market data providers, or integrations. We are not responsible for the privacy practices of third parties.</p>
+
+                <h2>9. AI and Financial Information</h2>
+                <p>MoneyBot Labs may use automated systems and AI-generated outputs to provide stock analysis and related insights. These features are informational only and are not personalized financial advice. You are responsible for evaluating and using any information provided by the platform.</p>
+
+                <h2>10. State Privacy Rights</h2>
+                <p>If you live in a state with applicable privacy laws, including California, you may have additional legal rights regarding your personal information. We will honor applicable rights as required by law.</p>
+
+                <h2>11. International Users</h2>
+                <p>If you access the Services from outside the United States, you understand that your information may be processed and stored in the United States or other jurisdictions where our providers operate.</p>
+
+                <h2>12. Changes to This Privacy Policy</h2>
+                <p>We may update this Privacy Policy from time to time. When we do, we will revise the Effective Date above. Your continued use of the Services after changes become effective means you accept the updated Privacy Policy.</p>
+
+                <h2>13. Contact</h2>
+                <p>If you have questions about this Privacy Policy or our data practices, contact:</p>
+                <p>MoneyBot Labs<br />Email: <a href="mailto:support@moneybotlabs.com">support@moneybotlabs.com</a></p>
+              </main>
+            </body></html>
+            """
+        )
 
     @app.get("/terms")
     def terms_page():
-        return _simple_page("Terms")
+        return render_template_string(
+            """
+            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;background:#f7fee7;padding:24px;box-sizing:border-box;color:#14532d">
+              <main style="max-width:900px;margin:0 auto;background:#f0fdf4;padding:28px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08);line-height:1.6">
+                <p style="margin:0 0 12px"><a href="/" style="display:inline-block;text-decoration:none;background:#dcfce7;color:#14532d;padding:8px 12px;border-radius:999px;font-weight:700">← Back</a></p>
+                <h1 style="margin-top:0">Terms of Service</h1>
+                <p><strong>Effective Date: April 30, 2026</strong></p>
+                <p>Welcome to MoneyBot Labs. These Terms of Service (“Terms”) govern your access to and use of the MoneyBot Labs website, platform, tools, features, and services (collectively, the “Services”). By using our Services, you agree to these Terms. If you do not agree, do not use the Services.</p>
+
+                <h2>1. Who We Are</h2>
+                <p>MoneyBot Labs (“MoneyBot Labs,” “we,” “our,” or “us”) provides AI-powered stock analysis, market insights, watchlist tools, portfolio-related features, and related informational services.</p>
+
+                <h2>2. Eligibility</h2>
+                <p>You must be at least 18 years old, or the age of majority in your jurisdiction, to use our Services. By using MoneyBot Labs, you represent that you have the legal capacity to enter into these Terms.</p>
+
+                <h2>3. Informational Use Only</h2>
+                <p>MoneyBot Labs provides informational and educational content only. Our Services do not provide personalized investment advice, legal advice, tax advice, or financial planning services. Nothing on the platform should be interpreted as a recommendation to buy, sell, or hold any security for your specific situation.</p>
+                <p>You remain solely responsible for your investment decisions, trades, research, and evaluation of risk.</p>
+
+                <h2>4. No Broker, Dealer, or Investment Adviser Relationship</h2>
+                <p>MoneyBot Labs is not a registered broker-dealer, investment adviser, or financial institution unless expressly stated otherwise. Use of the Services does not create any fiduciary, advisory, or client relationship between you and MoneyBot Labs.</p>
+
+                <h2>5. User Accounts</h2>
+                <p>To access some features, you may need to create an account. You agree to provide accurate information and keep it updated. You are responsible for maintaining the confidentiality of your login credentials and for all activity under your account.</p>
+                <p>You agree to notify us promptly of any unauthorized use of your account.</p>
+
+                <h2>6. User Content</h2>
+                <p>You may submit information such as portfolio holdings, watchlists, stock symbols, purchase prices, profile information, and other content (“User Content”). You retain ownership of your User Content, but you grant MoneyBot Labs a non-exclusive, worldwide, royalty-free license to use, host, store, process, and display that content solely to operate, improve, and provide the Services.</p>
+                <p>You are responsible for ensuring that your User Content is accurate and that you have the rights to submit it.</p>
+
+                <h2>7. Acceptable Use</h2>
+                <p>You agree not to:</p>
+                <ul>
+                  <li>use the Services for unlawful, fraudulent, or misleading purposes</li>
+                  <li>interfere with platform security or operations</li>
+                  <li>attempt to gain unauthorized access to accounts, systems, or data</li>
+                  <li>scrape, copy, reverse engineer, or exploit the Services except as allowed by law</li>
+                  <li>upload malicious code, bots, or harmful material</li>
+                  <li>misuse AI outputs as guaranteed facts or professional advice</li>
+                  <li>use the Services in a way that infringes another party’s rights</li>
+                </ul>
+                <p>We may suspend or terminate access for conduct that violates these Terms or harms the platform or other users.</p>
+
+                <h2>8. AI-Generated Content</h2>
+                <p>MoneyBot Labs may generate stock ratings, commentary, summaries, forecasts, alerts, or similar outputs using automated systems and AI models. These outputs may be incomplete, inaccurate, delayed, or wrong. Market conditions can change rapidly, and data sources may contain errors or interruptions.</p>
+                <p>You should independently verify all information before acting on it.</p>
+
+                <h2>9. Market Data and Third-Party Sources</h2>
+                <p>Our Services may rely on third-party market data providers, news sources, analytics vendors, hosting providers, and other external services. We do not guarantee the accuracy, completeness, timeliness, or availability of third-party data.</p>
+                <p>We are not responsible for losses or damages arising from delayed quotes, incomplete news coverage, inaccurate data feeds, outages, or third-party service failures.</p>
+
+                <h2>10. Payments and Paid Features</h2>
+                <p>Some features may require payment or subscription. If paid plans are offered, pricing, billing frequency, renewal terms, and cancellation details will be presented at the time of purchase. Unless otherwise stated, fees are non-refundable to the fullest extent allowed by law.</p>
+                <p>We may change pricing or features at any time, but changes will apply prospectively.</p>
+
+                <h2>11. Intellectual Property</h2>
+                <p>The Services, including software, branding, logos, design, text, graphics, AI workflows, and platform content created by MoneyBot Labs, are owned by or licensed to MoneyBot Labs and are protected by applicable intellectual property laws.</p>
+                <p>Except for limited personal use of the Services, you may not copy, distribute, modify, sell, or create derivative works from our content without prior written permission.</p>
+
+                <h2>12. Disclaimer of Warranties</h2>
+                <p>The Services are provided on an “as is” and “as available” basis. To the fullest extent permitted by law, MoneyBot Labs disclaims all warranties, express or implied, including warranties of merchantability, fitness for a particular purpose, title, non-infringement, accuracy, and availability.</p>
+                <p>We do not guarantee that the Services will be uninterrupted, error-free, secure, or suitable for your needs.</p>
+
+                <h2>13. Limitation of Liability</h2>
+                <p>To the fullest extent permitted by law, MoneyBot Labs and its officers, owners, employees, contractors, affiliates, and service providers will not be liable for any indirect, incidental, special, consequential, exemplary, or punitive damages, or for any loss of profits, trading losses, lost data, business interruption, or loss of goodwill arising out of or related to your use of the Services.</p>
+                <p>Our total liability for any claim arising out of or relating to the Services will not exceed the amount you paid us, if any, in the 12 months before the event giving rise to the claim.</p>
+
+                <h2>14. Indemnification</h2>
+                <p>You agree to defend, indemnify, and hold harmless MoneyBot Labs and its affiliates, officers, employees, and service providers from any claims, liabilities, damages, losses, and expenses arising out of your use of the Services, your User Content, your violation of these Terms, or your violation of any rights of another person or entity.</p>
+
+                <h2>15. Termination</h2>
+                <p>We may suspend or terminate your access to the Services at any time, with or without notice, if we believe you violated these Terms, created risk for the platform, or if continued service is no longer commercially or legally feasible.</p>
+
+                <h2>16. Changes to the Services or Terms</h2>
+                <p>We may update the Services or these Terms from time to time. When we do, we will update the Effective Date above. Your continued use of the Services after changes become effective means you accept the revised Terms.</p>
+
+                <h2>17. Governing Law</h2>
+                <p>These Terms will be governed by and construed in accordance with the laws of the applicable jurisdiction in which MoneyBot Labs operates, without regard to conflict of law principles.</p>
+
+                <h2>18. Contact</h2>
+                <p>If you have questions about these Terms, contact:</p>
+                <p>MoneyBot Labs<br />Email: <a href="mailto:support@moneybotlabs.com">support@moneybotlabs.com</a></p>
+              </main>
+            </body></html>
+            """
+        )
 
     @app.get("/help")
     def help_page():
-        return _simple_page("Help")
+        return render_template_string(
+            """
+            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;background:#f7fee7;padding:24px;box-sizing:border-box;color:#14532d">
+              <main style="max-width:980px;margin:0 auto;background:#f0fdf4;padding:28px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08);line-height:1.65">
+                <p style="margin:0 0 12px"><a href="/" style="display:inline-block;text-decoration:none;background:#dcfce7;color:#14532d;padding:8px 12px;border-radius:999px;font-weight:700">← Back</a></p>
+                <h1 style="margin-top:0">MoneyBot Labs Help Center</h1>
+                <h2>Welcome to MoneyBot Labs</h2>
+                <p>MoneyBot Labs is an AI-assisted stock research website built to help users review market data, compare stock signals, track a personal portfolio, and understand why a recommendation was generated.</p>
+                <p>MoneyBot Labs does not place trades for you. It provides research, signal summaries, AI explanations, market context, and portfolio tracking tools so you can make better-informed decisions.</p>
+                <h2>Main Menu</h2>
+                <p>Use the Menu button in the top-right corner of the homepage to open the navigation sidebar.</p>
+                <p>From the menu, you can access:</p>
+                <table style="width:100%;border-collapse:collapse"><tr><th align="left">Menu Item</th><th align="left">What It Does</th></tr>
+                <tr><td>User Portfolio</td><td>Track stocks you own, entry price, shares, current value, gains/losses, and AI advice.</td></tr>
+                <tr><td>Security</td><td>Update your email address or password.</td></tr>
+                <tr><td>Notifications</td><td>Manage push alert settings for portfolio and stock signal changes.</td></tr>
+                <tr><td>AI Performance</td><td>View model health, decision tracking, outcome testing, and backtested result summaries.</td></tr>
+                <tr><td>Account</td><td>General account area.</td></tr>
+                <tr><td>Privacy</td><td>Read how user data is handled.</td></tr>
+                <tr><td>Terms</td><td>Review the website terms of use.</td></tr>
+                <tr><td>Help</td><td>Learn how to use the website features.</td></tr>
+                <tr><td>Disclaimer</td><td>Review the financial disclaimer and risk notice.</td></tr></table>
+                <h2>Quick Ask</h2><p>The Quick Ask tool lets you enter a stock ticker and receive an instant AI-assisted signal.</p>
+                <h3>How to use Quick Ask</h3><ol><li>Go to the homepage.</li><li>Find the Quick Ask section.</li><li>Enter a ticker symbol, such as AAPL, TSLA, NVDA, or SOFI.</li><li>Click Analyze.</li><li>Review the recommendation, current price, short rationale, trend chart, and AI key points.</li></ol>
+                <h3>What the recommendation means</h3>
+                <table style="width:100%;border-collapse:collapse"><tr><th align="left">Signal</th><th align="left">Meaning</th></tr>
+                <tr><td>Strong Buy</td><td>The system sees a stronger buying setup based on current indicators.</td></tr>
+                <tr><td>Buy</td><td>The stock may be reasonable to consider, but you should still review risk.</td></tr>
+                <tr><td>Hold</td><td>The system does not see a strong reason to buy or sell immediately.</td></tr>
+                <tr><td>Hold Off For Now</td><td>The system suggests waiting instead of buying right now.</td></tr>
+                <tr><td>Sell</td><td>The system may see conditions where reducing or exiting the position could be worth considering.</td></tr></table>
+                <h3>AI Key Points</h3><ul><li>A short explanation of the signal.</li><li>Risk notes.</li><li>Next checks to review before making a decision.</li><li>Whether the signal came from the AI model, deterministic model, or rule-based logic.</li></ul>
+                <h2>Market Indices</h2><p>The homepage includes a Market Indices section that shows broad market context.</p><p>This section may include: Dow, S&amp;P 500, Nasdaq, Gold, Bitcoin.</p><p>Each market card may show the latest price, daily change percentage, and a small trend chart. This helps users understand whether the broader market is moving up, down, or sideways before reviewing individual stock picks.</p>
+                <h2>Buyer’s Guide</h2><p>The Buyer’s Guide explains the main stock research categories on the homepage.</p>
+                <h3>Stable Watchlist</h3><p>The Stable Watchlist focuses on lower-risk, long-term style stocks. These are generally meant for users who want steadier companies instead of highly speculative trades.</p><p>Stable Watchlist rows may include: Ticker, Price, Signal score, Transparency note explaining why the stock appears on the list.</p>
+                <h3>Hot Momentum Buys</h3><p>The Hot Momentum Buys section focuses on higher-risk stocks that may have stronger short-term momentum.</p><p>These stocks can move fast in either direction. The section is designed for users who want to review aggressive opportunities, not guaranteed winners.</p><p>Hot Momentum rows may include: Ticker, Price, Score, Signal source, Transparency or rationale.</p>
+                <h3>Whales of Wall Street</h3><p>The Whales of Wall Street section shows stock ideas connected to well-known investors or large investor-style portfolios.</p><p>This section helps users see what major investors are associated with certain holdings. It is not a recommendation to copy them blindly. It is a research starting point.</p>
+                <h2>Clicking a Ticker Symbol</h2><p>Many ticker symbols on MoneyBot Labs are clickable.</p><p>When you click a ticker, a Company Details window opens.</p><p>The Company Details window may show: Company name, Ticker symbol, Short business summary, Recent headlines (when available), and Basic company context.</p><p>Use this feature when you want to understand what the business actually does before looking at the AI signal.</p>
+                <h3>Example</h3><p>Instead of only seeing AAPL, you can click the ticker and see more context about Apple as a business, including a short company overview and available news context.</p><p>This helps users avoid buying a stock based only on a score or ticker name.</p>
+                <h2>User Portfolio</h2><p>The User Portfolio page helps you track stocks you own or want to monitor closely.</p><p>To open it, click User Portfolio from the homepage or menu.</p><h3>What you can enter</h3><p>For each stock, you may enter: Stock symbol, Entry price, Number of shares.</p><p>The portfolio then uses that information to help calculate your position performance.</p>
+                <h3>Portfolio table columns</h3><table style="width:100%;border-collapse:collapse"><tr><th align="left">Column</th><th align="left">What It Means</th></tr><tr><td>Symbol</td><td>The ticker for the stock.</td></tr><tr><td>Entry</td><td>The price you paid or entered for the position.</td></tr><tr><td>Shares</td><td>The number of shares you own.</td></tr><tr><td>Current Price</td><td>The latest available price.</td></tr><tr><td>Today’s Gain/Loss</td><td>The estimated daily movement for your position.</td></tr><tr><td>Performance</td><td>How the position is performing compared with your entry price.</td></tr><tr><td>Trend Score</td><td>A signal score based on recent movement and indicators.</td></tr><tr><td>Advice</td><td>AI-assisted guidance for that position.</td></tr><tr><td>Action</td><td>Portfolio actions such as selling or removing a position.</td></tr></table>
+                <h3>Clicking Portfolio Advice for an Explanation</h3><p>In the User Portfolio, the advice field is clickable. When you click the advice, MoneyBot Labs opens an Advice Reasoning window.</p><p>This window is designed to explain the recommendation in plain English.</p><p>It may include: Why the system gave that advice; whether the position looks strong, weak, or mixed; risk notes; what to check next; recent headlines; and a button to explain the recommendation in simpler language.</p><p>Why this matters: a basic label like Buy, Hold, or Sell is not enough by itself. The explanation window helps users understand the reasoning behind the signal so they are not blindly following a recommendation.</p>
+                <h3>Lifetime Gains and Losses</h3><p>The User Portfolio page includes a Show Lifetime Gains/Losses option. This area is used to track sold trades and realized gains or losses.</p><p>When available, it may show sold symbol, entry price, sold price, shares sold, realized gain/loss, and lifetime total.</p><p>This helps users separate unrealized gains/losses from stocks they still hold and realized gains/losses from positions they already sold.</p>
+                <h2>Account Creation and Login</h2><p>Users can create an account using the Sign Up page.</p><p>During signup, users may be asked for display name, username, email address, password, and optional profile picture.</p><p>If a profile picture is not added, MoneyBot Labs can display initials inside a basic profile circle.</p><p>Users can log in with their account credentials and access profile, portfolio, notification, and security features.</p>
+                <h2>Profile and Account Settings</h2><p>The Profile / Account Settings area lets users update basic profile information: display name, username, and profile picture.</p><p>The profile image tool may include crop-style controls such as zoom, horizontal position, and vertical position before saving the picture.</p>
+                <h2>Security</h2><p>The Security page lets users update sensitive account information, including email address and password.</p><p>For protection, MoneyBot Labs may require the current password before saving security changes.</p>
+                <h2>Password Recovery</h2><p>If you forget your password, use the Forgot Password option on the login page.</p><p>MoneyBot Labs may send password recovery instructions to the email address on the account, if email delivery is configured.</p><p>For security, the website may show the same general message whether or not an email exists. This helps protect user privacy.</p>
+                <h2>Notifications</h2><p>The Notifications page is used to manage push alerts.</p><p>Depending on browser and device support, users may enable push notifications for certain MoneyBot activity.</p><p>Possible notification types include portfolio advice changes, buy advice changes, sell advice changes, hot momentum score changes, whale investor list changes, and new whale-related stock activity.</p><p>To receive notifications, the browser may ask for permission. If permission is blocked, users may need to adjust browser or device notification settings.</p>
+                <h2>AI Performance</h2><p>The AI Performance page is designed to show how the system is performing over time.</p><p>This section may include model health, whether the model is loaded, decision logging status, recent decision counts, one-day and five-day outcome tracking, calibration status, and backtested/historical performance summaries.</p>
+                <h3>What backtested results mean</h3><p>Backtested results compare past AI signals against later market outcomes. Backtesting helps show whether the system is improving, but it does not guarantee future results.</p>
+                <h2>Understanding AI Recommendations</h2><table style="width:100%;border-collapse:collapse"><tr><th align="left">Signal Source</th><th align="left">Meaning</th></tr><tr><td>AI-assisted explanation</td><td>A plain-English explanation generated from available stock context.</td></tr><tr><td>Deterministic model</td><td>A structured model that applies repeatable thresholds and learned signal behavior.</td></tr><tr><td>Rule-based logic</td><td>A fallback system based on indicators, price movement, and simple signal rules.</td></tr><tr><td>Market data checks</td><td>Current price, recent history, trend movement, and available company context.</td></tr><tr><td>News context</td><td>Recent headlines or company-related news when available.</td></tr></table><p>The goal is to make the stock signal easier to understand, not to guarantee a profitable trade.</p>
+                <h2>Important Risk Reminder</h2><p>MoneyBot Labs provides AI-assisted stock research and educational information only. It is not a licensed financial advisor, broker, or investment manager.</p><p>Before making any trade, users should do their own research, review company fundamentals, consider risk tolerance, avoid investing money they cannot afford to lose, understand that stocks can lose value quickly, and treat AI signals as research support—not guaranteed instructions.</p>
+                <h2>Common Questions</h2><h3>Does MoneyBot Labs buy or sell stocks for me?</h3><p>No. MoneyBot Labs does not place trades. It only provides research, signals, explanations, and tracking tools.</p><h3>Are the AI recommendations guaranteed?</h3><p>No. No AI stock prediction is guaranteed. Market conditions can change quickly.</p><h3>Why does a stock show Hold Off For Now?</h3><p>Hold Off For Now means the system does not currently see a strong enough setup to support buying. It may be due to weak trend, mixed indicators, risk, price pressure, or lack of confirmation.</p><h3>Why should I click the ticker?</h3><p>Clicking the ticker helps you understand the company behind the stock. A stock score is more useful when you also know what the business does.</p><h3>Why should I click the portfolio advice?</h3><p>Clicking the advice opens the reasoning window. This explains why the system gave the recommendation and what risk factors or next checks matter.</p><h3>Why do some items say data is unavailable?</h3><p>Market data, company summaries, or news may occasionally be unavailable because of provider limits, temporary API issues, unsupported tickers, or market data delays.</p><h3>Is this financial advice?</h3><p>No. MoneyBot Labs provides AI-assisted research and educational information only.</p>
+                <h2>Best Way to Use MoneyBot Labs</h2><p>A good workflow is:</p><ol><li>Start with Market Indices to understand the broader market.</li><li>Use Quick Ask to analyze a ticker.</li><li>Click the ticker symbol to learn about the company.</li><li>Review Stable Watchlist, Hot Momentum Buys, or Whales of Wall Street for ideas.</li><li>Add stocks you own to User Portfolio.</li><li>Click the Advice field in your portfolio to understand the recommendation.</li><li>Review risk before making any decision.</li><li>Track results over time instead of relying on one signal.</li></ol>
+              </main>
+            </body></html>
+            """
+        )
 
     @app.get("/disclaimer")
     def disclaimer_page():
-        return _simple_page("Disclaimer")
+        return render_template_string(
+            """
+            <html><body style="font-family:Inter,sans-serif;min-height:100vh;margin:0;background:#f7fee7;padding:24px;box-sizing:border-box;color:#14532d">
+              <main style="max-width:900px;margin:0 auto;background:#f0fdf4;padding:28px;border-radius:14px;box-shadow:0 10px 28px rgba(15,23,42,.08);line-height:1.6">
+                <p style="margin:0 0 12px"><a href="/" style="display:inline-block;text-decoration:none;background:#dcfce7;color:#14532d;padding:8px 12px;border-radius:999px;font-weight:700">← Back</a></p>
+                <h1 style="margin-top:0">Disclaimer</h1>
+                <p><strong>Effective Date: April 30, 2026</strong></p>
+                <p>The information provided by MoneyBot Labs is for informational and educational purposes only.</p>
+
+                <h2>1. Not Investment Advice</h2>
+                <p>MoneyBot Labs does not provide personalized investment advice, financial advice, legal advice, tax advice, or other professional advice. Nothing on our platform, website, reports, alerts, AI outputs, commentary, stock ratings, or related materials should be interpreted as a recommendation or solicitation to buy, sell, or hold any security.</p>
+                <p>All investment decisions involve risk, and you are solely responsible for your own decisions.</p>
+
+                <h2>2. No Guarantee of Results</h2>
+                <p>Past performance does not guarantee future results. Any projections, forecasts, probabilities, backtests, model outputs, or forward-looking statements are inherently uncertain and may not reflect actual future performance.</p>
+                <p>MoneyBot Labs makes no guarantee that any stock, strategy, signal, alert, or AI-generated insight will be profitable or successful.</p>
+
+                <h2>3. AI and Automated Analysis Limitations</h2>
+                <p>Our platform may use automated models, scoring systems, external data feeds, and AI-generated analysis. These systems can produce incomplete, outdated, inaccurate, or misleading results. Outputs may change as data changes, models are updated, or market conditions shift.</p>
+                <p>You should not rely solely on automated outputs when making financial decisions.</p>
+
+                <h2>4. Third-Party Data</h2>
+                <p>MoneyBot Labs may use third-party data sources such as market data providers, financial statement sources, news services, and analytics providers. We do not warrant the accuracy, timeliness, completeness, or availability of any third-party information.</p>
+
+                <h2>5. No Professional Relationship</h2>
+                <p>Your use of MoneyBot Labs does not create an adviser-client, fiduciary, brokerage, agency, or other professional relationship between you and MoneyBot Labs.</p>
+
+                <h2>6. Use at Your Own Risk</h2>
+                <p>By using MoneyBot Labs, you acknowledge that you do so at your own risk. You are responsible for conducting your own due diligence and consulting qualified professionals before making financial, legal, or tax decisions.</p>
+
+                <h2>7. Contact</h2>
+                <p>If you have questions about this Disclaimer, contact:</p>
+                <p>MoneyBot Labs<br />Email: <a href="mailto:support@moneybotlabs.com">support@moneybotlabs.com</a></p>
+              </main>
+            </body></html>
+            """
+        )
 
     @app.get("/login")
     @app.get("/login/")
