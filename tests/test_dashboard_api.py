@@ -2,6 +2,7 @@ import os
 import json
 from datetime import datetime, timezone
 
+from flask import current_app
 from moneybot.app_factory import create_app
 from moneybot import api as api_module
 
@@ -1000,6 +1001,31 @@ def test_buy_watchlist_item_validates_positive_inputs():
     assert bad_shares.get_json()["error"] == "shares_bought must be > 0"
 
 
+def test_forgot_password_reports_delivery_error_when_email_send_fails(monkeypatch):
+    client = _client()
+    signup = client.post("/api/auth/signup", json=_signup_payload("mailer-fail@b.com"))
+    assert signup.status_code == 201
+
+    def fake_send_reset_email(email, reset_link):
+        return False
+
+    monkeypatch.setattr(api_module, "_send_reset_email", fake_send_reset_email)
+
+    os.environ["SMTP_HOST"] = "smtp.example.com"
+    os.environ["PASSWORD_RESET_FROM_EMAIL"] = "noreply@example.com"
+
+    with client.application.app_context():
+        current_app.config["SMTP_HOST"] = "smtp.example.com"
+        current_app.config["PASSWORD_RESET_FROM_EMAIL"] = "noreply@example.com"
+
+    res = client.post("/api/auth/forgot-password", json={"email": "mailer-fail@b.com"})
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["ok"] is True
+    assert payload["email_delivery_configured"] is True
+    assert payload["email_delivery_error"] is True
+
+
 def test_forgot_password_sends_reset_email_for_existing_user(monkeypatch):
     client = _client()
     signup = client.post("/api/auth/signup", json=_signup_payload("mailer@b.com"))
@@ -1018,6 +1044,8 @@ def test_forgot_password_sends_reset_email_for_existing_user(monkeypatch):
     assert res.status_code == 200
     assert captured["email"] == "mailer@b.com"
     assert "reset-password" in captured["reset_link"] and "token=" in captured["reset_link"]
+    payload = res.get_json()
+    assert payload["email_delivery_error"] is False
 
 
 def test_reset_password_updates_credentials_and_allows_login():

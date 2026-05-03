@@ -613,17 +613,20 @@ def forgot_password():
         return jsonify({"error": "email required", "request_id": g.request_id}), 400
 
     user = User.query.filter_by(email=email).first()
+    email_delivery_configured = _password_reset_email_configured()
+    email_delivery_error = False
+
     if user:
         reset_link = _build_password_reset_link(user)
-        _send_reset_email(email, reset_link)
-
-    email_delivery_configured = _password_reset_email_configured()
+        email_sent = _send_reset_email(email, reset_link)
+        email_delivery_error = email_delivery_configured and not email_sent
 
     # Avoid user-enumeration: always return the same response message.
     return jsonify({
         "ok": True,
         "message": "If an account exists for that email, password recovery instructions have been sent.",
         "email_delivery_configured": email_delivery_configured,
+        "email_delivery_error": email_delivery_error,
         "request_id": g.request_id,
     })
 
