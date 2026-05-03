@@ -1067,6 +1067,54 @@ def test_reset_password_updates_credentials_and_allows_login():
     assert new_login.status_code == 200
 
 
+def test_send_reset_email_sets_deliverability_headers(monkeypatch):
+    os.environ["MONEYBOT_SECRET_KEY"] = "test-secret"
+    os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+    os.environ["SMTP_HOST"] = "smtp.example.com"
+    os.environ["SMTP_PORT"] = "587"
+    os.environ["SMTP_USER"] = "support@moneybotlabs.com"
+    os.environ["SMTP_PASSWORD"] = "pw"
+    os.environ["SMTP_USE_TLS"] = "false"
+    os.environ["PASSWORD_RESET_FROM_EMAIL"] = "support@moneybotlabs.com"
+    os.environ["PASSWORD_RESET_FROM_NAME"] = "Moneybot Labs Support"
+    app = create_app()
+
+    captured = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout):
+            captured["host"] = host
+            captured["port"] = port
+            captured["timeout"] = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def starttls(self):
+            captured["starttls_called"] = True
+
+        def login(self, user, password):
+            captured["login"] = (user, password)
+
+        def send_message(self, message):
+            captured["message"] = message
+
+    monkeypatch.setattr(api_module.smtplib, "SMTP", FakeSMTP)
+
+    with app.app_context():
+        sent = api_module._send_reset_email("user@example.com", "https://moneybotlabs.com/reset-password?token=abc")
+
+    assert sent is True
+    msg = captured["message"]
+    assert msg["From"] == "Moneybot Labs Support <support@moneybotlabs.com>"
+    assert msg["Reply-To"] == "support@moneybotlabs.com"
+    assert msg["Date"]
+    assert msg["Message-ID"]
+
+
 def test_password_reset_email_config_helper_reads_runtime_config():
     os.environ["MONEYBOT_SECRET_KEY"] = "test-secret"
     os.environ["DATABASE_URL"] = "sqlite:///:memory:"

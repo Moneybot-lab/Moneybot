@@ -272,6 +272,7 @@ def create_app() -> Flask:
         SMTP_USE_TLS=(os.environ.get("SMTP_USE_TLS", "true").lower() == "true"),
         SMTP_USE_SSL=(os.environ.get("SMTP_USE_SSL", "false").lower() == "true"),
         PASSWORD_RESET_FROM_EMAIL=os.environ.get("PASSWORD_RESET_FROM_EMAIL", os.environ.get("SMTP_USER", "")),
+        PASSWORD_RESET_FROM_NAME=os.environ.get("PASSWORD_RESET_FROM_NAME", "Moneybot Labs"),
         PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS=int(os.environ.get("PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS", "3600")),
         DAILY_OPS_TOKEN=os.environ.get("DAILY_OPS_TOKEN", ""),
         AI_ENABLED=(os.environ.get("AI_ENABLED", "false").lower() == "true"),
