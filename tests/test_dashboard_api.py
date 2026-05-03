@@ -2,6 +2,7 @@ import os
 import json
 from datetime import datetime, timezone
 
+from flask import current_app
 from moneybot.app_factory import create_app
 from moneybot import api as api_module
 
@@ -1000,6 +1001,31 @@ def test_buy_watchlist_item_validates_positive_inputs():
     assert bad_shares.get_json()["error"] == "shares_bought must be > 0"
 
 
+def test_forgot_password_reports_delivery_error_when_email_send_fails(monkeypatch):
+    client = _client()
+    signup = client.post("/api/auth/signup", json=_signup_payload("mailer-fail@b.com"))
+    assert signup.status_code == 201
+
+    def fake_send_reset_email(email, reset_link):
+        return False
+
+    monkeypatch.setattr(api_module, "_send_reset_email", fake_send_reset_email)
+
+    os.environ["SMTP_HOST"] = "smtp.example.com"
+    os.environ["PASSWORD_RESET_FROM_EMAIL"] = "noreply@example.com"
+
+    with client.application.app_context():
+        current_app.config["SMTP_HOST"] = "smtp.example.com"
+        current_app.config["PASSWORD_RESET_FROM_EMAIL"] = "noreply@example.com"
+
+    res = client.post("/api/auth/forgot-password", json={"email": "mailer-fail@b.com"})
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert payload["ok"] is True
+    assert payload["email_delivery_configured"] is True
+    assert payload["email_delivery_error"] is True
+
+
 def test_forgot_password_sends_reset_email_for_existing_user(monkeypatch):
     client = _client()
     signup = client.post("/api/auth/signup", json=_signup_payload("mailer@b.com"))
@@ -1018,6 +1044,8 @@ def test_forgot_password_sends_reset_email_for_existing_user(monkeypatch):
     assert res.status_code == 200
     assert captured["email"] == "mailer@b.com"
     assert "reset-password" in captured["reset_link"] and "token=" in captured["reset_link"]
+    payload = res.get_json()
+    assert payload["email_delivery_error"] is False
 
 
 def test_reset_password_updates_credentials_and_allows_login():
@@ -1037,6 +1065,54 @@ def test_reset_password_updates_credentials_and_allows_login():
 
     new_login = client.post("/api/auth/login", json={"email": "reset@b.com", "password": "newpw"})
     assert new_login.status_code == 200
+
+
+def test_send_reset_email_sets_deliverability_headers(monkeypatch):
+    os.environ["MONEYBOT_SECRET_KEY"] = "test-secret"
+    os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+    os.environ["SMTP_HOST"] = "smtp.example.com"
+    os.environ["SMTP_PORT"] = "587"
+    os.environ["SMTP_USER"] = "support@moneybotlabs.com"
+    os.environ["SMTP_PASSWORD"] = "pw"
+    os.environ["SMTP_USE_TLS"] = "false"
+    os.environ["PASSWORD_RESET_FROM_EMAIL"] = "support@moneybotlabs.com"
+    os.environ["PASSWORD_RESET_FROM_NAME"] = "Moneybot Labs Support"
+    app = create_app()
+
+    captured = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout):
+            captured["host"] = host
+            captured["port"] = port
+            captured["timeout"] = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def starttls(self):
+            captured["starttls_called"] = True
+
+        def login(self, user, password):
+            captured["login"] = (user, password)
+
+        def send_message(self, message):
+            captured["message"] = message
+
+    monkeypatch.setattr(api_module.smtplib, "SMTP", FakeSMTP)
+
+    with app.app_context():
+        sent = api_module._send_reset_email("user@example.com", "https://moneybotlabs.com/reset-password?token=abc")
+
+    assert sent is True
+    msg = captured["message"]
+    assert msg["From"] == "Moneybot Labs Support <support@moneybotlabs.com>"
+    assert msg["Reply-To"] == "support@moneybotlabs.com"
+    assert msg["Date"]
+    assert msg["Message-ID"]
 
 
 def test_password_reset_email_config_helper_reads_runtime_config():

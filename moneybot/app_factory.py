@@ -272,6 +272,7 @@ def create_app() -> Flask:
         SMTP_USE_TLS=(os.environ.get("SMTP_USE_TLS", "true").lower() == "true"),
         SMTP_USE_SSL=(os.environ.get("SMTP_USE_SSL", "false").lower() == "true"),
         PASSWORD_RESET_FROM_EMAIL=os.environ.get("PASSWORD_RESET_FROM_EMAIL", os.environ.get("SMTP_USER", "")),
+        PASSWORD_RESET_FROM_NAME=os.environ.get("PASSWORD_RESET_FROM_NAME", "Moneybot Labs"),
         PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS=int(os.environ.get("PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS", "3600")),
         DAILY_OPS_TOKEN=os.environ.get("DAILY_OPS_TOKEN", ""),
         AI_ENABLED=(os.environ.get("AI_ENABLED", "false").lower() == "true"),
@@ -868,13 +869,26 @@ def create_app() -> Flask:
                   outEl.textContent = 'Enter your email first, then click Forgot Password.';
                   return;
                 }
-                const res = await fetch('/api/auth/forgot-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
-                const data = await res.json();
-                if (data && data.email_delivery_configured === false) {
-                  outEl.textContent = 'Password recovery email service is not configured yet. Please contact support or try again later.';
-                  return;
+                outEl.textContent = 'Sending password recovery instructions...';
+                try {
+                  const res = await fetch('/api/auth/forgot-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
+                  const data = await res.json();
+                  if (!res.ok) {
+                    outEl.textContent = data.error || 'Unable to start password recovery right now.';
+                    return;
+                  }
+                  if (data && data.email_delivery_configured === false) {
+                    outEl.textContent = 'Password recovery email service is not configured yet. Please contact support or try again later.';
+                    return;
+                  }
+                  if (data && data.email_delivery_error === true) {
+                    outEl.textContent = 'Password recovery request received, but there was a temporary email delivery issue. Please try again shortly or contact support.';
+                    return;
+                  }
+                  outEl.textContent = data.message || 'If an account exists for that email, password recovery instructions have been sent.';
+                } catch (err) {
+                  outEl.textContent = 'Unable to start password recovery right now. Please retry.';
                 }
-                outEl.textContent = data.message || data.error || 'Unable to start password recovery right now.';
               }
               </script>
             </body></html>

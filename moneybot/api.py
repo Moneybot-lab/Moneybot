@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlsplit
 from collections import defaultdict, deque
 from decimal import Decimal
 from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
 from functools import wraps
 from typing import Any, Dict, Tuple
 
@@ -178,6 +179,7 @@ def _send_reset_email(email: str, reset_link: str) -> bool:
     smtp_use_tls = bool(current_app.config.get("SMTP_USE_TLS", True))
     smtp_use_ssl = bool(current_app.config.get("SMTP_USE_SSL", False))
     from_email = (current_app.config.get("PASSWORD_RESET_FROM_EMAIL") or smtp_user or "").strip()
+    from_name = (current_app.config.get("PASSWORD_RESET_FROM_NAME") or "Moneybot Labs").strip()
 
     if not _password_reset_email_configured():
         logging.warning("Password reset email not sent: SMTP_HOST or sender email is not configured.")
@@ -185,7 +187,10 @@ def _send_reset_email(email: str, reset_link: str) -> bool:
 
     msg = EmailMessage()
     msg["Subject"] = "Reset your Moneybot password"
-    msg["From"] = from_email
+    msg["From"] = f"{from_name} <{from_email}>" if from_name else from_email
+    msg["Reply-To"] = from_email
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain=(from_email.split("@", 1)[1] if "@" in from_email else None))
     msg["To"] = email
     msg.set_content(
         "We received a request to reset your Moneybot password.\n\n"
@@ -613,17 +618,20 @@ def forgot_password():
         return jsonify({"error": "email required", "request_id": g.request_id}), 400
 
     user = User.query.filter_by(email=email).first()
+    email_delivery_configured = _password_reset_email_configured()
+    email_delivery_error = False
+
     if user:
         reset_link = _build_password_reset_link(user)
-        _send_reset_email(email, reset_link)
-
-    email_delivery_configured = _password_reset_email_configured()
+        email_sent = _send_reset_email(email, reset_link)
+        email_delivery_error = email_delivery_configured and not email_sent
 
     # Avoid user-enumeration: always return the same response message.
     return jsonify({
         "ok": True,
         "message": "If an account exists for that email, password recovery instructions have been sent.",
         "email_delivery_configured": email_delivery_configured,
+        "email_delivery_error": email_delivery_error,
         "request_id": g.request_id,
     })
 
