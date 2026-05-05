@@ -28,7 +28,8 @@ from advice_engine import compute_user_advice
 
 from .extensions import db
 from sqlalchemy import or_, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy import inspect
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from .models import FcmDeviceToken, NotificationTriggerPreference, SoldTrade, User, WatchlistItem
 from .services.decision_log import read_decision_events, summarize_decision_events
@@ -379,12 +380,18 @@ def _ensure_notification_trigger_preferences(user_id: int) -> NotificationTrigge
 
 
 def _ensure_clearview_trigger_column() -> None:
+    inspector = inspect(db.engine)
     try:
-        db.session.execute(text("SELECT clearview_hold_off_to_buy FROM notification_trigger_preferences LIMIT 1"))
-    except OperationalError:
-        db.session.rollback()
-        db.session.execute(text("ALTER TABLE notification_trigger_preferences ADD COLUMN clearview_hold_off_to_buy BOOLEAN NOT NULL DEFAULT 1"))
+        columns = {col.get("name") for col in inspector.get_columns("notification_trigger_preferences")}
+    except Exception:
+        columns = set()
+    if "clearview_hold_off_to_buy" in columns:
+        return
+    try:
+        db.session.execute(text("ALTER TABLE notification_trigger_preferences ADD COLUMN clearview_hold_off_to_buy BOOLEAN NOT NULL DEFAULT TRUE"))
         db.session.commit()
+    except (OperationalError, ProgrammingError):
+        db.session.rollback()
 
 def _notification_trigger_state_path() -> str:
     return _runtime_data_path("notification_trigger_state.json")
