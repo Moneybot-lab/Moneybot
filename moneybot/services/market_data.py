@@ -57,7 +57,7 @@ class MarketDataService:
         self.signal_cache = TTLCache(ttl_seconds=20)
         self.sector_cache = TTLCache(ttl_seconds=3600)
         self.company_snapshot_cache = TTLCache(ttl_seconds=600)
-        self._company_snapshot_backoff_until = 0.0
+        self._company_snapshot_backoff_until_by_symbol: dict[str, float] = {}
         self._market_timezone = ZoneInfo("America/New_York")
         self._daily_lists_last_refreshed_at: datetime | None = None
         self._daily_lists_cache: dict[str, list[Dict[str, Any]]] = {}
@@ -309,7 +309,19 @@ class MarketDataService:
         latest_news: list[Dict[str, Any]] = []
 
         now = time.time()
-        if now < self._company_snapshot_backoff_until:
+        backoff_until = float(self._company_snapshot_backoff_until_by_symbol.get(ticker_symbol, 0.0))
+        if now < backoff_until:
+            fallback_news = self._google_news_headlines(
+                symbol=ticker_symbol,
+                company_name=default_name,
+                limit=5,
+            )
+            latest_news = self._rank_news(
+                symbol=ticker_symbol,
+                company_name=default_name,
+                news_items=fallback_news,
+                limit=5,
+            )
             payload = {
                 "symbol": ticker_symbol,
                 "company_name": default_name,
@@ -387,7 +399,18 @@ class MarketDataService:
             return payload
         except Exception as exc:  # noqa: BLE001
             if "Too Many Requests" in str(exc):
-                self._company_snapshot_backoff_until = now + 300.0
+                self._company_snapshot_backoff_until_by_symbol[ticker_symbol] = now + 300.0
+            fallback_news = self._google_news_headlines(
+                symbol=ticker_symbol,
+                company_name=default_name,
+                limit=5,
+            )
+            latest_news = self._rank_news(
+                symbol=ticker_symbol,
+                company_name=default_name,
+                news_items=fallback_news,
+                limit=5,
+            )
             logging.warning("Company snapshot fetch failed for %s: %s", ticker_symbol, exc)
             payload = {
                 "symbol": ticker_symbol,

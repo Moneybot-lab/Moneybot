@@ -557,10 +557,50 @@ const fallbackData = {
                     }
                   });
 
-                  function showAdviceReason(symbol, rationale){
-                    document.getElementById('homeModalTitle').textContent = `${symbol} · Advice details`;
-                    document.getElementById('homeModalSummary').textContent = String(rationale || '');
+                  async function showAdviceReason(symbol, rationale){
+                    document.getElementById('homeModalTitle').textContent = `${symbol} · HOLD rationale`;
+                    const summaryEl = document.getElementById('homeModalSummary');
+                    summaryEl.innerHTML = 'Loading recommendation details...';
                     openHomeModal();
+                    let ai = {};
+                    let latestNews = [];
+                    try {
+                      const [quickRes, companyRes] = await Promise.all([
+                        fetch('/api/quick-ask?symbol=' + encodeURIComponent(symbol)),
+                        fetch('/api/company-details?symbol=' + encodeURIComponent(symbol)),
+                      ]);
+                      const quickPayload = quickRes.ok ? await quickRes.json() : {};
+                      const companyPayload = companyRes.ok ? await companyRes.json() : {};
+                      ai = (quickPayload.data || {}).ai || {};
+                      latestNews = ((companyPayload.data || {}).latest_news || []).slice(0, 5);
+                    } catch (err) {}
+
+                    const narrative = String(ai.narrative || rationale || 'Signal generated from current indicators.');
+                    const risk = Array.isArray(ai.risk_notes) && ai.risk_notes.length ? String(ai.risk_notes[0]) : 'Market conditions may change quickly; technical signals are not guarantees.';
+                    const next = Array.isArray(ai.next_checks) && ai.next_checks.length ? String(ai.next_checks[0]) : 'Re-evaluate on the next trading session with fresh volume and momentum.';
+                    const plainEnglish = `There is no clear edge right now, so holding is safer. ${narrative} This is guidance only, not financial advice.`;
+                    const newsHtml = latestNews.length
+                      ? latestNews.map((item) => {
+                        const title = escapeHtml(item?.title || 'Untitled');
+                        const publisher = escapeHtml(item?.publisher || 'Source');
+                        const link = item?.link ? String(item.link) : '';
+                        return `<li style="margin-bottom:6px">${link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" style="color:#166534;font-weight:700">${title}</a>` : `<span style="color:#166534;font-weight:700">${title}</span>`}<div style="font-size:12px;color:#3f6212">${publisher}</div></li>`;
+                      }).join('')
+                      : '<li>No recent headlines available.</li>';
+                    summaryEl.innerHTML = `
+                      <div style="background:#166534;color:#f0fdf4;border-radius:10px;padding:10px 12px;margin-bottom:10px">
+                        <div style="font-weight:900;margin-bottom:6px">${escapeHtml(symbol)} · ai enhanced</div>
+                        <ul style="margin:0;padding-left:18px">
+                          <li>${escapeHtml(narrative)}</li>
+                          <li><strong>Risk:</strong> ${escapeHtml(risk)}</li>
+                          <li><strong>Next:</strong> ${escapeHtml(next)}</li>
+                        </ul>
+                      </div>
+                      <div style="display:inline-block;background:#16a34a;color:#f0fdf4;border-radius:8px;padding:6px 10px;font-weight:800;margin-bottom:10px">Explain this recommendation in plain English</div>
+                      <div style="background:#d9f99d;border:1px solid #84cc16;color:#14532d;border-radius:10px;padding:10px 12px;margin-bottom:10px">${escapeHtml(plainEnglish)}</div>
+                      <div style="font-weight:800;color:#3f6212;margin-bottom:6px">LATEST HEADLINES</div>
+                      <ul style="margin:0;padding-left:18px;color:#3f6212">${newsHtml}</ul>
+                    `;
                   }
                   function setTabLoading(isLoading){
                     const loadingEl = document.getElementById('tabLoading');
