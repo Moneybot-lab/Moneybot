@@ -361,6 +361,7 @@ def _notification_trigger_payload(item: NotificationTriggerPreference) -> Dict[s
         "hot_momentum_score_crosses_8": bool(item.hot_momentum_score_crosses_8),
         "whale_top_investor_added": bool(item.whale_top_investor_added),
         "whales_top_stock_list_changes": bool(item.whales_top_stock_list_changes),
+        "clearview_hold_off_to_buy": bool(item.clearview_hold_off_to_buy),
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }
 
@@ -381,17 +382,18 @@ def _notification_trigger_state_path() -> str:
 def _load_notification_trigger_state() -> dict[str, Any]:
     path = Path(_notification_trigger_state_path())
     if not path.exists():
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
     if not isinstance(payload, dict):
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
     return {
         "portfolio_advice": payload.get("portfolio_advice") if isinstance(payload.get("portfolio_advice"), dict) else {},
         "momentum_scores": payload.get("momentum_scores") if isinstance(payload.get("momentum_scores"), dict) else {},
         "wells_snapshot": payload.get("wells_snapshot") if isinstance(payload.get("wells_snapshot"), dict) else {},
+        "clearview_advice": payload.get("clearview_advice") if isinstance(payload.get("clearview_advice"), dict) else {},
     }
 
 
@@ -768,6 +770,7 @@ def update_notification_triggers():
         "hot_momentum_score_crosses_8",
         "whale_top_investor_added",
         "whales_top_stock_list_changes",
+        "clearview_hold_off_to_buy",
     )
     for field in allowed_fields:
         if field in data:
@@ -1517,6 +1520,8 @@ def run_notification_triggers():
             momentum_scores[str(key).upper()] = float(value)
         except (TypeError, ValueError):
             continue
+    clearview_state: dict[str, str] = {str(k): str(v).upper() for k, v in (state.get("clearview_advice") or {}).items() if str(k)}
+
     wells_prev = {
         str(k): [str(t).upper() for t in v if str(t).strip()]
         for k, v in (state.get("wells_snapshot") or {}).items()
@@ -1582,6 +1587,17 @@ def run_notification_triggers():
                     title=f"{symbol}: Advice changed to BUY",
                     body=f"Portfolio advice for {symbol} changed from {previous or 'N/A'} to BUY.",
                     kind="portfolio_buy_advice_change",
+                    symbol=symbol,
+                )
+
+            clearview_previous = clearview_state.get(state_key, "")
+            clearview_state[state_key] = advice
+            if clearview_previous in {"", "HOLD", "HOLD OFF", "HOLD OFF FOR NOW"} and advice == "BUY" and prefs.clearview_hold_off_to_buy:
+                queue_user_event(
+                    user.id,
+                    title=f"{symbol}: ClearView flipped to BUY",
+                    body=f"ClearView Signals moved {symbol} from Hold Off to BUY. Open the app to read the plain-English AI reason.",
+                    kind="clearview_hold_off_to_buy",
                     symbol=symbol,
                 )
 
@@ -1694,6 +1710,7 @@ def run_notification_triggers():
             "portfolio_advice": portfolio_state,
             "momentum_scores": momentum_scores,
             "wells_snapshot": wells_now,
+            "clearview_advice": clearview_state,
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         }
     )
