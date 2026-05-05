@@ -320,7 +320,23 @@ const fallbackData = {
                       }
                       const data = payload.data || {};
                       titleEl.textContent = `${data.company_name || symbol} (${symbol})`;
-                      summaryEl.textContent = data.summary || 'No summary available.';
+                      const summary = data.summary || 'No summary available.';
+                      const news = Array.isArray(data.latest_news) ? data.latest_news : [];
+                      if(!news.length){
+                        summaryEl.innerHTML = `<div>${escapeHtml(summary)}</div>`;
+                        return;
+                      }
+                      const newsHtml = news.slice(0, 5).map((item) => {
+                        const title = escapeHtml(item?.title || 'Untitled');
+                        const publisher = escapeHtml(item?.publisher || 'Source');
+                        const link = item?.link ? String(item.link) : '';
+                        const publishedAt = item?.published_at ? ` · ${escapeHtml(item.published_at)}` : '';
+                        const headline = link
+                          ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" style="color:#166534;font-weight:700">${title}</a>`
+                          : `<span style="color:#166534;font-weight:700">${title}</span>`;
+                        return `<li style="margin-bottom:6px">${headline}<div style="font-size:12px;color:#3f6212">${publisher}${publishedAt}</div></li>`;
+                      }).join('');
+                      summaryEl.innerHTML = `<div style="margin-bottom:10px">${escapeHtml(summary)}</div><div><strong>Recent news</strong><ul style="padding-left:18px;margin:8px 0 0 0">${newsHtml}</ul></div>`;
                     } catch (err) {
                       titleEl.textContent = symbol;
                       summaryEl.textContent = 'Unable to load company details right now.';
@@ -495,7 +511,7 @@ const fallbackData = {
                       <button onclick="addClearviewTicker()" style="padding:8px 12px;border:none;background:#166534;color:#ecfdf5;border-radius:8px;font-weight:700">Add</button>
                       <span style="font-size:12px;color:#166534;align-self:center">Model: day1-logreg-v1</span>
                     </div>
-                    <table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Trend</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Advice</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Remove</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.current_price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${Number(item.score||0).toFixed(1)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${trendMiniGraph(item.history30 || [])}</td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="showAdviceReason('${item.symbol}','${encodeURIComponent(item.rationale || 'Signal generated from current indicators.')}')" style="border:none;background:${item.recommendation==='BUY'?'#166534':'#b91c1c'};color:#f8fafc;padding:6px 10px;border-radius:999px;font-weight:800;cursor:pointer">${escapeHtml(item.recommendation || 'HOLD OFF')}</button></td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="removeClearviewTicker('${item.symbol}')" style="border:none;background:#fee2e2;color:#991b1b;border-radius:8px;padding:6px 10px;cursor:pointer">Remove</button></td></tr>`).join('')}</tbody></table><p style="margin:10px 0 0 0;color:#166534;font-size:12px;font-weight:700">Click on advice badges to see why.</p>`;
+                    <table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Trend</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Advice</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Remove</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.current_price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${Number(item.score||0).toFixed(1)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${trendMiniGraph(item.history30 || [])}</td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button class="advice-reason-btn" data-symbol="${escapeHtml(item.symbol)}" data-rationale="${escapeHtml(item.rationale || 'Signal generated from current indicators.')}" style="border:none;background:${item.recommendation==='BUY'?'#166534':'#b91c1c'};color:#f8fafc;padding:6px 10px;border-radius:999px;font-weight:800;cursor:pointer">${escapeHtml(item.recommendation || 'HOLD OFF')}</button></td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="removeClearviewTicker('${item.symbol}')" style="border:none;background:#fee2e2;color:#991b1b;border-radius:8px;padding:6px 10px;cursor:pointer">Remove</button></td></tr>`).join('')}</tbody></table><p style="margin:10px 0 0 0;color:#166534;font-size:12px;font-weight:700">Click on advice badges to see why.</p>`;
                   }
                   async function fetchClearviewItems(){
                     const symbols = loadClearviewSymbols();
@@ -541,9 +557,9 @@ const fallbackData = {
                     }
                   });
 
-                  function showAdviceReason(symbol, encodedRationale){
+                  function showAdviceReason(symbol, rationale){
                     document.getElementById('homeModalTitle').textContent = `${symbol} · Advice details`;
-                    document.getElementById('homeModalSummary').textContent = decodeURIComponent(encodedRationale || '');
+                    document.getElementById('homeModalSummary').textContent = String(rationale || '');
                     openHomeModal();
                   }
                   function setTabLoading(isLoading){
@@ -615,6 +631,12 @@ const fallbackData = {
                     if(event.target.value){ event.target.value = ''; }
                   });
                   document.getElementById('homeTickerModal').addEventListener('click', (event) => { if(event.target.id==='homeTickerModal'){ closeHomeModal(); }});
+                  document.addEventListener('click', (event) => {
+                    const target = event.target;
+                    if(!(target instanceof HTMLElement)) return;
+                    if(!target.classList.contains('advice-reason-btn')) return;
+                    showAdviceReason(target.dataset.symbol || '', target.dataset.rationale || '');
+                  });
                   document.getElementById('menuToggleBtn').addEventListener('click', toggleMenu);
                   document.getElementById('userMenuButton').addEventListener('click', openMenu);
                   document.getElementById('menuCloseBtn').addEventListener('click', closeMenu);
