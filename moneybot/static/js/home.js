@@ -530,6 +530,16 @@ const fallbackData = {
                     saveClearviewSymbols(loadClearviewSymbols().filter((s)=>s!==symbol));
                     refreshClearview();
                   }
+
+                  document.addEventListener('keydown', (event) => {
+                    const input = document.getElementById('clearviewInput');
+                    if(!input || document.activeElement !== input) return;
+                    if(event.key === 'Enter'){
+                      event.preventDefault();
+                      addClearviewTicker();
+                    }
+                  });
+
                   function showAdviceReason(symbol, encodedRationale){
                     document.getElementById('homeModalTitle').textContent = `${symbol} · Advice details`;
                     document.getElementById('homeModalSummary').textContent = decodeURIComponent(encodedRationale || '');

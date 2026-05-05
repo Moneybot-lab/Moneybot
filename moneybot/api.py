@@ -27,7 +27,8 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from advice_engine import compute_user_advice
 
 from .extensions import db
-from sqlalchemy import or_
+from sqlalchemy import or_, text
+from sqlalchemy.exc import OperationalError
 
 from .models import FcmDeviceToken, NotificationTriggerPreference, SoldTrade, User, WatchlistItem
 from .services.decision_log import read_decision_events, summarize_decision_events
@@ -374,6 +375,16 @@ def _ensure_notification_trigger_preferences(user_id: int) -> NotificationTrigge
         db.session.commit()
     return item
 
+
+
+
+def _ensure_clearview_trigger_column() -> None:
+    try:
+        db.session.execute(text("SELECT clearview_hold_off_to_buy FROM notification_trigger_preferences LIMIT 1"))
+    except OperationalError:
+        db.session.rollback()
+        db.session.execute(text("ALTER TABLE notification_trigger_preferences ADD COLUMN clearview_hold_off_to_buy BOOLEAN NOT NULL DEFAULT 1"))
+        db.session.commit()
 
 def _notification_trigger_state_path() -> str:
     return _runtime_data_path("notification_trigger_state.json")
@@ -755,6 +766,7 @@ def list_fcm_tokens():
 @api_bp.get("/notifications/triggers")
 @login_required
 def get_notification_triggers():
+    _ensure_clearview_trigger_column()
     item = _ensure_notification_trigger_preferences(session["user_id"])
     return jsonify({"item": _notification_trigger_payload(item), "request_id": g.request_id})
 
@@ -762,6 +774,7 @@ def get_notification_triggers():
 @api_bp.put("/notifications/triggers")
 @login_required
 def update_notification_triggers():
+    _ensure_clearview_trigger_column()
     data = request.get_json(silent=True) or {}
     updates: dict[str, bool] = {}
     allowed_fields = (
@@ -1501,6 +1514,7 @@ def run_daily_ops():
 
 @api_bp.post("/run-notification-triggers")
 def run_notification_triggers():
+    _ensure_clearview_trigger_column()
     expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
     provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
     if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
