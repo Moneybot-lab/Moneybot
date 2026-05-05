@@ -505,7 +505,8 @@ const fallbackData = {
                         const payload = await res.json();
                         const d = payload.data || {};
                         const rec = String(d.recommendation || 'HOLD OFF FOR NOW').toUpperCase();
-                        return {symbol, current_price:d.current_price, score:d.score, history30:d.history30 || [], recommendation: rec.includes('BUY') ? 'BUY' : 'HOLD OFF', rationale:((d.ai && d.ai.narrative) || d.rationale || 'The AI sees improving momentum and risk setup; wait if volume weakens.')};
+                        const derivedScore = Number.isFinite(Number(d.score)) ? Number(d.score) : (Number.isFinite(Number(d.signal_score)) ? Number(d.signal_score) : (Number.isFinite(Number(d.probability_up)) ? Number(d.probability_up) * 10 : 0));
+                        return {symbol, current_price:d.current_price, score:derivedScore, history30:d.history30 || [], recommendation: rec.includes('BUY') ? 'BUY' : 'HOLD OFF', rationale:((d.ai && d.ai.narrative) || d.rationale || 'The AI sees improving momentum and risk setup; wait if volume weakens.')};
                       } catch (err) {
                         return {symbol, current_price:null, score:0, history30:[], recommendation:'HOLD OFF', rationale:'Unable to load live signal right now.'};
                       }
