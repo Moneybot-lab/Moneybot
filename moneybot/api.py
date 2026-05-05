@@ -27,7 +27,8 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from advice_engine import compute_user_advice
 
 from .extensions import db
-from sqlalchemy import or_
+from sqlalchemy import or_, text
+from sqlalchemy.exc import OperationalError
 
 from .models import FcmDeviceToken, NotificationTriggerPreference, SoldTrade, User, WatchlistItem
 from .services.decision_log import read_decision_events, summarize_decision_events
@@ -361,6 +362,7 @@ def _notification_trigger_payload(item: NotificationTriggerPreference) -> Dict[s
         "hot_momentum_score_crosses_8": bool(item.hot_momentum_score_crosses_8),
         "whale_top_investor_added": bool(item.whale_top_investor_added),
         "whales_top_stock_list_changes": bool(item.whales_top_stock_list_changes),
+        "clearview_hold_off_to_buy": bool(item.clearview_hold_off_to_buy),
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }
 
@@ -374,6 +376,16 @@ def _ensure_notification_trigger_preferences(user_id: int) -> NotificationTrigge
     return item
 
 
+
+
+def _ensure_clearview_trigger_column() -> None:
+    try:
+        db.session.execute(text("SELECT clearview_hold_off_to_buy FROM notification_trigger_preferences LIMIT 1"))
+    except OperationalError:
+        db.session.rollback()
+        db.session.execute(text("ALTER TABLE notification_trigger_preferences ADD COLUMN clearview_hold_off_to_buy BOOLEAN NOT NULL DEFAULT 1"))
+        db.session.commit()
+
 def _notification_trigger_state_path() -> str:
     return _runtime_data_path("notification_trigger_state.json")
 
@@ -381,17 +393,18 @@ def _notification_trigger_state_path() -> str:
 def _load_notification_trigger_state() -> dict[str, Any]:
     path = Path(_notification_trigger_state_path())
     if not path.exists():
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
     if not isinstance(payload, dict):
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
     return {
         "portfolio_advice": payload.get("portfolio_advice") if isinstance(payload.get("portfolio_advice"), dict) else {},
         "momentum_scores": payload.get("momentum_scores") if isinstance(payload.get("momentum_scores"), dict) else {},
         "wells_snapshot": payload.get("wells_snapshot") if isinstance(payload.get("wells_snapshot"), dict) else {},
+        "clearview_advice": payload.get("clearview_advice") if isinstance(payload.get("clearview_advice"), dict) else {},
     }
 
 
@@ -753,6 +766,7 @@ def list_fcm_tokens():
 @api_bp.get("/notifications/triggers")
 @login_required
 def get_notification_triggers():
+    _ensure_clearview_trigger_column()
     item = _ensure_notification_trigger_preferences(session["user_id"])
     return jsonify({"item": _notification_trigger_payload(item), "request_id": g.request_id})
 
@@ -760,6 +774,7 @@ def get_notification_triggers():
 @api_bp.put("/notifications/triggers")
 @login_required
 def update_notification_triggers():
+    _ensure_clearview_trigger_column()
     data = request.get_json(silent=True) or {}
     updates: dict[str, bool] = {}
     allowed_fields = (
@@ -768,6 +783,7 @@ def update_notification_triggers():
         "hot_momentum_score_crosses_8",
         "whale_top_investor_added",
         "whales_top_stock_list_changes",
+        "clearview_hold_off_to_buy",
     )
     for field in allowed_fields:
         if field in data:
@@ -1498,6 +1514,7 @@ def run_daily_ops():
 
 @api_bp.post("/run-notification-triggers")
 def run_notification_triggers():
+    _ensure_clearview_trigger_column()
     expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
     provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
     if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
@@ -1517,6 +1534,8 @@ def run_notification_triggers():
             momentum_scores[str(key).upper()] = float(value)
         except (TypeError, ValueError):
             continue
+    clearview_state: dict[str, str] = {str(k): str(v).upper() for k, v in (state.get("clearview_advice") or {}).items() if str(k)}
+
     wells_prev = {
         str(k): [str(t).upper() for t in v if str(t).strip()]
         for k, v in (state.get("wells_snapshot") or {}).items()
@@ -1582,6 +1601,17 @@ def run_notification_triggers():
                     title=f"{symbol}: Advice changed to BUY",
                     body=f"Portfolio advice for {symbol} changed from {previous or 'N/A'} to BUY.",
                     kind="portfolio_buy_advice_change",
+                    symbol=symbol,
+                )
+
+            clearview_previous = clearview_state.get(state_key, "")
+            clearview_state[state_key] = advice
+            if clearview_previous in {"", "HOLD", "HOLD OFF", "HOLD OFF FOR NOW"} and advice == "BUY" and prefs.clearview_hold_off_to_buy:
+                queue_user_event(
+                    user.id,
+                    title=f"{symbol}: ClearView flipped to BUY",
+                    body=f"ClearView Signals moved {symbol} from Hold Off to BUY. Open the app to read the plain-English AI reason.",
+                    kind="clearview_hold_off_to_buy",
                     symbol=symbol,
                 )
 
@@ -1694,6 +1724,7 @@ def run_notification_triggers():
             "portfolio_advice": portfolio_state,
             "momentum_scores": momentum_scores,
             "wells_snapshot": wells_now,
+            "clearview_advice": clearview_state,
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         }
     )
