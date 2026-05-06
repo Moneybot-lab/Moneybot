@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+from datetime import timedelta
 from pathlib import Path
 
 from flask import Flask, redirect, render_template, render_template_string, send_from_directory
@@ -261,6 +262,8 @@ def create_app() -> Flask:
     app.url_map.strict_slashes = False
     app.config.update(
         SECRET_KEY=secret,
+        PERMANENT_SESSION_LIFETIME=timedelta(minutes=15),
+        SESSION_REFRESH_EACH_REQUEST=True,
         SQLALCHEMY_DATABASE_URI=database_url,
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
         DATA_PROVIDER=os.environ.get("DATA_PROVIDER", "yfinance"),

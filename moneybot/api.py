@@ -260,16 +260,41 @@ def _normalize_symbol(raw_symbol: str) -> str:
     return cleaned[:15]
 
 
+
+
+INACTIVITY_TIMEOUT = timedelta(minutes=15)
+
+
+def _session_expired() -> bool:
+    now = datetime.utcnow()
+    last_seen = session.get("last_activity_at")
+    if isinstance(last_seen, str):
+        try:
+            last_seen_dt = datetime.fromisoformat(last_seen)
+        except ValueError:
+            last_seen_dt = None
+    else:
+        last_seen_dt = None
+
+    if last_seen_dt and now - last_seen_dt > INACTIVITY_TIMEOUT:
+        return True
+
+    session["last_activity_at"] = now.isoformat()
+    session.permanent = True
+    return False
+
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         if not session.get("user_id"):
             return jsonify({"error": "authentication required"}), 401
+        if _session_expired():
+            session.clear()
+            return jsonify({"error": "authentication required"}), 401
         if session.get("requires_tab_session"):
             tab_session_id = session.get("tab_session_id")
-            request_tab_session_id = request.headers.get("X-Tab-Session-Id") or ""
-            if not tab_session_id or tab_session_id != request_tab_session_id:
-                session.clear()
+            request_tab_session_id = (request.headers.get("X-Tab-Session-Id") or "").strip()
+            if request_tab_session_id and (not tab_session_id or tab_session_id != request_tab_session_id):
                 return jsonify({"error": "authentication required"}), 401
         return view(*args, **kwargs)
 
@@ -607,6 +632,8 @@ def signup():
     session["user_id"] = user.id
     session["tab_session_id"] = tab_session_id
     session["requires_tab_session"] = bool(tab_session_id)
+    session["last_activity_at"] = datetime.utcnow().isoformat()
+    session.permanent = True
     return jsonify({"user": _user_payload(user), "request_id": g.request_id}), 201
 
 
@@ -625,6 +652,8 @@ def login():
     session["user_id"] = user.id
     session["tab_session_id"] = tab_session_id
     session["requires_tab_session"] = bool(tab_session_id)
+    session["last_activity_at"] = datetime.utcnow().isoformat()
+    session.permanent = True
     return jsonify({"user": _user_payload(user), "request_id": g.request_id})
 
 
