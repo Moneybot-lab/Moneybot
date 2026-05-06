@@ -686,3 +686,52 @@ def test_get_hot_momentum_buys_uses_shadow_decision_when_rollout_dry_run(monkeyp
     assert out[0]["decision_source"] == "deterministic_model"
     assert out[0]["model_version"] == "day1-logreg-v1-fallback"
     assert out[0]["score"] == 8.2
+
+
+def test_get_hot_momentum_buys_includes_apld_and_oklo(monkeypatch):
+    svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
+
+    def fake_quote(symbol):
+        return {
+            "symbol": symbol,
+            "price": 10.0,
+            "change_percent": 1.2,
+            "live_data_available": True,
+            "quote_source": "test",
+        }
+
+    monkeypatch.setattr(svc, "get_quote", fake_quote)
+    monkeypatch.setattr(
+        svc,
+        "get_signal",
+        lambda symbol: {"symbol": symbol, "action": "BUY", "score": 8.2, "technical": {}, "reasons": []},
+    )
+
+    out = svc.get_hot_momentum_buys()
+    symbols = {item["symbol"] for item in out}
+    assert "APLD" in symbols
+    assert "OKLO" in symbols
+
+
+def test_get_hot_momentum_buys_enforces_score_floor_when_market_not_down(monkeypatch):
+    svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
+
+    def fake_quote(symbol):
+        change = 1.2 if symbol == "SPY" else 0.4
+        return {
+            "symbol": symbol,
+            "price": 10.0,
+            "change_percent": change,
+            "live_data_available": True,
+            "quote_source": "test",
+        }
+
+    def fake_signal(symbol):
+        score = 4.2 if symbol == "T" else 8.0
+        return {"symbol": symbol, "action": "BUY", "score": score, "technical": {}, "reasons": []}
+
+    monkeypatch.setattr(svc, "get_quote", fake_quote)
+    monkeypatch.setattr(svc, "get_signal", fake_signal)
+
+    out = svc.get_hot_momentum_buys()
+    assert all(float(item["score"]) >= 5.0 for item in out)

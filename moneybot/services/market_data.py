@@ -728,6 +728,8 @@ class MarketDataService:
     def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
         candidates = [
             {"symbol": "SOFI", "price": 9.84, "score": 9.4, "rationale": "Member growth trend and improving margins."},
+            {"symbol": "APLD", "price": 7.38, "score": 9.2, "rationale": "AI infrastructure demand and breakout continuation setup."},
+            {"symbol": "OKLO", "price": 13.42, "score": 9.0, "rationale": "Nuclear-energy theme with strong high-beta momentum."},
             {"symbol": "PLUG", "price": 3.72, "score": 9.1, "rationale": "High-volume breakout setup in clean-energy swing."},
             {"symbol": "LCID", "price": 2.98, "score": 8.9, "rationale": "Speculative EV rebound momentum."},
             {"symbol": "NIO", "price": 4.31, "score": 8.6, "rationale": "Delivery stabilization and trend reversal watch."},
@@ -756,6 +758,11 @@ class MarketDataService:
             {"symbol": "CLSK", "price": 18.42, "score": 7.5, "rationale": "Mining efficiency narrative with risk-on flow."},
             {"symbol": "T", "price": 17.11, "score": 6.9, "rationale": "Low-vol telecom catch-up swing candidate."},
             {"symbol": "WBD", "price": 8.64, "score": 7.0, "rationale": "Media re-rating momentum setup."},
+            {"symbol": "SMCI", "price": 72.4, "score": 8.9, "rationale": "AI server demand and trend-following strength."},
+            {"symbol": "CIFR", "price": 5.68, "score": 8.2, "rationale": "Bitcoin mining beta with high relative volume."},
+            {"symbol": "IONA", "price": 4.82, "score": 7.1, "rationale": "Small-cap momentum rotation candidate."},
+            {"symbol": "LUNR", "price": 6.94, "score": 7.8, "rationale": "Space-theme momentum with event-driven catalyst flow."},
+            {"symbol": "SATS", "price": 3.44, "score": 6.8, "rationale": "Speculative turnaround with improving tape behavior."},
         ]
 
         enriched: list[Dict[str, Any]] = []
@@ -805,6 +812,10 @@ class MarketDataService:
 
             enriched.append(merged)
 
+        market_change = self.get_quote("SPY").get("change_percent")
+        market_is_down = isinstance(market_change, (int, float)) and float(market_change) < 0.0
+        minimum_score = 0.0 if market_is_down else 5.0
+
         target_count = 20
         price_cap = 100.0
         qualified = [item for item in enriched if item["qualified"]]
@@ -814,6 +825,10 @@ class MarketDataService:
             key=lambda x: (x["score"], self._change_percent_sort_value(x.get("change_percent"))),
             reverse=True,
         )
+        if minimum_score > 0.0:
+            sorted_pool = [item for item in sorted_pool if float(item.get("score") or 0.0) >= minimum_score]
+        if not sorted_pool:
+            return []
         under_cap = [item for item in sorted_pool if isinstance(item.get("price"), (int, float)) and float(item["price"]) <= price_cap]
         if len(under_cap) >= target_count:
             selected = under_cap[:target_count]
