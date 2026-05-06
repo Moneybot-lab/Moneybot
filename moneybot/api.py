@@ -1437,12 +1437,22 @@ def quick_ask():
             },
         )
 
+    signal_score = signal_data.get("score")
+    if signal_score is None:
+        signal_score = signal_data.get("hybrid_score")
+    probability_up = decision.get("probability_up")
+    quick_score = signal_score
+    if quick_score is None and isinstance(probability_up, (int, float)):
+        quick_score = round(float(probability_up) * 10.0, 2)
+
     return jsonify(
         {
             "data": {
                 "symbol": symbol,
                 "history30": history30,
                 **decision,
+                "score": quick_score,
+                "signal_score": signal_score,
                 "ai": ai_payload,
                 "ai_status": "working" if ai_mode == "ai_enhanced" else "fallback",
                 "ai_mode": ai_mode,

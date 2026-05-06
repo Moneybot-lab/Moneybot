@@ -511,7 +511,7 @@ const fallbackData = {
                       <button onclick="addClearviewTicker()" style="padding:8px 12px;border:none;background:#166534;color:#ecfdf5;border-radius:8px;font-weight:700">Add</button>
                       <span style="font-size:12px;color:#166534;align-self:center">Model: day1-logreg-v1</span>
                     </div>
-                    <table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Trend</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Advice</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Remove</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.current_price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${Number(item.score||0).toFixed(1)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${trendMiniGraph(item.history30 || [])}</td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button class="advice-reason-btn" data-symbol="${escapeHtml(item.symbol)}" data-rationale="${escapeHtml(item.rationale || 'Signal generated from current indicators.')}" style="border:none;background:${item.recommendation==='BUY'?'#166534':'#b91c1c'};color:#f8fafc;padding:6px 10px;border-radius:999px;font-weight:800;cursor:pointer">${escapeHtml(item.recommendation || 'HOLD OFF')}</button></td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="removeClearviewTicker('${item.symbol}')" style="border:none;background:#fee2e2;color:#991b1b;border-radius:8px;padding:6px 10px;cursor:pointer">Remove</button></td></tr>`).join('')}</tbody></table><p style="margin:10px 0 0 0;color:#166534;font-size:12px;font-weight:700">Click on advice badges to see why.</p>`;
+                    <table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Trend</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Advice</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Remove</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.current_price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${Number(item.score||0).toFixed(1)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${trendMiniGraph(item.history30 || [])}</td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="showAdviceReason('${item.symbol}','${encodeURIComponent(item.rationale || 'Signal generated from current indicators.')}')" style="border:none;background:${item.recommendation==='BUY'?'#166534':'#b91c1c'};color:#f8fafc;padding:6px 10px;border-radius:999px;font-weight:800;cursor:pointer">${escapeHtml(item.recommendation || 'HOLD OFF')}</button></td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="removeClearviewTicker('${item.symbol}')" style="border:none;background:#fee2e2;color:#991b1b;border-radius:8px;padding:6px 10px;cursor:pointer">Remove</button></td></tr>`).join('')}</tbody></table><p style="margin:10px 0 0 0;color:#166534;font-size:12px;font-weight:700">Click on advice badges to see why.</p>`;
                   }
                   async function fetchClearviewItems(){
                     const symbols = loadClearviewSymbols();
@@ -557,50 +557,10 @@ const fallbackData = {
                     }
                   });
 
-                  async function showAdviceReason(symbol, rationale){
-                    document.getElementById('homeModalTitle').textContent = `${symbol} · HOLD rationale`;
-                    const summaryEl = document.getElementById('homeModalSummary');
-                    summaryEl.innerHTML = 'Loading recommendation details...';
+                  function showAdviceReason(symbol, encodedRationale){
+                    document.getElementById('homeModalTitle').textContent = `${symbol} · Advice details`;
+                    document.getElementById('homeModalSummary').textContent = decodeURIComponent(encodedRationale || '');
                     openHomeModal();
-                    let ai = {};
-                    let latestNews = [];
-                    try {
-                      const [quickRes, companyRes] = await Promise.all([
-                        fetch('/api/quick-ask?symbol=' + encodeURIComponent(symbol)),
-                        fetch('/api/company-details?symbol=' + encodeURIComponent(symbol)),
-                      ]);
-                      const quickPayload = quickRes.ok ? await quickRes.json() : {};
-                      const companyPayload = companyRes.ok ? await companyRes.json() : {};
-                      ai = (quickPayload.data || {}).ai || {};
-                      latestNews = ((companyPayload.data || {}).latest_news || []).slice(0, 5);
-                    } catch (err) {}
-
-                    const narrative = String(ai.narrative || rationale || 'Signal generated from current indicators.');
-                    const risk = Array.isArray(ai.risk_notes) && ai.risk_notes.length ? String(ai.risk_notes[0]) : 'Market conditions may change quickly; technical signals are not guarantees.';
-                    const next = Array.isArray(ai.next_checks) && ai.next_checks.length ? String(ai.next_checks[0]) : 'Re-evaluate on the next trading session with fresh volume and momentum.';
-                    const plainEnglish = `There is no clear edge right now, so holding is safer. ${narrative} This is guidance only, not financial advice.`;
-                    const newsHtml = latestNews.length
-                      ? latestNews.map((item) => {
-                        const title = escapeHtml(item?.title || 'Untitled');
-                        const publisher = escapeHtml(item?.publisher || 'Source');
-                        const link = item?.link ? String(item.link) : '';
-                        return `<li style="margin-bottom:6px">${link ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" style="color:#166534;font-weight:700">${title}</a>` : `<span style="color:#166534;font-weight:700">${title}</span>`}<div style="font-size:12px;color:#3f6212">${publisher}</div></li>`;
-                      }).join('')
-                      : '<li>No recent headlines available.</li>';
-                    summaryEl.innerHTML = `
-                      <div style="background:#166534;color:#f0fdf4;border-radius:10px;padding:10px 12px;margin-bottom:10px">
-                        <div style="font-weight:900;margin-bottom:6px">${escapeHtml(symbol)} · ai enhanced</div>
-                        <ul style="margin:0;padding-left:18px">
-                          <li>${escapeHtml(narrative)}</li>
-                          <li><strong>Risk:</strong> ${escapeHtml(risk)}</li>
-                          <li><strong>Next:</strong> ${escapeHtml(next)}</li>
-                        </ul>
-                      </div>
-                      <div style="display:inline-block;background:#16a34a;color:#f0fdf4;border-radius:8px;padding:6px 10px;font-weight:800;margin-bottom:10px">Explain this recommendation in plain English</div>
-                      <div style="background:#d9f99d;border:1px solid #84cc16;color:#14532d;border-radius:10px;padding:10px 12px;margin-bottom:10px">${escapeHtml(plainEnglish)}</div>
-                      <div style="font-weight:800;color:#3f6212;margin-bottom:6px">LATEST HEADLINES</div>
-                      <ul style="margin:0;padding-left:18px;color:#3f6212">${newsHtml}</ul>
-                    `;
                   }
                   function setTabLoading(isLoading){
                     const loadingEl = document.getElementById('tabLoading');
