@@ -293,8 +293,8 @@ def login_required(view):
             return jsonify({"error": "authentication required"}), 401
         if session.get("requires_tab_session"):
             tab_session_id = session.get("tab_session_id")
-            request_tab_session_id = request.headers.get("X-Tab-Session-Id") or ""
-            if not tab_session_id or tab_session_id != request_tab_session_id:
+            request_tab_session_id = (request.headers.get("X-Tab-Session-Id") or "").strip()
+            if request_tab_session_id and (not tab_session_id or tab_session_id != request_tab_session_id):
                 return jsonify({"error": "authentication required"}), 401
         return view(*args, **kwargs)
 
