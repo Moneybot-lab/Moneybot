@@ -57,7 +57,7 @@ class MarketDataService:
         self.signal_cache = TTLCache(ttl_seconds=20)
         self.sector_cache = TTLCache(ttl_seconds=3600)
         self.company_snapshot_cache = TTLCache(ttl_seconds=600)
-        self._company_snapshot_backoff_until = 0.0
+        self._company_snapshot_backoff_until_by_symbol: dict[str, float] = {}
         self._market_timezone = ZoneInfo("America/New_York")
         self._daily_lists_last_refreshed_at: datetime | None = None
         self._daily_lists_cache: dict[str, list[Dict[str, Any]]] = {}
@@ -66,6 +66,27 @@ class MarketDataService:
         self._finnhub_forbidden_symbols: dict[str, float] = {}
         self._finnhub_forbidden_ttl_seconds = int(os.environ.get("FINNHUB_FORBIDDEN_SYMBOL_TTL_SECONDS", "21600"))
         self._twelve_data_backoff_until = 0.0
+
+    def _build_fallback_company_summary(self, symbol: str, info: dict[str, Any]) -> str:
+        company_name = str(info.get("longName") or info.get("shortName") or symbol).strip()
+        sector = str(info.get("sector") or "").strip()
+        industry = str(info.get("industry") or "").strip()
+        exchange = str(info.get("exchange") or info.get("fullExchangeName") or "").strip()
+        website = str(info.get("website") or "").strip()
+        parts: list[str] = []
+        if sector and industry:
+            parts.append(f"{company_name} operates in the {industry} industry within the {sector} sector.")
+        elif industry:
+            parts.append(f"{company_name} operates in the {industry} industry.")
+        elif sector:
+            parts.append(f"{company_name} operates in the {sector} sector.")
+        if exchange:
+            parts.append(f"It is listed on {exchange}.")
+        if website:
+            parts.append(f"Website: {website}.")
+        if parts:
+            return " ".join(parts)
+        return f"Overview data provider is unavailable right now for {symbol}."
 
     def _google_news_headlines(self, symbol: str, company_name: str, limit: int = 3) -> list[Dict[str, str]]:
         query = quote_plus(f"{symbol} {company_name} stock")
@@ -309,7 +330,19 @@ class MarketDataService:
         latest_news: list[Dict[str, Any]] = []
 
         now = time.time()
-        if now < self._company_snapshot_backoff_until:
+        backoff_until = float(self._company_snapshot_backoff_until_by_symbol.get(ticker_symbol, 0.0))
+        if now < backoff_until:
+            fallback_news = self._google_news_headlines(
+                symbol=ticker_symbol,
+                company_name=default_name,
+                limit=5,
+            )
+            latest_news = self._rank_news(
+                symbol=ticker_symbol,
+                company_name=default_name,
+                news_items=fallback_news,
+                limit=5,
+            )
             payload = {
                 "symbol": ticker_symbol,
                 "company_name": default_name,
@@ -323,11 +356,9 @@ class MarketDataService:
             ticker = yf.Ticker(ticker_symbol)
             info = ticker.info or {}
             company_name = str(info.get("longName") or info.get("shortName") or default_name)
-            summary = str(
-                info.get("longBusinessSummary")
-                or info.get("description")
-                or default_summary
-            )
+            summary = str(info.get("longBusinessSummary") or info.get("description") or "").strip()
+            if not summary:
+                summary = self._build_fallback_company_summary(ticker_symbol, info)
             summary = summary[:320].strip() + ("..." if len(summary) > 320 else "")
 
             news_items = ticker.news or []
@@ -387,12 +418,40 @@ class MarketDataService:
             return payload
         except Exception as exc:  # noqa: BLE001
             if "Too Many Requests" in str(exc):
-                self._company_snapshot_backoff_until = now + 300.0
+                self._company_snapshot_backoff_until_by_symbol[ticker_symbol] = now + 300.0
+            company_name = default_name
+            summary = default_summary
+            try:
+                search = yf.Search(ticker_symbol, max_results=1)
+                quotes = getattr(search, "quotes", None) or []
+                first = quotes[0] if quotes and isinstance(quotes[0], dict) else {}
+                if first:
+                    company_name = str(first.get("longname") or first.get("shortname") or default_name)
+                    info_stub = {
+                        "longName": company_name,
+                        "sector": first.get("sectorDisp") or "",
+                        "industry": first.get("industryDisp") or "",
+                        "exchange": first.get("exchange") or "",
+                    }
+                    summary = self._build_fallback_company_summary(ticker_symbol, info_stub)
+            except Exception:  # noqa: BLE001
+                pass
+            fallback_news = self._google_news_headlines(
+                symbol=ticker_symbol,
+                company_name=company_name,
+                limit=5,
+            )
+            latest_news = self._rank_news(
+                symbol=ticker_symbol,
+                company_name=company_name,
+                news_items=fallback_news,
+                limit=5,
+            )
             logging.warning("Company snapshot fetch failed for %s: %s", ticker_symbol, exc)
             payload = {
                 "symbol": ticker_symbol,
-                "company_name": default_name,
-                "summary": default_summary,
+                "company_name": company_name,
+                "summary": summary,
                 "latest_news": latest_news,
             }
             self.company_snapshot_cache.set(cache_key, payload)
