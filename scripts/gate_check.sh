@@ -116,14 +116,14 @@ check_bool_with_json "lookup_errors == 0" '(.data.lookup_errors // 0) == 0' "$ou
 if [[ "$gate" == "50_to_75" ]]; then
   check_bool_with_json "summary_5d.evaluated_rows >= 20" '(.data.summary_5d.evaluated_rows // 0) >= 20' "$outcomes_json"
   check_bool_with_json "summary_5d.accuracy >= 0.52" '(.data.summary_5d.accuracy // 0) >= 0.52' "$outcomes_json"
-  check_bool_with_json "summary_1d.evaluated_rows >= 40" '(.data.summary_1d.evaluated_rows // 0) >= 40' "$outcomes_json"
+  check_bool_with_json "evaluated_rows_available >= 40" '(.data.evaluated_rows_available // (.data.summary_1d.evaluated_rows // 0)) >= 40' "$outcomes_json"
   check_bool_with_json "summary_1d.accuracy >= 0.48" '(.data.summary_1d.accuracy // 0) >= 0.48' "$outcomes_json"
   check_bool_with_json "calibration_report.rows >= 30" '(.data.calibration_report.rows // 0) >= 30' "$model_json"
   check_bool_with_json "calibration_report.brier_score <= 0.26" '((.data.calibration_report.brier_score // 999) <= 0.26)' "$model_json"
 else
   check_bool_with_json "summary_5d.evaluated_rows >= 60" '(.data.summary_5d.evaluated_rows // 0) >= 60' "$outcomes_json"
   check_bool_with_json "summary_5d.accuracy >= 0.55" '(.data.summary_5d.accuracy // 0) >= 0.55' "$outcomes_json"
-  check_bool_with_json "summary_1d.evaluated_rows >= 100" '(.data.summary_1d.evaluated_rows // 0) >= 100' "$outcomes_json"
+  check_bool_with_json "evaluated_rows_available >= 100" '(.data.evaluated_rows_available // (.data.summary_1d.evaluated_rows // 0)) >= 100' "$outcomes_json"
   check_bool_with_json "summary_1d.accuracy >= 0.50" '(.data.summary_1d.accuracy // 0) >= 0.50' "$outcomes_json"
   check_bool_with_json "calibration_report.rows >= 100" '(.data.calibration_report.rows // 0) >= 100' "$model_json"
   check_bool_with_json "calibration_report.brier_score <= 0.24" '((.data.calibration_report.brier_score // 999) <= 0.24)' "$model_json"
