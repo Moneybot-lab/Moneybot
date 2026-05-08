@@ -1650,16 +1650,13 @@ def run_notification_triggers():
                     symbol=symbol,
                 )
 
-            clearview_previous = clearview_state.get(state_key, "")
+            # ClearView symbol selections are currently browser-local (localStorage) and are
+            # not persisted server-side per user. Running this trigger against watchlist symbols
+            # creates false positives for stocks a user never added to ClearView.
+            #
+            # Keep the state map intact for forward compatibility, but skip emitting
+            # clearview_hold_off_to_buy notifications until a server-side ClearView list exists.
             clearview_state[state_key] = advice
-            if clearview_previous in {"", "HOLD", "HOLD OFF", "HOLD OFF FOR NOW"} and advice == "BUY" and prefs.clearview_hold_off_to_buy:
-                queue_user_event(
-                    user.id,
-                    title=f"{symbol}: ClearView flipped to BUY",
-                    body=f"ClearView Signals moved {symbol} from Hold Off to BUY. Open the app to read the plain-English AI reason.",
-                    kind="clearview_hold_off_to_buy",
-                    symbol=symbol,
-                )
 
     momentum_items = []
     try:
