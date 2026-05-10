@@ -260,7 +260,8 @@ async function initializeTriggerToggles() {
   ];
   const controls = fieldConfig
     .map((cfg) => ({ ...cfg, el: document.getElementById(cfg.id) }))
-    .filter((cfg) => !!cfg.el);
+    .filter((cfg) => !!cfg.el && !!cfg.field)
+    .filter((cfg, idx, arr) => arr.findIndex((x) => x.field === cfg.field) === idx);
 
   if (!controls.length) {
     return;
@@ -282,11 +283,16 @@ async function initializeTriggerToggles() {
 
   controls.forEach(({ el, field, label }) => {
     el.addEventListener('change', async () => {
-      const previous = !el.checked;
+      const nextValue = Boolean(el.checked);
+      const previous = !nextValue;
+      if (!field) {
+        triggerStatus('Unable to save this trigger right now.', true);
+        return;
+      }
       el.disabled = true;
       triggerStatus(`Saving ${label}...`);
       try {
-        await saveTriggerPreferences({ [field]: el.checked });
+        await saveTriggerPreferences({ [field]: nextValue });
         triggerStatus('Trigger settings saved.');
       } catch (err) {
         el.checked = previous;

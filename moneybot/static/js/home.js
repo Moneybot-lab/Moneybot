@@ -493,7 +493,14 @@ const fallbackData = {
                     const key = clearviewStorageKey();
                     if(!key) return [];
                     try {
-                      const raw = localStorage.getItem(key);
+                      let raw = localStorage.getItem(key);
+                      if(!raw){
+                        const legacy = localStorage.getItem('moneybot_clearview_symbols');
+                        if(legacy){
+                          raw = legacy;
+                          localStorage.setItem(key, legacy);
+                        }
+                      }
                       const parsed = JSON.parse(raw || '[]');
                       if(!Array.isArray(parsed)) return ['NVDA','TSLA'];
                       const normalized = parsed.map((v)=>String(v||'').trim().toUpperCase()).filter(Boolean);
@@ -682,7 +689,7 @@ const fallbackData = {
                     setMenuState(false);
                     await refreshCurrentUser();
                     const clearviewBtn = document.querySelector('.tab-btn[data-tab="clearview"]');
-                    if(clearviewBtn){ clearviewBtn.style.display = currentHomeUser ? 'inline-block' : 'none'; }
+                    if(clearviewBtn){ clearviewBtn.style.display = 'inline-block'; }
                     const market = await fetchWithFallback('/api/market-overview', 'market');
                     renderMarket(market);
                     await refreshTab('stable');
