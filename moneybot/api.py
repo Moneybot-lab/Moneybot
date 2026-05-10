@@ -387,7 +387,6 @@ def _notification_trigger_payload(item: NotificationTriggerPreference) -> Dict[s
         "portfolio_buy_advice_change": bool(item.portfolio_buy_advice_change),
         "hot_momentum_score_crosses_8": bool(item.hot_momentum_score_crosses_8),
         "whale_top_investor_added": bool(item.whale_top_investor_added),
-        "whales_top_stock_list_changes": bool(item.whales_top_stock_list_changes),
         "clearview_hold_off_to_buy": bool(item.clearview_hold_off_to_buy),
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }
@@ -818,7 +817,6 @@ def update_notification_triggers():
         "portfolio_buy_advice_change",
         "hot_momentum_score_crosses_8",
         "whale_top_investor_added",
-        "whales_top_stock_list_changes",
         "clearview_hold_off_to_buy",
     )
     for field in allowed_fields:
@@ -1650,16 +1648,13 @@ def run_notification_triggers():
                     symbol=symbol,
                 )
 
-            clearview_previous = clearview_state.get(state_key, "")
+            # ClearView symbol selections are currently browser-local (localStorage) and are
+            # not persisted server-side per user. Running this trigger against watchlist symbols
+            # creates false positives for stocks a user never added to ClearView.
+            #
+            # Keep the state map intact for forward compatibility, but skip emitting
+            # clearview_hold_off_to_buy notifications until a server-side ClearView list exists.
             clearview_state[state_key] = advice
-            if clearview_previous in {"", "HOLD", "HOLD OFF", "HOLD OFF FOR NOW"} and advice == "BUY" and prefs.clearview_hold_off_to_buy:
-                queue_user_event(
-                    user.id,
-                    title=f"{symbol}: ClearView flipped to BUY",
-                    body=f"ClearView Signals moved {symbol} from Hold Off to BUY. Open the app to read the plain-English AI reason.",
-                    kind="clearview_hold_off_to_buy",
-                    symbol=symbol,
-                )
 
     momentum_items = []
     try:
@@ -1722,17 +1717,6 @@ def run_notification_triggers():
                 body=f"Whale/top investor {action_verb} {ticker} {body_action} Whales of Wall Street.",
                 kind="whale_top_investor_added",
                 symbol=ticker,
-            )
-    if list_changed:
-        for user in users:
-            prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
-            if not prefs.whales_top_stock_list_changes:
-                continue
-            queue_user_event(
-                user.id,
-                title="Whales top stock list changed",
-                body="At least one Whales of Wall Street top stock list changed since the last check.",
-                kind="whales_top_stock_list_changes",
             )
 
     for user in users:
