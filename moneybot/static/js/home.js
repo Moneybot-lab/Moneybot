@@ -48,6 +48,7 @@ const fallbackData = {
                     return `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${positive ? '#166534' : '#7f1d1d'};color:#fefce8;font-weight:700;font-size:12px">${escapeHtml(value)}</span>`;
                   }
                   const TAB_SESSION_KEY = 'moneybot_tab_session_id';
+                  let currentHomeUser = null;
                   function getTabSessionId(){
                     return sessionStorage.getItem(TAB_SESSION_KEY) || '';
                   }
@@ -106,6 +107,7 @@ const fallbackData = {
                     try {
                       const res = await apiFetch('/api/me');
                       if(!res.ok){
+                        currentHomeUser = null;
                         return null;
                       }
                       const payload = await res.json();
@@ -113,8 +115,10 @@ const fallbackData = {
                       if(user){
                         renderAuthenticatedMenu(user);
                       }
+                      currentHomeUser = user;
                       return user;
                     } catch (err) {
+                      currentHomeUser = null;
                       return null;
                     }
                   }
@@ -481,10 +485,15 @@ const fallbackData = {
                   }
 
 
-                  const CLEARVIEW_STORAGE_KEY = 'moneybot_clearview_symbols';
+                  function clearviewStorageKey(){
+                    const userKey = currentHomeUser?.id || currentHomeUser?.username || '';
+                    return userKey ? `moneybot_clearview_symbols_${userKey}` : '';
+                  }
                   function loadClearviewSymbols(){
+                    const key = clearviewStorageKey();
+                    if(!key) return [];
                     try {
-                      const raw = localStorage.getItem(CLEARVIEW_STORAGE_KEY);
+                      const raw = localStorage.getItem(key);
                       const parsed = JSON.parse(raw || '[]');
                       if(!Array.isArray(parsed)) return ['NVDA','TSLA'];
                       const normalized = parsed.map((v)=>String(v||'').trim().toUpperCase()).filter(Boolean);
@@ -494,7 +503,9 @@ const fallbackData = {
                     }
                   }
                   function saveClearviewSymbols(symbols){
-                    localStorage.setItem(CLEARVIEW_STORAGE_KEY, JSON.stringify(symbols));
+                    const key = clearviewStorageKey();
+                    if(!key) return;
+                    localStorage.setItem(key, JSON.stringify(symbols));
                   }
                   function trendMiniGraph(series){
                     const values = Array.isArray(series) ? series.filter((v)=>Number.isFinite(Number(v))).map(Number) : [];
@@ -505,6 +516,10 @@ const fallbackData = {
                     return `<svg viewBox="0 0 ${width} ${height}" width="110" height="28" preserveAspectRatio="none"><path d="${path}" fill="none" stroke="${up ? '#16a34a':'#dc2626'}" stroke-width="2" stroke-linecap="round"/></svg>`;
                   }
                   function renderClearview(items){
+                    if(!currentHomeUser){
+                      document.getElementById('clearview').innerHTML = `<div style="background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;padding:14px;color:#334155">Please sign in to use ClearView Signals and save your personal ticker list.</div>`;
+                      return;
+                    }
                     document.getElementById('clearview').innerHTML = `
                     <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
                       <input id="clearviewInput" placeholder="Add ticker (e.g. AMD)" style="padding:8px 10px;border:1px solid #86efac;border-radius:8px;min-width:210px" />
@@ -514,6 +529,7 @@ const fallbackData = {
                     <table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Trend</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Advice</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Remove</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.current_price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${Number(item.score||0).toFixed(1)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${trendMiniGraph(item.history30 || [])}</td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="showAdviceReason('${item.symbol}','${encodeURIComponent(item.rationale || 'Signal generated from current indicators.')}')" style="border:none;background:${item.recommendation==='BUY'?'#166534':'#b91c1c'};color:#f8fafc;padding:6px 10px;border-radius:999px;font-weight:800;cursor:pointer">${escapeHtml(item.recommendation || 'HOLD OFF')}</button></td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="removeClearviewTicker('${item.symbol}')" style="border:none;background:#fee2e2;color:#991b1b;border-radius:8px;padding:6px 10px;cursor:pointer">Remove</button></td></tr>`).join('')}</tbody></table><p style="margin:10px 0 0 0;color:#166534;font-size:12px;font-weight:700">Click on advice badges to see why.</p>`;
                   }
                   async function fetchClearviewItems(){
+                    if(!currentHomeUser) return [];
                     const symbols = loadClearviewSymbols();
                     const results = await Promise.all(symbols.map(async(symbol)=>{
                       try {
@@ -534,6 +550,7 @@ const fallbackData = {
                     try { renderClearview(await fetchClearviewItems()); } finally { setTabLoading(false); }
                   }
                   function addClearviewTicker(){
+                    if(!currentHomeUser) return;
                     const el = document.getElementById('clearviewInput');
                     const value = (el?.value || '').trim().toUpperCase();
                     if(!value) return;
@@ -544,6 +561,7 @@ const fallbackData = {
                     refreshClearview();
                   }
                   function removeClearviewTicker(symbol){
+                    if(!currentHomeUser) return;
                     saveClearviewSymbols(loadClearviewSymbols().filter((s)=>s!==symbol));
                     refreshClearview();
                   }
@@ -659,6 +677,8 @@ const fallbackData = {
                     }
                     setMenuState(false);
                     await refreshCurrentUser();
+                    const clearviewBtn = document.querySelector('.tab-btn[data-tab="clearview"]');
+                    if(clearviewBtn){ clearviewBtn.style.display = currentHomeUser ? 'inline-block' : 'none'; }
                     const market = await fetchWithFallback('/api/market-overview', 'market');
                     renderMarket(market);
                     await refreshTab('stable');
