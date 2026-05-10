@@ -48,6 +48,7 @@ const fallbackData = {
                     return `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${positive ? '#166534' : '#7f1d1d'};color:#fefce8;font-weight:700;font-size:12px">${escapeHtml(value)}</span>`;
                   }
                   const TAB_SESSION_KEY = 'moneybot_tab_session_id';
+                  let currentHomeUser = null;
                   function getTabSessionId(){
                     return sessionStorage.getItem(TAB_SESSION_KEY) || '';
                   }
@@ -106,6 +107,7 @@ const fallbackData = {
                     try {
                       const res = await apiFetch('/api/me');
                       if(!res.ok){
+                        currentHomeUser = null;
                         return null;
                       }
                       const payload = await res.json();
@@ -113,8 +115,10 @@ const fallbackData = {
                       if(user){
                         renderAuthenticatedMenu(user);
                       }
+                      currentHomeUser = user;
                       return user;
                     } catch (err) {
+                      currentHomeUser = null;
                       return null;
                     }
                   }
@@ -320,7 +324,23 @@ const fallbackData = {
                       }
                       const data = payload.data || {};
                       titleEl.textContent = `${data.company_name || symbol} (${symbol})`;
-                      summaryEl.textContent = data.summary || 'No summary available.';
+                      const summary = data.summary || 'No summary available.';
+                      const news = Array.isArray(data.latest_news) ? data.latest_news : [];
+                      if(!news.length){
+                        summaryEl.innerHTML = `<div>${escapeHtml(summary)}</div>`;
+                        return;
+                      }
+                      const newsHtml = news.slice(0, 5).map((item) => {
+                        const title = escapeHtml(item?.title || 'Untitled');
+                        const publisher = escapeHtml(item?.publisher || 'Source');
+                        const link = item?.link ? String(item.link) : '';
+                        const publishedAt = item?.published_at ? ` · ${escapeHtml(item.published_at)}` : '';
+                        const headline = link
+                          ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" style="color:#166534;font-weight:700">${title}</a>`
+                          : `<span style="color:#166534;font-weight:700">${title}</span>`;
+                        return `<li style="margin-bottom:6px">${headline}<div style="font-size:12px;color:#3f6212">${publisher}${publishedAt}</div></li>`;
+                      }).join('');
+                      summaryEl.innerHTML = `<div style="margin-bottom:10px">${escapeHtml(summary)}</div><div><strong>Recent news</strong><ul style="padding-left:18px;margin:8px 0 0 0">${newsHtml}</ul></div>`;
                     } catch (err) {
                       titleEl.textContent = symbol;
                       summaryEl.textContent = 'Unable to load company details right now.';
@@ -354,11 +374,11 @@ const fallbackData = {
                   }
 
                   function renderStable(items){
-                    document.getElementById('stable').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.signal_score}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.transparency || ''}</td></tr>`).join('')}</tbody></table>`;
+                    document.getElementById('stable').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.signal_score}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.transparency || ''}</td></tr>`).join('')}</tbody></table><p style="margin:10px 0 0 0;color:#166534;font-size:12px;font-weight:700">Click on advice badges to see why.</p>`;
                   }
 
                   function renderMomentum(items){
-                    document.getElementById('momentum').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Source</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.score}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.decision_source || 'rule_based'}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.rationale}</td></tr>`).join('')}</tbody></table>`;
+                    document.getElementById('momentum').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Source</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.score}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.decision_source || 'rule_based'}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.rationale}</td></tr>`).join('')}</tbody></table><p style="margin:10px 0 0 0;color:#166534;font-size:12px;font-weight:700">Click on advice badges to see why.</p>`;
                   }
 
                   function renderWells(items){
@@ -464,6 +484,134 @@ const fallbackData = {
                     document.getElementById('outcomesTable').innerHTML = rows.length ? `<div style="overflow:auto"><table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Symbol</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Endpoint</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Source</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Action</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Model</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">1D Return</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">1D Outcome</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">5D Return</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">5D Outcome</th></tr></thead><tbody>${rows.map(row => `<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(row.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${escapeHtml(row.endpoint || 'n/a')}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${escapeHtml(row.decision_source || 'n/a')}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${escapeHtml(row.action || 'n/a')}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${escapeHtml(row.model_version || 'n/a')}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatPercent(row.return_1d)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${outcomeBadge(row.outcome_1d)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatPercent(row.return_5d)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${outcomeBadge(row.outcome_5d)}</td></tr>`).join('')}</tbody></table></div>` : `<div style="background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;padding:16px;color:#475569">No evaluated decision outcomes yet. Run the Day 9 evaluator and let more logs accumulate.</div>`;
                   }
 
+
+                  const CLEARVIEW_STORAGE_KEY = 'moneybot_clearview_symbols';
+                  let clearviewSymbolsCache = null;
+                  let clearviewSaveChain = Promise.resolve();
+                  async function loadClearviewSymbols(){
+                    if(Array.isArray(clearviewSymbolsCache)) return [...clearviewSymbolsCache];
+                    try {
+                      const res = await fetch('/api/clearview-symbols');
+                      if(res.ok){
+                        const payload = await res.json();
+                        const symbols = Array.isArray(payload.symbols) ? payload.symbols : [];
+                        if(symbols.length){
+                          clearviewSymbolsCache = symbols.slice(0,20);
+                          return [...clearviewSymbolsCache];
+                        }
+                      }
+                    } catch (_err) {}
+                    try {
+                      const res = await fetch('/api/clearview-symbols');
+                      if(res.ok){
+                        const payload = await res.json();
+                        const symbols = Array.isArray(payload.symbols) ? payload.symbols : [];
+                        if(symbols.length) return symbols;
+                      }
+                    } catch (_err) {}
+                    try {
+                      const res = await fetch('/api/clearview-symbols');
+                      if(res.ok){
+                        const payload = await res.json();
+                        const symbols = Array.isArray(payload.symbols) ? payload.symbols : [];
+                        if(symbols.length) return symbols;
+                      }
+                    } catch (_err) {}
+                    try {
+                      const raw = localStorage.getItem(key);
+                      const parsed = JSON.parse(raw || '[]');
+                      if(!Array.isArray(parsed)) return ['NVDA','TSLA'];
+                      const normalized = parsed.map((v)=>String(v||'').trim().toUpperCase()).filter(Boolean);
+                      clearviewSymbolsCache = Array.from(new Set(normalized)).slice(0,20);
+                      return [...clearviewSymbolsCache];
+                    } catch (err) {
+                      clearviewSymbolsCache = ['NVDA','TSLA'];
+                      return [...clearviewSymbolsCache];
+                    }
+                  }
+                  async function saveClearviewSymbols(symbols){
+                    clearviewSymbolsCache = Array.from(new Set((symbols || []).map((s)=>String(s||'').trim().toUpperCase()).filter(Boolean))).slice(0,20);
+                    localStorage.setItem(CLEARVIEW_STORAGE_KEY, JSON.stringify(clearviewSymbolsCache));
+                    clearviewSaveChain = clearviewSaveChain.then(async () => {
+                      try {
+                        await fetch('/api/clearview-symbols', {
+                          method:'PUT',
+                          headers:{'Content-Type':'application/json'},
+                          body: JSON.stringify({ symbols: clearviewSymbolsCache }),
+                        });
+                      } catch (_err) {}
+                    });
+                    await clearviewSaveChain;
+                  }
+                  async function addClearviewTicker(){
+                    const el = document.getElementById('clearviewInput');
+                    const value = (el?.value || '').trim().toUpperCase();
+                    if(!value) return;
+                    const symbols = await loadClearviewSymbols();
+                    if(!symbols.includes(value)) symbols.push(value);
+                    await saveClearviewSymbols(symbols);
+                    if(el) el.value = '';
+                    await refreshClearview();
+                  }
+                  async function removeClearviewTicker(symbol){
+                    const symbols = await loadClearviewSymbols();
+                    await saveClearviewSymbols(symbols.filter((s)=>s!==symbol));
+                    await refreshClearview();
+                  }
+
+                  async function refreshClearview(){
+                    setTabLoading(true);
+                    try { renderClearview(await fetchClearviewItems()); } finally { setTabLoading(false); }
+                  }
+
+                  async function fetchClearviewItems(){
+                    const symbols = await loadClearviewSymbols();
+                    const results = await Promise.all(symbols.map(async(symbol)=>{
+                      try {
+                        const res = await fetch('/api/quick-ask?symbol=' + encodeURIComponent(symbol));
+                        const payload = await res.json();
+                        const d = payload.data || {};
+                        const rec = String(d.recommendation || 'HOLD OFF FOR NOW').toUpperCase();
+                        const derivedScore = Number.isFinite(Number(d.score)) ? Number(d.score) : (Number.isFinite(Number(d.signal_score)) ? Number(d.signal_score) : (Number.isFinite(Number(d.probability_up)) ? Number(d.probability_up) * 10 : 0));
+                        return {symbol, current_price:d.current_price, score:derivedScore, history30:d.history30 || [], recommendation: rec.includes('BUY') ? 'BUY' : 'HOLD OFF', rationale:((d.ai && d.ai.narrative) || d.rationale || 'The AI sees improving momentum and risk setup; wait if volume weakens.')};
+                      } catch (err) {
+                        return {symbol, current_price:null, score:0, history30:[], recommendation:'HOLD OFF', rationale:'Unable to load live signal right now.'};
+                      }
+                    }));
+                    return results;
+                  }
+                  function trendMiniGraph(series){
+                    const values = Array.isArray(series) ? series.filter((v)=>Number.isFinite(Number(v))).map(Number) : [];
+                    if(values.length < 2) return '<span style="color:#64748b">n/a</span>';
+                    const width = 100, height = 26;
+                    const path = trendPath(values, width, height);
+                    const up = values[values.length - 1] >= values[0];
+                    return `<svg viewBox="0 0 ${width} ${height}" width="110" height="28" preserveAspectRatio="none"><path d="${path}" fill="none" stroke="${up ? '#16a34a':'#dc2626'}" stroke-width="2" stroke-linecap="round"/></svg>`;
+                  }
+                  function renderClearview(items){
+                    document.getElementById('clearview').innerHTML = `
+                    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+                      <input id="clearviewInput" placeholder="Add ticker (e.g. AMD)" style="padding:8px 10px;border:1px solid #86efac;border-radius:8px;min-width:210px" />
+                      <button onclick="addClearviewTicker()" style="padding:8px 12px;border:none;background:#166534;color:#ecfdf5;border-radius:8px;font-weight:700">Add</button>
+                      <span style="font-size:12px;color:#166534;align-self:center">Model: day1-logreg-v1</span>
+                    </div>
+                    <table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Trend</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Advice</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Remove</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.current_price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${Number(item.score||0).toFixed(1)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${trendMiniGraph(item.history30 || [])}</td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="showAdviceReason('${item.symbol}','${encodeURIComponent(item.rationale || 'Signal generated from current indicators.')}')" style="border:none;background:${item.recommendation==='BUY'?'#166534':'#b91c1c'};color:#f8fafc;padding:6px 10px;border-radius:999px;font-weight:800;cursor:pointer">${escapeHtml(item.recommendation || 'HOLD OFF')}</button></td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="removeClearviewTicker('${item.symbol}')" style="border:none;background:#fee2e2;color:#991b1b;border-radius:8px;padding:6px 10px;cursor:pointer">Remove</button></td></tr>`).join('')}</tbody></table><p style="margin:10px 0 0 0;color:#166534;font-size:12px;font-weight:700">Click on advice badges to see why.</p>`;
+                  }
+
+                  document.addEventListener('keydown', (event) => {
+                    const input = document.getElementById('clearviewInput');
+                    if(!input || document.activeElement !== input) return;
+                    if(event.key === 'Enter'){
+                      event.preventDefault();
+                      addClearviewTicker();
+                    }
+                  });
+
+                  function showAdviceReason(symbol, encodedRationale){
+                    document.getElementById('homeModalTitle').textContent = `${symbol} · Advice details`;
+                    document.getElementById('homeModalSummary').textContent = decodeURIComponent(encodedRationale || '');
+                    openHomeModal();
+                  }
                   function setTabLoading(isLoading){
                     const loadingEl = document.getElementById('tabLoading');
                     if(!loadingEl) return;
@@ -494,6 +642,8 @@ const fallbackData = {
                       } else if(tab === 'wells'){
                         const wells = await fetchWithFallback('/api/wells-picks', 'wells');
                         renderWells(wells);
+                      } else if(tab === 'clearview'){
+                        await refreshClearview();
                       }
                     } finally {
                       setTabLoading(false);
@@ -531,6 +681,12 @@ const fallbackData = {
                     if(event.target.value){ event.target.value = ''; }
                   });
                   document.getElementById('homeTickerModal').addEventListener('click', (event) => { if(event.target.id==='homeTickerModal'){ closeHomeModal(); }});
+                  document.addEventListener('click', (event) => {
+                    const target = event.target;
+                    if(!(target instanceof HTMLElement)) return;
+                    if(!target.classList.contains('advice-reason-btn')) return;
+                    showAdviceReason(target.dataset.symbol || '', target.dataset.rationale || '');
+                  });
                   document.getElementById('menuToggleBtn').addEventListener('click', toggleMenu);
                   document.getElementById('userMenuButton').addEventListener('click', openMenu);
                   document.getElementById('menuCloseBtn').addEventListener('click', closeMenu);
@@ -553,6 +709,8 @@ const fallbackData = {
                     }
                     setMenuState(false);
                     await refreshCurrentUser();
+                    const clearviewBtn = document.querySelector('.tab-btn[data-tab="clearview"]');
+                    if(clearviewBtn){ clearviewBtn.style.display = currentHomeUser ? 'inline-block' : 'none'; }
                     const market = await fetchWithFallback('/api/market-overview', 'market');
                     renderMarket(market);
                     await refreshTab('stable');

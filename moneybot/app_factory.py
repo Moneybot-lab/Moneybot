@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+from datetime import timedelta
 from pathlib import Path
 
 from flask import Flask, redirect, render_template, render_template_string, send_from_directory
@@ -117,6 +118,18 @@ def _ensure_notification_trigger_schema() -> None:
                 "ALTER TABLE notification_trigger_preferences ADD COLUMN whales_top_stock_list_changes BOOLEAN DEFAULT TRUE",
             ),
         )
+    if "push_notifications_enabled" not in columns:
+        db.session.execute(
+            db.text(
+                "ALTER TABLE notification_trigger_preferences ADD COLUMN push_notifications_enabled BOOLEAN DEFAULT FALSE",
+            ),
+        )
+    if "clearview_symbols_csv" not in columns:
+        db.session.execute(
+            db.text(
+                "ALTER TABLE notification_trigger_preferences ADD COLUMN clearview_symbols_csv TEXT DEFAULT ''",
+            ),
+        )
     db.session.commit()
 
     db.session.execute(
@@ -126,7 +139,9 @@ def _ensure_notification_trigger_schema() -> None:
             "portfolio_buy_advice_change=COALESCE(portfolio_buy_advice_change, TRUE), "
             "hot_momentum_score_crosses_8=COALESCE(hot_momentum_score_crosses_8, TRUE), "
             "whale_top_investor_added=COALESCE(whale_top_investor_added, TRUE), "
-            "whales_top_stock_list_changes=COALESCE(whales_top_stock_list_changes, TRUE)",
+            "whales_top_stock_list_changes=COALESCE(whales_top_stock_list_changes, TRUE), "
+            "push_notifications_enabled=COALESCE(push_notifications_enabled, FALSE), "
+            "clearview_symbols_csv=COALESCE(clearview_symbols_csv, '')",
         ),
     )
     db.session.commit()
@@ -261,6 +276,8 @@ def create_app() -> Flask:
     app.url_map.strict_slashes = False
     app.config.update(
         SECRET_KEY=secret,
+        PERMANENT_SESSION_LIFETIME=timedelta(minutes=15),
+        SESSION_REFRESH_EACH_REQUEST=True,
         SQLALCHEMY_DATABASE_URI=database_url,
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
         DATA_PROVIDER=os.environ.get("DATA_PROVIDER", "yfinance"),
@@ -272,6 +289,7 @@ def create_app() -> Flask:
         SMTP_USE_TLS=(os.environ.get("SMTP_USE_TLS", "true").lower() == "true"),
         SMTP_USE_SSL=(os.environ.get("SMTP_USE_SSL", "false").lower() == "true"),
         PASSWORD_RESET_FROM_EMAIL=os.environ.get("PASSWORD_RESET_FROM_EMAIL", os.environ.get("SMTP_USER", "")),
+        PASSWORD_RESET_FROM_NAME=os.environ.get("PASSWORD_RESET_FROM_NAME", "Moneybot Labs"),
         PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS=int(os.environ.get("PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS", "3600")),
         DAILY_OPS_TOKEN=os.environ.get("DAILY_OPS_TOKEN", ""),
         AI_ENABLED=(os.environ.get("AI_ENABLED", "false").lower() == "true"),
@@ -868,13 +886,26 @@ def create_app() -> Flask:
                   outEl.textContent = 'Enter your email first, then click Forgot Password.';
                   return;
                 }
-                const res = await fetch('/api/auth/forgot-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
-                const data = await res.json();
-                if (data && data.email_delivery_configured === false) {
-                  outEl.textContent = 'Password recovery email service is not configured yet. Please contact support or try again later.';
-                  return;
+                outEl.textContent = 'Sending password recovery instructions...';
+                try {
+                  const res = await fetch('/api/auth/forgot-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
+                  const data = await res.json();
+                  if (!res.ok) {
+                    outEl.textContent = data.error || 'Unable to start password recovery right now.';
+                    return;
+                  }
+                  if (data && data.email_delivery_configured === false) {
+                    outEl.textContent = 'Password recovery email service is not configured yet. Please contact support or try again later.';
+                    return;
+                  }
+                  if (data && data.email_delivery_error === true) {
+                    outEl.textContent = 'Password recovery request received, but there was a temporary email delivery issue. Please try again shortly or contact support.';
+                    return;
+                  }
+                  outEl.textContent = data.message || 'If an account exists for that email, password recovery instructions have been sent.';
+                } catch (err) {
+                  outEl.textContent = 'Unable to start password recovery right now. Please retry.';
                 }
-                outEl.textContent = data.message || data.error || 'Unable to start password recovery right now.';
               }
               </script>
             </body></html>

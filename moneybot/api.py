@@ -5,6 +5,7 @@ import logging
 import os
 import smtplib
 import subprocess
+import sys
 import time
 import uuid
 import hmac
@@ -15,6 +16,7 @@ from urllib.parse import parse_qs, urlsplit
 from collections import defaultdict, deque
 from decimal import Decimal
 from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
 from functools import wraps
 from typing import Any, Dict, Tuple
 
@@ -26,7 +28,9 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from advice_engine import compute_user_advice
 
 from .extensions import db
-from sqlalchemy import or_
+from sqlalchemy import or_, text
+from sqlalchemy import inspect
+from sqlalchemy.exc import OperationalError, ProgrammingError
 
 from .models import FcmDeviceToken, NotificationTriggerPreference, SoldTrade, User, WatchlistItem
 from .services.decision_log import read_decision_events, summarize_decision_events
@@ -178,6 +182,7 @@ def _send_reset_email(email: str, reset_link: str) -> bool:
     smtp_use_tls = bool(current_app.config.get("SMTP_USE_TLS", True))
     smtp_use_ssl = bool(current_app.config.get("SMTP_USE_SSL", False))
     from_email = (current_app.config.get("PASSWORD_RESET_FROM_EMAIL") or smtp_user or "").strip()
+    from_name = (current_app.config.get("PASSWORD_RESET_FROM_NAME") or "Moneybot Labs").strip()
 
     if not _password_reset_email_configured():
         logging.warning("Password reset email not sent: SMTP_HOST or sender email is not configured.")
@@ -185,7 +190,10 @@ def _send_reset_email(email: str, reset_link: str) -> bool:
 
     msg = EmailMessage()
     msg["Subject"] = "Reset your Moneybot password"
-    msg["From"] = from_email
+    msg["From"] = f"{from_name} <{from_email}>" if from_name else from_email
+    msg["Reply-To"] = from_email
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain=(from_email.split("@", 1)[1] if "@" in from_email else None))
     msg["To"] = email
     msg.set_content(
         "We received a request to reset your Moneybot password.\n\n"
@@ -253,16 +261,41 @@ def _normalize_symbol(raw_symbol: str) -> str:
     return cleaned[:15]
 
 
+
+
+INACTIVITY_TIMEOUT = timedelta(minutes=15)
+
+
+def _session_expired() -> bool:
+    now = datetime.utcnow()
+    last_seen = session.get("last_activity_at")
+    if isinstance(last_seen, str):
+        try:
+            last_seen_dt = datetime.fromisoformat(last_seen)
+        except ValueError:
+            last_seen_dt = None
+    else:
+        last_seen_dt = None
+
+    if last_seen_dt and now - last_seen_dt > INACTIVITY_TIMEOUT:
+        return True
+
+    session["last_activity_at"] = now.isoformat()
+    session.permanent = True
+    return False
+
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         if not session.get("user_id"):
             return jsonify({"error": "authentication required"}), 401
+        if _session_expired():
+            session.clear()
+            return jsonify({"error": "authentication required"}), 401
         if session.get("requires_tab_session"):
             tab_session_id = session.get("tab_session_id")
-            request_tab_session_id = request.headers.get("X-Tab-Session-Id") or ""
-            if not tab_session_id or tab_session_id != request_tab_session_id:
-                session.clear()
+            request_tab_session_id = (request.headers.get("X-Tab-Session-Id") or "").strip()
+            if request_tab_session_id and (not tab_session_id or tab_session_id != request_tab_session_id):
                 return jsonify({"error": "authentication required"}), 401
         return view(*args, **kwargs)
 
@@ -355,9 +388,15 @@ def _notification_trigger_payload(item: NotificationTriggerPreference) -> Dict[s
         "portfolio_buy_advice_change": bool(item.portfolio_buy_advice_change),
         "hot_momentum_score_crosses_8": bool(item.hot_momentum_score_crosses_8),
         "whale_top_investor_added": bool(item.whale_top_investor_added),
-        "whales_top_stock_list_changes": bool(item.whales_top_stock_list_changes),
+        "clearview_hold_off_to_buy": bool(item.clearview_hold_off_to_buy),
+        "push_notifications_enabled": bool(item.push_notifications_enabled),
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }
+
+
+def _parse_clearview_symbols(raw: str | None) -> list[str]:
+    values = [str(v or "").strip().upper() for v in str(raw or "").split(",")]
+    return list(dict.fromkeys([v for v in values if v]))[:20]
 
 
 def _ensure_notification_trigger_preferences(user_id: int) -> NotificationTriggerPreference:
@@ -369,6 +408,22 @@ def _ensure_notification_trigger_preferences(user_id: int) -> NotificationTrigge
     return item
 
 
+
+
+def _ensure_clearview_trigger_column() -> None:
+    inspector = inspect(db.engine)
+    try:
+        columns = {col.get("name") for col in inspector.get_columns("notification_trigger_preferences")}
+    except Exception:
+        columns = set()
+    if "clearview_hold_off_to_buy" in columns:
+        return
+    try:
+        db.session.execute(text("ALTER TABLE notification_trigger_preferences ADD COLUMN clearview_hold_off_to_buy BOOLEAN NOT NULL DEFAULT TRUE"))
+        db.session.commit()
+    except (OperationalError, ProgrammingError):
+        db.session.rollback()
+
 def _notification_trigger_state_path() -> str:
     return _runtime_data_path("notification_trigger_state.json")
 
@@ -376,17 +431,18 @@ def _notification_trigger_state_path() -> str:
 def _load_notification_trigger_state() -> dict[str, Any]:
     path = Path(_notification_trigger_state_path())
     if not path.exists():
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
     if not isinstance(payload, dict):
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
     return {
         "portfolio_advice": payload.get("portfolio_advice") if isinstance(payload.get("portfolio_advice"), dict) else {},
         "momentum_scores": payload.get("momentum_scores") if isinstance(payload.get("momentum_scores"), dict) else {},
         "wells_snapshot": payload.get("wells_snapshot") if isinstance(payload.get("wells_snapshot"), dict) else {},
+        "clearview_advice": payload.get("clearview_advice") if isinstance(payload.get("clearview_advice"), dict) else {},
     }
 
 
@@ -582,6 +638,8 @@ def signup():
     session["user_id"] = user.id
     session["tab_session_id"] = tab_session_id
     session["requires_tab_session"] = bool(tab_session_id)
+    session["last_activity_at"] = datetime.utcnow().isoformat()
+    session.permanent = True
     return jsonify({"user": _user_payload(user), "request_id": g.request_id}), 201
 
 
@@ -600,6 +658,8 @@ def login():
     session["user_id"] = user.id
     session["tab_session_id"] = tab_session_id
     session["requires_tab_session"] = bool(tab_session_id)
+    session["last_activity_at"] = datetime.utcnow().isoformat()
+    session.permanent = True
     return jsonify({"user": _user_payload(user), "request_id": g.request_id})
 
 
@@ -613,17 +673,20 @@ def forgot_password():
         return jsonify({"error": "email required", "request_id": g.request_id}), 400
 
     user = User.query.filter_by(email=email).first()
+    email_delivery_configured = _password_reset_email_configured()
+    email_delivery_error = False
+
     if user:
         reset_link = _build_password_reset_link(user)
-        _send_reset_email(email, reset_link)
-
-    email_delivery_configured = _password_reset_email_configured()
+        email_sent = _send_reset_email(email, reset_link)
+        email_delivery_error = email_delivery_configured and not email_sent
 
     # Avoid user-enumeration: always return the same response message.
     return jsonify({
         "ok": True,
         "message": "If an account exists for that email, password recovery instructions have been sent.",
         "email_delivery_configured": email_delivery_configured,
+        "email_delivery_error": email_delivery_error,
         "request_id": g.request_id,
     })
 
@@ -745,6 +808,7 @@ def list_fcm_tokens():
 @api_bp.get("/notifications/triggers")
 @login_required
 def get_notification_triggers():
+    _ensure_clearview_trigger_column()
     item = _ensure_notification_trigger_preferences(session["user_id"])
     return jsonify({"item": _notification_trigger_payload(item), "request_id": g.request_id})
 
@@ -752,6 +816,7 @@ def get_notification_triggers():
 @api_bp.put("/notifications/triggers")
 @login_required
 def update_notification_triggers():
+    _ensure_clearview_trigger_column()
     data = request.get_json(silent=True) or {}
     updates: dict[str, bool] = {}
     allowed_fields = (
@@ -759,7 +824,8 @@ def update_notification_triggers():
         "portfolio_buy_advice_change",
         "hot_momentum_score_crosses_8",
         "whale_top_investor_added",
-        "whales_top_stock_list_changes",
+        "clearview_hold_off_to_buy",
+        "push_notifications_enabled",
     )
     for field in allowed_fields:
         if field in data:
@@ -775,6 +841,32 @@ def update_notification_triggers():
         setattr(item, key, value)
     db.session.commit()
     return jsonify({"item": _notification_trigger_payload(item), "request_id": g.request_id})
+
+
+@api_bp.get("/clearview-symbols")
+@login_required
+def get_clearview_symbols():
+    item = _ensure_notification_trigger_preferences(session["user_id"])
+    return jsonify({"symbols": _parse_clearview_symbols(item.clearview_symbols_csv), "request_id": g.request_id})
+
+
+@api_bp.put("/clearview-symbols")
+@login_required
+def update_clearview_symbols():
+    data = request.get_json(silent=True) or {}
+    symbols = data.get("symbols")
+    if not isinstance(symbols, list):
+        return jsonify({"error": "symbols must be an array", "request_id": g.request_id}), 400
+    parsed = []
+    for symbol in symbols:
+        value = str(symbol or "").strip().upper()
+        if value and value not in parsed:
+            parsed.append(value)
+    parsed = parsed[:20]
+    item = _ensure_notification_trigger_preferences(session["user_id"])
+    item.clearview_symbols_csv = ",".join(parsed)
+    db.session.commit()
+    return jsonify({"symbols": parsed, "request_id": g.request_id})
 
 
 @api_bp.post("/notifications/fcm-token")
@@ -1406,12 +1498,22 @@ def quick_ask():
             },
         )
 
+    signal_score = signal_data.get("score")
+    if signal_score is None:
+        signal_score = signal_data.get("hybrid_score")
+    probability_up = decision.get("probability_up")
+    quick_score = signal_score
+    if quick_score is None and isinstance(probability_up, (int, float)):
+        quick_score = round(float(probability_up) * 10.0, 2)
+
     return jsonify(
         {
             "data": {
                 "symbol": symbol,
                 "history30": history30,
                 **decision,
+                "score": quick_score,
+                "signal_score": signal_score,
                 "ai": ai_payload,
                 "ai_status": "working" if ai_mode == "ai_enhanced" else "fallback",
                 "ai_mode": ai_mode,
@@ -1490,6 +1592,7 @@ def run_daily_ops():
 
 @api_bp.post("/run-notification-triggers")
 def run_notification_triggers():
+    _ensure_clearview_trigger_column()
     expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
     provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
     if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
@@ -1509,6 +1612,8 @@ def run_notification_triggers():
             momentum_scores[str(key).upper()] = float(value)
         except (TypeError, ValueError):
             continue
+    clearview_state: dict[str, str] = {str(k): str(v).upper() for k, v in (state.get("clearview_advice") or {}).items() if str(k)}
+
     wells_prev = {
         str(k): [str(t).upper() for t in v if str(t).strip()]
         for k, v in (state.get("wells_snapshot") or {}).items()
@@ -1535,6 +1640,8 @@ def run_notification_triggers():
     for user in users:
         prefs = _ensure_notification_trigger_preferences(user.id)
         pref_cache[user.id] = prefs
+        if not prefs.push_notifications_enabled:
+            continue
         watchlist_items = (
             WatchlistItem.query.filter_by(user_id=user.id)
             .order_by(WatchlistItem.symbol.asc())
@@ -1577,6 +1684,14 @@ def run_notification_triggers():
                     symbol=symbol,
                 )
 
+            # ClearView symbol selections are currently browser-local (localStorage) and are
+            # not persisted server-side per user. Running this trigger against watchlist symbols
+            # creates false positives for stocks a user never added to ClearView.
+            #
+            # Keep the state map intact for forward compatibility, but skip emitting
+            # clearview_hold_off_to_buy notifications until a server-side ClearView list exists.
+            clearview_state[state_key] = advice
+
     momentum_items = []
     try:
         momentum_items = svc.get_hot_momentum_buys() or []
@@ -1597,6 +1712,8 @@ def run_notification_triggers():
         if previous <= 8.0 < score:
             for user in users:
                 prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
+                if not prefs.push_notifications_enabled:
+                    continue
                 if not prefs.hot_momentum_score_crosses_8:
                     continue
                 queue_user_event(
@@ -1613,7 +1730,7 @@ def run_notification_triggers():
     except Exception:  # noqa: BLE001
         wells_items = []
     wells_now = _normalize_wells_snapshot(wells_items)
-    added_holdings: list[tuple[str, str]] = []
+    holding_changes: list[tuple[str, str, str]] = []
     list_changed = False
     for investor, current_stocks in wells_now.items():
         previous_stocks = set(wells_prev.get(investor) or [])
@@ -1621,30 +1738,25 @@ def run_notification_triggers():
         if current_set != previous_stocks:
             list_changed = True
         for ticker in sorted(current_set - previous_stocks):
-            added_holdings.append((investor, ticker))
-    if added_holdings:
+            holding_changes.append((investor, ticker, "added"))
+        for ticker in sorted(previous_stocks - current_set):
+            holding_changes.append((investor, ticker, "removed"))
+    if holding_changes:
         for user in users:
             prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
+            if not prefs.push_notifications_enabled:
+                continue
             if not prefs.whale_top_investor_added:
                 continue
-            investor, ticker = added_holdings[0]
+            investor, ticker, action = holding_changes[0]
+            action_verb = "added" if action == "added" else "removed"
+            body_action = "to" if action == "added" else "from"
             queue_user_event(
                 user.id,
-                title=f"{investor} added {ticker}",
-                body=f"Whale/top investor added {ticker} to Whales of Wall Street.",
+                title=f"{investor} {action_verb} {ticker}",
+                body=f"Whale/top investor {action_verb} {ticker} {body_action} Whales of Wall Street.",
                 kind="whale_top_investor_added",
                 symbol=ticker,
-            )
-    if list_changed:
-        for user in users:
-            prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
-            if not prefs.whales_top_stock_list_changes:
-                continue
-            queue_user_event(
-                user.id,
-                title="Whales top stock list changed",
-                body="At least one Whales of Wall Street top stock list changed since the last check.",
-                kind="whales_top_stock_list_changes",
             )
 
     for user in users:
@@ -1674,6 +1786,17 @@ def run_notification_triggers():
                     sent_count += 1
                 except Exception:  # noqa: BLE001
                     failed_count += 1
+                    err_msg = str(sys.exc_info()[1] or "").lower()
+                    if (
+                        "unregistered" in err_msg
+                        or "registration-token-not-registered" in err_msg
+                        or "invalid registration token" in err_msg
+                    ):
+                        try:
+                            db.session.delete(token_item)
+                            db.session.commit()
+                        except Exception:  # noqa: BLE001
+                            db.session.rollback()
                     logging.exception(
                         "Failed to send trigger notification user_id=%s token_id=%s kind=%s",
                         user.id,
@@ -1686,6 +1809,7 @@ def run_notification_triggers():
             "portfolio_advice": portfolio_state,
             "momentum_scores": momentum_scores,
             "wells_snapshot": wells_now,
+            "clearview_advice": clearview_state,
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         }
     )
