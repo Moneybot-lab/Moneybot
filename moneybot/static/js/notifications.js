@@ -49,6 +49,22 @@ function triggerStatus(message, danger = false) {
   statusEl.style.color = danger ? '#991b1b' : '#166534';
 }
 
+
+function removeDuplicateClearviewTriggerRows() {
+  const inputs = Array.from(document.querySelectorAll('input#triggerClearviewBuy'));
+  if (inputs.length <= 1) {
+    return;
+  }
+  inputs.slice(1).forEach((input) => {
+    const label = input.closest('label');
+    if (label) {
+      label.remove();
+    } else {
+      input.remove();
+    }
+  });
+}
+
 function browserPushSupportStatus() {
   const reasons = [];
   const ua = String(navigator.userAgent || '');
@@ -304,5 +320,6 @@ async function initializeTriggerToggles() {
   });
 }
 
+removeDuplicateClearviewTriggerRows();
 initializeToggle();
 initializeTriggerToggles();
