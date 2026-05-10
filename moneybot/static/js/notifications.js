@@ -164,8 +164,16 @@ async function initializeToggle() {
     return;
   }
 
+  const prefs = await loadTriggerPreferences().catch(() => ({}));
   const existingTokens = await listRegisteredTokens();
-  toggle.checked = existingTokens.length > 0;
+  toggle.checked = Boolean(prefs.push_notifications_enabled);
+  if (toggle.checked && existingTokens.length === 0) {
+    try {
+      await registerPushToken();
+    } catch (_err) {
+      // Keep account-level setting, but device token still needs browser permission/device support.
+    }
+  }
   status(toggle.checked ? 'Push notifications are enabled.' : 'Push notifications are disabled.');
 
   toggle.addEventListener('change', async () => {
@@ -173,10 +181,12 @@ async function initializeToggle() {
     try {
       if (toggle.checked) {
         status('Enabling push notifications...');
+        await saveTriggerPreferences({ push_notifications_enabled: true });
         await registerPushToken();
         status('Push notifications enabled.');
       } else {
         status('Disabling push notifications...');
+        await saveTriggerPreferences({ push_notifications_enabled: false });
         await unregisterPushToken();
         status('Push notifications disabled.');
       }

@@ -388,8 +388,14 @@ def _notification_trigger_payload(item: NotificationTriggerPreference) -> Dict[s
         "hot_momentum_score_crosses_8": bool(item.hot_momentum_score_crosses_8),
         "whale_top_investor_added": bool(item.whale_top_investor_added),
         "clearview_hold_off_to_buy": bool(item.clearview_hold_off_to_buy),
+        "push_notifications_enabled": bool(item.push_notifications_enabled),
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }
+
+
+def _parse_clearview_symbols(raw: str | None) -> list[str]:
+    values = [str(v or "").strip().upper() for v in str(raw or "").split(",")]
+    return list(dict.fromkeys([v for v in values if v]))[:20]
 
 
 def _ensure_notification_trigger_preferences(user_id: int) -> NotificationTriggerPreference:
@@ -818,6 +824,7 @@ def update_notification_triggers():
         "hot_momentum_score_crosses_8",
         "whale_top_investor_added",
         "clearview_hold_off_to_buy",
+        "push_notifications_enabled",
     )
     for field in allowed_fields:
         if field in data:
@@ -833,6 +840,32 @@ def update_notification_triggers():
         setattr(item, key, value)
     db.session.commit()
     return jsonify({"item": _notification_trigger_payload(item), "request_id": g.request_id})
+
+
+@api_bp.get("/clearview-symbols")
+@login_required
+def get_clearview_symbols():
+    item = _ensure_notification_trigger_preferences(session["user_id"])
+    return jsonify({"symbols": _parse_clearview_symbols(item.clearview_symbols_csv), "request_id": g.request_id})
+
+
+@api_bp.put("/clearview-symbols")
+@login_required
+def update_clearview_symbols():
+    data = request.get_json(silent=True) or {}
+    symbols = data.get("symbols")
+    if not isinstance(symbols, list):
+        return jsonify({"error": "symbols must be an array", "request_id": g.request_id}), 400
+    parsed = []
+    for symbol in symbols:
+        value = str(symbol or "").strip().upper()
+        if value and value not in parsed:
+            parsed.append(value)
+    parsed = parsed[:20]
+    item = _ensure_notification_trigger_preferences(session["user_id"])
+    item.clearview_symbols_csv = ",".join(parsed)
+    db.session.commit()
+    return jsonify({"symbols": parsed, "request_id": g.request_id})
 
 
 @api_bp.post("/notifications/fcm-token")
@@ -1606,6 +1639,8 @@ def run_notification_triggers():
     for user in users:
         prefs = _ensure_notification_trigger_preferences(user.id)
         pref_cache[user.id] = prefs
+        if not prefs.push_notifications_enabled:
+            continue
         watchlist_items = (
             WatchlistItem.query.filter_by(user_id=user.id)
             .order_by(WatchlistItem.symbol.asc())
@@ -1676,6 +1711,8 @@ def run_notification_triggers():
         if previous <= 8.0 < score:
             for user in users:
                 prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
+                if not prefs.push_notifications_enabled:
+                    continue
                 if not prefs.hot_momentum_score_crosses_8:
                     continue
                 queue_user_event(
@@ -1706,6 +1743,8 @@ def run_notification_triggers():
     if holding_changes:
         for user in users:
             prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
+            if not prefs.push_notifications_enabled:
+                continue
             if not prefs.whale_top_investor_added:
                 continue
             investor, ticker, action = holding_changes[0]

@@ -485,13 +485,16 @@ const fallbackData = {
                   }
 
 
-                  function clearviewStorageKey(){
-                    const userKey = currentHomeUser?.id || currentHomeUser?.username || '';
-                    return userKey ? `moneybot_clearview_symbols_${userKey}` : '';
-                  }
-                  function loadClearviewSymbols(){
-                    const key = clearviewStorageKey();
-                    if(!key) return [];
+                  const CLEARVIEW_STORAGE_KEY = 'moneybot_clearview_symbols';
+                  async function loadClearviewSymbols(){
+                    try {
+                      const res = await fetch('/api/clearview-symbols');
+                      if(res.ok){
+                        const payload = await res.json();
+                        const symbols = Array.isArray(payload.symbols) ? payload.symbols : [];
+                        if(symbols.length) return symbols;
+                      }
+                    } catch (_err) {}
                     try {
                       const raw = localStorage.getItem(key);
                       const parsed = JSON.parse(raw || '[]');
@@ -502,10 +505,15 @@ const fallbackData = {
                       return ['NVDA','TSLA'];
                     }
                   }
-                  function saveClearviewSymbols(symbols){
-                    const key = clearviewStorageKey();
-                    if(!key) return;
-                    localStorage.setItem(key, JSON.stringify(symbols));
+                  async function saveClearviewSymbols(symbols){
+                    localStorage.setItem(CLEARVIEW_STORAGE_KEY, JSON.stringify(symbols));
+                    try {
+                      await fetch('/api/clearview-symbols', {
+                        method:'PUT',
+                        headers:{'Content-Type':'application/json'},
+                        body: JSON.stringify({ symbols }),
+                      });
+                    } catch (_err) {}
                   }
                   function trendMiniGraph(series){
                     const values = Array.isArray(series) ? series.filter((v)=>Number.isFinite(Number(v))).map(Number) : [];
@@ -529,8 +537,7 @@ const fallbackData = {
                     <table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Trend</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Advice</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Remove</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.current_price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${Number(item.score||0).toFixed(1)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${trendMiniGraph(item.history30 || [])}</td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="showAdviceReason('${item.symbol}','${encodeURIComponent(item.rationale || 'Signal generated from current indicators.')}')" style="border:none;background:${item.recommendation==='BUY'?'#166534':'#b91c1c'};color:#f8fafc;padding:6px 10px;border-radius:999px;font-weight:800;cursor:pointer">${escapeHtml(item.recommendation || 'HOLD OFF')}</button></td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="removeClearviewTicker('${item.symbol}')" style="border:none;background:#fee2e2;color:#991b1b;border-radius:8px;padding:6px 10px;cursor:pointer">Remove</button></td></tr>`).join('')}</tbody></table><p style="margin:10px 0 0 0;color:#166534;font-size:12px;font-weight:700">Click on advice badges to see why.</p>`;
                   }
                   async function fetchClearviewItems(){
-                    if(!currentHomeUser) return [];
-                    const symbols = loadClearviewSymbols();
+                    const symbols = await loadClearviewSymbols();
                     const results = await Promise.all(symbols.map(async(symbol)=>{
                       try {
                         const res = await fetch('/api/quick-ask?symbol=' + encodeURIComponent(symbol));
@@ -549,21 +556,20 @@ const fallbackData = {
                     setTabLoading(true);
                     try { renderClearview(await fetchClearviewItems()); } finally { setTabLoading(false); }
                   }
-                  function addClearviewTicker(){
-                    if(!currentHomeUser) return;
+                  async function addClearviewTicker(){
                     const el = document.getElementById('clearviewInput');
                     const value = (el?.value || '').trim().toUpperCase();
                     if(!value) return;
-                    const symbols = loadClearviewSymbols();
+                    const symbols = await loadClearviewSymbols();
                     if(!symbols.includes(value)) symbols.push(value);
-                    saveClearviewSymbols(symbols);
+                    await saveClearviewSymbols(symbols);
                     if(el) el.value = '';
                     refreshClearview();
                   }
-                  function removeClearviewTicker(symbol){
-                    if(!currentHomeUser) return;
-                    saveClearviewSymbols(loadClearviewSymbols().filter((s)=>s!==symbol));
-                    refreshClearview();
+                  async function removeClearviewTicker(symbol){
+                    const symbols = await loadClearviewSymbols();
+                    await saveClearviewSymbols(symbols.filter((s)=>s!==symbol));
+                    await refreshClearview();
                   }
 
                   document.addEventListener('keydown', (event) => {
