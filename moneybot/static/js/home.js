@@ -496,6 +496,14 @@ const fallbackData = {
                       }
                     } catch (_err) {}
                     try {
+                      const res = await fetch('/api/clearview-symbols');
+                      if(res.ok){
+                        const payload = await res.json();
+                        const symbols = Array.isArray(payload.symbols) ? payload.symbols : [];
+                        if(symbols.length) return symbols;
+                      }
+                    } catch (_err) {}
+                    try {
                       const raw = localStorage.getItem(key);
                       const parsed = JSON.parse(raw || '[]');
                       if(!Array.isArray(parsed)) return ['NVDA','TSLA'];

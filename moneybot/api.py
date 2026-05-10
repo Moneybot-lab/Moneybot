@@ -5,6 +5,7 @@ import logging
 import os
 import smtplib
 import subprocess
+import sys
 import time
 import uuid
 import hmac
@@ -1785,6 +1786,17 @@ def run_notification_triggers():
                     sent_count += 1
                 except Exception:  # noqa: BLE001
                     failed_count += 1
+                    err_msg = str(sys.exc_info()[1] or "").lower()
+                    if (
+                        "unregistered" in err_msg
+                        or "registration-token-not-registered" in err_msg
+                        or "invalid registration token" in err_msg
+                    ):
+                        try:
+                            db.session.delete(token_item)
+                            db.session.commit()
+                        except Exception:  # noqa: BLE001
+                            db.session.rollback()
                     logging.exception(
                         "Failed to send trigger notification user_id=%s token_id=%s kind=%s",
                         user.id,
