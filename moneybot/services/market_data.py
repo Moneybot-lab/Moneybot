@@ -57,7 +57,7 @@ class MarketDataService:
         self.signal_cache = TTLCache(ttl_seconds=20)
         self.sector_cache = TTLCache(ttl_seconds=3600)
         self.company_snapshot_cache = TTLCache(ttl_seconds=600)
-        self._company_snapshot_backoff_until = 0.0
+        self._company_snapshot_backoff_until_by_symbol: dict[str, float] = {}
         self._market_timezone = ZoneInfo("America/New_York")
         self._daily_lists_last_refreshed_at: datetime | None = None
         self._daily_lists_cache: dict[str, list[Dict[str, Any]]] = {}
@@ -66,6 +66,27 @@ class MarketDataService:
         self._finnhub_forbidden_symbols: dict[str, float] = {}
         self._finnhub_forbidden_ttl_seconds = int(os.environ.get("FINNHUB_FORBIDDEN_SYMBOL_TTL_SECONDS", "21600"))
         self._twelve_data_backoff_until = 0.0
+
+    def _build_fallback_company_summary(self, symbol: str, info: dict[str, Any]) -> str:
+        company_name = str(info.get("longName") or info.get("shortName") or symbol).strip()
+        sector = str(info.get("sector") or "").strip()
+        industry = str(info.get("industry") or "").strip()
+        exchange = str(info.get("exchange") or info.get("fullExchangeName") or "").strip()
+        website = str(info.get("website") or "").strip()
+        parts: list[str] = []
+        if sector and industry:
+            parts.append(f"{company_name} operates in the {industry} industry within the {sector} sector.")
+        elif industry:
+            parts.append(f"{company_name} operates in the {industry} industry.")
+        elif sector:
+            parts.append(f"{company_name} operates in the {sector} sector.")
+        if exchange:
+            parts.append(f"It is listed on {exchange}.")
+        if website:
+            parts.append(f"Website: {website}.")
+        if parts:
+            return " ".join(parts)
+        return f"Overview data provider is unavailable right now for {symbol}."
 
     def _google_news_headlines(self, symbol: str, company_name: str, limit: int = 3) -> list[Dict[str, str]]:
         query = quote_plus(f"{symbol} {company_name} stock")
@@ -309,7 +330,19 @@ class MarketDataService:
         latest_news: list[Dict[str, Any]] = []
 
         now = time.time()
-        if now < self._company_snapshot_backoff_until:
+        backoff_until = float(self._company_snapshot_backoff_until_by_symbol.get(ticker_symbol, 0.0))
+        if now < backoff_until:
+            fallback_news = self._google_news_headlines(
+                symbol=ticker_symbol,
+                company_name=default_name,
+                limit=5,
+            )
+            latest_news = self._rank_news(
+                symbol=ticker_symbol,
+                company_name=default_name,
+                news_items=fallback_news,
+                limit=5,
+            )
             payload = {
                 "symbol": ticker_symbol,
                 "company_name": default_name,
@@ -323,11 +356,9 @@ class MarketDataService:
             ticker = yf.Ticker(ticker_symbol)
             info = ticker.info or {}
             company_name = str(info.get("longName") or info.get("shortName") or default_name)
-            summary = str(
-                info.get("longBusinessSummary")
-                or info.get("description")
-                or default_summary
-            )
+            summary = str(info.get("longBusinessSummary") or info.get("description") or "").strip()
+            if not summary:
+                summary = self._build_fallback_company_summary(ticker_symbol, info)
             summary = summary[:320].strip() + ("..." if len(summary) > 320 else "")
 
             news_items = ticker.news or []
@@ -387,12 +418,40 @@ class MarketDataService:
             return payload
         except Exception as exc:  # noqa: BLE001
             if "Too Many Requests" in str(exc):
-                self._company_snapshot_backoff_until = now + 300.0
+                self._company_snapshot_backoff_until_by_symbol[ticker_symbol] = now + 300.0
+            company_name = default_name
+            summary = default_summary
+            try:
+                search = yf.Search(ticker_symbol, max_results=1)
+                quotes = getattr(search, "quotes", None) or []
+                first = quotes[0] if quotes and isinstance(quotes[0], dict) else {}
+                if first:
+                    company_name = str(first.get("longname") or first.get("shortname") or default_name)
+                    info_stub = {
+                        "longName": company_name,
+                        "sector": first.get("sectorDisp") or "",
+                        "industry": first.get("industryDisp") or "",
+                        "exchange": first.get("exchange") or "",
+                    }
+                    summary = self._build_fallback_company_summary(ticker_symbol, info_stub)
+            except Exception:  # noqa: BLE001
+                pass
+            fallback_news = self._google_news_headlines(
+                symbol=ticker_symbol,
+                company_name=company_name,
+                limit=5,
+            )
+            latest_news = self._rank_news(
+                symbol=ticker_symbol,
+                company_name=company_name,
+                news_items=fallback_news,
+                limit=5,
+            )
             logging.warning("Company snapshot fetch failed for %s: %s", ticker_symbol, exc)
             payload = {
                 "symbol": ticker_symbol,
-                "company_name": default_name,
-                "summary": default_summary,
+                "company_name": company_name,
+                "summary": summary,
                 "latest_news": latest_news,
             }
             self.company_snapshot_cache.set(cache_key, payload)
@@ -669,6 +728,8 @@ class MarketDataService:
     def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
         candidates = [
             {"symbol": "SOFI", "price": 9.84, "score": 9.4, "rationale": "Member growth trend and improving margins."},
+            {"symbol": "APLD", "price": 7.38, "score": 9.2, "rationale": "AI infrastructure demand and breakout continuation setup."},
+            {"symbol": "OKLO", "price": 13.42, "score": 9.0, "rationale": "Nuclear-energy theme with strong high-beta momentum."},
             {"symbol": "PLUG", "price": 3.72, "score": 9.1, "rationale": "High-volume breakout setup in clean-energy swing."},
             {"symbol": "LCID", "price": 2.98, "score": 8.9, "rationale": "Speculative EV rebound momentum."},
             {"symbol": "NIO", "price": 4.31, "score": 8.6, "rationale": "Delivery stabilization and trend reversal watch."},
@@ -697,6 +758,11 @@ class MarketDataService:
             {"symbol": "CLSK", "price": 18.42, "score": 7.5, "rationale": "Mining efficiency narrative with risk-on flow."},
             {"symbol": "T", "price": 17.11, "score": 6.9, "rationale": "Low-vol telecom catch-up swing candidate."},
             {"symbol": "WBD", "price": 8.64, "score": 7.0, "rationale": "Media re-rating momentum setup."},
+            {"symbol": "SMCI", "price": 72.4, "score": 8.9, "rationale": "AI server demand and trend-following strength."},
+            {"symbol": "CIFR", "price": 5.68, "score": 8.2, "rationale": "Bitcoin mining beta with high relative volume."},
+            {"symbol": "IONA", "price": 4.82, "score": 7.1, "rationale": "Small-cap momentum rotation candidate."},
+            {"symbol": "LUNR", "price": 6.94, "score": 7.8, "rationale": "Space-theme momentum with event-driven catalyst flow."},
+            {"symbol": "SATS", "price": 3.44, "score": 6.8, "rationale": "Speculative turnaround with improving tape behavior."},
         ]
 
         enriched: list[Dict[str, Any]] = []
@@ -746,6 +812,10 @@ class MarketDataService:
 
             enriched.append(merged)
 
+        market_change = self.get_quote("SPY").get("change_percent")
+        market_is_down = isinstance(market_change, (int, float)) and float(market_change) < 0.0
+        minimum_score = 0.0 if market_is_down else 5.0
+
         target_count = 20
         price_cap = 100.0
         qualified = [item for item in enriched if item["qualified"]]
@@ -755,6 +825,10 @@ class MarketDataService:
             key=lambda x: (x["score"], self._change_percent_sort_value(x.get("change_percent"))),
             reverse=True,
         )
+        if minimum_score > 0.0:
+            sorted_pool = [item for item in sorted_pool if float(item.get("score") or 0.0) >= minimum_score]
+        if not sorted_pool:
+            return []
         under_cap = [item for item in sorted_pool if isinstance(item.get("price"), (int, float)) and float(item["price"]) <= price_cap]
         if len(under_cap) >= target_count:
             selected = under_cap[:target_count]
