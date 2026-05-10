@@ -48,6 +48,7 @@ const fallbackData = {
                     return `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${positive ? '#166534' : '#7f1d1d'};color:#fefce8;font-weight:700;font-size:12px">${escapeHtml(value)}</span>`;
                   }
                   const TAB_SESSION_KEY = 'moneybot_tab_session_id';
+                  let currentHomeUser = null;
                   function getTabSessionId(){
                     return sessionStorage.getItem(TAB_SESSION_KEY) || '';
                   }
@@ -106,6 +107,7 @@ const fallbackData = {
                     try {
                       const res = await apiFetch('/api/me');
                       if(!res.ok){
+                        currentHomeUser = null;
                         return null;
                       }
                       const payload = await res.json();
@@ -113,8 +115,10 @@ const fallbackData = {
                       if(user){
                         renderAuthenticatedMenu(user);
                       }
+                      currentHomeUser = user;
                       return user;
                     } catch (err) {
+                      currentHomeUser = null;
                       return null;
                     }
                   }
@@ -492,7 +496,15 @@ const fallbackData = {
                       }
                     } catch (_err) {}
                     try {
-                      const raw = localStorage.getItem(CLEARVIEW_STORAGE_KEY);
+                      const res = await fetch('/api/clearview-symbols');
+                      if(res.ok){
+                        const payload = await res.json();
+                        const symbols = Array.isArray(payload.symbols) ? payload.symbols : [];
+                        if(symbols.length) return symbols;
+                      }
+                    } catch (_err) {}
+                    try {
+                      const raw = localStorage.getItem(key);
                       const parsed = JSON.parse(raw || '[]');
                       if(!Array.isArray(parsed)) return ['NVDA','TSLA'];
                       const normalized = parsed.map((v)=>String(v||'').trim().toUpperCase()).filter(Boolean);
@@ -520,6 +532,10 @@ const fallbackData = {
                     return `<svg viewBox="0 0 ${width} ${height}" width="110" height="28" preserveAspectRatio="none"><path d="${path}" fill="none" stroke="${up ? '#16a34a':'#dc2626'}" stroke-width="2" stroke-linecap="round"/></svg>`;
                   }
                   function renderClearview(items){
+                    if(!currentHomeUser){
+                      document.getElementById('clearview').innerHTML = `<div style="background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;padding:14px;color:#334155">Please sign in to use ClearView Signals and save your personal ticker list.</div>`;
+                      return;
+                    }
                     document.getElementById('clearview').innerHTML = `
                     <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
                       <input id="clearviewInput" placeholder="Add ticker (e.g. AMD)" style="padding:8px 10px;border:1px solid #86efac;border-radius:8px;min-width:210px" />
@@ -675,6 +691,8 @@ const fallbackData = {
                     }
                     setMenuState(false);
                     await refreshCurrentUser();
+                    const clearviewBtn = document.querySelector('.tab-btn[data-tab="clearview"]');
+                    if(clearviewBtn){ clearviewBtn.style.display = currentHomeUser ? 'inline-block' : 'none'; }
                     const market = await fetchWithFallback('/api/market-overview', 'market');
                     renderMarket(market);
                     await refreshTab('stable');
