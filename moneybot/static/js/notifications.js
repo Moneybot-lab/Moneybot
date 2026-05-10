@@ -164,8 +164,16 @@ async function initializeToggle() {
     return;
   }
 
+  const prefs = await loadTriggerPreferences().catch(() => ({}));
   const existingTokens = await listRegisteredTokens();
-  toggle.checked = existingTokens.length > 0;
+  toggle.checked = Boolean(prefs.push_notifications_enabled);
+  if (toggle.checked && existingTokens.length === 0) {
+    try {
+      await registerPushToken();
+    } catch (_err) {
+      // Keep account-level setting, but device token still needs browser permission/device support.
+    }
+  }
   status(toggle.checked ? 'Push notifications are enabled.' : 'Push notifications are disabled.');
 
   toggle.addEventListener('change', async () => {
@@ -173,10 +181,12 @@ async function initializeToggle() {
     try {
       if (toggle.checked) {
         status('Enabling push notifications...');
+        await saveTriggerPreferences({ push_notifications_enabled: true });
         await registerPushToken();
         status('Push notifications enabled.');
       } else {
         status('Disabling push notifications...');
+        await saveTriggerPreferences({ push_notifications_enabled: false });
         await unregisterPushToken();
         status('Push notifications disabled.');
       }
@@ -227,7 +237,6 @@ async function initializeTriggerToggles() {
     { id: 'triggerPortfolioBuy', field: 'portfolio_buy_advice_change', label: 'Portfolio BUY advice changes' },
     { id: 'triggerMomentum8', field: 'hot_momentum_score_crosses_8', label: 'Hot momentum score > 8' },
     { id: 'triggerWhaleAdded', field: 'whale_top_investor_added', label: 'Whale/top investor adds/removes a stock' },
-    { id: 'triggerWhalesTopStocks', field: 'whales_top_stock_list_changes', label: 'Changes to whales top stock list' },
     { id: 'triggerClearviewBuy', field: 'clearview_hold_off_to_buy', label: 'ClearView Hold Off to BUY' },
   ];
   const controls = fieldConfig
