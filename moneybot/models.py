@@ -109,8 +109,6 @@ class NotificationTriggerPreference(db.Model):
     whale_top_investor_added = db.Column(db.Boolean, nullable=False, default=True)
     whales_top_stock_list_changes = db.Column(db.Boolean, nullable=False, default=True)
     clearview_hold_off_to_buy = db.Column(db.Boolean, nullable=False, default=True)
-    push_notifications_enabled = db.Column(db.Boolean, nullable=False, default=False)
-    clearview_symbols_csv = db.Column(db.Text, nullable=False, default="")
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
     updated_at = db.Column(
         db.DateTime,
