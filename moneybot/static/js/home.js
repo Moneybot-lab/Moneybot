@@ -486,7 +486,21 @@ const fallbackData = {
 
 
                   const CLEARVIEW_STORAGE_KEY = 'moneybot_clearview_symbols';
+                  let clearviewSymbolsCache = null;
+                  let clearviewSaveChain = Promise.resolve();
                   async function loadClearviewSymbols(){
+                    if(Array.isArray(clearviewSymbolsCache)) return [...clearviewSymbolsCache];
+                    try {
+                      const res = await fetch('/api/clearview-symbols');
+                      if(res.ok){
+                        const payload = await res.json();
+                        const symbols = Array.isArray(payload.symbols) ? payload.symbols : [];
+                        if(symbols.length){
+                          clearviewSymbolsCache = symbols.slice(0,20);
+                          return [...clearviewSymbolsCache];
+                        }
+                      }
+                    } catch (_err) {}
                     try {
                       const res = await fetch('/api/clearview-symbols');
                       if(res.ok){
@@ -508,42 +522,48 @@ const fallbackData = {
                       const parsed = JSON.parse(raw || '[]');
                       if(!Array.isArray(parsed)) return ['NVDA','TSLA'];
                       const normalized = parsed.map((v)=>String(v||'').trim().toUpperCase()).filter(Boolean);
-                      return Array.from(new Set(normalized)).slice(0,20);
+                      clearviewSymbolsCache = Array.from(new Set(normalized)).slice(0,20);
+                      return [...clearviewSymbolsCache];
                     } catch (err) {
-                      return ['NVDA','TSLA'];
+                      clearviewSymbolsCache = ['NVDA','TSLA'];
+                      return [...clearviewSymbolsCache];
                     }
                   }
                   async function saveClearviewSymbols(symbols){
-                    localStorage.setItem(CLEARVIEW_STORAGE_KEY, JSON.stringify(symbols));
-                    try {
-                      await fetch('/api/clearview-symbols', {
-                        method:'PUT',
-                        headers:{'Content-Type':'application/json'},
-                        body: JSON.stringify({ symbols }),
-                      });
-                    } catch (_err) {}
+                    clearviewSymbolsCache = Array.from(new Set((symbols || []).map((s)=>String(s||'').trim().toUpperCase()).filter(Boolean))).slice(0,20);
+                    localStorage.setItem(CLEARVIEW_STORAGE_KEY, JSON.stringify(clearviewSymbolsCache));
+                    clearviewSaveChain = clearviewSaveChain.then(async () => {
+                      try {
+                        await fetch('/api/clearview-symbols', {
+                          method:'PUT',
+                          headers:{'Content-Type':'application/json'},
+                          body: JSON.stringify({ symbols: clearviewSymbolsCache }),
+                        });
+                      } catch (_err) {}
+                    });
+                    await clearviewSaveChain;
                   }
-                  function trendMiniGraph(series){
-                    const values = Array.isArray(series) ? series.filter((v)=>Number.isFinite(Number(v))).map(Number) : [];
-                    if(values.length < 2) return '<span style="color:#64748b">n/a</span>';
-                    const width = 100, height = 26;
-                    const path = trendPath(values, width, height);
-                    const up = values[values.length - 1] >= values[0];
-                    return `<svg viewBox="0 0 ${width} ${height}" width="110" height="28" preserveAspectRatio="none"><path d="${path}" fill="none" stroke="${up ? '#16a34a':'#dc2626'}" stroke-width="2" stroke-linecap="round"/></svg>`;
+                  async function addClearviewTicker(){
+                    const el = document.getElementById('clearviewInput');
+                    const value = (el?.value || '').trim().toUpperCase();
+                    if(!value) return;
+                    const symbols = await loadClearviewSymbols();
+                    if(!symbols.includes(value)) symbols.push(value);
+                    await saveClearviewSymbols(symbols);
+                    if(el) el.value = '';
+                    await refreshClearview();
                   }
-                  function renderClearview(items){
-                    if(!currentHomeUser){
-                      document.getElementById('clearview').innerHTML = `<div style="background:#f8fafc;border:1px dashed #cbd5e1;border-radius:12px;padding:14px;color:#334155">Please sign in to use ClearView Signals and save your personal ticker list.</div>`;
-                      return;
-                    }
-                    document.getElementById('clearview').innerHTML = `
-                    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-                      <input id="clearviewInput" placeholder="Add ticker (e.g. AMD)" style="padding:8px 10px;border:1px solid #86efac;border-radius:8px;min-width:210px" />
-                      <button onclick="addClearviewTicker()" style="padding:8px 12px;border:none;background:#166534;color:#ecfdf5;border-radius:8px;font-weight:700">Add</button>
-                      <span style="font-size:12px;color:#166534;align-self:center">Model: day1-logreg-v1</span>
-                    </div>
-                    <table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Trend</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Advice</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Remove</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.current_price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${Number(item.score||0).toFixed(1)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${trendMiniGraph(item.history30 || [])}</td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="showAdviceReason('${item.symbol}','${encodeURIComponent(item.rationale || 'Signal generated from current indicators.')}')" style="border:none;background:${item.recommendation==='BUY'?'#166534':'#b91c1c'};color:#f8fafc;padding:6px 10px;border-radius:999px;font-weight:800;cursor:pointer">${escapeHtml(item.recommendation || 'HOLD OFF')}</button></td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="removeClearviewTicker('${item.symbol}')" style="border:none;background:#fee2e2;color:#991b1b;border-radius:8px;padding:6px 10px;cursor:pointer">Remove</button></td></tr>`).join('')}</tbody></table><p style="margin:10px 0 0 0;color:#166534;font-size:12px;font-weight:700">Click on advice badges to see why.</p>`;
+                  async function removeClearviewTicker(symbol){
+                    const symbols = await loadClearviewSymbols();
+                    await saveClearviewSymbols(symbols.filter((s)=>s!==symbol));
+                    await refreshClearview();
                   }
+
+                  async function refreshClearview(){
+                    setTabLoading(true);
+                    try { renderClearview(await fetchClearviewItems()); } finally { setTabLoading(false); }
+                  }
+
                   async function fetchClearviewItems(){
                     const symbols = await loadClearviewSymbols();
                     const results = await Promise.all(symbols.map(async(symbol)=>{
@@ -560,24 +580,22 @@ const fallbackData = {
                     }));
                     return results;
                   }
-                  async function refreshClearview(){
-                    setTabLoading(true);
-                    try { renderClearview(await fetchClearviewItems()); } finally { setTabLoading(false); }
+                  function trendMiniGraph(series){
+                    const values = Array.isArray(series) ? series.filter((v)=>Number.isFinite(Number(v))).map(Number) : [];
+                    if(values.length < 2) return '<span style="color:#64748b">n/a</span>';
+                    const width = 100, height = 26;
+                    const path = trendPath(values, width, height);
+                    const up = values[values.length - 1] >= values[0];
+                    return `<svg viewBox="0 0 ${width} ${height}" width="110" height="28" preserveAspectRatio="none"><path d="${path}" fill="none" stroke="${up ? '#16a34a':'#dc2626'}" stroke-width="2" stroke-linecap="round"/></svg>`;
                   }
-                  async function addClearviewTicker(){
-                    const el = document.getElementById('clearviewInput');
-                    const value = (el?.value || '').trim().toUpperCase();
-                    if(!value) return;
-                    const symbols = await loadClearviewSymbols();
-                    if(!symbols.includes(value)) symbols.push(value);
-                    await saveClearviewSymbols(symbols);
-                    if(el) el.value = '';
-                    refreshClearview();
-                  }
-                  async function removeClearviewTicker(symbol){
-                    const symbols = await loadClearviewSymbols();
-                    await saveClearviewSymbols(symbols.filter((s)=>s!==symbol));
-                    await refreshClearview();
+                  function renderClearview(items){
+                    document.getElementById('clearview').innerHTML = `
+                    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+                      <input id="clearviewInput" placeholder="Add ticker (e.g. AMD)" style="padding:8px 10px;border:1px solid #86efac;border-radius:8px;min-width:210px" />
+                      <button onclick="addClearviewTicker()" style="padding:8px 12px;border:none;background:#166534;color:#ecfdf5;border-radius:8px;font-weight:700">Add</button>
+                      <span style="font-size:12px;color:#166534;align-self:center">Model: day1-logreg-v1</span>
+                    </div>
+                    <table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Trend</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Advice</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Remove</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.current_price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${Number(item.score||0).toFixed(1)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${trendMiniGraph(item.history30 || [])}</td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="showAdviceReason('${item.symbol}','${encodeURIComponent(item.rationale || 'Signal generated from current indicators.')}')" style="border:none;background:${item.recommendation==='BUY'?'#166534':'#b91c1c'};color:#f8fafc;padding:6px 10px;border-radius:999px;font-weight:800;cursor:pointer">${escapeHtml(item.recommendation || 'HOLD OFF')}</button></td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="removeClearviewTicker('${item.symbol}')" style="border:none;background:#fee2e2;color:#991b1b;border-radius:8px;padding:6px 10px;cursor:pointer">Remove</button></td></tr>`).join('')}</tbody></table><p style="margin:10px 0 0 0;color:#166534;font-size:12px;font-weight:700">Click on advice badges to see why.</p>`;
                   }
 
                   document.addEventListener('keydown', (event) => {
