@@ -1,5 +1,6 @@
 const TAB_SESSION_KEY = 'moneybot_tab_session_id';
 const PUSH_TOKEN_STORAGE_KEY = 'moneybot_push_token';
+const TOKEN_REFRESH_INTERVAL_MS = 1000 * 60 * 60 * 6;
 
 function getTabSessionId() {
   return sessionStorage.getItem(TAB_SESSION_KEY) || '';
@@ -120,6 +121,16 @@ async function registerPushToken() {
     throw new Error(payload.error || 'failed to save token');
   }
   localStorage.setItem(PUSH_TOKEN_STORAGE_KEY, token);
+  localStorage.setItem('moneybot_push_token_last_sync', String(Date.now()));
+}
+
+async function refreshPushTokenIfNeeded(force = false) {
+  const lastSync = Number(localStorage.getItem('moneybot_push_token_last_sync') || '0');
+  const stale = !Number.isFinite(lastSync) || (Date.now() - lastSync) > TOKEN_REFRESH_INTERVAL_MS;
+  if (!force && !stale) {
+    return;
+  }
+  await registerPushToken();
 }
 
 async function unregisterPushToken() {
@@ -164,8 +175,23 @@ async function initializeToggle() {
     return;
   }
 
+  const prefs = await loadTriggerPreferences().catch(() => ({}));
   const existingTokens = await listRegisteredTokens();
-  toggle.checked = existingTokens.length > 0;
+  toggle.checked = Boolean(prefs.push_notifications_enabled);
+  if (toggle.checked && existingTokens.length === 0) {
+    try {
+      await registerPushToken();
+    } catch (_err) {
+      // Keep account-level setting, but device token still needs browser permission/device support.
+    }
+  }
+  if (toggle.checked) {
+    try {
+      await refreshPushTokenIfNeeded(false);
+    } catch (_err) {
+      // Do not block the page if token refresh fails.
+    }
+  }
   status(toggle.checked ? 'Push notifications are enabled.' : 'Push notifications are disabled.');
 
   toggle.addEventListener('change', async () => {
@@ -173,10 +199,12 @@ async function initializeToggle() {
     try {
       if (toggle.checked) {
         status('Enabling push notifications...');
+        await saveTriggerPreferences({ push_notifications_enabled: true });
         await registerPushToken();
         status('Push notifications enabled.');
       } else {
         status('Disabling push notifications...');
+        await saveTriggerPreferences({ push_notifications_enabled: false });
         await unregisterPushToken();
         status('Push notifications disabled.');
       }
