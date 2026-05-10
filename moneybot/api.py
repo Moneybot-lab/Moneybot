@@ -833,10 +833,10 @@ def update_notification_triggers():
             if not isinstance(value, bool):
                 return jsonify({"error": f"{field} must be a boolean", "request_id": g.request_id}), 400
             updates[field] = value
-    if not updates:
-        return jsonify({"error": "no trigger updates provided", "request_id": g.request_id}), 400
-
     item = _ensure_notification_trigger_preferences(session["user_id"])
+    if not updates:
+        return jsonify({"item": _notification_trigger_payload(item), "request_id": g.request_id})
+
     for key, value in updates.items():
         setattr(item, key, value)
     db.session.commit()
