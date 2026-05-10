@@ -5,6 +5,7 @@ import logging
 import os
 import smtplib
 import subprocess
+import sys
 import time
 import uuid
 import hmac
@@ -260,16 +261,41 @@ def _normalize_symbol(raw_symbol: str) -> str:
     return cleaned[:15]
 
 
+
+
+INACTIVITY_TIMEOUT = timedelta(minutes=15)
+
+
+def _session_expired() -> bool:
+    now = datetime.utcnow()
+    last_seen = session.get("last_activity_at")
+    if isinstance(last_seen, str):
+        try:
+            last_seen_dt = datetime.fromisoformat(last_seen)
+        except ValueError:
+            last_seen_dt = None
+    else:
+        last_seen_dt = None
+
+    if last_seen_dt and now - last_seen_dt > INACTIVITY_TIMEOUT:
+        return True
+
+    session["last_activity_at"] = now.isoformat()
+    session.permanent = True
+    return False
+
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
         if not session.get("user_id"):
             return jsonify({"error": "authentication required"}), 401
+        if _session_expired():
+            session.clear()
+            return jsonify({"error": "authentication required"}), 401
         if session.get("requires_tab_session"):
             tab_session_id = session.get("tab_session_id")
-            request_tab_session_id = request.headers.get("X-Tab-Session-Id") or ""
-            if not tab_session_id or tab_session_id != request_tab_session_id:
-                session.clear()
+            request_tab_session_id = (request.headers.get("X-Tab-Session-Id") or "").strip()
+            if request_tab_session_id and (not tab_session_id or tab_session_id != request_tab_session_id):
                 return jsonify({"error": "authentication required"}), 401
         return view(*args, **kwargs)
 
@@ -366,6 +392,11 @@ def _notification_trigger_payload(item: NotificationTriggerPreference) -> Dict[s
         "clearview_hold_off_to_buy": bool(item.clearview_hold_off_to_buy),
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }
+
+
+def _parse_clearview_symbols(raw: str | None) -> list[str]:
+    values = [str(v or "").strip().upper() for v in str(raw or "").split(",")]
+    return list(dict.fromkeys([v for v in values if v]))[:20]
 
 
 def _ensure_notification_trigger_preferences(user_id: int) -> NotificationTriggerPreference:
@@ -607,6 +638,8 @@ def signup():
     session["user_id"] = user.id
     session["tab_session_id"] = tab_session_id
     session["requires_tab_session"] = bool(tab_session_id)
+    session["last_activity_at"] = datetime.utcnow().isoformat()
+    session.permanent = True
     return jsonify({"user": _user_payload(user), "request_id": g.request_id}), 201
 
 
@@ -625,6 +658,8 @@ def login():
     session["user_id"] = user.id
     session["tab_session_id"] = tab_session_id
     session["requires_tab_session"] = bool(tab_session_id)
+    session["last_activity_at"] = datetime.utcnow().isoformat()
+    session.permanent = True
     return jsonify({"user": _user_payload(user), "request_id": g.request_id})
 
 
@@ -806,6 +841,32 @@ def update_notification_triggers():
         setattr(item, key, value)
     db.session.commit()
     return jsonify({"item": _notification_trigger_payload(item), "request_id": g.request_id})
+
+
+@api_bp.get("/clearview-symbols")
+@login_required
+def get_clearview_symbols():
+    item = _ensure_notification_trigger_preferences(session["user_id"])
+    return jsonify({"symbols": _parse_clearview_symbols(item.clearview_symbols_csv), "request_id": g.request_id})
+
+
+@api_bp.put("/clearview-symbols")
+@login_required
+def update_clearview_symbols():
+    data = request.get_json(silent=True) or {}
+    symbols = data.get("symbols")
+    if not isinstance(symbols, list):
+        return jsonify({"error": "symbols must be an array", "request_id": g.request_id}), 400
+    parsed = []
+    for symbol in symbols:
+        value = str(symbol or "").strip().upper()
+        if value and value not in parsed:
+            parsed.append(value)
+    parsed = parsed[:20]
+    item = _ensure_notification_trigger_preferences(session["user_id"])
+    item.clearview_symbols_csv = ",".join(parsed)
+    db.session.commit()
+    return jsonify({"symbols": parsed, "request_id": g.request_id})
 
 
 @api_bp.post("/notifications/fcm-token")
@@ -1579,6 +1640,8 @@ def run_notification_triggers():
     for user in users:
         prefs = _ensure_notification_trigger_preferences(user.id)
         pref_cache[user.id] = prefs
+        if not prefs.push_notifications_enabled:
+            continue
         watchlist_items = (
             WatchlistItem.query.filter_by(user_id=user.id)
             .order_by(WatchlistItem.symbol.asc())
@@ -1652,6 +1715,8 @@ def run_notification_triggers():
         if previous <= 8.0 < score:
             for user in users:
                 prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
+                if not prefs.push_notifications_enabled:
+                    continue
                 if not prefs.hot_momentum_score_crosses_8:
                     continue
                 queue_user_event(
@@ -1668,7 +1733,7 @@ def run_notification_triggers():
     except Exception:  # noqa: BLE001
         wells_items = []
     wells_now = _normalize_wells_snapshot(wells_items)
-    added_holdings: list[tuple[str, str]] = []
+    holding_changes: list[tuple[str, str, str]] = []
     list_changed = False
     for investor, current_stocks in wells_now.items():
         previous_stocks = set(wells_prev.get(investor) or [])
@@ -1676,30 +1741,25 @@ def run_notification_triggers():
         if current_set != previous_stocks:
             list_changed = True
         for ticker in sorted(current_set - previous_stocks):
-            added_holdings.append((investor, ticker))
-    if added_holdings:
+            holding_changes.append((investor, ticker, "added"))
+        for ticker in sorted(previous_stocks - current_set):
+            holding_changes.append((investor, ticker, "removed"))
+    if holding_changes:
         for user in users:
             prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
+            if not prefs.push_notifications_enabled:
+                continue
             if not prefs.whale_top_investor_added:
                 continue
-            investor, ticker = added_holdings[0]
+            investor, ticker, action = holding_changes[0]
+            action_verb = "added" if action == "added" else "removed"
+            body_action = "to" if action == "added" else "from"
             queue_user_event(
                 user.id,
-                title=f"{investor} added {ticker}",
-                body=f"Whale/top investor added {ticker} to Whales of Wall Street.",
+                title=f"{investor} {action_verb} {ticker}",
+                body=f"Whale/top investor {action_verb} {ticker} {body_action} Whales of Wall Street.",
                 kind="whale_top_investor_added",
                 symbol=ticker,
-            )
-    if list_changed:
-        for user in users:
-            prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
-            if not prefs.whales_top_stock_list_changes:
-                continue
-            queue_user_event(
-                user.id,
-                title="Whales top stock list changed",
-                body="At least one Whales of Wall Street top stock list changed since the last check.",
-                kind="whales_top_stock_list_changes",
             )
 
     for user in users:
@@ -1729,6 +1789,17 @@ def run_notification_triggers():
                     sent_count += 1
                 except Exception:  # noqa: BLE001
                     failed_count += 1
+                    err_msg = str(sys.exc_info()[1] or "").lower()
+                    if (
+                        "unregistered" in err_msg
+                        or "registration-token-not-registered" in err_msg
+                        or "invalid registration token" in err_msg
+                    ):
+                        try:
+                            db.session.delete(token_item)
+                            db.session.commit()
+                        except Exception:  # noqa: BLE001
+                            db.session.rollback()
                     logging.exception(
                         "Failed to send trigger notification user_id=%s token_id=%s kind=%s",
                         user.id,

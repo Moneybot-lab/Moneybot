@@ -324,7 +324,23 @@ const fallbackData = {
                       }
                       const data = payload.data || {};
                       titleEl.textContent = `${data.company_name || symbol} (${symbol})`;
-                      summaryEl.textContent = data.summary || 'No summary available.';
+                      const summary = data.summary || 'No summary available.';
+                      const news = Array.isArray(data.latest_news) ? data.latest_news : [];
+                      if(!news.length){
+                        summaryEl.innerHTML = `<div>${escapeHtml(summary)}</div>`;
+                        return;
+                      }
+                      const newsHtml = news.slice(0, 5).map((item) => {
+                        const title = escapeHtml(item?.title || 'Untitled');
+                        const publisher = escapeHtml(item?.publisher || 'Source');
+                        const link = item?.link ? String(item.link) : '';
+                        const publishedAt = item?.published_at ? ` · ${escapeHtml(item.published_at)}` : '';
+                        const headline = link
+                          ? `<a href="${escapeHtml(link)}" target="_blank" rel="noopener noreferrer" style="color:#166534;font-weight:700">${title}</a>`
+                          : `<span style="color:#166534;font-weight:700">${title}</span>`;
+                        return `<li style="margin-bottom:6px">${headline}<div style="font-size:12px;color:#3f6212">${publisher}${publishedAt}</div></li>`;
+                      }).join('');
+                      summaryEl.innerHTML = `<div style="margin-bottom:10px">${escapeHtml(summary)}</div><div><strong>Recent news</strong><ul style="padding-left:18px;margin:8px 0 0 0">${newsHtml}</ul></div>`;
                     } catch (err) {
                       titleEl.textContent = symbol;
                       summaryEl.textContent = 'Unable to load company details right now.';
@@ -637,6 +653,12 @@ const fallbackData = {
                     if(event.target.value){ event.target.value = ''; }
                   });
                   document.getElementById('homeTickerModal').addEventListener('click', (event) => { if(event.target.id==='homeTickerModal'){ closeHomeModal(); }});
+                  document.addEventListener('click', (event) => {
+                    const target = event.target;
+                    if(!(target instanceof HTMLElement)) return;
+                    if(!target.classList.contains('advice-reason-btn')) return;
+                    showAdviceReason(target.dataset.symbol || '', target.dataset.rationale || '');
+                  });
                   document.getElementById('menuToggleBtn').addEventListener('click', toggleMenu);
                   document.getElementById('userMenuButton').addEventListener('click', openMenu);
                   document.getElementById('menuCloseBtn').addEventListener('click', closeMenu);
@@ -659,6 +681,8 @@ const fallbackData = {
                     }
                     setMenuState(false);
                     await refreshCurrentUser();
+                    const clearviewBtn = document.querySelector('.tab-btn[data-tab="clearview"]');
+                    if(clearviewBtn){ clearviewBtn.style.display = currentHomeUser ? 'inline-block' : 'none'; }
                     const market = await fetchWithFallback('/api/market-overview', 'market');
                     renderMarket(market);
                     await refreshTab('stable');
