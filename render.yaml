@@ -24,4 +24,4 @@ services:
       - key: DETERMINISTIC_CALIBRATION_SLOPE
         value: "0.9"
       - key: DETERMINISTIC_CALIBRATION_INTERCEPT
-        value: "-0.35"
+        value: "-0.55"

@@ -48,6 +48,7 @@ const fallbackData = {
                     return `<span style="display:inline-block;padding:4px 10px;border-radius:999px;background:${positive ? '#166534' : '#7f1d1d'};color:#fefce8;font-weight:700;font-size:12px">${escapeHtml(value)}</span>`;
                   }
                   const TAB_SESSION_KEY = 'moneybot_tab_session_id';
+                  let currentHomeUser = null;
                   function getTabSessionId(){
                     return sessionStorage.getItem(TAB_SESSION_KEY) || '';
                   }
@@ -106,6 +107,7 @@ const fallbackData = {
                     try {
                       const res = await apiFetch('/api/me');
                       if(!res.ok){
+                        currentHomeUser = null;
                         return null;
                       }
                       const payload = await res.json();
@@ -113,8 +115,10 @@ const fallbackData = {
                       if(user){
                         renderAuthenticatedMenu(user);
                       }
+                      currentHomeUser = user;
                       return user;
                     } catch (err) {
+                      currentHomeUser = null;
                       return null;
                     }
                   }
@@ -498,7 +502,14 @@ const fallbackData = {
                       }
                     } catch (_err) {}
                     try {
-                      const raw = localStorage.getItem(CLEARVIEW_STORAGE_KEY);
+                      let raw = localStorage.getItem(key);
+                      if(!raw){
+                        const legacy = localStorage.getItem('moneybot_clearview_symbols');
+                        if(legacy){
+                          raw = legacy;
+                          localStorage.setItem(key, legacy);
+                        }
+                      }
                       const parsed = JSON.parse(raw || '[]');
                       if(!Array.isArray(parsed)) return ['NVDA','TSLA'];
                       const normalized = parsed.map((v)=>String(v||'').trim().toUpperCase()).filter(Boolean);
@@ -631,6 +642,10 @@ const fallbackData = {
                   }
 
                   function switchTab(tab){
+                    if(tab === 'clearview' && !currentHomeUser){
+                      location.href = '/login';
+                      return;
+                    }
                     document.querySelectorAll('.tab-panel').forEach(panel => panel.style.display = panel.id === tab ? 'block' : 'none');
                     document.querySelectorAll('.tab-btn').forEach(btn => btn.style.background = btn.dataset.tab === tab ? '#bbf7d0' : '#f0fdf4');
                     refreshTab(tab);
@@ -689,6 +704,8 @@ const fallbackData = {
                     }
                     setMenuState(false);
                     await refreshCurrentUser();
+                    const clearviewBtn = document.querySelector('.tab-btn[data-tab="clearview"]');
+                    if(clearviewBtn){ clearviewBtn.style.display = 'inline-block'; }
                     const market = await fetchWithFallback('/api/market-overview', 'market');
                     renderMarket(market);
                     await refreshTab('stable');
