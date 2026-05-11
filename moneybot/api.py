@@ -388,8 +388,8 @@ def _notification_trigger_payload(item: NotificationTriggerPreference) -> Dict[s
         "portfolio_buy_advice_change": bool(item.portfolio_buy_advice_change),
         "hot_momentum_score_crosses_8": bool(item.hot_momentum_score_crosses_8),
         "whale_top_investor_added": bool(item.whale_top_investor_added),
-        "whales_top_stock_list_changes": bool(item.whales_top_stock_list_changes),
         "clearview_hold_off_to_buy": bool(item.clearview_hold_off_to_buy),
+        "push_notifications_enabled": bool(item.push_notifications_enabled),
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }
 
@@ -416,10 +416,24 @@ def _ensure_clearview_trigger_column() -> None:
         columns = {col.get("name") for col in inspector.get_columns("notification_trigger_preferences")}
     except Exception:
         columns = set()
-    if "clearview_hold_off_to_buy" in columns:
+    statements: list[str] = []
+    if "clearview_hold_off_to_buy" not in columns:
+        statements.append(
+            "ALTER TABLE notification_trigger_preferences ADD COLUMN clearview_hold_off_to_buy BOOLEAN NOT NULL DEFAULT TRUE"
+        )
+    if "push_notifications_enabled" not in columns:
+        statements.append(
+            "ALTER TABLE notification_trigger_preferences ADD COLUMN push_notifications_enabled BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+    if "clearview_symbols_csv" not in columns:
+        statements.append(
+            "ALTER TABLE notification_trigger_preferences ADD COLUMN clearview_symbols_csv TEXT NOT NULL DEFAULT ''"
+        )
+    if not statements:
         return
     try:
-        db.session.execute(text("ALTER TABLE notification_trigger_preferences ADD COLUMN clearview_hold_off_to_buy BOOLEAN NOT NULL DEFAULT TRUE"))
+        for sql in statements:
+            db.session.execute(text(sql))
         db.session.commit()
     except (OperationalError, ProgrammingError):
         db.session.rollback()
@@ -824,8 +838,8 @@ def update_notification_triggers():
         "portfolio_buy_advice_change",
         "hot_momentum_score_crosses_8",
         "whale_top_investor_added",
-        "whales_top_stock_list_changes",
         "clearview_hold_off_to_buy",
+        "push_notifications_enabled",
     )
     for field in allowed_fields:
         if field in data:
@@ -1684,16 +1698,13 @@ def run_notification_triggers():
                     symbol=symbol,
                 )
 
-            clearview_previous = clearview_state.get(state_key, "")
+            # ClearView symbol selections are currently browser-local (localStorage) and are
+            # not persisted server-side per user. Running this trigger against watchlist symbols
+            # creates false positives for stocks a user never added to ClearView.
+            #
+            # Keep the state map intact for forward compatibility, but skip emitting
+            # clearview_hold_off_to_buy notifications until a server-side ClearView list exists.
             clearview_state[state_key] = advice
-            if clearview_previous in {"", "HOLD", "HOLD OFF", "HOLD OFF FOR NOW"} and advice == "BUY" and prefs.clearview_hold_off_to_buy:
-                queue_user_event(
-                    user.id,
-                    title=f"{symbol}: ClearView flipped to BUY",
-                    body=f"ClearView Signals moved {symbol} from Hold Off to BUY. Open the app to read the plain-English AI reason.",
-                    kind="clearview_hold_off_to_buy",
-                    symbol=symbol,
-                )
 
     momentum_items = []
     try:
