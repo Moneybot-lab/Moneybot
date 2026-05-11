@@ -5,6 +5,7 @@ import logging
 import os
 import smtplib
 import subprocess
+import sys
 import time
 import uuid
 import hmac
@@ -387,10 +388,15 @@ def _notification_trigger_payload(item: NotificationTriggerPreference) -> Dict[s
         "portfolio_buy_advice_change": bool(item.portfolio_buy_advice_change),
         "hot_momentum_score_crosses_8": bool(item.hot_momentum_score_crosses_8),
         "whale_top_investor_added": bool(item.whale_top_investor_added),
-        "whales_top_stock_list_changes": bool(item.whales_top_stock_list_changes),
         "clearview_hold_off_to_buy": bool(item.clearview_hold_off_to_buy),
+        "push_notifications_enabled": bool(item.push_notifications_enabled),
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }
+
+
+def _parse_clearview_symbols(raw: str | None) -> list[str]:
+    values = [str(v or "").strip().upper() for v in str(raw or "").split(",")]
+    return list(dict.fromkeys([v for v in values if v]))[:20]
 
 
 def _ensure_notification_trigger_preferences(user_id: int) -> NotificationTriggerPreference:
@@ -410,10 +416,24 @@ def _ensure_clearview_trigger_column() -> None:
         columns = {col.get("name") for col in inspector.get_columns("notification_trigger_preferences")}
     except Exception:
         columns = set()
-    if "clearview_hold_off_to_buy" in columns:
+    statements: list[str] = []
+    if "clearview_hold_off_to_buy" not in columns:
+        statements.append(
+            "ALTER TABLE notification_trigger_preferences ADD COLUMN clearview_hold_off_to_buy BOOLEAN NOT NULL DEFAULT TRUE"
+        )
+    if "push_notifications_enabled" not in columns:
+        statements.append(
+            "ALTER TABLE notification_trigger_preferences ADD COLUMN push_notifications_enabled BOOLEAN NOT NULL DEFAULT FALSE"
+        )
+    if "clearview_symbols_csv" not in columns:
+        statements.append(
+            "ALTER TABLE notification_trigger_preferences ADD COLUMN clearview_symbols_csv TEXT NOT NULL DEFAULT ''"
+        )
+    if not statements:
         return
     try:
-        db.session.execute(text("ALTER TABLE notification_trigger_preferences ADD COLUMN clearview_hold_off_to_buy BOOLEAN NOT NULL DEFAULT TRUE"))
+        for sql in statements:
+            db.session.execute(text(sql))
         db.session.commit()
     except (OperationalError, ProgrammingError):
         db.session.rollback()
@@ -818,8 +838,8 @@ def update_notification_triggers():
         "portfolio_buy_advice_change",
         "hot_momentum_score_crosses_8",
         "whale_top_investor_added",
-        "whales_top_stock_list_changes",
         "clearview_hold_off_to_buy",
+        "push_notifications_enabled",
     )
     for field in allowed_fields:
         if field in data:
@@ -835,6 +855,32 @@ def update_notification_triggers():
         setattr(item, key, value)
     db.session.commit()
     return jsonify({"item": _notification_trigger_payload(item), "request_id": g.request_id})
+
+
+@api_bp.get("/clearview-symbols")
+@login_required
+def get_clearview_symbols():
+    item = _ensure_notification_trigger_preferences(session["user_id"])
+    return jsonify({"symbols": _parse_clearview_symbols(item.clearview_symbols_csv), "request_id": g.request_id})
+
+
+@api_bp.put("/clearview-symbols")
+@login_required
+def update_clearview_symbols():
+    data = request.get_json(silent=True) or {}
+    symbols = data.get("symbols")
+    if not isinstance(symbols, list):
+        return jsonify({"error": "symbols must be an array", "request_id": g.request_id}), 400
+    parsed = []
+    for symbol in symbols:
+        value = str(symbol or "").strip().upper()
+        if value and value not in parsed:
+            parsed.append(value)
+    parsed = parsed[:20]
+    item = _ensure_notification_trigger_preferences(session["user_id"])
+    item.clearview_symbols_csv = ",".join(parsed)
+    db.session.commit()
+    return jsonify({"symbols": parsed, "request_id": g.request_id})
 
 
 @api_bp.post("/notifications/fcm-token")
@@ -1608,6 +1654,8 @@ def run_notification_triggers():
     for user in users:
         prefs = _ensure_notification_trigger_preferences(user.id)
         pref_cache[user.id] = prefs
+        if not prefs.push_notifications_enabled:
+            continue
         watchlist_items = (
             WatchlistItem.query.filter_by(user_id=user.id)
             .order_by(WatchlistItem.symbol.asc())
@@ -1650,16 +1698,13 @@ def run_notification_triggers():
                     symbol=symbol,
                 )
 
-            clearview_previous = clearview_state.get(state_key, "")
+            # ClearView symbol selections are currently browser-local (localStorage) and are
+            # not persisted server-side per user. Running this trigger against watchlist symbols
+            # creates false positives for stocks a user never added to ClearView.
+            #
+            # Keep the state map intact for forward compatibility, but skip emitting
+            # clearview_hold_off_to_buy notifications until a server-side ClearView list exists.
             clearview_state[state_key] = advice
-            if clearview_previous in {"", "HOLD", "HOLD OFF", "HOLD OFF FOR NOW"} and advice == "BUY" and prefs.clearview_hold_off_to_buy:
-                queue_user_event(
-                    user.id,
-                    title=f"{symbol}: ClearView flipped to BUY",
-                    body=f"ClearView Signals moved {symbol} from Hold Off to BUY. Open the app to read the plain-English AI reason.",
-                    kind="clearview_hold_off_to_buy",
-                    symbol=symbol,
-                )
 
     momentum_items = []
     try:
@@ -1681,6 +1726,8 @@ def run_notification_triggers():
         if previous <= 8.0 < score:
             for user in users:
                 prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
+                if not prefs.push_notifications_enabled:
+                    continue
                 if not prefs.hot_momentum_score_crosses_8:
                     continue
                 queue_user_event(
@@ -1711,6 +1758,8 @@ def run_notification_triggers():
     if holding_changes:
         for user in users:
             prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
+            if not prefs.push_notifications_enabled:
+                continue
             if not prefs.whale_top_investor_added:
                 continue
             investor, ticker, action = holding_changes[0]
@@ -1722,17 +1771,6 @@ def run_notification_triggers():
                 body=f"Whale/top investor {action_verb} {ticker} {body_action} Whales of Wall Street.",
                 kind="whale_top_investor_added",
                 symbol=ticker,
-            )
-    if list_changed:
-        for user in users:
-            prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
-            if not prefs.whales_top_stock_list_changes:
-                continue
-            queue_user_event(
-                user.id,
-                title="Whales top stock list changed",
-                body="At least one Whales of Wall Street top stock list changed since the last check.",
-                kind="whales_top_stock_list_changes",
             )
 
     for user in users:
@@ -1762,6 +1800,17 @@ def run_notification_triggers():
                     sent_count += 1
                 except Exception:  # noqa: BLE001
                     failed_count += 1
+                    err_msg = str(sys.exc_info()[1] or "").lower()
+                    if (
+                        "unregistered" in err_msg
+                        or "registration-token-not-registered" in err_msg
+                        or "invalid registration token" in err_msg
+                    ):
+                        try:
+                            db.session.delete(token_item)
+                            db.session.commit()
+                        except Exception:  # noqa: BLE001
+                            db.session.rollback()
                     logging.exception(
                         "Failed to send trigger notification user_id=%s token_id=%s kind=%s",
                         user.id,

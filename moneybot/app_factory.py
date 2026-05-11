@@ -118,6 +118,18 @@ def _ensure_notification_trigger_schema() -> None:
                 "ALTER TABLE notification_trigger_preferences ADD COLUMN whales_top_stock_list_changes BOOLEAN DEFAULT TRUE",
             ),
         )
+    if "push_notifications_enabled" not in columns:
+        db.session.execute(
+            db.text(
+                "ALTER TABLE notification_trigger_preferences ADD COLUMN push_notifications_enabled BOOLEAN DEFAULT FALSE",
+            ),
+        )
+    if "clearview_symbols_csv" not in columns:
+        db.session.execute(
+            db.text(
+                "ALTER TABLE notification_trigger_preferences ADD COLUMN clearview_symbols_csv TEXT DEFAULT ''",
+            ),
+        )
     db.session.commit()
 
     db.session.execute(
@@ -127,7 +139,9 @@ def _ensure_notification_trigger_schema() -> None:
             "portfolio_buy_advice_change=COALESCE(portfolio_buy_advice_change, TRUE), "
             "hot_momentum_score_crosses_8=COALESCE(hot_momentum_score_crosses_8, TRUE), "
             "whale_top_investor_added=COALESCE(whale_top_investor_added, TRUE), "
-            "whales_top_stock_list_changes=COALESCE(whales_top_stock_list_changes, TRUE)",
+            "whales_top_stock_list_changes=COALESCE(whales_top_stock_list_changes, TRUE), "
+            "push_notifications_enabled=COALESCE(push_notifications_enabled, FALSE), "
+            "clearview_symbols_csv=COALESCE(clearview_symbols_csv, '')",
         ),
     )
     db.session.commit()
