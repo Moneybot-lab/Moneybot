@@ -264,6 +264,7 @@ def _normalize_symbol(raw_symbol: str) -> str:
 
 
 INACTIVITY_TIMEOUT = timedelta(minutes=15)
+TRUSTED_DEVICE_TIMEOUT = timedelta(days=30)
 
 
 def _session_expired() -> bool:
@@ -277,7 +278,10 @@ def _session_expired() -> bool:
     else:
         last_seen_dt = None
 
-    if last_seen_dt and now - last_seen_dt > INACTIVITY_TIMEOUT:
+    is_trusted_device = bool(session.get("trusted_device"))
+    timeout = TRUSTED_DEVICE_TIMEOUT if is_trusted_device else INACTIVITY_TIMEOUT
+
+    if last_seen_dt and now - last_seen_dt > timeout:
         return True
 
     session["last_activity_at"] = now.isoformat()
@@ -652,6 +656,7 @@ def signup():
     session["user_id"] = user.id
     session["tab_session_id"] = tab_session_id
     session["requires_tab_session"] = bool(tab_session_id)
+    session["trusted_device"] = False
     session["last_activity_at"] = datetime.utcnow().isoformat()
     session.permanent = True
     return jsonify({"user": _user_payload(user), "request_id": g.request_id}), 201
@@ -663,7 +668,7 @@ def login():
     login_identifier = (data.get("email") or data.get("username") or "").strip().lower()
     password = data.get("password") or ""
     tab_session_id = (data.get("tab_session_id") or "").strip()
-
+    trusted_device = bool(data.get("trusted_device"))
 
     user = User.query.filter(or_(User.email == login_identifier, User.username == login_identifier)).first()
     if not user or not check_password_hash(user.password_hash, password):
@@ -672,6 +677,7 @@ def login():
     session["user_id"] = user.id
     session["tab_session_id"] = tab_session_id
     session["requires_tab_session"] = bool(tab_session_id)
+    session["trusted_device"] = trusted_device
     session["last_activity_at"] = datetime.utcnow().isoformat()
     session.permanent = True
     return jsonify({"user": _user_payload(user), "request_id": g.request_id})

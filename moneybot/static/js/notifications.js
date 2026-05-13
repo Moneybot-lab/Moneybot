@@ -3,7 +3,7 @@ const PUSH_TOKEN_STORAGE_KEY = 'moneybot_push_token';
 const TOKEN_REFRESH_INTERVAL_MS = 1000 * 60 * 60 * 6;
 
 function getTabSessionId() {
-  return sessionStorage.getItem(TAB_SESSION_KEY) || '';
+  return sessionStorage.getItem(TAB_SESSION_KEY) || localStorage.getItem(TAB_SESSION_KEY) || '';
 }
 
 async function apiFetch(url, options = {}) {

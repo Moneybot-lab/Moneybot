@@ -276,7 +276,7 @@ def create_app() -> Flask:
     app.url_map.strict_slashes = False
     app.config.update(
         SECRET_KEY=secret,
-        PERMANENT_SESSION_LIFETIME=timedelta(minutes=15),
+        PERMANENT_SESSION_LIFETIME=timedelta(days=30),
         SESSION_REFRESH_EACH_REQUEST=True,
         SQLALCHEMY_DATABASE_URI=database_url,
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
@@ -505,7 +505,7 @@ def create_app() -> Flask:
               </section>
               <script>
                 const TAB_SESSION_KEY = 'moneybot_tab_session_id';
-                function getTabSessionId(){ return sessionStorage.getItem(TAB_SESSION_KEY) || ''; }
+                function getTabSessionId(){ return sessionStorage.getItem(TAB_SESSION_KEY) || localStorage.getItem(TAB_SESSION_KEY) || ''; }
                 async function apiFetch(url, options = {}){
                   const headers = Object.assign({'Content-Type':'application/json', 'X-Tab-Session-Id': getTabSessionId()}, options.headers || {});
                   const res = await fetch(url, Object.assign({}, options, { headers }));
@@ -847,6 +847,10 @@ def create_app() -> Flask:
                 <form id="loginForm" style="display:flex;flex-direction:column;gap:12px">
                   <input id="email" name="email" type="text" autocomplete="username" placeholder="email or username" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
                   <input id="password" name="password" type="password" autocomplete="current-password" placeholder="password" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <label style="display:flex;align-items:center;gap:10px;color:#14532d;font-size:0.98rem">
+                    <input id="trustedDevice" name="trustedDevice" type="checkbox" style="width:18px;height:18px" />
+                    Stay signed in on this device
+                  </label>
                   <button type="button" onclick="forgotPassword()" style="align-self:flex-start;border:none;background:none;color:#15803d;padding:0 2px;font-size:0.95rem;font-weight:600;cursor:pointer;text-decoration:underline">Forgot Password?</button>
                   <button type="submit" style="font-size:1.08rem;padding:12px;border:none;border-radius:10px;background:#16a34a;color:#f0fdf4;font-weight:700;cursor:pointer">Login</button>
                 </form>
@@ -856,9 +860,10 @@ def create_app() -> Flask:
               const emailEl = document.getElementById('email');
               const passwordEl = document.getElementById('password');
               const outEl = document.getElementById('out');
+              const trustedDeviceEl = document.getElementById('trustedDevice');
               const TAB_SESSION_KEY = 'moneybot_tab_session_id';
               function getOrCreateTabSessionId(){
-                let tabSessionId = sessionStorage.getItem(TAB_SESSION_KEY);
+                let tabSessionId = sessionStorage.getItem(TAB_SESSION_KEY) || localStorage.getItem(TAB_SESSION_KEY);
                 if(!tabSessionId){
                   tabSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
                   sessionStorage.setItem(TAB_SESSION_KEY, tabSessionId);
@@ -871,9 +876,9 @@ def create_app() -> Flask:
                 if (event) event.preventDefault();
                 outEl.textContent = 'Logging in...';
                 try {
-                  const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,tab_session_id:getOrCreateTabSessionId()})});
+                  const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,tab_session_id:getOrCreateTabSessionId(),trusted_device:Boolean(trustedDeviceEl && trustedDeviceEl.checked)})});
                   const data = await res.json();
-                  if(res.ok){ outEl.textContent='Login successful. Redirecting...'; location.href='/'; }
+                  if(res.ok){ if(Boolean(trustedDeviceEl && trustedDeviceEl.checked)){ localStorage.setItem(TAB_SESSION_KEY, getOrCreateTabSessionId()); } else { localStorage.removeItem(TAB_SESSION_KEY); } outEl.textContent='Login successful. Redirecting...'; location.href='/'; }
                   else { outEl.textContent = data.error || 'Login failed. Please verify your credentials.'; }
                 } catch (err) {
                   outEl.textContent = 'Unable to login right now. Please retry.';
@@ -984,7 +989,7 @@ def create_app() -> Flask:
               let rawSelectedAvatarUrl = null;
               const TAB_SESSION_KEY = 'moneybot_tab_session_id';
               function getOrCreateTabSessionId(){
-                let tabSessionId = sessionStorage.getItem(TAB_SESSION_KEY);
+                let tabSessionId = sessionStorage.getItem(TAB_SESSION_KEY) || localStorage.getItem(TAB_SESSION_KEY);
                 if(!tabSessionId){
                   tabSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
                   sessionStorage.setItem(TAB_SESSION_KEY, tabSessionId);
@@ -1172,7 +1177,7 @@ def create_app() -> Flask:
                 let currentProfileImageUrl = null;
                 let originalProfile = null;
                 let rawSelectedAvatarUrl = null;
-                function getTabSessionId(){ return sessionStorage.getItem(TAB_SESSION_KEY) || ''; }
+                function getTabSessionId(){ return sessionStorage.getItem(TAB_SESSION_KEY) || localStorage.getItem(TAB_SESSION_KEY) || ''; }
                 async function apiFetch(url, options = {}){
                   const headers = Object.assign({'Content-Type':'application/json', 'X-Tab-Session-Id': getTabSessionId()}, options.headers || {});
                   const res = await fetch(url, Object.assign({}, options, { headers }));
@@ -1383,7 +1388,7 @@ def create_app() -> Flask:
 
               const TAB_SESSION_KEY = 'moneybot_tab_session_id';
               function getTabSessionId(){
-                return sessionStorage.getItem(TAB_SESSION_KEY) || '';
+                return sessionStorage.getItem(TAB_SESSION_KEY) || localStorage.getItem(TAB_SESSION_KEY) || '';
               }
               async function apiFetch(url, options = {}){
                 const tabSessionId = getTabSessionId();
@@ -1395,6 +1400,7 @@ def create_app() -> Flask:
                 const response = await fetch(url, Object.assign({}, options, {headers}));
                 if(response.status === 401){
                   sessionStorage.removeItem(TAB_SESSION_KEY);
+                  localStorage.removeItem(TAB_SESSION_KEY);
                   location.href = '/login';
                 }
                 return response;
@@ -1414,7 +1420,7 @@ def create_app() -> Flask:
               let currentAdviceContext = null;
               document.getElementById('addForm').addEventListener('submit', addItem);
 
-              async function logout(){ await apiFetch('/api/auth/logout',{method:'POST'}); sessionStorage.removeItem(TAB_SESSION_KEY); location.href='/'; }
+              async function logout(){ await apiFetch('/api/auth/logout',{method:'POST'}); sessionStorage.removeItem(TAB_SESSION_KEY); localStorage.removeItem(TAB_SESSION_KEY); location.href='/'; }
               function setLoading(isLoading){ loadingStateEl.style.display = isLoading ? 'flex' : 'none'; }
               function displayValue(value){
                 return (value === null || value === undefined || value === '') ? 'n/a' : value;
