@@ -50,7 +50,7 @@ const fallbackData = {
                   const TAB_SESSION_KEY = 'moneybot_tab_session_id';
                   let currentHomeUser = null;
                   function getTabSessionId(){
-                    return sessionStorage.getItem(TAB_SESSION_KEY) || '';
+                    return sessionStorage.getItem(TAB_SESSION_KEY) || localStorage.getItem(TAB_SESSION_KEY) || '';
                   }
                   async function apiFetch(url, options = {}){
                     const headers = Object.assign({}, options.headers || {});
@@ -125,6 +125,7 @@ const fallbackData = {
                   async function logoutFromMenu(){
                     await apiFetch('/api/auth/logout', { method: 'POST' });
                     sessionStorage.removeItem(TAB_SESSION_KEY);
+                    localStorage.removeItem(TAB_SESSION_KEY);
                     location.href = '/';
                   }
                   const marketChartInstances = {};
