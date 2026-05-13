@@ -521,6 +521,7 @@ def create_app() -> Flask:
                 document.getElementById('securityForm').addEventListener('submit', async (event) => {
                   event.preventDefault();
                   const outEl = document.getElementById('out');
+              const trustedDeviceEl = document.getElementById('trustedDevice');
                   outEl.textContent = 'Saving...';
                   const body = {
                     email: document.getElementById('email').value,
@@ -847,6 +848,10 @@ def create_app() -> Flask:
                 <form id="loginForm" style="display:flex;flex-direction:column;gap:12px">
                   <input id="email" name="email" type="text" autocomplete="username" placeholder="email or username" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
                   <input id="password" name="password" type="password" autocomplete="current-password" placeholder="password" required style="font-size:1.08rem;padding:12px;border:1px solid #bbf7d0;border-radius:10px" />
+                  <label style="display:flex;align-items:center;gap:10px;color:#14532d;font-size:0.98rem">
+                    <input id="trustedDevice" name="trustedDevice" type="checkbox" style="width:18px;height:18px" />
+                    Stay signed in on this device
+                  </label>
                   <button type="button" onclick="forgotPassword()" style="align-self:flex-start;border:none;background:none;color:#15803d;padding:0 2px;font-size:0.95rem;font-weight:600;cursor:pointer;text-decoration:underline">Forgot Password?</button>
                   <button type="submit" style="font-size:1.08rem;padding:12px;border:none;border-radius:10px;background:#16a34a;color:#f0fdf4;font-weight:700;cursor:pointer">Login</button>
                 </form>
@@ -856,6 +861,7 @@ def create_app() -> Flask:
               const emailEl = document.getElementById('email');
               const passwordEl = document.getElementById('password');
               const outEl = document.getElementById('out');
+              const trustedDeviceEl = document.getElementById('trustedDevice');
               const TAB_SESSION_KEY = 'moneybot_tab_session_id';
               function getOrCreateTabSessionId(){
                 let tabSessionId = sessionStorage.getItem(TAB_SESSION_KEY);
@@ -871,7 +877,7 @@ def create_app() -> Flask:
                 if (event) event.preventDefault();
                 outEl.textContent = 'Logging in...';
                 try {
-                  const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,tab_session_id:getOrCreateTabSessionId()})});
+                  const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,tab_session_id:getOrCreateTabSessionId(),trusted_device:Boolean(trustedDeviceEl && trustedDeviceEl.checked)})});
                   const data = await res.json();
                   if(res.ok){ outEl.textContent='Login successful. Redirecting...'; location.href='/'; }
                   else { outEl.textContent = data.error || 'Login failed. Please verify your credentials.'; }
@@ -980,6 +986,7 @@ def create_app() -> Flask:
               const passwordEl = document.getElementById('password');
               const confirmPasswordEl = document.getElementById('confirmPassword');
               const outEl = document.getElementById('out');
+              const trustedDeviceEl = document.getElementById('trustedDevice');
               let profileImageDataUrl = null;
               let rawSelectedAvatarUrl = null;
               const TAB_SESSION_KEY = 'moneybot_tab_session_id';
@@ -1093,6 +1100,7 @@ def create_app() -> Flask:
                 const passwordEl = document.getElementById('password');
                 const confirmPasswordEl = document.getElementById('confirmPassword');
                 const outEl = document.getElementById('out');
+              const trustedDeviceEl = document.getElementById('trustedDevice');
                 const params = new URLSearchParams(window.location.search);
                 const token = params.get('token') || '';
                 document.getElementById('resetForm').addEventListener('submit', async (event) => {
@@ -1285,6 +1293,7 @@ def create_app() -> Flask:
                 document.getElementById('profileForm').addEventListener('submit', async (event) => {
                   event.preventDefault();
                   const outEl = document.getElementById('out');
+              const trustedDeviceEl = document.getElementById('trustedDevice');
                   outEl.textContent = 'Saving...';
                   const res = await apiFetch('/api/me/profile', {
                     method:'PUT',
@@ -1406,6 +1415,7 @@ def create_app() -> Flask:
               const lifetimeTotalEl = document.getElementById('lifetimeTotal');
               const toggleLifetimeBtnEl = document.getElementById('toggleLifetimeBtn');
               const outEl = document.getElementById('out');
+              const trustedDeviceEl = document.getElementById('trustedDevice');
               const loadingStateEl = document.getElementById('loadingState');
               const symbolEl = document.getElementById('symbol');
               const buyPriceEl = document.getElementById('buy_price');
