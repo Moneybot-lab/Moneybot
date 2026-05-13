@@ -505,7 +505,7 @@ def create_app() -> Flask:
               </section>
               <script>
                 const TAB_SESSION_KEY = 'moneybot_tab_session_id';
-                function getTabSessionId(){ return sessionStorage.getItem(TAB_SESSION_KEY) || ''; }
+                function getTabSessionId(){ return sessionStorage.getItem(TAB_SESSION_KEY) || localStorage.getItem(TAB_SESSION_KEY) || ''; }
                 async function apiFetch(url, options = {}){
                   const headers = Object.assign({'Content-Type':'application/json', 'X-Tab-Session-Id': getTabSessionId()}, options.headers || {});
                   const res = await fetch(url, Object.assign({}, options, { headers }));
@@ -864,7 +864,7 @@ def create_app() -> Flask:
               const trustedDeviceEl = document.getElementById('trustedDevice');
               const TAB_SESSION_KEY = 'moneybot_tab_session_id';
               function getOrCreateTabSessionId(){
-                let tabSessionId = sessionStorage.getItem(TAB_SESSION_KEY);
+                let tabSessionId = sessionStorage.getItem(TAB_SESSION_KEY) || localStorage.getItem(TAB_SESSION_KEY);
                 if(!tabSessionId){
                   tabSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
                   sessionStorage.setItem(TAB_SESSION_KEY, tabSessionId);
@@ -879,7 +879,7 @@ def create_app() -> Flask:
                 try {
                   const res = await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:emailEl.value,password:passwordEl.value,tab_session_id:getOrCreateTabSessionId(),trusted_device:Boolean(trustedDeviceEl && trustedDeviceEl.checked)})});
                   const data = await res.json();
-                  if(res.ok){ outEl.textContent='Login successful. Redirecting...'; location.href='/'; }
+                  if(res.ok){ if(Boolean(trustedDeviceEl && trustedDeviceEl.checked)){ localStorage.setItem(TAB_SESSION_KEY, getOrCreateTabSessionId()); } else { localStorage.removeItem(TAB_SESSION_KEY); } outEl.textContent='Login successful. Redirecting...'; location.href='/'; }
                   else { outEl.textContent = data.error || 'Login failed. Please verify your credentials.'; }
                 } catch (err) {
                   outEl.textContent = 'Unable to login right now. Please retry.';
@@ -991,7 +991,7 @@ def create_app() -> Flask:
               let rawSelectedAvatarUrl = null;
               const TAB_SESSION_KEY = 'moneybot_tab_session_id';
               function getOrCreateTabSessionId(){
-                let tabSessionId = sessionStorage.getItem(TAB_SESSION_KEY);
+                let tabSessionId = sessionStorage.getItem(TAB_SESSION_KEY) || localStorage.getItem(TAB_SESSION_KEY);
                 if(!tabSessionId){
                   tabSessionId = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2);
                   sessionStorage.setItem(TAB_SESSION_KEY, tabSessionId);
@@ -1180,7 +1180,7 @@ def create_app() -> Flask:
                 let currentProfileImageUrl = null;
                 let originalProfile = null;
                 let rawSelectedAvatarUrl = null;
-                function getTabSessionId(){ return sessionStorage.getItem(TAB_SESSION_KEY) || ''; }
+                function getTabSessionId(){ return sessionStorage.getItem(TAB_SESSION_KEY) || localStorage.getItem(TAB_SESSION_KEY) || ''; }
                 async function apiFetch(url, options = {}){
                   const headers = Object.assign({'Content-Type':'application/json', 'X-Tab-Session-Id': getTabSessionId()}, options.headers || {});
                   const res = await fetch(url, Object.assign({}, options, { headers }));
@@ -1392,7 +1392,7 @@ def create_app() -> Flask:
 
               const TAB_SESSION_KEY = 'moneybot_tab_session_id';
               function getTabSessionId(){
-                return sessionStorage.getItem(TAB_SESSION_KEY) || '';
+                return sessionStorage.getItem(TAB_SESSION_KEY) || localStorage.getItem(TAB_SESSION_KEY) || '';
               }
               async function apiFetch(url, options = {}){
                 const tabSessionId = getTabSessionId();
@@ -1404,6 +1404,7 @@ def create_app() -> Flask:
                 const response = await fetch(url, Object.assign({}, options, {headers}));
                 if(response.status === 401){
                   sessionStorage.removeItem(TAB_SESSION_KEY);
+                  localStorage.removeItem(TAB_SESSION_KEY);
                   location.href = '/login';
                 }
                 return response;
@@ -1424,7 +1425,7 @@ def create_app() -> Flask:
               let currentAdviceContext = null;
               document.getElementById('addForm').addEventListener('submit', addItem);
 
-              async function logout(){ await apiFetch('/api/auth/logout',{method:'POST'}); sessionStorage.removeItem(TAB_SESSION_KEY); location.href='/'; }
+              async function logout(){ await apiFetch('/api/auth/logout',{method:'POST'}); sessionStorage.removeItem(TAB_SESSION_KEY); localStorage.removeItem(TAB_SESSION_KEY); location.href='/'; }
               function setLoading(isLoading){ loadingStateEl.style.display = isLoading ? 'flex' : 'none'; }
               function displayValue(value){
                 return (value === null || value === undefined || value === '') ? 'n/a' : value;
