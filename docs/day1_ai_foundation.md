@@ -301,6 +301,52 @@ Allowlist/blocklist guidance when switching dry-run to false:
 - Keep blocklist for known-problem symbols you want to suppress regardless of percentage.
 - Avoid putting the same symbol in both lists; if that happens, blocklist takes precedence in rollout gating logic.
 
+### 5.3 terminal test runbook (example: promote quick-ask from 50% to 75%)
+
+Yes — you can run a terminal validation loop before and after changing rollout percentage.
+
+1) Set rollout to 50% (baseline window):
+
+```bash
+export DETERMINISTIC_ROLLOUT_DRY_RUN=false
+export DETERMINISTIC_ROLLOUT_PERCENTAGE=50
+```
+
+2) Verify runtime config is live:
+
+```bash
+curl -s http://localhost:5000/api/model-health | jq '.data.rollout_percentage, .data.rollout_dry_run, .data.rollout_allowlist, .data.rollout_blocklist'
+```
+
+3) Sample quick-ask responses across a symbol basket and measure deterministic share:
+
+```bash
+for s in AAPL MSFT NVDA AMZN GOOGL META TSLA NFLX AMD CRM; do
+  curl -s "http://localhost:5000/api/quick-ask?symbol=${s}" | jq -r '"\($s),\(.data.decision_source)"'
+done
+```
+
+4) Promote to 75%:
+
+```bash
+export DETERMINISTIC_ROLLOUT_PERCENTAGE=75
+```
+
+5) Re-run the same checks (steps 2-3) and compare deterministic share + latency/error metrics.
+
+Optional automated guardrail check:
+
+```bash
+BASE_URL=http://localhost:5000 bash scripts/gate_check.sh
+```
+
+Optional unit tests for rollout logic:
+
+```bash
+pytest -q tests/test_deterministic_advisor.py -k rollout
+pytest -q tests/test_dashboard_api.py -k "quick_ask and rollout"
+```
+
 ### Day-13 calibration diagnostics + plan
 
 Generate a calibration report from decision telemetry:
