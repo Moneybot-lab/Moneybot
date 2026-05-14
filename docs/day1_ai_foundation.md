@@ -273,6 +273,34 @@ DETERMINISTIC_ROLLOUT_PERCENTAGE=0
 
 In this mode, `/api/quick-ask` continues to serve the existing rule-based response, while logging deterministic shadow decisions under `quick_ask_shadow` for comparison.
 
+### 5.2 rollout promotion plan (starting from `DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE=20`)
+
+Use a staged promotion schedule so you can validate quality and safety at each step before broadening exposure.
+
+Suggested progression:
+
+1. **20% (current baseline, 24-48h)**
+   - keep `DETERMINISTIC_ROLLOUT_DRY_RUN=false` (live traffic)
+   - monitor `/api/model-health`, `quick_ask` latency, and decision outcome drift vs baseline
+2. **35% (next step, 24-48h)**
+   - increase only `DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE=35`
+   - keep the same `DETERMINISTIC_ROLLOUT_SEED` to avoid cohort churn
+3. **50% (confidence gate, 2-3 days)**
+   - promote if error/complaint rates remain flat and deterministic outcomes are not materially worse
+4. **75% (broad exposure, 2-3 days)**
+   - verify no concentration risk by symbol/sector in the deterministic cohort
+5. **100% (full rollout)**
+   - promote only after stable metrics across at least one full market cycle for your strategy horizon
+
+Rollback rule:
+- if quality/safety metrics regress at any stage, revert to the previous percentage immediately and investigate before retrying.
+
+Allowlist/blocklist guidance when switching dry-run to false:
+- **No mandatory change is required** just because `DETERMINISTIC_ROLLOUT_DRY_RUN` moved to `false`.
+- Keep allowlist empty unless you intentionally want to force specific symbols into deterministic mode regardless of percentage.
+- Keep blocklist for known-problem symbols you want to suppress regardless of percentage.
+- Avoid putting the same symbol in both lists; if that happens, blocklist takes precedence in rollout gating logic.
+
 ### Day-13 calibration diagnostics + plan
 
 Generate a calibration report from decision telemetry:
