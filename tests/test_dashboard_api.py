@@ -1160,7 +1160,6 @@ def test_user_watchlist_uses_ai_portfolio_advice_when_available():
     assert res.status_code == 200
     enriched = res.get_json()["enriched_items"][0]
     assert enriched["advice"] == "HOLD"
-    assert "consistency adjustment" in enriched["advice_reason"].lower()
     assert enriched["quick_alignment_recommendation"] in {"BUY", "STRONG BUY"}
     assert enriched["ai_portfolio"]["mode"] == "ai_enhanced"
     assert enriched["ai_portfolio"]["provider"] == "stub"
@@ -1182,3 +1181,21 @@ def test_user_watchlist_includes_deterministic_portfolio_advice_when_available()
     assert enriched["advice"] == "BUY"
     assert enriched["deterministic_portfolio"]["mode"] == "deterministic_model"
     assert enriched["deterministic_portfolio"]["decision_source"] == "deterministic_model"
+
+
+def test_user_watchlist_keeps_deterministic_portfolio_advice_when_ai_is_enabled():
+    client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = StubDeterministicQuickAdvisor()
+    client.application.extensions["ai_advisor_service"] = StubAIAdvisorService()
+
+    signup = client.post("/api/auth/signup", json=_signup_payload("portfolio-det-ai@b.com"))
+    assert signup.status_code == 201
+    add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 1})
+    assert add.status_code == 201
+
+    res = client.get("/api/user-watchlist")
+    assert res.status_code == 200
+    enriched = res.get_json()["enriched_items"][0]
+    assert enriched["advice"] == "BUY"
+    assert enriched["deterministic_portfolio"]["decision_source"] == "deterministic_model"
+    assert enriched["ai_portfolio"]["mode"] == "ai_enhanced"

@@ -1062,6 +1062,7 @@ def user_watchlist():
             advice_reason = rationale.strip()
 
         deterministic_portfolio = None
+        deterministic_locked = False
         if deterministic_svc is not None:
             try:
                 deterministic_portfolio = deterministic_svc.predict_portfolio_position(
@@ -1075,6 +1076,7 @@ def user_watchlist():
                 deterministic_advice = str((deterministic_portfolio or {}).get("advice") or "").upper()
                 if deterministic_advice in {"BUY", "HOLD", "SELL"}:
                     advice = deterministic_advice
+                    deterministic_locked = True
                 deterministic_reason = str((deterministic_portfolio or {}).get("advice_reason") or "").strip()
                 if deterministic_reason:
                     advice_reason = deterministic_reason
@@ -1092,7 +1094,7 @@ def user_watchlist():
                     signal_data=signal,
                 )
                 ai_advice = str((ai_portfolio or {}).get("advice") or "").upper()
-                if ai_advice in {"BUY", "HOLD", "SELL"}:
+                if (not deterministic_locked) and ai_advice in {"BUY", "HOLD", "SELL"}:
                     advice = ai_advice
                 ai_reason = str((ai_portfolio or {}).get("advice_reason") or "").strip()
                 if ai_reason:
