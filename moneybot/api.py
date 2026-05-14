@@ -1062,6 +1062,7 @@ def user_watchlist():
             advice_reason = rationale.strip()
 
         deterministic_portfolio = None
+        deterministic_locked = False
         if deterministic_svc is not None:
             try:
                 deterministic_portfolio = deterministic_svc.predict_portfolio_position(
@@ -1075,6 +1076,7 @@ def user_watchlist():
                 deterministic_advice = str((deterministic_portfolio or {}).get("advice") or "").upper()
                 if deterministic_advice in {"BUY", "HOLD", "SELL"}:
                     advice = deterministic_advice
+                    deterministic_locked = True
                 deterministic_reason = str((deterministic_portfolio or {}).get("advice_reason") or "").strip()
                 if deterministic_reason:
                     advice_reason = deterministic_reason
@@ -1092,7 +1094,7 @@ def user_watchlist():
                     signal_data=signal,
                 )
                 ai_advice = str((ai_portfolio or {}).get("advice") or "").upper()
-                if ai_advice in {"BUY", "HOLD", "SELL"}:
+                if (not deterministic_locked) and ai_advice in {"BUY", "HOLD", "SELL"}:
                     advice = ai_advice
                 ai_reason = str((ai_portfolio or {}).get("advice_reason") or "").strip()
                 if ai_reason:
@@ -2004,6 +2006,7 @@ def model_health():
                 "model_version": getattr(getattr(deterministic_svc, "artifact", None), "version", None),
                 "model_load_error": getattr(deterministic_svc, "load_error", None),
                 "rollout_percentage": getattr(deterministic_svc, "rollout_percentage", None),
+                "portfolio_rollout_percentage": getattr(deterministic_svc, "portfolio_rollout_percentage", None),
                 "rollout_allowlist_size": len(getattr(deterministic_svc, "rollout_allowlist", set()) or set()),
                 "rollout_blocklist_size": len(getattr(deterministic_svc, "rollout_blocklist", set()) or set()),
                 "rollout_dry_run": bool(getattr(deterministic_svc, "rollout_dry_run", False)),
@@ -2058,7 +2061,11 @@ def decision_outcomes():
     decision_logger = current_app.extensions.get("decision_logger")
     raw_limit = request.args.get("limit") or "20"
     include_skipped = (request.args.get("include_skipped") or "").strip().lower() == "true"
+    decision_source_filter = (request.args.get("decision_source") or "").strip()
     force_live = (request.args.get("force_live") or "").strip().lower() == "true"
+    if decision_source_filter:
+        # Snapshot payload is pre-aggregated and may not match source filtering.
+        force_live = True
     try:
         limit = max(1, min(int(raw_limit), 100))
     except ValueError:
@@ -2127,6 +2134,14 @@ def decision_outcomes():
             if isinstance(row.get("return_1d"), (int, float)) or isinstance(row.get("return_5d"), (int, float))
         ]
         evaluated_rows_5d = [row for row in rows if isinstance(row.get("return_5d"), (int, float))]
+        if decision_source_filter:
+            rows = [row for row in rows if str(row.get("decision_source") or "").strip() == decision_source_filter]
+            evaluated_rows = [
+                row
+                for row in rows
+                if isinstance(row.get("return_1d"), (int, float)) or isinstance(row.get("return_5d"), (int, float))
+            ]
+            evaluated_rows_5d = [row for row in rows if isinstance(row.get("return_5d"), (int, float))]
         # Keep widening until we either have enough 5D-evaluable rows or hit the cap.
         # Do not stop early just because 1D rows are available; that can hide older 5D rows.
         if include_skipped or len(evaluated_rows_5d) >= limit or read_limit >= read_cap:
@@ -2155,6 +2170,7 @@ def decision_outcomes():
                 "summary_1d": summary_1d,
                 "summary_5d": summary_5d,
                 "include_skipped": include_skipped,
+                "decision_source_filter": decision_source_filter or None,
                 "rows_scanned": len(rows),
                 "evaluated_rows_available": len(evaluated_rows),
                 "evaluated_rows_5d_available": len(evaluated_rows_5d),
