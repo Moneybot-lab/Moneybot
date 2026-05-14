@@ -340,6 +340,17 @@ Optional automated guardrail check:
 BASE_URL=http://localhost:5000 bash scripts/gate_check.sh
 ```
 
+Portfolio rollout promotion gates (same style as quick-ask):
+
+```bash
+BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_20_to_35
+BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_35_to_50
+BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_50_to_75
+BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_75_to_100
+```
+
+Use the gate that matches your **current** portfolio rollout percentage. Promote only when the gate passes.
+
 Optional unit tests for rollout logic:
 
 ```bash

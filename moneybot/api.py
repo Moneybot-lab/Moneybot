@@ -2004,6 +2004,7 @@ def model_health():
                 "model_version": getattr(getattr(deterministic_svc, "artifact", None), "version", None),
                 "model_load_error": getattr(deterministic_svc, "load_error", None),
                 "rollout_percentage": getattr(deterministic_svc, "rollout_percentage", None),
+                "portfolio_rollout_percentage": getattr(deterministic_svc, "portfolio_rollout_percentage", None),
                 "rollout_allowlist_size": len(getattr(deterministic_svc, "rollout_allowlist", set()) or set()),
                 "rollout_blocklist_size": len(getattr(deterministic_svc, "rollout_blocklist", set()) or set()),
                 "rollout_dry_run": bool(getattr(deterministic_svc, "rollout_dry_run", False)),
