@@ -559,6 +559,27 @@ def test_decision_outcomes_filters_skipped_rows_by_default(tmp_path, monkeypatch
     assert include_skipped_data["include_skipped"] is True
 
 
+def test_decision_outcomes_can_filter_by_decision_source(tmp_path, monkeypatch):
+    monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
+    client = _client()
+    logger = client.application.extensions["decision_logger"]
+    logger.log(endpoint="quick_ask", symbol="AAPL", decision_source="deterministic_model", payload={"recommendation": "BUY"})
+    logger.log(endpoint="quick_ask", symbol="TSLA", decision_source="rule_based", payload={"recommendation": "SELL"})
+
+    monkeypatch.setattr(
+        api_module,
+        "_future_return_for_outcomes",
+        lambda symbol, ts, days: {("AAPL", 1): 0.02, ("AAPL", 5): 0.05, ("TSLA", 1): -0.01, ("TSLA", 5): -0.03}[(symbol, days)],
+    )
+
+    res = client.get("/api/decision-outcomes?limit=10&decision_source=deterministic_model")
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["decision_source_filter"] == "deterministic_model"
+    assert len(data["rows"]) == 1
+    assert data["rows"][0]["decision_source"] == "deterministic_model"
+
+
 def test_decision_outcomes_prefers_rows_with_5d_returns_for_default_view(tmp_path, monkeypatch):
     monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
     client = _client()

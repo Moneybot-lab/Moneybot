@@ -2059,7 +2059,11 @@ def decision_outcomes():
     decision_logger = current_app.extensions.get("decision_logger")
     raw_limit = request.args.get("limit") or "20"
     include_skipped = (request.args.get("include_skipped") or "").strip().lower() == "true"
+    decision_source_filter = (request.args.get("decision_source") or "").strip()
     force_live = (request.args.get("force_live") or "").strip().lower() == "true"
+    if decision_source_filter:
+        # Snapshot payload is pre-aggregated and may not match source filtering.
+        force_live = True
     try:
         limit = max(1, min(int(raw_limit), 100))
     except ValueError:
@@ -2128,6 +2132,14 @@ def decision_outcomes():
             if isinstance(row.get("return_1d"), (int, float)) or isinstance(row.get("return_5d"), (int, float))
         ]
         evaluated_rows_5d = [row for row in rows if isinstance(row.get("return_5d"), (int, float))]
+        if decision_source_filter:
+            rows = [row for row in rows if str(row.get("decision_source") or "").strip() == decision_source_filter]
+            evaluated_rows = [
+                row
+                for row in rows
+                if isinstance(row.get("return_1d"), (int, float)) or isinstance(row.get("return_5d"), (int, float))
+            ]
+            evaluated_rows_5d = [row for row in rows if isinstance(row.get("return_5d"), (int, float))]
         # Keep widening until we either have enough 5D-evaluable rows or hit the cap.
         # Do not stop early just because 1D rows are available; that can hide older 5D rows.
         if include_skipped or len(evaluated_rows_5d) >= limit or read_limit >= read_cap:
@@ -2156,6 +2168,7 @@ def decision_outcomes():
                 "summary_1d": summary_1d,
                 "summary_5d": summary_5d,
                 "include_skipped": include_skipped,
+                "decision_source_filter": decision_source_filter or None,
                 "rows_scanned": len(rows),
                 "evaluated_rows_available": len(evaluated_rows),
                 "evaluated_rows_5d_available": len(evaluated_rows_5d),
