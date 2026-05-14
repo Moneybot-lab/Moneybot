@@ -312,6 +312,12 @@ def create_app() -> Flask:
         DETERMINISTIC_CALIBRATION_SLOPE=float(os.environ.get("DETERMINISTIC_CALIBRATION_SLOPE", "1.0")),
         DETERMINISTIC_CALIBRATION_INTERCEPT=float(os.environ.get("DETERMINISTIC_CALIBRATION_INTERCEPT", "0.0")),
         DETERMINISTIC_ROLLOUT_PERCENTAGE=float(os.environ.get("DETERMINISTIC_ROLLOUT_PERCENTAGE", "100.0")),
+        DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE=float(
+            os.environ.get(
+                "DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE",
+                os.environ.get("DETERMINISTIC_ROLLOUT_PERCENTAGE", "100.0"),
+            ),
+        ),
         DETERMINISTIC_ROLLOUT_SEED=os.environ.get("DETERMINISTIC_ROLLOUT_SEED", "moneybot"),
         DETERMINISTIC_ROLLOUT_ALLOWLIST=_parse_symbol_set(os.environ.get("DETERMINISTIC_ROLLOUT_ALLOWLIST", "")),
         DETERMINISTIC_ROLLOUT_BLOCKLIST=_parse_symbol_set(os.environ.get("DETERMINISTIC_ROLLOUT_BLOCKLIST", "")),
@@ -370,6 +376,7 @@ def create_app() -> Flask:
         calibration_slope=app.config["DETERMINISTIC_CALIBRATION_SLOPE"],
         calibration_intercept=app.config["DETERMINISTIC_CALIBRATION_INTERCEPT"],
         rollout_percentage=app.config["DETERMINISTIC_ROLLOUT_PERCENTAGE"],
+        portfolio_rollout_percentage=app.config["DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE"],
         rollout_seed=app.config["DETERMINISTIC_ROLLOUT_SEED"],
         rollout_allowlist=app.config["DETERMINISTIC_ROLLOUT_ALLOWLIST"],
         rollout_blocklist=app.config["DETERMINISTIC_ROLLOUT_BLOCKLIST"],

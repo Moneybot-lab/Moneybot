@@ -33,6 +33,7 @@ class DeterministicQuickAdvisor:
         rollout_allowlist: set[str] | None = None,
         rollout_blocklist: set[str] | None = None,
         rollout_dry_run: bool = False,
+        portfolio_rollout_percentage: float | None = None,
     ):
         self.enabled = bool(enabled)
         self.artifact_path = artifact_path
@@ -53,6 +54,15 @@ class DeterministicQuickAdvisor:
         self.rollout_allowlist = {s.strip().upper() for s in (rollout_allowlist or set()) if str(s).strip()}
         self.rollout_blocklist = {s.strip().upper() for s in (rollout_blocklist or set()) if str(s).strip()}
         self.rollout_dry_run = bool(rollout_dry_run)
+        self.portfolio_rollout_percentage = max(
+            0.0,
+            min(
+                100.0,
+                float(portfolio_rollout_percentage)
+                if portfolio_rollout_percentage is not None
+                else self.rollout_percentage,
+            ),
+        )
 
         if self.enabled:
             self._load_artifact()
@@ -117,18 +127,24 @@ class DeterministicQuickAdvisor:
         return row, imputed
 
     def _is_in_rollout(self, symbol: str | None) -> bool:
+        return self._is_in_rollout_with_percentage(symbol, self.rollout_percentage)
+
+    def _is_in_rollout_with_percentage(self, symbol: str | None, rollout_percentage: float) -> bool:
         normalized = str(symbol or "").strip().upper()
         if normalized and normalized in self.rollout_allowlist:
             return True
         if normalized and normalized in self.rollout_blocklist:
             return False
-        if self.rollout_percentage >= 100.0:
+        if rollout_percentage >= 100.0:
             return True
-        if self.rollout_percentage <= 0.0:
+        if rollout_percentage <= 0.0:
             return False
         key = f"{self.rollout_seed}:{normalized or '*'}".encode("utf-8")
         bucket = int(hashlib.sha256(key).hexdigest()[:8], 16) / 0xFFFFFFFF
-        return bucket < (self.rollout_percentage / 100.0)
+        return bucket < (rollout_percentage / 100.0)
+
+    def _is_in_portfolio_rollout(self, symbol: str | None) -> bool:
+        return self._is_in_rollout_with_percentage(symbol, self.portfolio_rollout_percentage)
 
     @staticmethod
     def _sigmoid(value: float) -> float:
@@ -227,7 +243,9 @@ class DeterministicQuickAdvisor:
         signal_data: Dict[str, Any],
         quote_data: Dict[str, Any],
     ) -> Dict[str, Any] | None:
-        quick = self.predict_quick_decision(signal_data=signal_data, quote_data=quote_data, symbol=symbol)
+        quick = None
+        if self._is_in_portfolio_rollout(symbol):
+            quick = self.predict_quick_decision(signal_data=signal_data, quote_data=quote_data, symbol=symbol)
         if quick is None and self.rollout_dry_run:
             quick = self.predict_shadow_decision(signal_data=signal_data, quote_data=quote_data)
         if quick is None:

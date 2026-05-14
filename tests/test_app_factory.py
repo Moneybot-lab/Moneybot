@@ -151,6 +151,7 @@ def test_create_app_reads_deterministic_calibration_and_rollout_settings(monkeyp
     monkeypatch.setenv("DETERMINISTIC_CALIBRATION_SLOPE", "0.9")
     monkeypatch.setenv("DETERMINISTIC_CALIBRATION_INTERCEPT", "-0.15")
     monkeypatch.setenv("DETERMINISTIC_ROLLOUT_PERCENTAGE", "35")
+    monkeypatch.setenv("DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE", "20")
     monkeypatch.setenv("DETERMINISTIC_ROLLOUT_SEED", "day12")
     monkeypatch.setenv("DETERMINISTIC_ROLLOUT_ALLOWLIST", "AAPL, msft")
     monkeypatch.setenv("DETERMINISTIC_ROLLOUT_BLOCKLIST", "TSLA")
@@ -165,6 +166,7 @@ def test_create_app_reads_deterministic_calibration_and_rollout_settings(monkeyp
     assert app.config["DETERMINISTIC_CALIBRATION_SLOPE"] == 0.9
     assert app.config["DETERMINISTIC_CALIBRATION_INTERCEPT"] == -0.15
     assert app.config["DETERMINISTIC_ROLLOUT_PERCENTAGE"] == 35.0
+    assert app.config["DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE"] == 20.0
     assert app.config["DETERMINISTIC_ROLLOUT_SEED"] == "day12"
     assert app.config["DETERMINISTIC_ROLLOUT_ALLOWLIST"] == {"AAPL", "MSFT"}
     assert app.config["DETERMINISTIC_ROLLOUT_BLOCKLIST"] == {"TSLA"}
@@ -173,6 +175,7 @@ def test_create_app_reads_deterministic_calibration_and_rollout_settings(monkeyp
     assert app.config["DETERMINISTIC_CALIBRATION_REPORT_MAX_AGE_SECONDS"] == 1234
     assert svc.calibration_enabled is True
     assert svc.rollout_percentage == 35.0
+    assert svc.portfolio_rollout_percentage == 20.0
     assert svc.rollout_allowlist == {"AAPL", "MSFT"}
     assert svc.rollout_blocklist == {"TSLA"}
     assert svc.rollout_dry_run is True
