@@ -273,6 +273,91 @@ DETERMINISTIC_ROLLOUT_PERCENTAGE=0
 
 In this mode, `/api/quick-ask` continues to serve the existing rule-based response, while logging deterministic shadow decisions under `quick_ask_shadow` for comparison.
 
+### 5.2 rollout promotion plan (starting from `DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE=20`)
+
+Use a staged promotion schedule so you can validate quality and safety at each step before broadening exposure.
+
+Suggested progression:
+
+1. **20% (current baseline, 24-48h)**
+   - keep `DETERMINISTIC_ROLLOUT_DRY_RUN=false` (live traffic)
+   - monitor `/api/model-health`, `quick_ask` latency, and decision outcome drift vs baseline
+2. **35% (next step, 24-48h)**
+   - increase only `DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE=35`
+   - keep the same `DETERMINISTIC_ROLLOUT_SEED` to avoid cohort churn
+3. **50% (confidence gate, 2-3 days)**
+   - promote if error/complaint rates remain flat and deterministic outcomes are not materially worse
+4. **75% (broad exposure, 2-3 days)**
+   - verify no concentration risk by symbol/sector in the deterministic cohort
+5. **100% (full rollout)**
+   - promote only after stable metrics across at least one full market cycle for your strategy horizon
+
+Rollback rule:
+- if quality/safety metrics regress at any stage, revert to the previous percentage immediately and investigate before retrying.
+
+Allowlist/blocklist guidance when switching dry-run to false:
+- **No mandatory change is required** just because `DETERMINISTIC_ROLLOUT_DRY_RUN` moved to `false`.
+- Keep allowlist empty unless you intentionally want to force specific symbols into deterministic mode regardless of percentage.
+- Keep blocklist for known-problem symbols you want to suppress regardless of percentage.
+- Avoid putting the same symbol in both lists; if that happens, blocklist takes precedence in rollout gating logic.
+
+### 5.3 terminal test runbook (example: promote quick-ask from 50% to 75%)
+
+Yes — you can run a terminal validation loop before and after changing rollout percentage.
+
+1) Set rollout to 50% (baseline window):
+
+```bash
+export DETERMINISTIC_ROLLOUT_DRY_RUN=false
+export DETERMINISTIC_ROLLOUT_PERCENTAGE=50
+```
+
+2) Verify runtime config is live:
+
+```bash
+curl -s http://localhost:5000/api/model-health | jq '.data.rollout_percentage, .data.rollout_dry_run, .data.rollout_allowlist, .data.rollout_blocklist'
+```
+
+3) Sample quick-ask responses across a symbol basket and measure deterministic share:
+
+```bash
+for s in AAPL MSFT NVDA AMZN GOOGL META TSLA NFLX AMD CRM; do
+  curl -s "http://localhost:5000/api/quick-ask?symbol=${s}" | jq -r '"\($s),\(.data.decision_source)"'
+done
+```
+
+4) Promote to 75%:
+
+```bash
+export DETERMINISTIC_ROLLOUT_PERCENTAGE=75
+```
+
+5) Re-run the same checks (steps 2-3) and compare deterministic share + latency/error metrics.
+
+Optional automated guardrail check:
+
+```bash
+BASE_URL=http://localhost:5000 bash scripts/gate_check.sh
+```
+
+Portfolio rollout promotion gates (same style as quick-ask):
+
+```bash
+BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_20_to_35
+BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_35_to_50
+BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_50_to_75
+BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_75_to_100
+```
+
+Use the gate that matches your **current** portfolio rollout percentage. Promote only when the gate passes.
+
+Optional unit tests for rollout logic:
+
+```bash
+pytest -q tests/test_deterministic_advisor.py -k rollout
+pytest -q tests/test_dashboard_api.py -k "quick_ask and rollout"
+```
+
 ### Day-13 calibration diagnostics + plan
 
 Generate a calibration report from decision telemetry:

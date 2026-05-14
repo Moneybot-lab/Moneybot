@@ -6,9 +6,14 @@ usage() {
 Usage:
   BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate 50_to_75
   BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate 75_to_100
+  BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_20_to_35
+  BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_35_to_50
+  BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_50_to_75
+  BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_75_to_100
 
 Options:
-  --gate <50_to_75|75_to_100>   Promotion gate profile (required)
+  --gate <50_to_75|75_to_100|portfolio_20_to_35|portfolio_35_to_50|portfolio_50_to_75|portfolio_75_to_100>
+                                 Promotion gate profile (required)
   --limit <n>                   decision-outcomes limit (default: 100)
 
 Environment:
@@ -53,8 +58,8 @@ if [[ -z "${BASE_URL:-}" ]]; then
   exit 2
 fi
 
-if [[ "$gate" != "50_to_75" && "$gate" != "75_to_100" ]]; then
-  echo "--gate must be one of: 50_to_75, 75_to_100" >&2
+if [[ "$gate" != "50_to_75" && "$gate" != "75_to_100" && "$gate" != "portfolio_20_to_35" && "$gate" != "portfolio_35_to_50" && "$gate" != "portfolio_50_to_75" && "$gate" != "portfolio_75_to_100" ]]; then
+  echo "--gate must be one of: 50_to_75, 75_to_100, portfolio_20_to_35, portfolio_35_to_50, portfolio_50_to_75, portfolio_75_to_100" >&2
   usage
   exit 2
 fi
@@ -120,7 +125,7 @@ if [[ "$gate" == "50_to_75" ]]; then
   check_bool_with_json "summary_1d.accuracy >= 0.48" '(.data.summary_1d.accuracy // 0) >= 0.48' "$outcomes_json"
   check_bool_with_json "calibration_report.rows >= 30" '(.data.calibration_report.rows // 0) >= 30' "$model_json"
   check_bool_with_json "calibration_report.brier_score <= 0.26" '((.data.calibration_report.brier_score // 999) <= 0.26)' "$model_json"
-else
+elif [[ "$gate" == "75_to_100" ]]; then
   check_bool_with_json "summary_5d.evaluated_rows >= 60" '(.data.summary_5d.evaluated_rows // 0) >= 60' "$outcomes_json"
   check_bool_with_json "summary_5d.accuracy >= 0.55" '(.data.summary_5d.accuracy // 0) >= 0.55' "$outcomes_json"
   check_bool_with_json "evaluated_rows_available >= 100" '(.data.evaluated_rows_available // (.data.summary_1d.evaluated_rows // 0)) >= 100' "$outcomes_json"
@@ -129,14 +134,34 @@ else
   check_bool_with_json "calibration_report.brier_score <= 0.24" '((.data.calibration_report.brier_score // 999) <= 0.24)' "$model_json"
 fi
 
+if [[ "$gate" == portfolio_* ]]; then
+  check_bool_with_json "rollout_dry_run == false" '.data.rollout_dry_run == false' "$model_json"
+  check_bool_with_json "portfolio_rollout_percentage is present" '(.data.portfolio_rollout_percentage // null) != null' "$model_json"
+  check_bool_with_json "calibration_report.rows >= 30" '(.data.calibration_report.rows // 0) >= 30' "$model_json"
+  check_bool_with_json "calibration_report.brier_score <= 0.26" '((.data.calibration_report.brier_score // 999) <= 0.26)' "$model_json"
+
+  if [[ "$gate" == "portfolio_20_to_35" ]]; then
+    check_bool_with_json "portfolio_rollout_percentage == 20" '(.data.portfolio_rollout_percentage // -1) == 20' "$model_json"
+    check_bool_with_json "summary_5d.evaluated_rows >= 20" '(.data.summary_5d.evaluated_rows // 0) >= 20' "$outcomes_json"
+  elif [[ "$gate" == "portfolio_35_to_50" ]]; then
+    check_bool_with_json "portfolio_rollout_percentage == 35" '(.data.portfolio_rollout_percentage // -1) == 35' "$model_json"
+    check_bool_with_json "summary_5d.evaluated_rows >= 30" '(.data.summary_5d.evaluated_rows // 0) >= 30' "$outcomes_json"
+  elif [[ "$gate" == "portfolio_50_to_75" ]]; then
+    check_bool_with_json "portfolio_rollout_percentage == 50" '(.data.portfolio_rollout_percentage // -1) == 50' "$model_json"
+    check_bool_with_json "summary_5d.evaluated_rows >= 40" '(.data.summary_5d.evaluated_rows // 0) >= 40' "$outcomes_json"
+  else
+    check_bool_with_json "portfolio_rollout_percentage == 75" '(.data.portfolio_rollout_percentage // -1) == 75' "$model_json"
+    check_bool_with_json "summary_5d.evaluated_rows >= 60" '(.data.summary_5d.evaluated_rows // 0) >= 60' "$outcomes_json"
+  fi
+fi
+
 echo
 echo "Summary: PASS=$pass_count FAIL=$fail_count"
 echo
 echo "Observed metrics:"
 echo "$outcomes_json" | jq '.data | {summary_1d, summary_5d, used_unevaluated_fallback, lookup_errors}'
-echo "$model_json" | jq '.data | {model_loaded, model_load_error, decision_logging, calibration_report: (.calibration_report // {rows:0,brier_score:null})}'
+echo "$model_json" | jq '.data | {model_loaded, model_load_error, rollout_percentage, portfolio_rollout_percentage, decision_logging, calibration_report: (.calibration_report // {rows:0,brier_score:null})}'
 
 if [[ $fail_count -gt 0 ]]; then
   exit 1
 fi
-
