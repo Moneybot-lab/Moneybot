@@ -351,6 +351,18 @@ BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_75_
 
 Use the gate that matches your **current** portfolio rollout percentage. Promote only when the gate passes.
 
+If `portfolio_35_to_50` passes, promote with:
+
+```bash
+export DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE=50
+```
+
+Then validate the new live value:
+
+```bash
+curl -s "https://moneybotlabs.com/api/model-health" | jq '.data.portfolio_rollout_percentage, .data.rollout_dry_run'
+```
+
 Optional unit tests for rollout logic:
 
 ```bash
