@@ -120,3 +120,13 @@ class NotificationTriggerPreference(db.Model):
     )
 
     user = db.relationship("User", back_populates="notification_trigger_preferences")
+
+
+class WaitlistSignup(db.Model):
+    __tablename__ = "waitlist_signups"
+
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(255), unique=True, nullable=False, index=True)
+    source = db.Column(db.String(80), nullable=False, default="landing")
+    welcome_email_sent = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)

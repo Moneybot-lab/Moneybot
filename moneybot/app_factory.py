@@ -5,10 +5,13 @@ import json
 import logging
 import os
 import re
+import smtplib
+from email.message import EmailMessage
+from email.utils import formatdate, make_msgid
 from datetime import timedelta
 from pathlib import Path
 
-from flask import Flask, redirect, render_template, render_template_string, send_from_directory
+from flask import Flask, redirect, render_template, render_template_string, request, send_from_directory, url_for
 from flask_cors import CORS
 from .api import api_bp
 from .extensions import db, migrate
@@ -16,6 +19,7 @@ from .services.ai_advisor import AIAdvisorService
 from .services.decision_log import DecisionLogger
 from .services.deterministic_advisor import DeterministicQuickAdvisor
 from .services.market_data import MarketDataService
+from .models import WaitlistSignup
 from .services.runtime_paths import (
     day1_baseline_model_path,
     day13_calibration_report_path,
@@ -224,6 +228,53 @@ def _resolve_database_url() -> str:
     return database_url
 
 
+def _waitlist_email_configured(app: Flask) -> bool:
+    smtp_host = (app.config.get("SMTP_HOST") or "").strip()
+    from_email = (app.config.get("PASSWORD_RESET_FROM_EMAIL") or app.config.get("SMTP_USER") or "").strip()
+    return bool(smtp_host and from_email)
+
+
+def _send_waitlist_welcome_email(app: Flask, email: str) -> bool:
+    smtp_host = (app.config.get("SMTP_HOST") or "").strip()
+    smtp_port = int(app.config.get("SMTP_PORT") or 587)
+    smtp_user = (app.config.get("SMTP_USER") or "").strip()
+    smtp_password = app.config.get("SMTP_PASSWORD") or ""
+    smtp_use_tls = bool(app.config.get("SMTP_USE_TLS", True))
+    smtp_use_ssl = bool(app.config.get("SMTP_USE_SSL", False))
+    from_email = (app.config.get("PASSWORD_RESET_FROM_EMAIL") or smtp_user or "").strip()
+    from_name = (app.config.get("PASSWORD_RESET_FROM_NAME") or "Moneybot Labs").strip()
+
+    if not _waitlist_email_configured(app):
+        return False
+
+    msg = EmailMessage()
+    msg["Subject"] = "Welcome to the Moneybot waitlist"
+    msg["From"] = f"{from_name} <{from_email}>" if from_name else from_email
+    msg["Reply-To"] = from_email
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain=(from_email.split("@", 1)[1] if "@" in from_email else None))
+    msg["To"] = email
+    msg.set_content("Thanks for joining the Moneybot waitlist. We'll email you when early access opens.")
+
+    try:
+        if smtp_use_ssl:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=20) as smtp:
+                if smtp_user and smtp_password:
+                    smtp.login(smtp_user, smtp_password)
+                smtp.send_message(msg)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as smtp:
+                if smtp_use_tls:
+                    smtp.starttls()
+                if smtp_user and smtp_password:
+                    smtp.login(smtp_user, smtp_password)
+                smtp.send_message(msg)
+        return True
+    except Exception:
+        logging.exception("Failed to send waitlist welcome email.")
+        return False
+
+
 def _resolve_runtime_file_path(runtime_dir, env_name: str, default_filename: str) -> str:
     raw = os.environ.get(env_name)
     if not raw:
@@ -343,6 +394,7 @@ def create_app() -> Flask:
         FIREBASE_APP_ID=os.environ.get("FIREBASE_APP_ID", ""),
         FIREBASE_MEASUREMENT_ID=os.environ.get("FIREBASE_MEASUREMENT_ID", ""),
         FIREBASE_VAPID_KEY=os.environ.get("FIREBASE_VAPID_KEY", ""),
+        WAITLIST_WELCOME_EMAIL_ENABLED=(os.environ.get("WAITLIST_WELCOME_EMAIL_ENABLED", "false").lower() == "true"),
     )
     calibration_report = day13_calibration_report_path()
     recalibration_plan = day13_recalibration_plan_path()
@@ -431,6 +483,37 @@ def create_app() -> Flask:
             }
 
         return render_template("home.html", **_firebase_template_context())
+
+    @app.get("/landing")
+    @app.get("/landing/")
+    def landing_page():
+        success = request.args.get("success") == "1"
+        submitted_email = str(request.args.get("email", "") or "").strip()
+        return render_template("landing.html", signup_success=success, submitted_email=submitted_email)
+
+    @app.post("/landing")
+    @app.post("/landing/")
+    def landing_signup():
+        email = str(request.form.get("email", "") or "").strip().lower()
+        if not email or "@" not in email or "." not in email.split("@")[-1]:
+            return render_template(
+                "landing.html",
+                signup_success=False,
+                signup_error="Please enter a valid email address.",
+                submitted_email=email,
+            ), 400
+
+        existing = WaitlistSignup.query.filter_by(email=email).first()
+        if existing is None:
+            signup = WaitlistSignup(email=email, source="landing")
+            db.session.add(signup)
+            db.session.commit()
+            if app.config.get("WAITLIST_WELCOME_EMAIL_ENABLED", False):
+                sent = _send_waitlist_welcome_email(app, email)
+                signup.welcome_email_sent = bool(sent)
+                db.session.commit()
+
+        return redirect(url_for("landing_page", success="1", email=email), code=303)
 
     @app.get("/notifications")
     def notifications_page():
