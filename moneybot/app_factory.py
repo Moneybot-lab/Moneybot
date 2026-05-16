@@ -432,6 +432,11 @@ def create_app() -> Flask:
 
         return render_template("home.html", **_firebase_template_context())
 
+    @app.get("/landing")
+    @app.get("/landing/")
+    def landing_page():
+        return render_template("landing.html")
+
     @app.get("/notifications")
     def notifications_page():
         firebase_config = {
