@@ -8,7 +8,7 @@ import re
 from datetime import timedelta
 from pathlib import Path
 
-from flask import Flask, redirect, render_template, render_template_string, send_from_directory
+from flask import Flask, redirect, render_template, render_template_string, request, send_from_directory, url_for
 from flask_cors import CORS
 from .api import api_bp
 from .extensions import db, migrate
@@ -435,7 +435,23 @@ def create_app() -> Flask:
     @app.get("/landing")
     @app.get("/landing/")
     def landing_page():
-        return render_template("landing.html")
+        success = request.args.get("success") == "1"
+        submitted_email = str(request.args.get("email", "") or "").strip()
+        return render_template("landing.html", signup_success=success, submitted_email=submitted_email)
+
+    @app.post("/landing")
+    @app.post("/landing/")
+    def landing_signup():
+        email = str(request.form.get("email", "") or "").strip().lower()
+        if not email or "@" not in email or "." not in email.split("@")[-1]:
+            return render_template(
+                "landing.html",
+                signup_success=False,
+                signup_error="Please enter a valid email address.",
+                submitted_email=email,
+            ), 400
+
+        return redirect(url_for("landing_page", success="1", email=email), code=303)
 
     @app.get("/notifications")
     def notifications_page():

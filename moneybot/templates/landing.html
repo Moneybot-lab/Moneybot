@@ -82,11 +82,17 @@
         We are preparing a new landing experience for Moneybot. Join the list for launch updates,
         product milestones, and early access invitations.
       </p>
-      <form method="post" action="#" aria-label="Early access signup">
-        <input type="email" name="email" placeholder="Enter your email" required />
+      <form method="post" action="/landing" aria-label="Early access signup">
+        <input type="email" name="email" placeholder="Enter your email" value="{{ submitted_email or "" }}" required />
         <button type="submit">Join waitlist</button>
       </form>
-      <p class="note">Step 1 complete: dedicated <code>/landing</code> route and template are now live.</p>
+      {% if signup_success %}
+      <p class="note" style="color:#166534;font-weight:700">Thanks{% if submitted_email %}, {{ submitted_email }}{% endif %}! You're on the waitlist.</p>
+      {% elif signup_error %}
+      <p class="note" style="color:#991b1b;font-weight:700">{{ signup_error }}</p>
+      {% else %}
+      <p class="note">Enter your email and click <strong>Join waitlist</strong>.</p>
+      {% endif %}
     </main>
   </body>
 </html>
