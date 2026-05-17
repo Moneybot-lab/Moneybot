@@ -11,7 +11,7 @@ from email.utils import formatdate, make_msgid
 from datetime import timedelta
 from pathlib import Path
 
-from flask import Flask, redirect, render_template, render_template_string, request, send_from_directory, url_for
+from flask import Flask, abort, redirect, render_template, render_template_string, request, send_from_directory, url_for
 from flask_cors import CORS
 from .api import api_bp
 from .extensions import db, migrate
@@ -395,6 +395,11 @@ def create_app() -> Flask:
         FIREBASE_MEASUREMENT_ID=os.environ.get("FIREBASE_MEASUREMENT_ID", ""),
         FIREBASE_VAPID_KEY=os.environ.get("FIREBASE_VAPID_KEY", ""),
         WAITLIST_WELCOME_EMAIL_ENABLED=(os.environ.get("WAITLIST_WELCOME_EMAIL_ENABLED", "false").lower() == "true"),
+        LANDING_ONLY_HOSTS={
+            host.strip().lower()
+            for host in os.environ.get("LANDING_ONLY_HOSTS", "moneybotlabs.us,www.moneybotlabs.us").split(",")
+            if host.strip()
+        },
     )
     calibration_report = day13_calibration_report_path()
     recalibration_plan = day13_recalibration_plan_path()
@@ -483,6 +488,18 @@ def create_app() -> Flask:
             }
 
         return render_template("home.html", **_firebase_template_context())
+
+    @app.before_request
+    def enforce_landing_only_hosts():
+        host = str(request.host or "").split(":", 1)[0].strip().lower()
+        landing_only_hosts = app.config.get("LANDING_ONLY_HOSTS") or set()
+        if host not in landing_only_hosts:
+            return None
+        if request.path in {"/landing", "/landing/"}:
+            return None
+        if request.path == "/":
+            return redirect(url_for("landing_page"), code=302)
+        abort(404)
 
     @app.get("/landing")
     @app.get("/landing/")
