@@ -254,7 +254,22 @@ def _send_waitlist_welcome_email(app: Flask, email: str) -> bool:
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain=(from_email.split("@", 1)[1] if "@" in from_email else None))
     msg["To"] = email
-    msg.set_content("Thanks for joining the Moneybot waitlist. We'll email you when early access opens.")
+    msg["List-Unsubscribe"] = f"<mailto:{from_email}?subject=Unsubscribe>"
+    msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+    msg.set_content(
+        "\n".join(
+            [
+                "Thanks for joining the Moneybot waitlist.",
+                "",
+                "You signed up on moneybotlabs.us to receive early-access launch updates.",
+                "",
+                "If you would like to stop these updates, reply with 'unsubscribe' and we'll remove you.",
+                "",
+                "— Moneybot Labs",
+                f"Contact: {from_email}",
+            ]
+        )
+    )
 
     try:
         if smtp_use_ssl:
