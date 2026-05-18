@@ -33,3 +33,18 @@ def test_calibration_rows_from_events_skips_non_mature_events(monkeypatch):
     rows = calibration_rows_from_events(events, horizon_days=5, now_ts=100 + (7 * 86400))
     assert len(rows) == 1
     assert rows[0]["symbol"] == "AAPL"
+
+
+def test_calibration_summary_recommends_slope_adjustment_when_overconfident():
+    rows = [
+        {"predicted": 0.9, "observed": 0.0},
+        {"predicted": 0.85, "observed": 0.0},
+        {"predicted": 0.8, "observed": 1.0},
+        {"predicted": 0.75, "observed": 0.0},
+        {"predicted": 0.2, "observed": 0.0},
+        {"predicted": 0.15, "observed": 1.0},
+    ]
+
+    summary = calibration_summary(rows, bins=4)
+
+    assert abs(summary["recommended"]["slope_delta"]) > 0.01
