@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Moneybot Labs | Early Access</title>
+    <meta name="description" content="Join the Moneybot Labs early-access waitlist for AI-powered investing insights." />
+    <style>
+      :root {
+        --bg: #050708;
+        --card: #0b0f10;
+        --text: #8cffb0;
+        --muted: #6ce18f;
+        --primary: #22c55e;
+        --primary-soft: #0f1f14;
+        --border: #1f3d28;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: Inter, Segoe UI, system-ui, sans-serif;
+        background: #030505;
+        color: var(--text);
+      }
+      .page {
+        width: min(980px, 92vw);
+        margin: 28px auto 48px;
+      }
+      .hero, .section, .footer {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+      }
+      .section, .footer { margin-top: 16px; }
+      .tag {
+        display: inline-block;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: .04em;
+        text-transform: uppercase;
+        color: #7bffad;
+        background: var(--primary-soft);
+        padding: 6px 10px;
+        border-radius: 999px;
+      }
+      h1 { margin: 12px 0 8px; font-size: clamp(1.8rem, 4vw, 2.6rem); }
+      h2 { margin: 0 0 10px; font-size: 1.35rem; }
+      p { margin: 0 0 12px; color: var(--muted); line-height: 1.55; }
+      .trust { font-size: .92rem; color: #7bffad; font-weight: 600; margin-top: 4px; }
+      form { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+      input[type="email"] {
+        flex: 1 1 280px;
+        min-height: 46px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 1rem;
+      }
+      button {
+        min-height: 46px;
+        border: none;
+        border-radius: 10px;
+        padding: 10px 16px;
+        background: var(--primary);
+        color: #021307;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .microcopy { font-size: .88rem; color: #7bdc9b; margin-top: 8px; }
+      .state-success { color: #86efac; font-weight: 700; }
+      .state-error { color: #fca5a5; font-weight: 700; }
+      .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 14px;
+        background: #0a0d0b;
+      }
+      .card h3 { margin: 0 0 6px; font-size: 1rem; }
+      ol { margin: 0; padding-left: 20px; color: var(--muted); line-height: 1.7; }
+      .cred { display: flex; gap: 8px; flex-wrap: wrap; }
+      .pill {
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 7px 11px;
+        font-size: .87rem;
+        color: #8cffb0;
+      }
+      .footer p { margin: 0 0 8px; }
+      .links { display: flex; gap: 12px; flex-wrap: wrap; font-size: .9rem; }
+      .links a { color: #7bffad; text-decoration: none; }
+      .links a:hover { text-decoration: underline; }
+      @media (max-width: 620px) {
+        .hero, .section, .footer { padding: 18px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero" aria-label="Hero">
+        <span class="tag">Moneybot Labs • Early Access</span>
+        <p class="trust">Joining founders every week</p>
+        <h1>Invest with clarity, not noise.</h1>
+        <p>Moneybot helps everyday investors turn market data into clear, actionable insights.</p>
+        <form method="post" action="/landing" aria-label="Early access signup">
+          <input type="email" name="email" placeholder="Enter your email" value="{{ submitted_email or "" }}" required />
+          <button type="submit">Join Early Access</button>
+        </form>
+        {% if signup_success %}
+        <p class="microcopy state-success">Thanks{% if submitted_email %}, {{ submitted_email }}{% endif %}! You're on the waitlist.</p>
+        {% elif signup_error %}
+        <p class="microcopy state-error">{{ signup_error }}</p>
+        {% else %}
+        <p class="microcopy">No spam. Unsubscribe anytime.</p>
+        {% endif %}
+      </section>
+
+      <section class="section" aria-label="Core value">
+        <h2>Why join now</h2>
+        <div class="grid">
+          <article class="card">
+            <h3>Signal over noise</h3>
+            <p>Focus on meaningful insights instead of chasing every headline.</p>
+          </article>
+          <article class="card">
+            <h3>Simple portfolio insights</h3>
+            <p>Understand trends, momentum, and risk in a practical way.</p>
+          </article>
+          <article class="card">
+            <h3>Built for consistency</h3>
+            <p>Create repeatable decision habits with less second-guessing.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" aria-label="How it works">
+        <h2>How it works</h2>
+        <ol>
+          <li>Connect your watchlist.</li>
+          <li>Get AI-powered insights.</li>
+          <li>Decide with confidence.</li>
+        </ol>
+      </section>
+
+      <section class="section" aria-label="Credibility">
+        <h2>Built with trust in mind</h2>
+        <div class="cred">
+          <span class="pill">Security-first architecture</span>
+          <span class="pill">Transparent methodology</span>
+          <span class="pill">Built by Moneybot Labs</span>
+        </div>
+      </section>
+
+      <section class="section" aria-label="Secondary signup">
+        <h2>Ready for early access?</h2>
+        <p>Join the waitlist to get launch updates and invitations at <strong>moneybotlabs.us</strong>.</p>
+        <form method="post" action="/landing" aria-label="Secondary early access signup">
+          <input type="email" name="email" placeholder="Enter your email" value="{{ submitted_email or "" }}" required />
+          <button type="submit">Join Early Access</button>
+        </form>
+        <p class="microcopy">No spam. Unsubscribe anytime.</p>
+      </section>
+
+      <footer class="footer">
+        <p><strong>Moneybot Labs</strong> · Not investment advice.</p>
+        <div class="links">
+          <a href="mailto:support@mail.moneybotlabs.us">support@mail.moneybotlabs.us</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/terms">Terms</a>
+        </div>
+      </footer>
+    </main>
+  </body>
+</html>
