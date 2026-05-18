@@ -93,6 +93,33 @@ def calibration_rows_from_events(
     return out
 
 
+
+def _fit_platt_brier_deltas(rows: list[dict], *, steps: int = 600, lr: float = 0.03) -> tuple[float, float]:
+    probs = [min(max(float(r["predicted"]), 1e-6), 1.0 - 1e-6) for r in rows]
+    ys = [float(r["observed"]) for r in rows]
+    logits = [math.log(p / (1.0 - p)) for p in probs]
+
+    intercept = 0.0
+    slope = 1.0
+    n = float(len(rows))
+    for _ in range(max(100, steps)):
+        grad_i = 0.0
+        grad_s = 0.0
+        for x, y in zip(logits, ys):
+            z = intercept + slope * x
+            z = max(-35.0, min(35.0, z))
+            p_hat = 1.0 / (1.0 + math.exp(-z))
+            # d/dz of (p_hat - y)^2 = 2*(p_hat-y)*p_hat*(1-p_hat)
+            common = 2.0 * (p_hat - y) * p_hat * (1.0 - p_hat)
+            grad_i += common
+            grad_s += common * x
+        intercept -= lr * (grad_i / n)
+        slope -= lr * (grad_s / n)
+        slope = max(0.25, min(3.0, slope))
+
+    return intercept, slope - 1.0
+
+
 def calibration_summary(rows: list[dict], *, bins: int = 10) -> dict:
     if not rows:
         return {
@@ -128,10 +155,12 @@ def calibration_summary(rows: list[dict], *, bins: int = 10) -> dict:
             }
         )
 
-    pred_safe = min(max(avg_pred, 1e-6), 1.0 - 1e-6)
-    obs_safe = min(max(avg_obs, 1e-6), 1.0 - 1e-6)
-    intercept_delta = math.log(obs_safe / (1.0 - obs_safe)) - math.log(pred_safe / (1.0 - pred_safe))
-    slope_delta = 0.0
+    base_intercept_delta = math.log(min(max(avg_obs, 1e-6), 1.0 - 1e-6) / (1.0 - min(max(avg_obs, 1e-6), 1.0 - 1e-6))) - math.log(min(max(avg_pred, 1e-6), 1.0 - 1e-6) / (1.0 - min(max(avg_pred, 1e-6), 1.0 - 1e-6)))
+    intercept_delta, slope_delta = _fit_platt_brier_deltas(rows)
+    if not math.isfinite(intercept_delta):
+        intercept_delta = base_intercept_delta
+    if not math.isfinite(slope_delta):
+        slope_delta = 0.0
 
     return {
         "rows": len(rows),
