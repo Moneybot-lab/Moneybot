@@ -25,3 +25,18 @@ def test_build_recalibration_plan_skips_when_rows_below_threshold():
 
     assert plan["apply_change"] is False
     assert plan["next"]["intercept"] == 0.1
+
+
+def test_build_recalibration_plan_applies_bounded_slope_delta():
+    report = {"rows": 120, "recommended": {"intercept_delta": 0.0, "slope_delta": -0.8}}
+    plan = build_recalibration_plan(
+        report,
+        current_slope=0.9,
+        current_intercept=-0.45,
+        max_slope_step=0.25,
+        min_rows=30,
+    )
+
+    assert plan["apply_change"] is True
+    assert plan["recommended_delta"]["bounded_slope_delta"] == -0.25
+    assert plan["next"]["slope"] == 0.65
