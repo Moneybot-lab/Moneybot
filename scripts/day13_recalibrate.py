@@ -20,6 +20,7 @@ def build_recalibration_plan(
     current_slope: float = 1.0,
     current_intercept: float = 0.0,
     max_intercept_step: float = 0.2,
+    max_slope_step: float = 0.25,
     min_rows: int = 30,
 ) -> dict:
     rows = int(report.get("rows") or 0)
@@ -27,8 +28,9 @@ def build_recalibration_plan(
     intercept_delta = float(recommendation.get("intercept_delta") or 0.0)
     slope_delta = float(recommendation.get("slope_delta") or 0.0)
     bounded_intercept_delta = max(-max_intercept_step, min(max_intercept_step, intercept_delta))
+    bounded_slope_delta = max(-max_slope_step, min(max_slope_step, slope_delta))
     apply_change = rows >= min_rows
-    next_slope = float(current_slope + slope_delta) if apply_change else float(current_slope)
+    next_slope = float(current_slope + bounded_slope_delta) if apply_change else float(current_slope)
     next_intercept = float(current_intercept + bounded_intercept_delta) if apply_change else float(current_intercept)
     return {
         "schema_version": "calibration_recalibration_plan.v1",
@@ -38,6 +40,7 @@ def build_recalibration_plan(
         "current": {"slope": float(current_slope), "intercept": float(current_intercept)},
         "recommended_delta": {
             "slope_delta": round(slope_delta, 6),
+            "bounded_slope_delta": round(bounded_slope_delta, 6),
             "intercept_delta": round(intercept_delta, 6),
             "bounded_intercept_delta": round(bounded_intercept_delta, 6),
         },
@@ -52,6 +55,7 @@ def main() -> None:
     parser.add_argument("--current-slope", type=float, default=1.0)
     parser.add_argument("--current-intercept", type=float, default=0.0)
     parser.add_argument("--max-intercept-step", type=float, default=0.2)
+    parser.add_argument("--max-slope-step", type=float, default=0.25)
     parser.add_argument("--min-rows", type=int, default=30)
     args = parser.parse_args()
 
@@ -61,6 +65,7 @@ def main() -> None:
         current_slope=args.current_slope,
         current_intercept=args.current_intercept,
         max_intercept_step=max(0.01, abs(args.max_intercept_step)),
+        max_slope_step=max(0.01, abs(args.max_slope_step)),
         min_rows=max(1, args.min_rows),
     )
     serialized = json.dumps(plan, indent=2, sort_keys=True)
