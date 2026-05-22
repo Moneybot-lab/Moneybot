@@ -1448,6 +1448,7 @@ def create_app() -> Flask:
               <h2>User Portfolio</h2>
               <p style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
                 <a href="/" style="text-decoration:none;background:#dcfce7;color:#14532d;padding:12px 18px;border-radius:999px;font-size:1.08rem;font-weight:700">Home</a>
+                <button id="refreshPortfolioBtn" onclick="refreshPortfolio()" style="border:none;background:#65a30d;color:#f7fee7;padding:12px 18px;border-radius:999px;font-size:1.08rem;font-weight:700;cursor:pointer">Refresh Portfolio</button>
                 <button onclick="logout()" style="border:none;background:#166534;color:#f0fdf4;padding:12px 18px;border-radius:999px;font-size:1.08rem;font-weight:700;cursor:pointer">Logout</button>
               </p>
               <form id="addForm">
@@ -1549,6 +1550,25 @@ def create_app() -> Flask:
 
               async function logout(){ await apiFetch('/api/auth/logout',{method:'POST'}); sessionStorage.removeItem(TAB_SESSION_KEY); localStorage.removeItem(TAB_SESSION_KEY); location.href='/'; }
               function setLoading(isLoading){ loadingStateEl.style.display = isLoading ? 'flex' : 'none'; }
+              async function refreshPortfolio(){
+                const refreshBtn = document.getElementById('refreshPortfolioBtn');
+                if(refreshBtn){
+                  refreshBtn.disabled = true;
+                  refreshBtn.style.opacity = '.75';
+                  refreshBtn.textContent = 'Refreshing...';
+                }
+                outEl.textContent = 'Refreshing portfolio data...';
+                try {
+                  await load();
+                  outEl.textContent = 'Portfolio refreshed.';
+                } finally {
+                  if(refreshBtn){
+                    refreshBtn.disabled = false;
+                    refreshBtn.style.opacity = '1';
+                    refreshBtn.textContent = 'Refresh Portfolio';
+                  }
+                }
+              }
               function displayValue(value){
                 return (value === null || value === undefined || value === '') ? 'n/a' : value;
               }
