@@ -46,7 +46,7 @@ def test_close_values_handles_dataframe_close_column():
 
 def test_evaluate_decision_events_builds_rows_with_outcomes():
     events = [
-        {"symbol": "AAPL", "endpoint": "quick_ask", "decision_source": "deterministic_model", "ts": 1, "payload": {"recommendation": "BUY", "model_version": "day1-logreg-v1"}},
+        {"symbol": "AAPL", "endpoint": "quick_ask", "decision_source": "deterministic_model", "ts": 1, "payload": {"recommendation": "BUY", "model_version": "alpha-atlas-v1"}},
         {"symbol": "TSLA", "endpoint": "user_watchlist", "decision_source": "rule_based", "ts": 2, "payload": {"advice": "SELL"}},
     ]
 
@@ -56,7 +56,7 @@ def test_evaluate_decision_events_builds_rows_with_outcomes():
     )
 
     assert rows[0]["outcome_1d"] == "correct"
-    assert rows[0]["model_version"] == "day1-logreg-v1"
+    assert rows[0]["model_version"] == "alpha-atlas-v1"
     assert rows[1]["outcome_5d"] == "correct"
 
 
