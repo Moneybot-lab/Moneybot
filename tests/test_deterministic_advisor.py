@@ -6,7 +6,7 @@ from moneybot.services.deterministic_model import BaselineModelArtifact, save_ar
 
 def _write_artifact(tmp_path: Path) -> Path:
     artifact = BaselineModelArtifact(
-        version="day1-logreg-v1",
+        version="alpha-atlas-v1",
         feature_columns=["return_1d", "return_5d", "rsi_14", "macd_hist", "vol_ratio_20d"],
         means=[0.0, 0.0, 50.0, 0.0, 1.0],
         stds=[1.0, 1.0, 10.0, 1.0, 1.0],
@@ -45,7 +45,7 @@ def test_predict_quick_decision_returns_structured_payload(tmp_path: Path):
     assert out is not None
     assert out["recommendation"] in {"STRONG BUY", "BUY", "HOLD OFF FOR NOW"}
     assert out["decision_source"] == "deterministic_model"
-    assert out["model_version"] == "day1-logreg-v1"
+    assert out["model_version"] == "alpha-atlas-v1"
     assert 0.0 <= out["probability_up"] <= 1.0
     assert out["quote_source"] == "finnhub"
 
@@ -98,7 +98,7 @@ def test_predict_portfolio_position_can_return_sell_on_weak_prob_and_profit(tmp_
 
     assert out is not None
     assert out["advice"] in {"HOLD", "SELL", "BUY"}
-    assert out["model_version"] == "day1-logreg-v1"
+    assert out["model_version"] == "alpha-atlas-v1"
     assert isinstance(out["confidence"], float)
 
 
@@ -222,7 +222,7 @@ def test_predict_portfolio_position_uses_shadow_in_rollout_dry_run(tmp_path: Pat
 
     assert out is not None
     assert out["decision_source"] == "deterministic_model"
-    assert out["model_version"] in {"day1-logreg-v1", "day1-logreg-v1-fallback"}
+    assert out["model_version"] in {"alpha-atlas-v1", "alpha-atlas-v1-fallback"}
 
 
 def test_predict_portfolio_position_supports_separate_rollout_percentage(tmp_path: Path):
