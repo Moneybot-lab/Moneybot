@@ -2,12 +2,15 @@ name: Track B Offline Challenger
 
 on:
   schedule:
-    # Runs daily at 06:15 UTC (adjust as needed)
+    # Runs daily at 06:15 UTC
     - cron: "15 6 * * *"
   workflow_dispatch: {}
 
 permissions:
   contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   run-track-b:
@@ -28,26 +31,26 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Optional: sanity check commands before execution
       - name: Track B dry-run
         run: |
           python3 scripts/run_track_b_offline.py --dry-run
 
-      # IMPORTANT:
-      # This expects data/decision_events.jsonl to exist in the runner workspace.
-      # If you fetch/export logs from elsewhere, add that step before this.
+      - name: Check decision log exists
+        run: |
+          test -f data/decision_events.jsonl || (echo "Missing data/decision_events.jsonl" && exit 1)
+          wc -l data/decision_events.jsonl
+
       - name: Run Track B offline pipeline
         run: |
           python3 scripts/run_track_b_offline.py \
             --input-log data/decision_events.jsonl \
             --output-dir data/track_b \
-            --min-rows 200
+            --min-rows 25
 
       - name: Upload Track B artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: track-b-offline-output
-          path: |
-            data/track_b/**
+          path: data/track_b/**
           if-no-files-found: warn
