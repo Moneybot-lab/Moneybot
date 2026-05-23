@@ -42,7 +42,7 @@ class StubDeterministicQuickAdvisor:
             "quote_source": quote_data.get("quote_source"),
             "quote_diagnostics": quote_data.get("diagnostics"),
             "decision_source": "deterministic_model",
-            "model_version": "day1-logreg-v1",
+            "model_version": "alpha-atlas-v1",
             "probability_up": 0.78,
             "decision_threshold": 0.55,
             "confidence": 78.0,
@@ -56,7 +56,7 @@ class StubDeterministicQuickAdvisor:
             "advice": "BUY",
             "advice_reason": f"Deterministic portfolio signal for {symbol}.",
             "decision_source": "deterministic_model",
-            "model_version": "day1-logreg-v1",
+            "model_version": "alpha-atlas-v1",
             "probability_up": 0.71,
             "confidence": 71.0,
             "position_shares": float(shares),
@@ -196,7 +196,7 @@ def test_quick_ask_uses_deterministic_model_extension_when_present():
     data = res.get_json()["data"]
     assert data["recommendation"] == "STRONG BUY"
     assert data["decision_source"] == "deterministic_model"
-    assert data["model_version"] == "day1-logreg-v1"
+    assert data["model_version"] == "alpha-atlas-v1"
     assert data["confidence"] == 78.0
 
 
@@ -224,7 +224,7 @@ def test_model_health_includes_artifact_metadata_history(tmp_path, monkeypatch):
     model_path = tmp_path / "day1_baseline_model.json"
     metadata_path = tmp_path / "day1_baseline_model.json.meta.json"
     history_path = tmp_path / "day1_baseline_model.json.history.json"
-    metadata = {"model_version": "day1-logreg-v1", "train_rows": 100}
+    metadata = {"model_version": "alpha-atlas-v1", "train_rows": 100}
     metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
     history_path.write_text(json.dumps([metadata]), encoding="utf-8")
     monkeypatch.setenv("DETERMINISTIC_MODEL_PATH", str(model_path))
@@ -234,7 +234,7 @@ def test_model_health_includes_artifact_metadata_history(tmp_path, monkeypatch):
 
     assert res.status_code == 200
     data = res.get_json()["data"]
-    assert data["artifact_metadata"]["model_version"] == "day1-logreg-v1"
+    assert data["artifact_metadata"]["model_version"] == "alpha-atlas-v1"
     assert data["artifact_history"][0]["train_rows"] == 100
 
 
@@ -306,7 +306,7 @@ def test_quick_ask_logs_shadow_decision_in_rollout_dry_run():
             return {
                 "recommendation": "BUY",
                 "decision_source": "deterministic_model",
-                "model_version": "day1-logreg-v1",
+                "model_version": "alpha-atlas-v1",
                 "probability_up": 0.66,
                 "confidence": 66.0,
             }
@@ -508,7 +508,7 @@ def test_decision_outcomes_returns_rows_and_summaries(tmp_path, monkeypatch):
     monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
     client = _client()
     logger = client.application.extensions["decision_logger"]
-    logger.log(endpoint="quick_ask", symbol="AAPL", decision_source="deterministic_model", payload={"recommendation": "BUY", "model_version": "day1-logreg-v1"})
+    logger.log(endpoint="quick_ask", symbol="AAPL", decision_source="deterministic_model", payload={"recommendation": "BUY", "model_version": "alpha-atlas-v1"})
     logger.log(endpoint="user_watchlist", symbol="TSLA", decision_source="rule_based", payload={"advice": "SELL"})
 
     monkeypatch.setattr(
@@ -525,7 +525,7 @@ def test_decision_outcomes_returns_rows_and_summaries(tmp_path, monkeypatch):
     assert data["summary_1d"]["rows"] == 2
     assert data["summary_1d"]["accuracy"] == 1.0
     assert data["rows"][0]["outcome_1d"] == "correct"
-    assert data["rows"][0]["model_version"] == "day1-logreg-v1"
+    assert data["rows"][0]["model_version"] == "alpha-atlas-v1"
     assert data["include_skipped"] is False
     assert data["rows_scanned"] >= 2
     assert data["evaluated_rows_available"] == 2

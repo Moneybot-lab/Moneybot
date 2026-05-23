@@ -159,7 +159,7 @@ def train_logistic_baseline(
         bias -= learning_rate * grad_b
 
     return BaselineModelArtifact(
-        version="day1-logreg-v1",
+        version="alpha-atlas-v1",
         feature_columns=list(FEATURE_COLUMNS),
         means=means.tolist(),
         stds=stds.tolist(),
@@ -172,7 +172,7 @@ def train_logistic_baseline(
 def default_baseline_artifact() -> BaselineModelArtifact:
     """Built-in fallback artifact used when external artifact file is unavailable."""
     return BaselineModelArtifact(
-        version="day1-logreg-v1-fallback",
+        version="alpha-atlas-v1-fallback",
         feature_columns=list(FEATURE_COLUMNS),
         means=[0.0, 0.0, 50.0, 0.0, 1.0, 0.0, 1.0, 0.7, 0.0, 0.0],
         stds=[1.0, 1.0, 10.0, 1.0, 1.0, 0.4, 2.0, 0.3, 0.5, 0.5],

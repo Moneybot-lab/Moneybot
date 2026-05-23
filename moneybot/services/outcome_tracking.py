@@ -9,6 +9,30 @@ NEGATIVE_ACTIONS = {"SELL", "HOLD OFF FOR NOW"}
 NEUTRAL_ACTIONS = {"HOLD"}
 
 
+def normalize_unix_ts(value: Any) -> int | None:
+    """Normalize mixed timestamp inputs to unix seconds.
+
+    Accepts int/float or digit-only strings and returns a positive int.
+    Returns None for missing, malformed, or non-positive values.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float):
+        if value <= 0:
+            return None
+        return int(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        if raw.isdigit():
+            parsed = int(raw)
+            return parsed if parsed > 0 else None
+    return None
+
+
 def normalize_action(event: Dict[str, Any]) -> str | None:
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     action = (
