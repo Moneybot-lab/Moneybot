@@ -1,5 +1,5 @@
 {
-  "version": "day1-logreg-v1",
+  "version": "alpha-atlas-v1",
   "feature_columns": [
     "return_1d",
     "return_5d",
