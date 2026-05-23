@@ -21,7 +21,7 @@ def test_decision_snapshot_structure_valid():
         decision_source="deterministic_model",
         recommendation="buy",
         probability_up=0.63,
-        model_version="day1-logreg-v1",
+        model_version="alpha-atlas-v1",
         calibration_version="cal-v1",
         quote={"price": 180.5, "change_percent": 1.2, "source": "finnhub"},
         features={"return_1d": 0.01},

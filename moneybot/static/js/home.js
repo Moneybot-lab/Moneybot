@@ -14,7 +14,7 @@ const fallbackData = {
                         deterministic_quick_enabled: true,
                         deterministic_momentum_enabled: true,
                         model_loaded: true,
-                        model_version: 'day1-logreg-v1',
+                        model_version: 'alpha-atlas-v1',
                         decision_logging: { enabled: true, source_counts: { deterministic_model: 14, rule_based: 6 } },
                       },
                       summary: {
@@ -29,7 +29,7 @@ const fallbackData = {
                       summary_1d: { accuracy: 0.62, evaluated_rows: 13 },
                       summary_5d: { accuracy: 0.67, evaluated_rows: 12 },
                       rows: [
-                        { symbol: 'AAPL', endpoint: 'quick_ask', decision_source: 'deterministic_model', action: 'BUY', model_version: 'day1-logreg-v1', return_1d: 0.021, return_5d: 0.048, outcome_1d: 'correct', outcome_5d: 'correct' },
+                        { symbol: 'AAPL', endpoint: 'quick_ask', decision_source: 'deterministic_model', action: 'BUY', model_version: 'alpha-atlas-v1', return_1d: 0.021, return_5d: 0.048, outcome_1d: 'correct', outcome_5d: 'correct' },
                         { symbol: 'SOFI', endpoint: 'hot_momentum_buys', decision_source: 'rule_based', action: 'HOLD OFF FOR NOW', model_version: null, return_1d: -0.013, return_5d: -0.028, outcome_1d: 'correct', outcome_5d: 'correct' },
                       ],
                     },
@@ -585,7 +585,7 @@ const fallbackData = {
                     <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
                       <input id="clearviewInput" placeholder="Add ticker (e.g. AMD)" style="padding:8px 10px;border:1px solid #86efac;border-radius:8px;min-width:210px" />
                       <button onclick="addClearviewTicker()" style="padding:8px 12px;border:none;background:#166534;color:#ecfdf5;border-radius:8px;font-weight:700">Add</button>
-                      <span style="font-size:12px;color:#166534;align-self:center">Model: day1-logreg-v1</span>
+                      <span style="font-size:12px;color:#166534;align-self:center">Model: alpha-atlas-v1</span>
                     </div>
                     <table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Trend</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Advice</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Remove</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.current_price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${Number(item.score||0).toFixed(1)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${trendMiniGraph(item.history30 || [])}</td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="showAdviceReason('${item.symbol}','${encodeURIComponent(item.rationale || 'Signal generated from current indicators.')}')" style="border:none;background:${item.recommendation==='BUY'?'#166534':'#b91c1c'};color:#f8fafc;padding:6px 10px;border-radius:999px;font-weight:800;cursor:pointer">${escapeHtml(item.recommendation || 'HOLD OFF')}</button></td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="removeClearviewTicker('${item.symbol}')" style="border:none;background:#fee2e2;color:#991b1b;border-radius:8px;padding:6px 10px;cursor:pointer">Remove</button></td></tr>`).join('')}</tbody></table><p style="margin:10px 0 0 0;color:#166534;font-size:12px;font-weight:700">Click on advice badges to see why.</p>`;
                   }

@@ -541,7 +541,7 @@ def test_get_hot_momentum_buys_uses_deterministic_scores_when_enabled(monkeypatc
             recommendation = "BUY" if prob >= 0.55 else "HOLD OFF FOR NOW"
             return {
                 "decision_source": "deterministic_model",
-                "model_version": "day1-logreg-v1",
+                "model_version": "alpha-atlas-v1",
                 "probability_up": prob,
                 "confidence": round(max(prob, 1 - prob) * 100, 1),
                 "recommendation": recommendation,
@@ -580,7 +580,7 @@ def test_get_hot_momentum_buys_uses_deterministic_scores_when_enabled(monkeypatc
     assert len(out) == 5
     assert out[0]["symbol"] == "SOFI"
     assert out[0]["decision_source"] == "deterministic_model"
-    assert out[0]["model_version"] == "day1-logreg-v1"
+    assert out[0]["model_version"] == "alpha-atlas-v1"
     assert out[0]["score"] == 9.1
     assert out[0]["probability_up"] == 0.91
 
@@ -622,11 +622,11 @@ def test_get_hot_momentum_buys_strips_deterministic_boilerplate_rationale(monkey
         def predict_quick_decision(self, *, signal_data, quote_data, symbol=None):
             return {
                 "decision_source": "deterministic_model",
-                "model_version": "day1-logreg-v1",
+                "model_version": "alpha-atlas-v1",
                 "probability_up": 0.88,
                 "confidence": 88.0,
                 "recommendation": "BUY",
-                "rationale": "Deterministic model (day1-logreg-v1) probability-up=0.88 based on threshold 0.55.",
+                "rationale": "Deterministic model (alpha-atlas-v1) probability-up=0.88 based on threshold 0.55.",
             }
 
     svc = MarketDataService(deterministic_quick_advisor=StubDeterministicAdvisor(), deterministic_momentum_enabled=True)
@@ -647,7 +647,7 @@ def test_get_hot_momentum_buys_strips_deterministic_boilerplate_rationale(monkey
     assert len(out) == 5
     assert out[0]["decision_source"] == "deterministic_model"
     assert out[0]["rationale"].startswith("Based on threshold")
-    assert "Deterministic model (day1-logreg-v1)" not in out[0]["rationale"]
+    assert "Deterministic model (alpha-atlas-v1)" not in out[0]["rationale"]
 
 
 def test_get_hot_momentum_buys_uses_shadow_decision_when_rollout_dry_run(monkeypatch):
@@ -660,7 +660,7 @@ def test_get_hot_momentum_buys_uses_shadow_decision_when_rollout_dry_run(monkeyp
         def predict_shadow_decision(self, *, signal_data, quote_data):
             return {
                 "decision_source": "deterministic_model",
-                "model_version": "day1-logreg-v1-fallback",
+                "model_version": "alpha-atlas-v1-fallback",
                 "probability_up": 0.82,
                 "confidence": 82.0,
                 "recommendation": "BUY",
@@ -684,7 +684,7 @@ def test_get_hot_momentum_buys_uses_shadow_decision_when_rollout_dry_run(monkeyp
 
     assert len(out) == 5
     assert out[0]["decision_source"] == "deterministic_model"
-    assert out[0]["model_version"] == "day1-logreg-v1-fallback"
+    assert out[0]["model_version"] == "alpha-atlas-v1-fallback"
     assert out[0]["score"] == 8.2
 
 
