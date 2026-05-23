@@ -266,7 +266,7 @@ const fallbackData = {
                       const topRisk = riskNotes[0] || 'Keep strict risk controls and position sizing.';
                       const topCheck = nextChecks[0] || 'Recheck momentum and volume before changing size.';
                       adviceEl.innerHTML = `
-                        <strong style="display:block;color:#bbf7d0;margin-bottom:6px">${escapeHtml(symbol)} · ${escapeHtml((ai.mode || data.ai_mode || 'rule_based').replaceAll('_',' '))}<br/><span style="font-size:12px;color:#86efac;font-weight:700">${(ai.mode==='ai_enhanced'||data.ai_mode==='ai_enhanced') ? 'AI Enhanced' : 'AI Fallback'}</span></strong>
+                        <strong style="display:block;color:#bbf7d0;margin-bottom:6px">${escapeHtml(symbol)} · ${((ai.mode==='ai_enhanced'||data.ai_mode==='ai_enhanced') ? 'AI Enhanced' : 'AI Fallback')}</strong>
                         <ul style="margin:0;padding-left:18px;display:grid;gap:4px;color:#dcfce7">
                           <li>${escapeHtml(narrative)}</li>
                           <li><strong>Risk:</strong> ${escapeHtml(topRisk)}</li>
