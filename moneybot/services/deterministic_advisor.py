@@ -185,8 +185,7 @@ class DeterministicQuickAdvisor:
 
         confidence = round(max(prob_up, 1.0 - prob_up) * 100.0, 1)
         rationale = (
-            f"Deterministic model ({self.artifact.version}) probability-up={prob_up:.2f} "
-            f"vs threshold={threshold:.2f}."
+            f"Alpha Atlas v1 probability-up={prob_up:.2f} vs threshold={threshold:.2f}."
         )
         if self.calibration_enabled:
             rationale += (
@@ -266,10 +265,10 @@ class DeterministicQuickAdvisor:
                 advice = "SELL"
 
         reason = (
-            f"Deterministic portfolio rule ({quick.get('model_version')}) using probability_up={prob_up:.2f}"
+            f"Alpha Atlas v1 portfolio rule using probability_up={prob_up:.2f}"
             f" and pnl_percent={pnl_percent:.2f}."
             if pnl_percent is not None
-            else f"Deterministic portfolio rule ({quick.get('model_version')}) holding due to missing entry/current price context."
+            else "Alpha Atlas v1 portfolio rule holding due to missing entry/current price context."
         )
 
         return {
