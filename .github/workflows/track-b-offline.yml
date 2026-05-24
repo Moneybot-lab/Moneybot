@@ -30,12 +30,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Dry run
+      - name: Track B dry-run
         run: python3 scripts/run_track_b_offline.py --dry-run
-
-      # Ensure output dir exists so artifact step has something even on early failure
-      - name: Create output dir
-        run: mkdir -p data/track_b
 
       - name: Fetch real decision log export
         env:
@@ -43,17 +39,16 @@ jobs:
           DAILY_OPS_TOKEN: ${{ secrets.DAILY_OPS_TOKEN }}
         run: |
           set -euo pipefail
-          mkdir -p data
+          test -n "$MONEYBOT_BASE_URL" || (echo "Missing secret: MONEYBOT_BASE_URL" && exit 1)
+          test -n "$DAILY_OPS_TOKEN" || (echo "Missing secret: DAILY_OPS_TOKEN" && exit 1)
+          mkdir -p data data/track_b
 
-          # Example protected endpoint (you add this endpoint server-side):
-          # GET /api/export-decision-log?limit=50000
-          # returns raw JSONL
           curl -fsS --retry 3 --retry-delay 3 --retry-all-errors \
             "$MONEYBOT_BASE_URL/api/export-decision-log?limit=50000" \
             -H "X-Daily-Ops-Token: $DAILY_OPS_TOKEN" \
             -o data/decision_events.jsonl
 
-          test -s data/decision_events.jsonl || (echo "Exported decision log is empty"; exit 1)
+          test -s data/decision_events.jsonl || (echo "Exported decision log is empty" && exit 1)
           wc -l data/decision_events.jsonl
           tail -n 2 data/decision_events.jsonl
 
@@ -62,7 +57,7 @@ jobs:
           python3 scripts/run_track_b_offline.py \
             --input-log data/decision_events.jsonl \
             --output-dir data/track_b \
-            --min-rows 25
+            --min-rows 200
 
       - name: Upload Track B artifacts
         if: always()
