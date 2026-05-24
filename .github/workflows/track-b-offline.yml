@@ -37,14 +37,25 @@ jobs:
       - name: Create output dir
         run: mkdir -p data/track_b
 
-      # If no real traffic log exists in runner, seed for smoke validation
-      - name: Ensure decision log exists
+      - name: Fetch real decision log export
+        env:
+          MONEYBOT_BASE_URL: ${{ secrets.MONEYBOT_BASE_URL }}
+          DAILY_OPS_TOKEN: ${{ secrets.DAILY_OPS_TOKEN }}
         run: |
-          if [ ! -f data/decision_events.jsonl ]; then
-            echo "No decision log found; seeding synthetic log for workflow validation."
-            python3 scripts/seed_decision_log.py --output data/decision_events.jsonl --rows 260 --overwrite
-          fi
+          set -euo pipefail
+          mkdir -p data
+
+          # Example protected endpoint (you add this endpoint server-side):
+          # GET /api/export-decision-log?limit=50000
+          # returns raw JSONL
+          curl -fsS --retry 3 --retry-delay 3 --retry-all-errors \
+            "$MONEYBOT_BASE_URL/api/export-decision-log?limit=50000" \
+            -H "X-Daily-Ops-Token: $DAILY_OPS_TOKEN" \
+            -o data/decision_events.jsonl
+
+          test -s data/decision_events.jsonl || (echo "Exported decision log is empty"; exit 1)
           wc -l data/decision_events.jsonl
+          tail -n 2 data/decision_events.jsonl
 
       - name: Run Track B offline pipeline
         run: |
