@@ -21,7 +21,7 @@ from functools import wraps
 from typing import Any, Dict, Tuple
 
 import yfinance as yf
-from flask import Blueprint, current_app, g, jsonify, request, session, url_for
+from flask import Blueprint, Response, current_app, g, jsonify, request, session, url_for
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -2033,6 +2033,33 @@ def model_health():
     )
 
 
+
+
+@api_bp.get("/export-decision-log")
+def export_decision_log():
+    expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
+    provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
+    if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
+
+    limit_raw = request.args.get("limit")
+    try:
+        limit = int(limit_raw) if limit_raw is not None else 50000
+    except (TypeError, ValueError):
+        return jsonify({"error": "invalid limit", "request_id": g.request_id}), 400
+
+    limit = max(1, min(limit, 200000))
+    input_path = current_app.config.get("DECISION_LOG_PATH") or str(decision_events_log_path())
+    events = read_decision_events(str(input_path), limit=limit)
+
+    body = "".join(json.dumps(event, default=str) + "\n" for event in events if isinstance(event, dict))
+    headers = {
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Decision-Log-Path": str(input_path),
+        "X-Decision-Log-Lines": str(len(events)),
+    }
+    return Response(body, status=200, headers=headers)
 @api_bp.get("/decision-log-summary")
 def decision_log_summary():
     decision_logger = current_app.extensions.get("decision_logger")

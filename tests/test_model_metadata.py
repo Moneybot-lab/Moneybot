@@ -11,7 +11,7 @@ def test_artifact_metadata_round_trip(tmp_path):
     model_path = str(tmp_path / "day1_baseline_model.json")
     metadata = build_artifact_metadata(
         model_path=model_path,
-        model_version="day1-logreg-v1",
+        model_version="alpha-atlas-v1",
         input_path="data/day1_training_snapshot.csv",
         train_rows=100,
         test_rows=25,
@@ -24,5 +24,5 @@ def test_artifact_metadata_round_trip(tmp_path):
     save_artifact_metadata(model_path, metadata)
     append_artifact_history(model_path, metadata)
 
-    assert load_artifact_metadata(model_path)["model_version"] == "day1-logreg-v1"
+    assert load_artifact_metadata(model_path)["model_version"] == "alpha-atlas-v1"
     assert load_artifact_history(model_path)[0]["train_rows"] == 100

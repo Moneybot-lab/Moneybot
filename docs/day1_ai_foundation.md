@@ -444,3 +444,49 @@ Keep local / do not commit:
 - `data/day13_recalibration_plan.json`
 - `data/daily_report.md`
 - other runtime artifacts/logs generated during ops
+
+
+## Track B (offline R&D challenger pipeline, zero live routing)
+
+You can run a fully offline challenger workflow without changing any live API routing:
+
+```bash
+python3 scripts/run_track_b_offline.py --input-log data/decision_events.jsonl --output-dir data/track_b
+```
+
+What it does:
+- builds an offline decision training dataset (`day8_build_decision_training_dataset.py`)
+- trains a challenger candidate artifact in `data/track_b/candidate_model_track_b.json`
+- compares challenger vs production on holdout and writes `data/track_b/model_comparison_track_b.json`
+- writes a run summary to `data/track_b/track_b_summary.json`
+
+Safety guarantees:
+- **does not call** `day14_promote_candidate.py`
+- **does not modify** live routing or endpoint decision paths
+- uses offline artifacts under `data/track_b/` only
+
+Optional dry run:
+
+```bash
+python3 scripts/run_track_b_offline.py --dry-run
+```
+
+
+### If workspace has no decision log yet (seed data for Track B)
+
+If your environment is new and `data/decision_events.jsonl` is empty, create a synthetic workspace log so Track B can run end-to-end:
+
+```bash
+python3 scripts/seed_decision_log.py --output data/decision_events.jsonl --rows 260 --overwrite
+python3 scripts/day7_decision_log_summary.py --input data/decision_events.jsonl --limit 50
+```
+
+Then run Track B:
+
+```bash
+python3 scripts/run_track_b_offline.py --input-log data/decision_events.jsonl --output-dir data/track_b --min-rows 25
+```
+
+Notes:
+- Seeded logs are for workflow/testing validation only (not production quality training data).
+- Increase `--min-rows` back to `200` once real decision traffic is available.
