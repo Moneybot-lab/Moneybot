@@ -238,5 +238,21 @@
     "test_rows": 965,
     "train_ratio": 0.8,
     "train_rows": 3858
+  },
+  {
+    "horizon_days": 5,
+    "input_path": "data/day1_training_snapshot.csv",
+    "metrics": {
+      "accuracy": 0.5005,
+      "positive_rate": 0.5981,
+      "rows": 963.0
+    },
+    "model_path": "data/day1_baseline_model.json",
+    "model_version": "alpha-atlas-v1",
+    "recorded_at_utc": "2026-05-24T04:11:55.965466+00:00",
+    "target_return": 0.0,
+    "test_rows": 963,
+    "train_ratio": 0.8,
+    "train_rows": 3850
   }
 ]
