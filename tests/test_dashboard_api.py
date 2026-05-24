@@ -1199,3 +1199,33 @@ def test_user_watchlist_keeps_deterministic_portfolio_advice_when_ai_is_enabled(
     assert enriched["advice"] == "BUY"
     assert enriched["deterministic_portfolio"]["decision_source"] == "deterministic_model"
     assert enriched["ai_portfolio"]["mode"] == "ai_enhanced"
+
+
+def test_export_decision_log_requires_token():
+    client = _client()
+    res = client.get('/api/export-decision-log')
+    assert res.status_code == 401
+    assert res.get_json()['error'] == 'unauthorized'
+
+
+def test_export_decision_log_returns_ndjson_with_token(tmp_path):
+    client = _client()
+    log_path = tmp_path / 'decision_events.jsonl'
+    log_path.write_text(
+        '{"ts": 1, "endpoint": "quick_ask", "symbol": "AAPL", "decision_source": "deterministic_model", "payload": {"recommendation": "BUY"}}\n'
+        '{"ts": 2, "endpoint": "hot_momentum_buys", "symbol": "TSLA", "decision_source": "rule_based", "payload": {"recommendation": "HOLD"}}\n',
+        encoding='utf-8',
+    )
+
+    with client.application.app_context():
+        current_app.config['DAILY_OPS_TOKEN'] = 'secret-token'
+        current_app.config['DECISION_LOG_PATH'] = str(log_path)
+
+    res = client.get('/api/export-decision-log?limit=1', headers={'X-Daily-Ops-Token': 'secret-token'})
+    assert res.status_code == 200
+    assert 'application/x-ndjson' in (res.headers.get('Content-Type') or '')
+    assert res.headers.get('X-Decision-Log-Lines') == '1'
+    lines = [line for line in res.get_data(as_text=True).splitlines() if line.strip()]
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload['symbol'] == 'TSLA'
