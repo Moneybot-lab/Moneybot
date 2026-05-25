@@ -18,6 +18,8 @@ from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import classify_outcome, close_values, normalize_action, normalize_unix_ts
 from moneybot.services.runtime_paths import decision_events_log_path
 
+RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
+
 
 def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
     start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
@@ -107,6 +109,21 @@ def _extract_feature_columns(
     return out
 
 
+def _return_bin(value: float | None) -> str | None:
+    if not isinstance(value, (int, float)):
+        return None
+    ret = float(value)
+    if ret < RETURN_BIN_EDGES[0]:
+        return "big_loss"
+    if ret < RETURN_BIN_EDGES[1]:
+        return "loss"
+    if ret <= RETURN_BIN_EDGES[2]:
+        return "flat"
+    if ret <= RETURN_BIN_EDGES[3]:
+        return "gain"
+    return "big_gain"
+
+
 def build_rows(events: list[dict[str, Any]], *, horizon_days: int) -> tuple[list[dict[str, Any]], dict[str, int]]:
     now_utc = datetime.now(timezone.utc)
     mature_cutoff = now_utc - timedelta(days=max(1, horizon_days + 2))
@@ -130,6 +147,7 @@ def build_rows(events: list[dict[str, Any]], *, horizon_days: int) -> tuple[list
 
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
+        experiment = event.get("experiment") if isinstance(event.get("experiment"), dict) else {}
         recommendation = _extract_recommendation(event, snapshot)
         if not recommendation:
             continue
@@ -152,6 +170,17 @@ def build_rows(events: list[dict[str, Any]], *, horizon_days: int) -> tuple[list
             "outcome_1d": classify_outcome(recommendation, ret_1d),
             "outcome_5d": classify_outcome(recommendation, ret_5d),
             "label_up_5d": int(ret_5d > 0) if isinstance(ret_5d, (int, float)) else None,
+            "return_bin_5d": _return_bin(ret_5d),
+            "label_profit_5d": int(ret_5d > 0) if isinstance(ret_5d, (int, float)) else None,
+            "label_drawdown_5d": int(ret_5d <= -0.02) if isinstance(ret_5d, (int, float)) else None,
+            "has_snapshot": int(bool(snapshot)),
+            "has_feature_map": int(isinstance(snapshot.get("features"), dict) and bool(snapshot.get("features"))),
+            "has_model_version": int(bool(_extract_model_version(snapshot, payload))),
+            "experiment_id": str(experiment.get("experiment_id") or "default"),
+            "cohort_id": str(experiment.get("cohort_id") or "unknown"),
+            "rollout_dry_run": bool(experiment.get("rollout_dry_run", False)),
+            "rollout_percentage": experiment.get("rollout_percentage"),
+            "portfolio_rollout_percentage": experiment.get("portfolio_rollout_percentage"),
         }
         row.update(
             _extract_feature_columns(

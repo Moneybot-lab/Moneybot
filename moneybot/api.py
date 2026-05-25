@@ -35,6 +35,7 @@ from sqlalchemy.exc import OperationalError, ProgrammingError
 from .models import FcmDeviceToken, NotificationTriggerPreference, SoldTrade, User, WatchlistItem
 from .services.decision_log import read_decision_events, summarize_decision_events
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
+from .services.decision_snapshot import build_decision_snapshot
 from .services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
 from .services.runtime_paths import (
     day13_calibration_report_path,
@@ -46,6 +47,18 @@ from .services.runtime_paths import (
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
+
+
+
+def _experiment_metadata(*, cohort_id: str) -> dict[str, Any]:
+    return {
+        "experiment_id": str(current_app.config.get("EXPERIMENT_ID") or "default"),
+        "cohort_id": str(cohort_id or current_app.config.get("EXPERIMENT_COHORT_DEFAULT") or "control"),
+        "rollout_seed": str(current_app.config.get("DETERMINISTIC_ROLLOUT_SEED") or ""),
+        "rollout_percentage": current_app.config.get("DETERMINISTIC_ROLLOUT_PERCENTAGE"),
+        "portfolio_rollout_percentage": current_app.config.get("DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE"),
+        "rollout_dry_run": bool(current_app.config.get("DETERMINISTIC_ROLLOUT_DRY_RUN")),
+    }
 
 def _runtime_data_path(filename: str) -> str:
     base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
@@ -1147,17 +1160,29 @@ def user_watchlist():
             }
         )
         if decision_logger is not None:
+            watchlist_source = (deterministic_portfolio or {}).get("decision_source") or (ai_portfolio or {}).get("mode") or "rule_based"
             decision_logger.log(
                 endpoint="user_watchlist",
                 symbol=item.get("symbol"),
-                decision_source=(deterministic_portfolio or {}).get("decision_source")
-                or (ai_portfolio or {}).get("mode")
-                or "rule_based",
+                decision_source=watchlist_source,
                 payload={
                     "advice": advice,
                     "model_version": (deterministic_portfolio or {}).get("model_version"),
                     "confidence": (deterministic_portfolio or {}).get("confidence"),
                 },
+                snapshot=build_decision_snapshot(
+                    symbol=str(item.get("symbol") or ""),
+                    endpoint="user_watchlist",
+                    decision_source=str(watchlist_source),
+                    recommendation=str(advice),
+                    probability_up=(deterministic_portfolio or {}).get("probability_up"),
+                    model_version=(deterministic_portfolio or {}).get("model_version"),
+                    quote=quote,
+                    features=signal.get("features") if isinstance(signal.get("features"), dict) else {},
+                    signals=signal,
+                    explanation={"rationale": advice_reason},
+                ),
+                experiment=_experiment_metadata(cohort_id="treatment" if str(watchlist_source) == "deterministic_model" else "control"),
             )
 
     return jsonify({"items": base_items, "enriched_items": enriched_items, "request_id": g.request_id})
@@ -1491,6 +1516,19 @@ def quick_ask():
                         "probability_up": shadow.get("probability_up"),
                         "confidence": shadow.get("confidence"),
                     },
+                    snapshot=build_decision_snapshot(
+                        symbol=symbol,
+                        endpoint="quick_ask_shadow",
+                        decision_source=str(shadow.get("decision_source") or "unknown"),
+                        recommendation=str(shadow.get("recommendation") or "HOLD"),
+                        probability_up=shadow.get("probability_up"),
+                        model_version=shadow.get("model_version"),
+                        quote=quote_data,
+                        features=signal_data.get("features") if isinstance(signal_data.get("features"), dict) else {},
+                        signals=signal_data,
+                        explanation={"rationale": (shadow.get("advice_reason") or shadow.get("rationale"))},
+                    ),
+                    experiment=_experiment_metadata(cohort_id="shadow"),
                 )
     if decision is None:
         decision = _quick_decision(signal_data, quote_data)
@@ -1518,6 +1556,19 @@ def quick_ask():
                 "confidence": decision.get("confidence"),
                 "ai_mode": ai_mode,
             },
+            snapshot=build_decision_snapshot(
+                symbol=symbol,
+                endpoint="quick_ask",
+                decision_source=str(decision.get("decision_source") or "unknown"),
+                recommendation=str(decision.get("recommendation") or "HOLD"),
+                probability_up=decision.get("probability_up"),
+                model_version=decision.get("model_version"),
+                quote=quote_data,
+                features=signal_data.get("features") if isinstance(signal_data.get("features"), dict) else {},
+                signals=signal_data,
+                explanation={"rationale": (decision.get("advice_reason") or decision.get("rationale"))},
+            ),
+            experiment=_experiment_metadata(cohort_id="treatment" if str(decision.get("decision_source") or "") == "deterministic_model" else "control"),
         )
 
     signal_score = signal_data.get("score")

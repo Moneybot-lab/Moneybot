@@ -73,7 +73,7 @@ def test_day8_builder_skips_immature_rows(monkeypatch):
 
 def test_day8_builder_outputs_labeled_rows_with_snapshot_fields(monkeypatch):
     now = datetime.now(timezone.utc)
-    mature_ts = int((now - timedelta(days=10)).timestamp() * 1000)  # milliseconds path
+    mature_ts = int((now - timedelta(days=10)).timestamp())
     events = [
         {
             "ts": mature_ts,
@@ -87,6 +87,7 @@ def test_day8_builder_outputs_labeled_rows_with_snapshot_fields(monkeypatch):
                 "model_version": "snap-v1",
                 "features": {"return_1d": 0.01, "rsi_14": 55.0},
             },
+            "experiment": {"experiment_id": "exp-a", "cohort_id": "treatment", "rollout_dry_run": True},
         }
     ]
     monkeypatch.setattr("scripts.day8_build_decision_training_dataset._future_return", lambda symbol, ts, days: 0.03 if days == 1 else -0.01)
@@ -100,6 +101,12 @@ def test_day8_builder_outputs_labeled_rows_with_snapshot_fields(monkeypatch):
     assert "feature_return_1d" in rows[0]
     assert "feature_rsi_14" in rows[0] or "feature_rsi" in rows[0]
     assert rows[0]["label_up_5d"] in {0, 1}
+    assert rows[0]["experiment_id"] == "exp-a"
+    assert rows[0]["cohort_id"] == "treatment"
+    assert rows[0]["rollout_dry_run"] is True
+    assert rows[0]["has_snapshot"] == 1
+    assert rows[0]["has_feature_map"] == 1
+    assert rows[0]["return_bin_5d"] in {"big_loss", "loss", "flat", "gain", "big_gain"}
 
 
 def test_day8_builder_backward_compatible_without_snapshot(monkeypatch):
@@ -120,6 +127,9 @@ def test_day8_builder_backward_compatible_without_snapshot(monkeypatch):
     assert rows[0]["feature_probability_up"] == 0.55
     assert rows[0]["feature_return_1d"] == 0.02
     assert rows[0]["label_up_5d"] == 1
+    assert rows[0]["has_snapshot"] == 0
+    assert rows[0]["experiment_id"] == "default"
+    assert rows[0]["cohort_id"] == "unknown"
 
 
 def test_day10_candidate_trainer_fails_if_rows_below_min(tmp_path, monkeypatch):
