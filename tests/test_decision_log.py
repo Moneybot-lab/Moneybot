@@ -44,3 +44,21 @@ def test_summarize_decision_events_reports_recent_activity(tmp_path: Path):
     assert summary["endpoint_counts"] == {"hot_momentum_buys": 1, "quick_ask": 1}
     assert summary["top_symbols"] == [{"symbol": "SOFI", "count": 1}, {"symbol": "TSLA", "count": 1}]
     assert summary["latest_event"]["symbol"] == "TSLA"
+
+
+def test_decision_logger_writes_snapshot_and_experiment_fields(tmp_path: Path):
+    path = tmp_path / "events.jsonl"
+    logger = DecisionLogger(enabled=True, output_path=str(path))
+
+    logger.log(
+        endpoint="quick_ask",
+        symbol="AAPL",
+        decision_source="deterministic_model",
+        payload={"recommendation": "BUY"},
+        snapshot={"schema_version": "decision_snapshot.v1", "recommendation": "BUY"},
+        experiment={"experiment_id": "exp-1", "cohort_id": "treatment"},
+    )
+
+    row = path.read_text(encoding="utf-8").strip()
+    assert '"snapshot"' in row
+    assert '"experiment"' in row
