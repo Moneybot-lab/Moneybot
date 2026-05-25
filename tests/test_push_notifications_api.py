@@ -1,6 +1,8 @@
 import os
 
 from moneybot.app_factory import create_app
+from moneybot.extensions import db
+from moneybot.models import NotificationTriggerPreference
 
 
 def _client(*, daily_ops_token: str | None = None):
@@ -118,3 +120,52 @@ def test_run_notification_triggers_returns_success_with_token():
     payload = res.get_json()
     assert payload['data']['success'] is True
     assert payload['data']['sent_count'] == 0
+
+
+def test_run_notification_triggers_sends_clearview_hold_off_to_buy_push(monkeypatch):
+    client = _client(daily_ops_token='cron-secret')
+    signup = _signup(client, email='cv@example.com', username='cv_user')
+    assert signup.status_code == 201
+
+    add = client.post('/api/user-watchlist', json={'symbol': 'NVDA', 'buy_price': 100, 'shares': 1})
+    assert add.status_code == 201
+
+    prefs_update = client.put('/api/notifications/triggers', json={'push_notifications_enabled': True})
+    assert prefs_update.status_code == 200
+    token_res = client.post('/api/notifications/fcm-token', json={'token': 'fcm_token_' + ('b' * 48)})
+    assert token_res.status_code == 201
+
+    client.put('/api/clearview-symbols', json={'symbols': ['NVDA']})
+
+    app = client.application
+    with app.app_context():
+        pref = NotificationTriggerPreference.query.first()
+        pref.clearview_symbols_csv = 'NVDA'
+        db.session.commit()
+
+    class _SignalSvc:
+        def get_signal(self, symbol):
+            return {'action': 'HOLD'}
+
+        def get_hot_momentum_buys(self):
+            return []
+
+        def get_wells_picks(self):
+            return []
+
+    sent = []
+    monkeypatch.setitem(app.extensions, 'market_data_service', _SignalSvc())
+    monkeypatch.setattr('moneybot.api._send_firebase_push_to_token', lambda **kwargs: sent.append(kwargs) or 'ok')
+
+    first = client.post('/api/run-notification-triggers', headers={'X-Daily-Ops-Token': 'cron-secret'})
+    assert first.status_code == 200
+    assert sent == []
+
+    class _BuySvc(_SignalSvc):
+        def get_signal(self, symbol):
+            return {'action': 'BUY'}
+
+    monkeypatch.setitem(app.extensions, 'market_data_service', _BuySvc())
+    second = client.post('/api/run-notification-triggers', headers={'X-Daily-Ops-Token': 'cron-secret'})
+    assert second.status_code == 200
+    assert any(msg['data']['kind'] == 'clearview_hold_off_to_buy' for msg in sent)
