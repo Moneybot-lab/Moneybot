@@ -262,6 +262,16 @@ Behavior:
 
 `GET /api/model-health` now reports rollout and calibration settings so you can confirm production configuration quickly.
 
+### Decision telemetry fields for training snapshots
+
+Decision event rows (from `scripts/day8_build_decision_training_dataset.py`) now include:
+
+- experiment segmentation: `experiment_id`, `cohort_id`, `rollout_dry_run`, `rollout_percentage`, `portfolio_rollout_percentage`
+- richer label columns: `return_bin_5d`, `label_profit_5d`, `label_drawdown_5d`
+- telemetry coverage columns: `has_snapshot`, `has_feature_map`, `has_model_version`
+
+These fields are backward-compatible: if older log rows do not include `experiment` or `snapshot`, defaults are used (`experiment_id=default`, `cohort_id=unknown`, and `has_snapshot=0`).
+
 ### 5.1 rollout dry-run mode
 
 If you want to observe deterministic recommendations without exposing them to users yet:
