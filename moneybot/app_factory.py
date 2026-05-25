@@ -365,6 +365,8 @@ def create_app() -> Flask:
         AI_TIMEOUT_SECONDS=float(os.environ.get("AI_TIMEOUT_SECONDS", "6.0")),
         AI_FAILURE_COOLDOWN_SECONDS=int(os.environ.get("AI_FAILURE_COOLDOWN_SECONDS", "120")),
         AI_RESPONSE_CACHE_TTL_SECONDS=int(os.environ.get("AI_RESPONSE_CACHE_TTL_SECONDS", "300")),
+        EXPERIMENT_ID=os.environ.get("EXPERIMENT_ID", "default"),
+        EXPERIMENT_COHORT_DEFAULT=os.environ.get("EXPERIMENT_COHORT_DEFAULT", "control"),
         DETERMINISTIC_QUICK_ENABLED=(os.environ.get("DETERMINISTIC_QUICK_ENABLED", "true").lower() == "true"),
         DETERMINISTIC_MODEL_PATH=default_model_path,
         DETERMINISTIC_MOMENTUM_ENABLED=(os.environ.get("DETERMINISTIC_MOMENTUM_ENABLED", "true").lower() == "true"),
