@@ -1706,13 +1706,22 @@ def run_notification_triggers():
                     symbol=symbol,
                 )
 
-            # ClearView symbol selections are currently browser-local (localStorage) and are
-            # not persisted server-side per user. Running this trigger against watchlist symbols
-            # creates false positives for stocks a user never added to ClearView.
-            #
-            # Keep the state map intact for forward compatibility, but skip emitting
-            # clearview_hold_off_to_buy notifications until a server-side ClearView list exists.
+            clearview_symbols = set(_parse_clearview_symbols(prefs.clearview_symbols_csv))
+            previous_clearview = clearview_state.get(state_key, "")
             clearview_state[state_key] = advice
+            if (
+                symbol in clearview_symbols
+                and advice == "BUY"
+                and previous_clearview == "HOLD"
+                and prefs.clearview_hold_off_to_buy
+            ):
+                queue_user_event(
+                    user.id,
+                    title=f"{symbol}: ClearView changed to BUY",
+                    body=f"ClearView signal for {symbol} changed from HOLD OFF to BUY.",
+                    kind="clearview_hold_off_to_buy",
+                    symbol=symbol,
+                )
 
     momentum_items = []
     try:
