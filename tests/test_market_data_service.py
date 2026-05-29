@@ -577,7 +577,7 @@ def test_get_hot_momentum_buys_uses_deterministic_scores_when_enabled(monkeypatc
 
     out = svc.get_hot_momentum_buys()
 
-    assert len(out) == 5
+    assert len(out) == 20
     assert out[0]["symbol"] == "SOFI"
     assert out[0]["decision_source"] == "deterministic_model"
     assert out[0]["model_version"] == "alpha-atlas-v1"
@@ -612,7 +612,7 @@ def test_get_hot_momentum_buys_falls_back_when_deterministic_disabled(monkeypatc
 
     out = svc.get_hot_momentum_buys()
 
-    assert len(out) == 5
+    assert len(out) == 20
     assert out[0]["decision_source"] == "rule_based"
     assert "model_version" not in out[0]
 
@@ -644,7 +644,7 @@ def test_get_hot_momentum_buys_strips_deterministic_boilerplate_rationale(monkey
 
     out = svc.get_hot_momentum_buys()
 
-    assert len(out) == 5
+    assert len(out) == 20
     assert out[0]["decision_source"] == "deterministic_model"
     assert out[0]["rationale"].startswith("Based on threshold")
     assert "Deterministic model (alpha-atlas-v1)" not in out[0]["rationale"]
@@ -682,10 +682,48 @@ def test_get_hot_momentum_buys_uses_shadow_decision_when_rollout_dry_run(monkeyp
 
     out = svc.get_hot_momentum_buys()
 
-    assert len(out) == 5
+    assert len(out) == 20
     assert out[0]["decision_source"] == "deterministic_model"
     assert out[0]["model_version"] == "alpha-atlas-v1-fallback"
     assert out[0]["score"] == 8.2
+
+
+def test_get_hot_momentum_buys_ignores_quick_rollout_gate_when_momentum_enabled(monkeypatch):
+    class StubDeterministicAdvisor:
+        rollout_dry_run = False
+
+        def predict_quick_decision(self, *, signal_data, quote_data, symbol=None):
+            return None
+
+        def predict_shadow_decision(self, *, signal_data, quote_data):
+            return {
+                "decision_source": "deterministic_model",
+                "model_version": "alpha-atlas-v1-rollout-bypass",
+                "probability_up": 0.83,
+                "confidence": 83.0,
+                "recommendation": "BUY",
+                "rationale": "Deterministic momentum score.",
+            }
+
+    svc = MarketDataService(deterministic_quick_advisor=StubDeterministicAdvisor(), deterministic_momentum_enabled=True)
+
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda symbol: {"symbol": symbol, "price": 10.0, "change_percent": 1.2, "live_data_available": True, "quote_source": "test"},
+    )
+    monkeypatch.setattr(
+        svc,
+        "get_signal",
+        lambda symbol: {"symbol": symbol, "action": "BUY", "score": 8.0, "technical": {"rsi": 48, "macd_histogram": 0.2}, "volume_ratio": 1.3, "reasons": [f"{symbol} signal"]},
+    )
+
+    out = svc.get_hot_momentum_buys()
+
+    assert len(out) == 20
+    assert out[0]["decision_source"] == "deterministic_model"
+    assert out[0]["model_version"] == "alpha-atlas-v1-rollout-bypass"
+    assert out[0]["score"] == 8.3
 
 
 def test_get_hot_momentum_buys_includes_apld_and_oklo(monkeypatch):

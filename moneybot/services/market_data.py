@@ -785,10 +785,7 @@ class MarketDataService:
                     quote_data=quote,
                     symbol=item["symbol"],
                 )
-                if (
-                    deterministic_decision is None
-                    and bool(getattr(self.deterministic_quick_advisor, "rollout_dry_run", False))
-                ):
+                if deterministic_decision is None and hasattr(self.deterministic_quick_advisor, "predict_shadow_decision"):
                     deterministic_decision = self.deterministic_quick_advisor.predict_shadow_decision(
                         signal_data=signal,
                         quote_data=quote,
