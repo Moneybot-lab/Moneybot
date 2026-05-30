@@ -693,7 +693,150 @@ def test_get_hot_momentum_buys_uses_shadow_decision_when_rollout_dry_run(monkeyp
     assert len(out) == 20
     assert out[0]["decision_source"] == "deterministic_model"
     assert out[0]["model_version"] == "alpha-atlas-v1-fallback"
-    assert out[0]["score"] == 8.2
+    assert out[0]["score"] == 8.35
+
+
+def test_get_hot_momentum_buys_labels_score_basis_and_avoids_static_score_floor(monkeypatch):
+    svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
+    _disable_hot_momentum_scanner(monkeypatch, svc)
+
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda symbol: {"symbol": symbol, "price": 10.0, "change_percent": 1.2, "live_data_available": True, "quote_source": "test"},
+    )
+    monkeypatch.setattr(
+        svc,
+        "get_signal",
+        lambda symbol: {"symbol": symbol, "action": "BUY", "score": None, "technical": {}, "volume_ratio": None, "reasons": [f"{symbol} signal"]},
+    )
+
+    out = svc.get_hot_momentum_buys()
+
+    assert len(out) == 20
+    assert out[0]["score"] < 8.0
+    assert out[0]["score_basis"] == "watchlist_seed"
+    assert any("curated watchlist seed" in component for component in out[0]["score_components"])
+
+
+def test_get_hot_momentum_buys_exposes_live_signal_score_basis(monkeypatch):
+    svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
+    _disable_hot_momentum_scanner(monkeypatch, svc)
+
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda symbol: {"symbol": symbol, "price": 10.0, "change_percent": 1.2, "live_data_available": True, "quote_source": "test"},
+    )
+    monkeypatch.setattr(
+        svc,
+        "get_signal",
+        lambda symbol: {"symbol": symbol, "action": "BUY", "score": 8.2, "technical": {}, "volume_ratio": 1.1, "reasons": [f"{symbol} signal"]},
+    )
+
+    out = svc.get_hot_momentum_buys()
+
+    assert out[0]["score_basis"] == "live_signal"
+    assert any("live technical/sentiment signal score" in component for component in out[0]["score_components"])
+
+
+def test_get_hot_momentum_buys_does_not_let_hold_model_empty_rule_candidates(monkeypatch):
+    class StubDeterministicAdvisor:
+        rollout_dry_run = False
+
+        def predict_quick_decision(self, *, signal_data, quote_data, symbol=None):
+            return {
+                "decision_source": "deterministic_model",
+                "model_version": "alpha-atlas-v1",
+                "probability_up": 0.21,
+                "confidence": 79.0,
+                "recommendation": "HOLD OFF FOR NOW",
+                "rationale": "Model is not bullish enough.",
+            }
+
+    svc = MarketDataService(deterministic_quick_advisor=StubDeterministicAdvisor(), deterministic_momentum_enabled=True)
+    _disable_hot_momentum_scanner(monkeypatch, svc)
+
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda symbol: {"symbol": symbol, "price": 10.0, "change_percent": 1.2, "live_data_available": True, "quote_source": "test"},
+    )
+    monkeypatch.setattr(
+        svc,
+        "get_signal",
+        lambda symbol: {"symbol": symbol, "action": "BUY", "score": 8.0, "technical": {"rsi": 48, "macd_histogram": 0.2}, "volume_ratio": 1.3, "reasons": [f"{symbol} signal"]},
+    )
+
+    out = svc.get_hot_momentum_buys()
+
+    assert len(out) == 20
+    assert out[0]["decision_source"] == "rule_based"
+    assert out[0]["score"] >= 8.0
+    assert out[0]["model_version"] == "alpha-atlas-v1"
+
+
+def test_dynamic_hot_momentum_candidates_reads_yahoo_screeners(monkeypatch):
+    svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
+
+    def fake_screen(query, size=None):
+        if query == "small_cap_gainers":
+            return {
+                "quotes": [
+                    {"symbol": "ASTC", "regularMarketPrice": 5.43, "regularMarketChangePercent": 126.4},
+                    {"symbol": "SLOW", "regularMarketPrice": 14.0, "regularMarketChangePercent": 2.0},
+                ]
+            }
+        return {"quotes": []}
+
+    monkeypatch.setattr("moneybot.services.market_data.yf.screen", fake_screen)
+
+    out = svc._dynamic_hot_momentum_candidates()
+
+    assert out == [
+        {
+            "symbol": "ASTC",
+            "price": 5.43,
+            "score": 9.8,
+            "rationale": "Live small cap gainers scanner: 126.4% move with early-breakout momentum.",
+            "candidate_source": "scanner:small_cap_gainers",
+        }
+    ]
+
+
+def test_get_hot_momentum_buys_includes_dynamic_early_breakout_scanner_names(monkeypatch):
+    svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
+
+    monkeypatch.setattr(
+        svc,
+        "_dynamic_hot_momentum_candidates",
+        lambda: [
+            {
+                "symbol": "ASTC",
+                "price": 3.2,
+                "score": 9.3,
+                "rationale": "Live scanner: early breakout move.",
+                "candidate_source": "scanner:small_cap_gainers",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda symbol: {"symbol": symbol, "price": 5.4 if symbol == "ASTC" else 10.0, "change_percent": 125.0 if symbol == "ASTC" else 1.2, "live_data_available": True, "quote_source": "test"},
+    )
+    monkeypatch.setattr(
+        svc,
+        "get_signal",
+        lambda symbol: {"symbol": symbol, "action": "HOLD" if symbol == "ASTC" else "BUY", "score": 8.0, "technical": {}, "volume_ratio": 12.0 if symbol == "ASTC" else 1.0, "reasons": [f"{symbol} signal"]},
+    )
+
+    out = svc.get_hot_momentum_buys()
+    astc = next(item for item in out if item["symbol"] == "ASTC")
+
+    assert astc["decision_source"] in {"explosive_watchlist", "scanner:small_cap_gainers"}
+    assert astc["score"] >= 9.0
+    assert "Early momentum alert" in astc["rationale"]
 
 
 def test_get_hot_momentum_buys_returns_empty_without_trustworthy_scores(monkeypatch):
