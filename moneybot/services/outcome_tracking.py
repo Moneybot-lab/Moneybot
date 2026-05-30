@@ -83,6 +83,48 @@ def summarize_outcome_rows(rows: list[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _has_numeric_return(row: Dict[str, Any], key: str) -> bool:
+    return isinstance(row.get(key), (int, float)) and not isinstance(row.get(key), bool)
+
+
+def rows_with_horizon_return(rows: list[Dict[str, Any]], horizon: str) -> list[Dict[str, Any]]:
+    """Return rows that have a realized return for a specific horizon."""
+    key = f"return_{horizon}"
+    return [row for row in rows if _has_numeric_return(row, key)]
+
+
+def rows_with_any_horizon_return(rows: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    """Return rows that have at least one realized horizon return."""
+    return [
+        row
+        for row in rows
+        if _has_numeric_return(row, "return_1d") or _has_numeric_return(row, "return_5d")
+    ]
+
+
+def merge_recent_rows(*row_groups: list[Dict[str, Any]], limit: int) -> list[Dict[str, Any]]:
+    """Merge row groups without duplicates while preserving chronological order."""
+    max_rows = max(1, int(limit))
+    merged: list[Dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for group in row_groups:
+        for row in group:
+            key = (
+                row.get("ts"),
+                row.get("symbol"),
+                row.get("endpoint"),
+                row.get("action"),
+                row.get("return_1d"),
+                row.get("return_5d"),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(row)
+    merged.sort(key=lambda row: int(row.get("ts") or 0))
+    return merged[-max_rows:]
+
+
 def close_values(history) -> list[float]:
     if history is None or getattr(history, "empty", False):
         return []
