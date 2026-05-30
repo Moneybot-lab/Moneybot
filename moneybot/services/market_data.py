@@ -675,6 +675,201 @@ class MarketDataService:
         action = str(signal.get("action") or signal.get("verdict") or "").upper()
         return action in {"BUY", "STRONG BUY"}
 
+    @staticmethod
+    def _is_recommendation_buy_like(decision: Dict[str, Any] | None) -> bool:
+        recommendation = str((decision or {}).get("recommendation") or "").upper()
+        return recommendation in {"BUY", "STRONG BUY"}
+
+    @staticmethod
+    def _num_or_none(value: Any) -> float | None:
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            if value not in (None, ""):
+                return float(value)
+        except (TypeError, ValueError):
+            return None
+        return None
+
+    def _dynamic_hot_momentum_candidates(self, limit: int = 30) -> list[Dict[str, Any]]:
+        candidates: list[Dict[str, Any]] = []
+        seen: set[str] = set()
+        screeners = ("small_cap_gainers", "day_gainers", "most_actives")
+        for screener in screeners:
+            try:
+                result = yf.screen(screener, size=max(1, int(limit))) or {}
+            except Exception as exc:  # noqa: BLE001
+                logging.info("Hot momentum screener %s unavailable: %s", screener, exc)
+                continue
+
+            quotes = result.get("quotes") if isinstance(result, dict) else None
+            if not isinstance(quotes, list):
+                continue
+
+            for quote_item in quotes:
+                if not isinstance(quote_item, dict):
+                    continue
+                symbol = str(quote_item.get("symbol") or "").strip().upper()
+                if not symbol or symbol in seen:
+                    continue
+                price = self._num_or_none(
+                    quote_item.get("regularMarketPrice")
+                    or quote_item.get("postMarketPrice")
+                    or quote_item.get("preMarketPrice")
+                )
+                change_percent = self._num_or_none(
+                    quote_item.get("regularMarketChangePercent")
+                    or quote_item.get("postMarketChangePercent")
+                    or quote_item.get("preMarketChangePercent")
+                )
+                if price is None or price <= 0:
+                    continue
+                if price > 100.0 and (change_percent is None or change_percent < 50.0):
+                    continue
+                if change_percent is None or change_percent < 8.0:
+                    continue
+
+                score = 7.2
+                if change_percent >= 15.0:
+                    score += 0.8
+                if change_percent >= 30.0:
+                    score += 0.7
+                if change_percent >= 75.0:
+                    score += 0.8
+                if price <= 10.0:
+                    score += 0.4
+                elif price <= 25.0:
+                    score += 0.2
+
+                candidates.append(
+                    {
+                        "symbol": symbol,
+                        "price": round(float(price), 2),
+                        "score": round(min(score, 9.8), 2),
+                        "rationale": (
+                            f"Live {screener.replace('_', ' ')} scanner: {change_percent:.1f}% move"
+                            " with early-breakout momentum."
+                        ),
+                        "candidate_source": f"scanner:{screener}",
+                    }
+                )
+                seen.add(symbol)
+        return candidates
+
+    def _early_momentum_score(self, base_score: float, quote: Dict[str, Any], signal: Dict[str, Any]) -> float:
+        score = float(base_score)
+        change_percent = self._num_or_none(quote.get("change_percent"))
+        volume_ratio = self._num_or_none(signal.get("volume_ratio"))
+        price = self._num_or_none(quote.get("price"))
+
+        if change_percent is not None:
+            if change_percent >= 12.0:
+                score += 0.5
+            if change_percent >= 25.0:
+                score += 0.7
+            if change_percent >= 50.0:
+                score += 0.8
+            if change_percent >= 100.0:
+                score += 0.5
+        if volume_ratio is not None:
+            if volume_ratio >= 2.0:
+                score += 0.35
+            if volume_ratio >= 5.0:
+                score += 0.55
+            if volume_ratio >= 10.0:
+                score += 0.4
+        if price is not None:
+            if price <= 10.0:
+                score += 0.35
+            elif price <= 25.0:
+                score += 0.15
+
+        return round(min(max(score, 0.0), 9.9), 2)
+
+    def _early_momentum_reason(self, fallback: str, quote: Dict[str, Any], signal: Dict[str, Any]) -> str:
+        parts: list[str] = []
+        change_percent = self._num_or_none(quote.get("change_percent"))
+        volume_ratio = self._num_or_none(signal.get("volume_ratio"))
+        if change_percent is not None and change_percent >= 12.0:
+            parts.append(f"price is already moving +{change_percent:.1f}%")
+        if volume_ratio is not None and volume_ratio >= 2.0:
+            parts.append(f"volume is {volume_ratio:.1f}x normal")
+        if not parts:
+            return fallback
+        return f"Early momentum alert: {', '.join(parts)}. {fallback}"
+
+    def _hot_momentum_base_score(self, item: Dict[str, Any], signal: Dict[str, Any]) -> tuple[float, str, list[str]]:
+        raw_score = signal.get("score")
+        if isinstance(raw_score, (int, float)):
+            score = round(float(raw_score), 2)
+            return score, "live_signal", [f"live technical/sentiment signal score {score:.2f}"]
+
+        candidate_source = str(item.get("candidate_source") or "")
+        candidate_score = self._num_or_none(item.get("score"))
+        if candidate_source.startswith("scanner:") and candidate_score is not None:
+            score = round(float(candidate_score), 2)
+            return score, "live_scanner", [f"{candidate_source} seed score {score:.2f}"]
+
+        return 5.5, "watchlist_seed", ["curated watchlist seed starts at 5.50 until live signal data confirms momentum"]
+
+    def _hot_momentum_score_components(
+        self,
+        *,
+        base_score: float,
+        score_basis: str,
+        base_components: list[str],
+        quote: Dict[str, Any],
+        signal: Dict[str, Any],
+    ) -> tuple[float, list[str]]:
+        score = float(base_score)
+        components = list(base_components)
+        change_percent = self._num_or_none(quote.get("change_percent"))
+        volume_ratio = self._num_or_none(signal.get("volume_ratio"))
+        price = self._num_or_none(quote.get("price"))
+
+        if change_percent is not None:
+            if change_percent >= 12.0:
+                score += 0.5
+                components.append("+0.50 for 12%+ live price move")
+            if change_percent >= 25.0:
+                score += 0.7
+                components.append("+0.70 for 25%+ live price move")
+            if change_percent >= 50.0:
+                score += 0.8
+                components.append("+0.80 for 50%+ live price move")
+            if change_percent >= 100.0:
+                score += 0.5
+                components.append("+0.50 for 100%+ live price move")
+        elif score_basis == "watchlist_seed":
+            score -= 0.75
+            components.append("-0.75 because live percent-change data is missing")
+
+        if volume_ratio is not None:
+            if volume_ratio >= 2.0:
+                score += 0.35
+                components.append("+0.35 for 2x+ relative volume")
+            if volume_ratio >= 5.0:
+                score += 0.55
+                components.append("+0.55 for 5x+ relative volume")
+            if volume_ratio >= 10.0:
+                score += 0.4
+                components.append("+0.40 for 10x+ relative volume")
+        elif score_basis == "watchlist_seed":
+            score -= 0.25
+            components.append("-0.25 because relative volume data is missing")
+
+        if price is not None:
+            if price <= 10.0:
+                score += 0.35
+                components.append("+0.35 for sub-$10 price")
+            elif price <= 25.0:
+                score += 0.15
+                components.append("+0.15 for sub-$25 price")
+
+        final_score = round(min(max(score, 0.0), 9.9), 2)
+        components.append(f"final score {final_score:.2f}")
+        return final_score, components
+
     def get_stable_watchlist(self) -> list[Dict[str, Any]]:
         candidates = [
             {"symbol": "MSFT", "company": "Microsoft", "price": 418.2, "signal_score": 7.9, "transparency": "Strong balance sheet and recurring revenue."},
@@ -763,7 +958,15 @@ class MarketDataService:
             {"symbol": "IONA", "price": 4.82, "score": 7.1, "rationale": "Small-cap momentum rotation candidate."},
             {"symbol": "LUNR", "price": 6.94, "score": 7.8, "rationale": "Space-theme momentum with event-driven catalyst flow."},
             {"symbol": "SATS", "price": 3.44, "score": 6.8, "rationale": "Speculative turnaround with improving tape behavior."},
+            {"symbol": "ASTC", "price": 3.0, "score": 8.8, "rationale": "Nano-cap space/security-tech breakout watch with squeeze potential.", "candidate_source": "explosive_watchlist"},
         ]
+
+        seen_symbols = {str(item.get("symbol") or "").upper() for item in candidates}
+        for scanner_item in self._dynamic_hot_momentum_candidates():
+            scanner_symbol = str(scanner_item.get("symbol") or "").upper()
+            if scanner_symbol and scanner_symbol not in seen_symbols:
+                candidates.append(scanner_item)
+                seen_symbols.add(scanner_symbol)
 
         enriched: list[Dict[str, Any]] = []
         for item in candidates:
@@ -772,8 +975,23 @@ class MarketDataService:
             merged = dict(item)
             if isinstance(quote.get("price"), (int, float)):
                 merged["price"] = float(quote["price"])
-            merged["score"] = self._score_from_signal(signal, item["score"])
-            merged["rationale"] = self._reason_from_signal(signal, item["rationale"])
+            base_score, score_basis, base_components = self._hot_momentum_base_score(item, signal)
+            rule_score, score_components = self._hot_momentum_score_components(
+                base_score=base_score,
+                score_basis=score_basis,
+                base_components=base_components,
+                quote=quote,
+                signal=signal,
+            )
+            rule_rationale = self._early_momentum_reason(
+                self._reason_from_signal(signal, item["rationale"]),
+                quote,
+                signal,
+            )
+            merged["score"] = rule_score
+            merged["score_basis"] = score_basis
+            merged["score_components"] = score_components
+            merged["rationale"] = rule_rationale
             merged["change_percent"] = quote.get("change_percent")
             merged["quote_source"] = quote.get("quote_source")
             merged["live_data_available"] = bool(quote.get("live_data_available"))
@@ -788,6 +1006,7 @@ class MarketDataService:
                 if (
                     deterministic_decision is None
                     and bool(getattr(self.deterministic_quick_advisor, "rollout_dry_run", False))
+                    and hasattr(self.deterministic_quick_advisor, "predict_shadow_decision")
                 ):
                     deterministic_decision = self.deterministic_quick_advisor.predict_shadow_decision(
                         signal_data=signal,
@@ -796,19 +1015,33 @@ class MarketDataService:
 
             if deterministic_decision is not None:
                 prob_up = float(deterministic_decision.get("probability_up") or 0.0)
-                merged["score"] = round(prob_up * 10.0, 2)
-                merged["rationale"] = self._clean_deterministic_rationale(str(deterministic_decision.get("rationale") or merged["rationale"]))
-                merged["decision_source"] = str(deterministic_decision.get("decision_source") or "deterministic_model")
+                model_score = round(prob_up * 10.0, 2)
+                model_is_buy = self._is_recommendation_buy_like(deterministic_decision)
                 merged["model_version"] = deterministic_decision.get("model_version")
                 merged["probability_up"] = deterministic_decision.get("probability_up")
                 merged["confidence"] = deterministic_decision.get("confidence")
-                merged["qualified"] = bool(
-                    merged["live_data_available"]
-                    and deterministic_decision.get("recommendation") in {"BUY", "STRONG BUY"}
-                )
+                if model_is_buy:
+                    merged["score"] = max(rule_score, model_score)
+                    merged["score_basis"] = "deterministic_model" if model_score >= rule_score else score_basis
+                    merged["score_components"] = score_components + [f"model probability score {model_score:.2f} considered alongside rule score"]
+                    merged["rationale"] = self._clean_deterministic_rationale(str(deterministic_decision.get("rationale") or rule_rationale))
+                    merged["decision_source"] = str(deterministic_decision.get("decision_source") or "deterministic_model")
+                else:
+                    merged["score_components"] = score_components + [f"model recommendation was {str(deterministic_decision.get('recommendation') or 'unknown')} so rule/scanner score was kept"]
+                    merged["decision_source"] = str(item.get("candidate_source") or "rule_based")
             else:
-                merged["decision_source"] = "rule_based"
-                merged["qualified"] = bool(merged["live_data_available"] and merged["score"] >= 7.0 and self._is_buy_like(signal))
+                merged["decision_source"] = str(item.get("candidate_source") or "rule_based")
+
+            explosive_move = bool(
+                merged["live_data_available"]
+                and self._change_percent_sort_value(merged.get("change_percent")) >= 12.0
+                and merged["score"] >= 7.0
+            )
+            merged["qualified"] = bool(
+                merged["live_data_available"]
+                and merged["score"] >= 7.0
+                and (self._is_buy_like(signal) or explosive_move or str(item.get("candidate_source") or "").startswith("scanner:"))
+            )
 
             enriched.append(merged)
 
