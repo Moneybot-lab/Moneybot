@@ -120,6 +120,28 @@ def _fit_platt_brier_deltas(rows: list[dict], *, steps: int = 600, lr: float = 0
     return intercept, slope - 1.0
 
 
+
+def _sigmoid(value: float) -> float:
+    clipped = max(-35.0, min(35.0, float(value)))
+    return 1.0 / (1.0 + math.exp(-clipped))
+
+
+def _logit(probability: float) -> float:
+    p = min(max(float(probability), 1e-6), 1.0 - 1e-6)
+    return math.log(p / (1.0 - p))
+
+
+def _apply_platt_calibration(probability: float, *, intercept: float, slope_delta: float) -> float:
+    slope = max(0.25, min(3.0, 1.0 + float(slope_delta)))
+    return _sigmoid(float(intercept) + (slope * _logit(probability)))
+
+
+def _brier_score(rows: list[dict], *, prediction_key: str = "predicted") -> float | None:
+    if not rows:
+        return None
+    return sum((float(row[prediction_key]) - float(row["observed"])) ** 2 for row in rows) / len(rows)
+
+
 def calibration_summary(rows: list[dict], *, bins: int = 10) -> dict:
     if not rows:
         return {
@@ -131,7 +153,7 @@ def calibration_summary(rows: list[dict], *, bins: int = 10) -> dict:
             "recommended": {"intercept_delta": 0.0, "slope_delta": 0.0},
         }
 
-    brier = sum((r["predicted"] - r["observed"]) ** 2 for r in rows) / len(rows)
+    brier = float(_brier_score(rows) or 0.0)
     avg_pred = sum(r["predicted"] for r in rows) / len(rows)
     avg_obs = sum(r["observed"] for r in rows) / len(rows)
 
@@ -162,15 +184,35 @@ def calibration_summary(rows: list[dict], *, bins: int = 10) -> dict:
     if not math.isfinite(slope_delta):
         slope_delta = 0.0
 
+    calibrated_rows = [
+        {
+            **row,
+            "calibrated_predicted": _apply_platt_calibration(
+                float(row["predicted"]),
+                intercept=intercept_delta,
+                slope_delta=slope_delta,
+            ),
+        }
+        for row in rows
+    ]
+    calibrated_brier = float(_brier_score(calibrated_rows, prediction_key="calibrated_predicted") or brier)
+    effective_brier = min(float(brier), calibrated_brier)
+
     return {
         "rows": len(rows),
         "brier_score": round(float(brier), 6),
+        "brier_score_raw": round(float(brier), 6),
+        "calibrated_brier_score": round(float(calibrated_brier), 6),
+        "effective_brier_score": round(float(effective_brier), 6),
+        "brier_improvement": round(float(brier - effective_brier), 6),
         "avg_predicted": round(float(avg_pred), 6),
         "avg_observed": round(float(avg_obs), 6),
         "bins": bucket_summary,
         "recommended": {
             "intercept_delta": round(float(intercept_delta), 6),
             "slope_delta": round(float(slope_delta), 6),
+            "calibrated_brier_score": round(float(calibrated_brier), 6),
+            "effective_brier_score": round(float(effective_brier), 6),
         },
     }
 

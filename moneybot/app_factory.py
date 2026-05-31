@@ -171,6 +171,22 @@ def _parse_int_env(name: str, default: int) -> int:
         raise RuntimeError(f"{name} must be an integer value, got: {raw!r}")
 
 
+
+
+def _load_recalibration_plan(path: Path) -> dict | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _num_or_none(value) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
 def _runtime_data_path(filename: str) -> str:
     base_dir = os.getenv("MONEYBOT_PERSISTENT_DATA_DIR", "data")
     os.makedirs(base_dir, exist_ok=True)
@@ -379,6 +395,7 @@ def create_app() -> Flask:
         DETERMINISTIC_CALIBRATION_ENABLED=(os.environ.get("DETERMINISTIC_CALIBRATION_ENABLED", "false").lower() == "true"),
         DETERMINISTIC_CALIBRATION_SLOPE=float(os.environ.get("DETERMINISTIC_CALIBRATION_SLOPE", "1.0")),
         DETERMINISTIC_CALIBRATION_INTERCEPT=float(os.environ.get("DETERMINISTIC_CALIBRATION_INTERCEPT", "0.0")),
+        DETERMINISTIC_CALIBRATION_AUTO_APPLY_PLAN=(os.environ.get("DETERMINISTIC_CALIBRATION_AUTO_APPLY_PLAN", "true").lower() == "true"),
         DETERMINISTIC_ROLLOUT_PERCENTAGE=float(os.environ.get("DETERMINISTIC_ROLLOUT_PERCENTAGE", "100.0")),
         DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE=float(
             os.environ.get(
@@ -427,6 +444,23 @@ def create_app() -> Flask:
         recalibration_plan,
         recalibration_plan.exists(),
     )
+
+    calibration_enabled_env = os.environ.get("DETERMINISTIC_CALIBRATION_ENABLED")
+    if app.config["DETERMINISTIC_CALIBRATION_AUTO_APPLY_PLAN"] and calibration_enabled_env is None:
+        plan = _load_recalibration_plan(recalibration_plan)
+        next_plan = plan.get("next") if isinstance(plan, dict) and isinstance(plan.get("next"), dict) else {}
+        plan_slope = _num_or_none(next_plan.get("slope"))
+        plan_intercept = _num_or_none(next_plan.get("intercept"))
+        if plan and plan.get("apply_change") is True and plan_slope is not None and plan_intercept is not None:
+            app.config["DETERMINISTIC_CALIBRATION_ENABLED"] = True
+            app.config["DETERMINISTIC_CALIBRATION_SLOPE"] = plan_slope
+            app.config["DETERMINISTIC_CALIBRATION_INTERCEPT"] = plan_intercept
+            logging.info(
+                "Applied deterministic calibration plan slope=%s intercept=%s effective_brier_score=%s",
+                plan_slope,
+                plan_intercept,
+                plan.get("effective_brier_score"),
+            )
 
     app.extensions["ai_advisor_service"] = AIAdvisorService(
         enabled=app.config["AI_ENABLED"],
