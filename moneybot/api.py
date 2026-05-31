@@ -1213,7 +1213,10 @@ def add_watchlist_item():
 
     existing = WatchlistItem.query.filter_by(user_id=session["user_id"], symbol=symbol).first()
     if existing:
-        return jsonify({"error": "symbol already in watchlist", "request_id": g.request_id}), 409
+        return jsonify({
+            "error": "Symbol already exists in portfolio. Click Buy in the Action column to add more shares.",
+            "request_id": g.request_id,
+        }), 409
 
     item = WatchlistItem(
         user_id=session["user_id"], symbol=symbol, company=company, buy_price=buy_price, shares=shares
