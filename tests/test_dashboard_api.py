@@ -908,6 +908,20 @@ def test_user_watchlist_exposes_quote_source_diagnostics():
     assert enriched["quote_diagnostics"]["provider"] == "finnhub"
 
 
+def test_user_watchlist_duplicate_symbol_points_to_buy_action():
+    client = _client()
+    signup = client.post("/api/auth/signup", json=_signup_payload("duplicate@b.com"))
+    assert signup.status_code == 201
+    add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 1})
+    assert add.status_code == 201
+
+    duplicate = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 110, "shares": 2})
+    assert duplicate.status_code == 409
+    assert duplicate.get_json()["error"] == (
+        "Symbol already exists in portfolio. Click Buy in the Action column to add more shares."
+    )
+
+
 def test_forgot_password_returns_generic_success_message():
     client = _client()
     signup = client.post("/api/auth/signup", json=_signup_payload("recover@b.com"))
