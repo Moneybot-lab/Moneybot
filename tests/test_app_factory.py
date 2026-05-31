@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from moneybot.app_factory import _resolve_database_url, create_app
@@ -262,3 +264,29 @@ def test_run_notification_triggers_alias_redirects_to_api(monkeypatch):
 
     assert res.status_code == 307
     assert res.headers["Location"].endswith("/api/run-notification-triggers")
+
+
+def test_create_app_auto_applies_recalibration_plan(tmp_path, monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("DETERMINISTIC_CALIBRATION_ENABLED", raising=False)
+    plan_path = tmp_path / "day13_recalibration_plan.json"
+    plan_path.write_text(
+        json.dumps(
+            {
+                "apply_change": True,
+                "effective_brier_score": 0.245,
+                "next": {"slope": 0.646989, "intercept": 0.666503},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    app = create_app()
+
+    advisor = app.extensions["deterministic_quick_advisor"]
+    assert app.config["DETERMINISTIC_CALIBRATION_ENABLED"] is True
+    assert advisor.calibration_enabled is True
+    assert advisor.calibration_slope == 0.646989
+    assert advisor.calibration_intercept == 0.666503

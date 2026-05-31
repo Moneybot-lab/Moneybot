@@ -124,21 +124,21 @@ if [[ "$gate" == "50_to_75" ]]; then
   check_bool_with_json "evaluated_rows_available >= 40" '(.data.evaluated_rows_available // (.data.summary_1d.evaluated_rows // 0)) >= 40' "$outcomes_json"
   check_bool_with_json "summary_1d.accuracy >= 0.48" '(.data.summary_1d.accuracy // 0) >= 0.48' "$outcomes_json"
   check_bool_with_json "calibration_report.rows >= 30" '(.data.calibration_report.rows // 0) >= 30' "$model_json"
-  check_bool_with_json "calibration_report.brier_score <= 0.26" '((.data.calibration_report.brier_score // 999) <= 0.26)' "$model_json"
+  check_bool_with_json "calibration_report.effective_brier_score <= 0.26" '((.data.calibration_report.effective_brier_score // .data.calibration_report.calibrated_brier_score // .data.calibration_report.brier_score // 999) <= 0.26)' "$model_json"
 elif [[ "$gate" == "75_to_100" ]]; then
   check_bool_with_json "summary_5d.evaluated_rows >= 60" '(.data.summary_5d.evaluated_rows // 0) >= 60' "$outcomes_json"
   check_bool_with_json "summary_5d.accuracy >= 0.55" '(.data.summary_5d.accuracy // 0) >= 0.55' "$outcomes_json"
   check_bool_with_json "evaluated_rows_available >= 100" '(.data.evaluated_rows_available // (.data.summary_1d.evaluated_rows // 0)) >= 100' "$outcomes_json"
   check_bool_with_json "summary_1d.accuracy >= 0.50" '(.data.summary_1d.accuracy // 0) >= 0.50' "$outcomes_json"
   check_bool_with_json "calibration_report.rows >= 100" '(.data.calibration_report.rows // 0) >= 100' "$model_json"
-  check_bool_with_json "calibration_report.brier_score <= 0.24" '((.data.calibration_report.brier_score // 999) <= 0.24)' "$model_json"
+  check_bool_with_json "calibration_report.effective_brier_score <= 0.24" '((.data.calibration_report.effective_brier_score // .data.calibration_report.calibrated_brier_score // .data.calibration_report.brier_score // 999) <= 0.24)' "$model_json"
 fi
 
 if [[ "$gate" == portfolio_* ]]; then
   check_bool_with_json "rollout_dry_run == false" '.data.rollout_dry_run == false' "$model_json"
   check_bool_with_json "portfolio_rollout_percentage is present" '(.data.portfolio_rollout_percentage // null) != null' "$model_json"
   check_bool_with_json "calibration_report.rows >= 30" '(.data.calibration_report.rows // 0) >= 30' "$model_json"
-  check_bool_with_json "calibration_report.brier_score <= 0.26" '((.data.calibration_report.brier_score // 999) <= 0.26)' "$model_json"
+  check_bool_with_json "calibration_report.effective_brier_score <= 0.26" '((.data.calibration_report.effective_brier_score // .data.calibration_report.calibrated_brier_score // .data.calibration_report.brier_score // 999) <= 0.26)' "$model_json"
 
   if [[ "$gate" == "portfolio_20_to_35" ]]; then
     check_bool_with_json "portfolio_rollout_percentage == 20" '(.data.portfolio_rollout_percentage // -1) == 20' "$model_json"

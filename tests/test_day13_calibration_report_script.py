@@ -48,3 +48,21 @@ def test_calibration_summary_recommends_slope_adjustment_when_overconfident():
     summary = calibration_summary(rows, bins=4)
 
     assert abs(summary["recommended"]["slope_delta"]) > 0.01
+
+
+def test_calibration_summary_reports_effective_calibrated_brier_for_underconfident_predictions():
+    rows = [
+        {"predicted": 0.35, "observed": 1.0},
+        {"predicted": 0.38, "observed": 1.0},
+        {"predicted": 0.42, "observed": 1.0},
+        {"predicted": 0.45, "observed": 0.0},
+        {"predicted": 0.48, "observed": 1.0},
+        {"predicted": 0.52, "observed": 1.0},
+    ]
+
+    summary = calibration_summary(rows, bins=4)
+
+    assert summary["brier_score_raw"] == summary["brier_score"]
+    assert summary["calibrated_brier_score"] <= summary["brier_score"]
+    assert summary["effective_brier_score"] == summary["calibrated_brier_score"]
+    assert summary["brier_improvement"] > 0
