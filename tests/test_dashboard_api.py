@@ -88,6 +88,9 @@ class StubMarketService:
             "quote": self.get_quote(symbol),
         }
 
+    def get_price_history(self, symbol, days=30):
+        return [150.25, 151.5, 152.0]
+
     def get_company_snapshot(self, symbol):
         return {"symbol": symbol, "company_name": f"{symbol} Corp", "summary": "Test summary."}
 
@@ -198,6 +201,9 @@ def test_quick_ask_uses_deterministic_model_extension_when_present():
     assert data["decision_source"] == "deterministic_model"
     assert data["model_version"] == "alpha-atlas-v1"
     assert data["confidence"] == 78.0
+    assert data["score"] == 7.8
+    assert data["model_score"] == 7.8
+    assert data["score_basis"] == "deterministic_model_probability"
 
 
 def test_model_health_reports_deterministic_and_logging_status():

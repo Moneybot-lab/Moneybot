@@ -127,9 +127,6 @@ def test_run_notification_triggers_sends_clearview_hold_off_to_buy_push(monkeypa
     signup = _signup(client, email='cv@example.com', username='cv_user')
     assert signup.status_code == 201
 
-    add = client.post('/api/user-watchlist', json={'symbol': 'NVDA', 'buy_price': 100, 'shares': 1})
-    assert add.status_code == 201
-
     prefs_update = client.put('/api/notifications/triggers', json={'push_notifications_enabled': True})
     assert prefs_update.status_code == 200
     token_res = client.post('/api/notifications/fcm-token', json={'token': 'fcm_token_' + ('b' * 48)})
@@ -145,7 +142,7 @@ def test_run_notification_triggers_sends_clearview_hold_off_to_buy_push(monkeypa
 
     class _SignalSvc:
         def get_signal(self, symbol):
-            return {'action': 'HOLD'}
+            return {'action': 'HOLD', 'score': 2.0}
 
         def get_hot_momentum_buys(self):
             return []
@@ -155,15 +152,25 @@ def test_run_notification_triggers_sends_clearview_hold_off_to_buy_push(monkeypa
 
     sent = []
     monkeypatch.setitem(app.extensions, 'market_data_service', _SignalSvc())
+    monkeypatch.setitem(app.extensions, 'deterministic_quick_advisor', None)
     monkeypatch.setattr('moneybot.api._send_firebase_push_to_token', lambda **kwargs: sent.append(kwargs) or 'ok')
 
     first = client.post('/api/run-notification-triggers', headers={'X-Daily-Ops-Token': 'cron-secret'})
     assert first.status_code == 200
     assert sent == []
 
+    class _LowScoreBuySvc(_SignalSvc):
+        def get_signal(self, symbol):
+            return {'action': 'BUY', 'score': 4.0}
+
+    monkeypatch.setitem(app.extensions, 'market_data_service', _LowScoreBuySvc())
+    low_score = client.post('/api/run-notification-triggers', headers={'X-Daily-Ops-Token': 'cron-secret'})
+    assert low_score.status_code == 200
+    assert sent == []
+
     class _BuySvc(_SignalSvc):
         def get_signal(self, symbol):
-            return {'action': 'BUY'}
+            return {'action': 'BUY', 'score': 7.0}
 
     monkeypatch.setitem(app.extensions, 'market_data_service', _BuySvc())
     second = client.post('/api/run-notification-triggers', headers={'X-Daily-Ops-Token': 'cron-secret'})
