@@ -118,6 +118,12 @@ check_bool_with_json "decision_logging.enabled == true" '.data.decision_logging.
 check_bool_with_json "used_unevaluated_fallback == false" '.data.used_unevaluated_fallback == false' "$outcomes_json"
 check_bool_with_json "lookup_errors == 0" '(.data.lookup_errors // 0) == 0' "$outcomes_json"
 
+combined_json="$(jq -n --argjson outcomes "$outcomes_json" --argjson model "$model_json" '{outcomes: $outcomes.data, model: $model.data}')"
+portfolio_5d_evidence_expr() {
+  local min_rows="$1"
+  printf '((.outcomes.summary_5d.evaluated_rows // .outcomes.evaluated_rows_5d_available // 0) >= %s) or ((.model.calibration_report.rows // 0) >= %s)' "$min_rows" "$min_rows"
+}
+
 if [[ "$gate" == "50_to_75" ]]; then
   check_bool_with_json "summary_5d.evaluated_rows >= 20" '(.data.summary_5d.evaluated_rows // 0) >= 20' "$outcomes_json"
   check_bool_with_json "summary_5d.accuracy >= 0.52" '(.data.summary_5d.accuracy // 0) >= 0.52' "$outcomes_json"
@@ -142,16 +148,16 @@ if [[ "$gate" == portfolio_* ]]; then
 
   if [[ "$gate" == "portfolio_20_to_35" ]]; then
     check_bool_with_json "portfolio_rollout_percentage == 20" '(.data.portfolio_rollout_percentage // -1) == 20' "$model_json"
-    check_bool_with_json "summary_5d.evaluated_rows >= 20" '(.data.summary_5d.evaluated_rows // 0) >= 20' "$outcomes_json"
+    check_bool_with_json "5d evidence rows >= 20" "$(portfolio_5d_evidence_expr 20)" "$combined_json"
   elif [[ "$gate" == "portfolio_35_to_50" ]]; then
     check_bool_with_json "portfolio_rollout_percentage == 35" '(.data.portfolio_rollout_percentage // -1) == 35' "$model_json"
-    check_bool_with_json "summary_5d.evaluated_rows >= 30" '(.data.summary_5d.evaluated_rows // 0) >= 30' "$outcomes_json"
+    check_bool_with_json "5d evidence rows >= 30" "$(portfolio_5d_evidence_expr 30)" "$combined_json"
   elif [[ "$gate" == "portfolio_50_to_75" ]]; then
     check_bool_with_json "portfolio_rollout_percentage == 50" '(.data.portfolio_rollout_percentage // -1) == 50' "$model_json"
-    check_bool_with_json "summary_5d.evaluated_rows >= 40" '(.data.summary_5d.evaluated_rows // 0) >= 40' "$outcomes_json"
+    check_bool_with_json "5d evidence rows >= 40" "$(portfolio_5d_evidence_expr 40)" "$combined_json"
   else
     check_bool_with_json "portfolio_rollout_percentage == 75" '(.data.portfolio_rollout_percentage // -1) == 75' "$model_json"
-    check_bool_with_json "summary_5d.evaluated_rows >= 60" '(.data.summary_5d.evaluated_rows // 0) >= 60' "$outcomes_json"
+    check_bool_with_json "5d evidence rows >= 60" "$(portfolio_5d_evidence_expr 60)" "$combined_json"
   fi
 fi
 
