@@ -74,3 +74,15 @@ def test_evaluate_decision_events_handles_lookup_errors_as_skipped():
     assert rows[0]["return_1d"] is None
     assert rows[0]["outcome_1d"] == "skipped"
     assert rows[0]["return_5d"] == 0.02
+
+
+def test_rows_with_horizon_return_keeps_horizons_separate():
+    from moneybot.services.outcome_tracking import rows_with_horizon_return
+
+    rows = [
+        {"symbol": "AAPL", "return_1d": 0.01, "return_5d": None},
+        {"symbol": "MSFT", "return_1d": 0.02, "return_5d": 0.05},
+    ]
+
+    assert [row["symbol"] for row in rows_with_horizon_return(rows, "1d")] == ["AAPL", "MSFT"]
+    assert [row["symbol"] for row in rows_with_horizon_return(rows, "5d")] == ["MSFT"]

@@ -397,12 +397,14 @@ const fallbackData = {
                     const total = Number(summary.events_considered || 0);
                     const calibrationReport = health.calibration_report || {};
                     const calibrationReportExists = Boolean(health.calibration_report_exists);
-                    const brierScore = typeof calibrationReport.brier_score === 'number' ? calibrationReport.brier_score : null;
+                    const rawBrierScore = typeof calibrationReport.brier_score_raw === 'number' ? calibrationReport.brier_score_raw : (typeof calibrationReport.brier_score === 'number' ? calibrationReport.brier_score : null);
+                    const calibratedBrierScore = typeof calibrationReport.calibrated_brier_score === 'number' ? calibrationReport.calibrated_brier_score : null;
+                    const effectiveBrierScore = typeof calibrationReport.effective_brier_score === 'number' ? calibrationReport.effective_brier_score : (calibratedBrierScore ?? rawBrierScore);
                     const calibrationRows = Number(calibrationReport.rows || 0);
                     const hasCalibrationPayload = calibrationReportExists || Object.keys(calibrationReport).length > 0;
                     const calibrationStatus = !hasCalibrationPayload
                       ? 'No report'
-                      : (brierScore == null ? 'Pending maturity' : (brierScore <= 0.22 ? 'Healthy' : 'Drifting'));
+                      : (effectiveBrierScore == null ? 'Pending maturity' : (effectiveBrierScore <= 0.26 ? 'Gate-ready' : 'Drifting'));
                     const trainingFresh = health.training_fresh;
                     const trainingAgeHours = typeof health.training_age_hours === 'number' ? health.training_age_hours : null;
                     const trainingMaxAgeHours = Number(health.training_max_age_hours || 36);
@@ -441,12 +443,12 @@ const fallbackData = {
                       },
                       {
                         label: 'Calibration',
-                        value: opsBadge(calibrationStatus, calibrationStatus === 'Healthy' || calibrationStatus === 'Pending maturity'),
+                        value: opsBadge(calibrationStatus, calibrationStatus === 'Gate-ready' || calibrationStatus === 'Pending maturity'),
                         detail: !hasCalibrationPayload
                           ? 'Run day13_calibration_report.py to populate diagnostics.'
-                          : (brierScore == null
+                          : (effectiveBrierScore == null
                             ? `Report loaded · ${calibrationRows} mature rows available for scoring`
-                            : `Brier ${brierScore.toFixed(4)} · rows ${calibrationRows}`),
+                            : `Effective Brier ${effectiveBrierScore.toFixed(4)}${rawBrierScore != null && rawBrierScore !== effectiveBrierScore ? ` (raw ${rawBrierScore.toFixed(4)})` : ''} · rows ${calibrationRows}`),
                         tone: 'normal',
                       },
                     ];
