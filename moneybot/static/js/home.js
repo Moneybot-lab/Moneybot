@@ -567,7 +567,9 @@ const fallbackData = {
                         const d = payload.data || {};
                         const rec = String(d.recommendation || 'HOLD OFF FOR NOW').toUpperCase();
                         const derivedScore = Number.isFinite(Number(d.score)) ? Number(d.score) : (Number.isFinite(Number(d.signal_score)) ? Number(d.signal_score) : (Number.isFinite(Number(d.probability_up)) ? Number(d.probability_up) * 10 : 0));
-                        return {symbol, current_price:d.current_price, score:derivedScore, history30:d.history30 || [], recommendation: rec.includes('BUY') ? 'BUY' : 'HOLD OFF', rationale:((d.ai && d.ai.narrative) || d.rationale || 'The AI sees improving momentum and risk setup; wait if volume weakens.')};
+                        const buyThreshold = Number.isFinite(Number(d.decision_threshold)) ? Number(d.decision_threshold) * 10 : 6;
+                        const clearviewAdvice = (rec === 'BUY' || rec === 'STRONG BUY') && derivedScore >= buyThreshold ? 'BUY' : 'HOLD OFF';
+                        return {symbol, current_price:d.current_price, score:derivedScore, history30:d.history30 || [], recommendation: clearviewAdvice, rationale:((d.ai && d.ai.narrative) || d.rationale || 'The AI sees improving momentum and risk setup; wait if volume weakens.')};
                       } catch (err) {
                         return {symbol, current_price:null, score:0, history30:[], recommendation:'HOLD OFF', rationale:'Unable to load live signal right now.'};
                       }
