@@ -580,7 +580,7 @@ def test_decision_outcomes_can_filter_by_decision_source(tmp_path, monkeypatch):
     assert data["rows"][0]["decision_source"] == "deterministic_model"
 
 
-def test_decision_outcomes_prefers_rows_with_5d_returns_for_default_view(tmp_path, monkeypatch):
+def test_decision_outcomes_keeps_1d_and_5d_rows_separate_for_default_view(tmp_path, monkeypatch):
     monkeypatch.setenv("DECISION_LOG_PATH", str(tmp_path / "decision_events.jsonl"))
     client = _client()
     logger = client.application.extensions["decision_logger"]
@@ -604,11 +604,14 @@ def test_decision_outcomes_prefers_rows_with_5d_returns_for_default_view(tmp_pat
     res = client.get("/api/decision-outcomes?limit=10")
     assert res.status_code == 200
     data = res.get_json()["data"]
-    assert len(data["rows"]) == 1
-    assert data["rows"][0]["symbol"] == "TSLA"
-    assert data["rows"][0]["return_5d"] == -0.04
+    assert len(data["rows"]) == 3
+    assert [row["symbol"] for row in data["rows_1d"]] == ["AAPL", "TSLA", "MSFT"]
+    assert [row["symbol"] for row in data["rows_5d"]] == ["TSLA"]
+    assert data["rows_5d"][0]["return_5d"] == -0.04
+    assert data["summary_1d"]["evaluated_rows"] == 3
     assert data["summary_5d"]["evaluated_rows"] == 1
     assert data["evaluated_rows_available"] == 3
+    assert data["evaluated_rows_1d_available"] == 3
     assert data["evaluated_rows_5d_available"] == 1
 
 

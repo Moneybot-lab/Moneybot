@@ -14,13 +14,26 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from moneybot.services.decision_log import read_decision_events
-from moneybot.services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
+from moneybot.services.outcome_tracking import (
+    close_values,
+    evaluate_decision_events,
+    merge_recent_rows,
+    rows_with_any_horizon_return,
+    rows_with_horizon_return,
+    summarize_outcome_rows,
+)
 from moneybot.services.runtime_paths import resolve_runtime_dir
 
 
 def select_visible_rows(rows: list[dict], evaluated_rows: list[dict], rows_limit: int) -> list[dict]:
     limit = max(1, int(rows_limit))
     return evaluated_rows[-limit:] if evaluated_rows else rows[-limit:]
+
+
+def summarize_horizon(rows: list[dict], horizon: str) -> dict:
+    if horizon == "5d":
+        return summarize_outcome_rows([{**row, "return_1d": row.get("return_5d")} for row in rows])
+    return summarize_outcome_rows(rows)
 
 
 def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
@@ -65,24 +78,27 @@ def main() -> None:
 
     events = read_decision_events(args.input, limit=max(1, args.limit))
     rows = evaluate_decision_events(events, future_return_lookup=_future_return)
-    evaluated_rows = [
-        row
-        for row in rows
-        if isinstance(row.get("return_1d"), (int, float)) or isinstance(row.get("return_5d"), (int, float))
-    ]
-    evaluated_rows_5d = [row for row in rows if isinstance(row.get("return_5d"), (int, float))]
-    preferred_rows = evaluated_rows_5d if evaluated_rows_5d else evaluated_rows
-    visible_rows = select_visible_rows(rows, preferred_rows, args.rows_limit)
+    evaluated_rows_1d = rows_with_horizon_return(rows, "1d")
+    evaluated_rows_5d = rows_with_horizon_return(rows, "5d")
+    evaluated_rows = rows_with_any_horizon_return(rows)
+    visible_rows_1d = select_visible_rows(rows, evaluated_rows_1d, args.rows_limit) if evaluated_rows_1d else []
+    visible_rows_5d = select_visible_rows(rows, evaluated_rows_5d, args.rows_limit) if evaluated_rows_5d else []
+    visible_rows = merge_recent_rows(visible_rows_1d, visible_rows_5d, limit=args.rows_limit)
+    if not visible_rows and rows:
+        visible_rows = select_visible_rows(rows, [], args.rows_limit)
 
     payload = {
         "computed_at_utc": datetime.now(timezone.utc).isoformat(),
         "data": {
             "rows": visible_rows,
-            "summary_1d": summarize_outcome_rows(visible_rows),
-            "summary_5d": summarize_outcome_rows([{**row, "return_1d": row.get("return_5d")} for row in visible_rows]),
+            "rows_1d": visible_rows_1d,
+            "rows_5d": visible_rows_5d,
+            "summary_1d": summarize_horizon(visible_rows_1d, "1d"),
+            "summary_5d": summarize_horizon(visible_rows_5d, "5d"),
             "include_skipped": False,
             "rows_scanned": len(rows),
             "evaluated_rows_available": len(evaluated_rows),
+            "evaluated_rows_1d_available": len(evaluated_rows_1d),
             "evaluated_rows_5d_available": len(evaluated_rows_5d),
             "used_unevaluated_fallback": len(evaluated_rows) == 0 and bool(rows),
             "lookup_cache_hits": 0,

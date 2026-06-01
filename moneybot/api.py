@@ -36,7 +36,14 @@ from .models import FcmDeviceToken, NotificationTriggerPreference, SoldTrade, Us
 from .services.decision_log import read_decision_events, summarize_decision_events
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
 from .services.decision_snapshot import build_decision_snapshot
-from .services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
+from .services.outcome_tracking import (
+    close_values,
+    evaluate_decision_events,
+    merge_recent_rows,
+    rows_with_any_horizon_return,
+    rows_with_horizon_return,
+    summarize_outcome_rows,
+)
 from .services.runtime_paths import (
     day13_calibration_report_path,
     day13_recalibration_plan_path,
@@ -2211,24 +2218,19 @@ def decision_outcomes():
     read_limit = min(max(limit * 10, 200), read_cap)
     rows: list[dict[str, Any]] = []
     evaluated_rows: list[dict[str, Any]] = []
+    evaluated_rows_1d: list[dict[str, Any]] = []
     evaluated_rows_5d: list[dict[str, Any]] = []
     while True:
         events = read_decision_events(str(output_path), limit=read_limit)
         rows = evaluate_decision_events(events, future_return_lookup=cached_future_return_lookup)
-        evaluated_rows = [
-            row
-            for row in rows
-            if isinstance(row.get("return_1d"), (int, float)) or isinstance(row.get("return_5d"), (int, float))
-        ]
-        evaluated_rows_5d = [row for row in rows if isinstance(row.get("return_5d"), (int, float))]
+        evaluated_rows_1d = rows_with_horizon_return(rows, "1d")
+        evaluated_rows_5d = rows_with_horizon_return(rows, "5d")
+        evaluated_rows = rows_with_any_horizon_return(rows)
         if decision_source_filter:
             rows = [row for row in rows if str(row.get("decision_source") or "").strip() == decision_source_filter]
-            evaluated_rows = [
-                row
-                for row in rows
-                if isinstance(row.get("return_1d"), (int, float)) or isinstance(row.get("return_5d"), (int, float))
-            ]
-            evaluated_rows_5d = [row for row in rows if isinstance(row.get("return_5d"), (int, float))]
+            evaluated_rows_1d = rows_with_horizon_return(rows, "1d")
+            evaluated_rows_5d = rows_with_horizon_return(rows, "5d")
+            evaluated_rows = rows_with_any_horizon_return(rows)
         # Keep widening until we either have enough 5D-evaluable rows or hit the cap.
         # Do not stop early just because 1D rows are available; that can hide older 5D rows.
         if include_skipped or len(evaluated_rows_5d) >= limit or read_limit >= read_cap:
@@ -2236,30 +2238,36 @@ def decision_outcomes():
         read_limit = min(read_limit * 2, read_cap)
     used_unevaluated_fallback = False
     if include_skipped:
-        visible_rows = rows
+        visible_rows = rows[-limit:]
+        visible_rows_1d = rows_with_horizon_return(rows, "1d")[-limit:]
+        visible_rows_5d = rows_with_horizon_return(rows, "5d")[-limit:]
     else:
-        visible_rows = evaluated_rows_5d if evaluated_rows_5d else evaluated_rows
+        visible_rows_1d = evaluated_rows_1d[-limit:]
+        visible_rows_5d = evaluated_rows_5d[-limit:]
+        visible_rows = merge_recent_rows(visible_rows_1d, visible_rows_5d, limit=limit)
     if not include_skipped and not visible_rows and rows:
         # If nothing is evaluable yet, return the most recent rows so the UI still shows
         # live decision activity instead of an empty panel.
-        visible_rows = rows
+        visible_rows = rows[-limit:]
         used_unevaluated_fallback = True
-    visible_rows = visible_rows[-limit:]
 
-    summary_1d = summarize_outcome_rows(visible_rows)
-    summary_5d = summarize_outcome_rows([{**row, "return_1d": row.get("return_5d")} for row in visible_rows])
+    summary_1d = summarize_outcome_rows(visible_rows_1d)
+    summary_5d = summarize_outcome_rows([{**row, "return_1d": row.get("return_5d")} for row in visible_rows_5d])
 
     return jsonify(
         {
             "data": {
                 "schema_version": "decision_outcomes.v1",
                 "rows": visible_rows,
+                "rows_1d": visible_rows_1d,
+                "rows_5d": visible_rows_5d,
                 "summary_1d": summary_1d,
                 "summary_5d": summary_5d,
                 "include_skipped": include_skipped,
                 "decision_source_filter": decision_source_filter or None,
                 "rows_scanned": len(rows),
                 "evaluated_rows_available": len(evaluated_rows),
+                "evaluated_rows_1d_available": len(evaluated_rows_1d),
                 "evaluated_rows_5d_available": len(evaluated_rows_5d),
                 "used_unevaluated_fallback": used_unevaluated_fallback,
                 "lookup_cache_hits": cache_hits,

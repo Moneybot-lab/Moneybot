@@ -19,8 +19,8 @@ def build_recalibration_plan(
     *,
     current_slope: float = 1.0,
     current_intercept: float = 0.0,
-    max_intercept_step: float = 0.2,
-    max_slope_step: float = 0.25,
+    max_intercept_step: float = 0.75,
+    max_slope_step: float = 0.5,
     min_rows: int = 30,
 ) -> dict:
     rows = int(report.get("rows") or 0)
@@ -29,6 +29,9 @@ def build_recalibration_plan(
     slope_delta = float(recommendation.get("slope_delta") or 0.0)
     bounded_intercept_delta = max(-max_intercept_step, min(max_intercept_step, intercept_delta))
     bounded_slope_delta = max(-max_slope_step, min(max_slope_step, slope_delta))
+    raw_brier = report.get("brier_score_raw", report.get("brier_score"))
+    calibrated_brier = report.get("calibrated_brier_score")
+    effective_brier = report.get("effective_brier_score", calibrated_brier if calibrated_brier is not None else raw_brier)
     apply_change = rows >= min_rows
     next_slope = float(current_slope + bounded_slope_delta) if apply_change else float(current_slope)
     next_intercept = float(current_intercept + bounded_intercept_delta) if apply_change else float(current_intercept)
@@ -36,6 +39,9 @@ def build_recalibration_plan(
         "schema_version": "calibration_recalibration_plan.v1",
         "computed_at_utc": datetime.now(timezone.utc).isoformat(),
         "rows": rows,
+        "brier_score_raw": raw_brier,
+        "calibrated_brier_score": calibrated_brier,
+        "effective_brier_score": effective_brier,
         "apply_change": apply_change,
         "current": {"slope": float(current_slope), "intercept": float(current_intercept)},
         "recommended_delta": {
@@ -54,8 +60,8 @@ def main() -> None:
     parser.add_argument("--output", default=str(day13_recalibration_plan_path()))
     parser.add_argument("--current-slope", type=float, default=1.0)
     parser.add_argument("--current-intercept", type=float, default=0.0)
-    parser.add_argument("--max-intercept-step", type=float, default=0.2)
-    parser.add_argument("--max-slope-step", type=float, default=0.25)
+    parser.add_argument("--max-intercept-step", type=float, default=0.75)
+    parser.add_argument("--max-slope-step", type=float, default=0.5)
     parser.add_argument("--min-rows", type=int, default=30)
     args = parser.parse_args()
 
