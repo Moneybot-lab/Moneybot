@@ -606,6 +606,75 @@ def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> 
     }
 
 
+def _quick_score_payload(signal_data: Dict[str, Any], decision: Dict[str, Any]) -> tuple[Any, Any, Any, str | None]:
+    signal_score = signal_data.get("score")
+    if signal_score is None:
+        signal_score = signal_data.get("hybrid_score")
+    probability_up = decision.get("probability_up")
+    model_score = round(float(probability_up) * 10.0, 2) if isinstance(probability_up, (int, float)) else None
+    if model_score is not None and str(decision.get("decision_source") or "") == "deterministic_model":
+        return model_score, signal_score, model_score, "deterministic_model_probability"
+    if signal_score is not None:
+        return signal_score, signal_score, model_score, "signal_score"
+    return model_score, signal_score, model_score, "probability_up" if model_score is not None else None
+
+
+def _clearview_decision_for_symbol(
+    *,
+    svc: Any,
+    deterministic_svc: Any,
+    symbol: str,
+) -> Dict[str, Any]:
+    try:
+        signal_data = svc.get_signal(symbol) or {}
+    except Exception:  # noqa: BLE001
+        signal_data = {}
+
+    quote_data = signal_data.get("quote") if isinstance(signal_data.get("quote"), dict) else None
+    if quote_data is None and hasattr(svc, "get_quote"):
+        try:
+            quote_data = svc.get_quote(symbol) or {}
+        except Exception:  # noqa: BLE001
+            quote_data = {}
+    if quote_data is None:
+        quote_data = {}
+
+    decision = None
+    if deterministic_svc is not None:
+        try:
+            decision = deterministic_svc.predict_quick_decision(
+                signal_data=signal_data,
+                quote_data=quote_data,
+                symbol=symbol,
+            )
+        except Exception:  # noqa: BLE001
+            decision = None
+    if decision is None:
+        decision = _quick_decision(signal_data, quote_data)
+
+    score, signal_score, model_score, score_basis = _quick_score_payload(signal_data, decision)
+    try:
+        numeric_score = float(score)
+    except (TypeError, ValueError):
+        numeric_score = 0.0
+    try:
+        buy_threshold = float(decision.get("decision_threshold")) * 10.0
+    except (TypeError, ValueError):
+        buy_threshold = 6.0
+
+    recommendation = str(decision.get("recommendation") or "HOLD OFF FOR NOW").upper()
+    advice = "BUY" if recommendation in {"BUY", "STRONG BUY"} and numeric_score >= buy_threshold else "HOLD"
+    return {
+        "advice": advice,
+        "recommendation": recommendation,
+        "score": score,
+        "signal_score": signal_score,
+        "model_score": model_score,
+        "score_basis": score_basis,
+        "decision_threshold": decision.get("decision_threshold"),
+    }
+
+
 def _plain_english_recommendation(recommendation: str, reason: str) -> str:
     rec = (recommendation or "HOLD").strip().upper()
     raw_reason = (reason or "Signals are mixed right now.").strip()
@@ -1581,20 +1650,7 @@ def quick_ask():
             experiment=_experiment_metadata(cohort_id="treatment" if str(decision.get("decision_source") or "") == "deterministic_model" else "control"),
         )
 
-    signal_score = signal_data.get("score")
-    if signal_score is None:
-        signal_score = signal_data.get("hybrid_score")
-    probability_up = decision.get("probability_up")
-    model_score = round(float(probability_up) * 10.0, 2) if isinstance(probability_up, (int, float)) else None
-    if model_score is not None and str(decision.get("decision_source") or "") == "deterministic_model":
-        quick_score = model_score
-        score_basis = "deterministic_model_probability"
-    elif signal_score is not None:
-        quick_score = signal_score
-        score_basis = "signal_score"
-    else:
-        quick_score = model_score
-        score_basis = "probability_up" if model_score is not None else None
+    quick_score, signal_score, model_score, score_basis = _quick_score_payload(signal_data, decision)
 
     return jsonify(
         {
@@ -1693,6 +1749,7 @@ def run_notification_triggers():
     svc = current_app.extensions.get("market_data_service")
     if svc is None:
         return jsonify({"error": "market data service unavailable", "request_id": g.request_id}), 503
+    deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
 
     state = _load_notification_trigger_state()
     portfolio_state: dict[str, str] = {
@@ -1776,22 +1833,30 @@ def run_notification_triggers():
                     symbol=symbol,
                 )
 
-            clearview_symbols = set(_parse_clearview_symbols(prefs.clearview_symbols_csv))
-            previous_clearview = clearview_state.get(state_key, "")
-            clearview_state[state_key] = advice
-            if (
-                symbol in clearview_symbols
-                and advice == "BUY"
-                and previous_clearview == "HOLD"
-                and prefs.clearview_hold_off_to_buy
-            ):
-                queue_user_event(
-                    user.id,
-                    title=f"{symbol}: ClearView changed to BUY",
-                    body=f"ClearView signal for {symbol} changed from HOLD OFF to BUY.",
-                    kind="clearview_hold_off_to_buy",
+
+        clearview_symbols = _parse_clearview_symbols(prefs.clearview_symbols_csv)
+        if prefs.clearview_hold_off_to_buy and clearview_symbols:
+            for symbol in clearview_symbols:
+                state_key = f"{user.id}:{symbol}"
+                clearview_decision = _clearview_decision_for_symbol(
+                    svc=svc,
+                    deterministic_svc=deterministic_svc,
                     symbol=symbol,
                 )
+                advice = str(clearview_decision.get("advice") or "HOLD").upper()
+                previous_clearview = clearview_state.get(state_key, "")
+                clearview_state[state_key] = advice
+                if advice == "BUY" and previous_clearview != "BUY":
+                    score = clearview_decision.get("score")
+                    score_text = f" Score: {float(score):.1f}." if isinstance(score, (int, float)) else ""
+                    previous_text = "changed from HOLD OFF to BUY" if previous_clearview else "is BUY now"
+                    queue_user_event(
+                        user.id,
+                        title=f"{symbol}: ClearView changed to BUY",
+                        body=f"ClearView signal for {symbol} {previous_text}.{score_text}",
+                        kind="clearview_hold_off_to_buy",
+                        symbol=symbol,
+                    )
 
     momentum_items = []
     try:
