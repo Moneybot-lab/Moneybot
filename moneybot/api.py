@@ -1585,9 +1585,16 @@ def quick_ask():
     if signal_score is None:
         signal_score = signal_data.get("hybrid_score")
     probability_up = decision.get("probability_up")
-    quick_score = signal_score
-    if quick_score is None and isinstance(probability_up, (int, float)):
-        quick_score = round(float(probability_up) * 10.0, 2)
+    model_score = round(float(probability_up) * 10.0, 2) if isinstance(probability_up, (int, float)) else None
+    if model_score is not None and str(decision.get("decision_source") or "") == "deterministic_model":
+        quick_score = model_score
+        score_basis = "deterministic_model_probability"
+    elif signal_score is not None:
+        quick_score = signal_score
+        score_basis = "signal_score"
+    else:
+        quick_score = model_score
+        score_basis = "probability_up" if model_score is not None else None
 
     return jsonify(
         {
@@ -1596,7 +1603,9 @@ def quick_ask():
                 "history30": history30,
                 **decision,
                 "score": quick_score,
+                "score_basis": score_basis,
                 "signal_score": signal_score,
+                "model_score": model_score,
                 "ai": ai_payload,
                 "ai_status": "working" if ai_mode == "ai_enhanced" else "fallback",
                 "ai_mode": ai_mode,
