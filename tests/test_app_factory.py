@@ -226,6 +226,16 @@ def test_home_page_includes_model_ops_snapshot(monkeypatch):
     assert "/notifications" in html
 
 
+def test_decision_outcomes_snapshot_default_ttl_matches_daily_ops(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.delenv("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", raising=False)
+
+    app = create_app()
+
+    assert app.config["DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS"] == 129600
+
+
 def test_performance_page_uses_empty_outcomes_fallback(monkeypatch):
     monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")

@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from flask import current_app
 from moneybot.app_factory import create_app
@@ -735,6 +735,36 @@ def test_decision_outcomes_uses_materialized_snapshot_when_fresh(tmp_path, monke
     assert data["snapshot_source"] == "materialized"
     assert data["rows"][0]["symbol"] == "AAPL"
     assert data["snapshot_age_seconds"] >= 0
+
+
+def test_decision_outcomes_uses_daily_snapshot_for_default_ttl(tmp_path, monkeypatch):
+    snapshot_path = tmp_path / "decision_outcomes_snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "computed_at_utc": (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(),
+                "data": {
+                    "rows": [{"symbol": "SNAP", "action": "BUY", "return_1d": 0.01}],
+                    "summary_1d": {"rows": 1, "evaluated_rows": 1, "accuracy": 1.0},
+                    "summary_5d": {"rows": 0, "evaluated_rows": 0, "accuracy": None},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_PATH", str(snapshot_path))
+    monkeypatch.delenv("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", raising=False)
+    client = _client()
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should use daily snapshot")))
+
+    res = client.get("/api/decision-outcomes?limit=10")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["snapshot_source"] == "materialized"
+    assert data["rows"][0]["symbol"] == "SNAP"
+    assert data["snapshot_age_seconds"] >= 24 * 60 * 60
 
 
 def test_decision_outcomes_force_live_bypasses_materialized_snapshot(tmp_path, monkeypatch):
