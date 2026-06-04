@@ -2243,7 +2243,7 @@ def decision_outcomes():
         return jsonify({"error": "limit must be an integer", "request_id": g.request_id}), 400
 
     snapshot_path = current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_PATH") or _runtime_data_path("decision_outcomes_snapshot.json")
-    snapshot_max_age_seconds = int(current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS") or 900)
+    snapshot_max_age_seconds = int(current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS") or 129600)
     if not force_live:
         snapshot = _load_materialized_outcomes_snapshot(
             str(snapshot_path),
