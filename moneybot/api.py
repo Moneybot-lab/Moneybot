@@ -89,7 +89,12 @@ def _file_diagnostics(path: str | Path) -> dict[str, Any]:
     return diagnostics
 
 
-def _load_materialized_outcomes_snapshot(path: str, *, max_age_seconds: int) -> dict[str, Any] | None:
+def _load_materialized_outcomes_snapshot(
+    path: str,
+    *,
+    max_age_seconds: int,
+    allow_stale: bool = False,
+) -> dict[str, Any] | None:
     file_path = Path(path)
     if not file_path.exists():
         return None
@@ -108,12 +113,17 @@ def _load_materialized_outcomes_snapshot(path: str, *, max_age_seconds: int) -> 
     except ValueError:
         return None
     age_seconds = (datetime.now(timezone.utc) - computed_dt.astimezone(timezone.utc)).total_seconds()
-    if age_seconds < 0 or age_seconds > max(1, int(max_age_seconds)):
+    max_age = max(1, int(max_age_seconds))
+    if age_seconds < 0:
+        return None
+    stale = age_seconds > max_age
+    if stale and not allow_stale:
         return None
     return {
         "data": data,
         "computed_at_utc": computed_dt.astimezone(timezone.utc).isoformat(),
         "age_seconds": int(age_seconds),
+        "stale": stale,
     }
 
 
@@ -2248,6 +2258,7 @@ def decision_outcomes():
         snapshot = _load_materialized_outcomes_snapshot(
             str(snapshot_path),
             max_age_seconds=snapshot_max_age_seconds,
+            allow_stale=True,
         )
         if snapshot is not None:
             return jsonify(
@@ -2255,7 +2266,8 @@ def decision_outcomes():
                     "data": {
                         "schema_version": "decision_outcomes.v1",
                         **snapshot["data"],
-                        "snapshot_source": "materialized",
+                        "snapshot_source": "materialized_stale" if snapshot["stale"] else "materialized",
+                        "snapshot_stale": bool(snapshot["stale"]),
                         "snapshot_computed_at_utc": snapshot["computed_at_utc"],
                         "snapshot_age_seconds": snapshot["age_seconds"],
                     },

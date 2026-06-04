@@ -767,6 +767,36 @@ def test_decision_outcomes_uses_daily_snapshot_for_default_ttl(tmp_path, monkeyp
     assert data["snapshot_age_seconds"] >= 24 * 60 * 60
 
 
+def test_decision_outcomes_serves_stale_snapshot_instead_of_live_fanout(tmp_path, monkeypatch):
+    snapshot_path = tmp_path / "decision_outcomes_snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "computed_at_utc": (datetime.now(timezone.utc) - timedelta(days=3)).isoformat(),
+                "data": {
+                    "rows": [{"symbol": "STALE", "action": "BUY", "return_1d": 0.01}],
+                    "summary_1d": {"rows": 1, "evaluated_rows": 1, "accuracy": 1.0},
+                    "summary_5d": {"rows": 0, "evaluated_rows": 0, "accuracy": None},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_PATH", str(snapshot_path))
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")
+    client = _client()
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not fan out live lookups")))
+
+    res = client.get("/api/decision-outcomes?limit=10")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["snapshot_source"] == "materialized_stale"
+    assert data["snapshot_stale"] is True
+    assert data["rows"][0]["symbol"] == "STALE"
+
+
 def test_decision_outcomes_force_live_bypasses_materialized_snapshot(tmp_path, monkeypatch):
     snapshot_path = tmp_path / "decision_outcomes_snapshot.json"
     snapshot_path.write_text(
