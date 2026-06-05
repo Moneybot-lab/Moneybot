@@ -69,6 +69,14 @@ const fallbackData = {
                     }
                     return normalized.trim();
                   }
+
+                  async function readJsonResponse(response){
+                    try {
+                      return await response.json();
+                    } catch (_err) {
+                      return {};
+                    }
+                  }
                   
                   function initialsFromName(name){
                     const tokens = String(name || '').trim().replaceAll('-', ' ').split(/\s+/).filter(Boolean);
@@ -257,7 +265,7 @@ const fallbackData = {
 
                     try {
                       const res = await fetch('/api/quick-ask?symbol=' + encodeURIComponent(symbol));
-                      const payload = await res.json();
+                      const payload = await readJsonResponse(res);
                       if(!res.ok){
                         outEl.textContent = payload.error || 'Unable to analyze this ticker.';
                         adviceEl.innerHTML = `<strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong><span style="color:#fca5a5">Unable to load assistant notes right now.</span>`;
