@@ -1488,7 +1488,7 @@ def create_app() -> Flask:
                 <button onclick="logout()" style="border:none;background:#166534;color:#f0fdf4;padding:12px 18px;border-radius:999px;font-size:1.08rem;font-weight:700;cursor:pointer">Logout</button>
               </p>
               <form id="addForm">
-                <input id="symbol" placeholder="AAPL" required />
+                <input id="symbol" placeholder="AAPL" required autocapitalize="characters" style="text-transform:uppercase" />
                 <input id="buy_price" type="number" step="0.01" placeholder="buy price"/>
                 <input id="shares" type="number" step="0.0001" placeholder="shares"/>
                 <button type="submit" style="border:none;background:#16a34a;color:#f0fdf4;padding:9px 14px;border-radius:8px;font-weight:700;cursor:pointer">Add</button>
@@ -1569,6 +1569,15 @@ def create_app() -> Flask:
                 return response;
               }
 
+              function normalizeTickerInputValue(inputEl){
+                if(!inputEl) return '';
+                const normalized = String(inputEl.value || '').toUpperCase();
+                if(inputEl.value !== normalized){
+                  inputEl.value = normalized;
+                }
+                return normalized.trim();
+              }
+
               const rowsEl = document.getElementById('rows');
               const soldRowsEl = document.getElementById('soldRows');
               const lifetimePanelEl = document.getElementById('lifetimePanel');
@@ -1580,6 +1589,7 @@ def create_app() -> Flask:
               const symbolEl = document.getElementById('symbol');
               const buyPriceEl = document.getElementById('buy_price');
               const sharesEl = document.getElementById('shares');
+              symbolEl.addEventListener('input', (event) => normalizeTickerInputValue(event.target));
               let currentPortfolioItems = [];
               let currentAdviceContext = null;
               document.getElementById('addForm').addEventListener('submit', addItem);
@@ -1803,7 +1813,7 @@ def create_app() -> Flask:
               }
               async function addItem(event){
                 if (event) event.preventDefault();
-                const payload = { symbol:(symbolEl.value || '').trim().toUpperCase(), buy_price:buyPriceEl.value||null, shares:sharesEl.value||null };
+                const payload = { symbol:normalizeTickerInputValue(symbolEl), buy_price:buyPriceEl.value||null, shares:sharesEl.value||null };
                 const res = await apiFetch('/api/user-watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
                 const data = await res.json();
                 if (res.ok) {

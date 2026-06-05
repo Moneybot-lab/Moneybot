@@ -162,6 +162,34 @@ def test_quick_ask_normalizes_symbol_from_url_like_input():
     assert data["symbol"] == "TSLA"
 
 
+class FailingMarketService(StubMarketService):
+    def get_signal(self, symbol):
+        raise RuntimeError("provider unavailable")
+
+    def get_quote(self, symbol):
+        raise RuntimeError("quote unavailable")
+
+    def get_price_history(self, symbol, days=30):
+        raise RuntimeError("history unavailable")
+
+
+def test_quick_ask_returns_json_fallback_when_market_provider_fails():
+    client = _client()
+    client.application.extensions["market_data_service"] = FailingMarketService()
+    client.application.extensions["deterministic_quick_advisor"] = None
+    client.application.extensions["ai_advisor_service"] = None
+
+    res = client.get("/api/quick-ask?symbol=aapl")
+
+    assert res.status_code == 200
+    assert res.content_type.startswith("application/json")
+    data = res.get_json()["data"]
+    assert data["symbol"] == "AAPL"
+    assert data["recommendation"] == "HOLD OFF FOR NOW"
+    assert data["history30"] == []
+    assert data["current_price"] is None
+
+
 def test_quick_ask_includes_ai_fallback_payload_when_ai_not_configured():
     client = _client()
     res = client.get("/api/quick-ask?symbol=AAPL")
