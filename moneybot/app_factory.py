@@ -1772,13 +1772,21 @@ def create_app() -> Flask:
                 loadingEl.style.display = 'none';
               }
 
+              function selectPortfolioRows(data){
+                const enriched = Array.isArray(data && data.enriched_items) ? data.enriched_items : [];
+                const base = Array.isArray(data && data.items) ? data.items : [];
+                return enriched.length ? enriched : base;
+              }
+
               function renderRows(items){
-                if(!items || !items.length){
+                const safeItems = Array.isArray(items) ? items : [];
+                if(!safeItems.length){
                   rowsEl.innerHTML = '<tr><td colspan="10" style="padding:8px;color:#3f6212">No watchlist entries yet.</td></tr>';
                   currentPortfolioItems = [];
                   return;
                 }
-                currentPortfolioItems = items;
+                currentPortfolioItems = safeItems;
+                items = safeItems;
                 const totalValue = items.reduce((sum, item) => {
                   const price = typeof item.current_price === 'number' ? item.current_price : 0;
                   const shares = typeof item.shares === 'number' ? item.shares : 1;
@@ -1796,17 +1804,25 @@ def create_app() -> Flask:
                 setLoading(true);
                 try {
                   const res = await apiFetch('/api/user-watchlist');
-                  const data = await res.json();
+                  let data = {};
+                  try {
+                    data = await res.json();
+                  } catch (jsonErr) {
+                    data = {};
+                  }
                   if(!res.ok){
                     if (res.status === 401) { location.href='/login'; return; }
                     rowsEl.innerHTML = '<tr><td colspan="10" style="padding:8px;color:#4d7c0f">Unable to load watchlist right now.</td></tr>';
                     outEl.textContent = data.error || 'Please try again in a moment.';
                     return;
                   }
-                  renderRows(data.enriched_items || data.items || []);
+                  renderRows(selectPortfolioRows(data));
                   if (lifetimePanelEl.style.display !== 'none') {
                     await loadSoldTrades();
                   }
+                } catch (err) {
+                  rowsEl.innerHTML = '<tr><td colspan="10" style="padding:8px;color:#4d7c0f">Unable to load portfolio rows right now. Please refresh.</td></tr>';
+                  outEl.textContent = 'Portfolio data did not load completely. Please refresh in a moment.';
                 } finally {
                   setLoading(false);
                 }

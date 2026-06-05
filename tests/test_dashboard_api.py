@@ -1030,6 +1030,43 @@ def test_user_watchlist_exposes_quote_source_diagnostics():
     assert enriched["quote_diagnostics"]["provider"] == "finnhub"
 
 
+def test_user_watchlist_returns_rows_without_signal_or_history_enrichment():
+    client = _client()
+
+    class QuoteOnlyPortfolioService(StubMarketService):
+        def get_quote(self, symbol):
+            return {
+                "symbol": symbol,
+                "price": 42.5,
+                "change_percent": 2.0,
+                "live_data_available": True,
+                "quote_source": "test_quote",
+                "diagnostics": {"provider": "test_quote", "error": None},
+            }
+
+        def get_signal(self, symbol, include_company_snapshot=True):
+            raise AssertionError("portfolio endpoint should not call slow signal enrichment")
+
+        def get_price_history(self, symbol, days=30):
+            raise AssertionError("portfolio endpoint should not call slow history enrichment")
+
+    client.application.extensions["market_data_service"] = QuoteOnlyPortfolioService()
+    signup = client.post("/api/auth/signup", json=_signup_payload("quote-only@b.com"))
+    assert signup.status_code == 201
+    assert client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 40, "shares": 1}).status_code == 201
+    assert client.post("/api/user-watchlist", json={"symbol": "TSLA", "buy_price": 50, "shares": 2}).status_code == 201
+
+    res = client.get("/api/user-watchlist")
+
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert len(payload["items"]) == 2
+    assert len(payload["enriched_items"]) == 2
+    assert {item["current_price"] for item in payload["enriched_items"]} == {42.5}
+    assert {item["quote_source"] for item in payload["enriched_items"]} == {"test_quote"}
+    assert all(item["history30"] == [] for item in payload["enriched_items"])
+
+
 def test_user_watchlist_duplicate_symbol_points_to_buy_action():
     client = _client()
     signup = client.post("/api/auth/signup", json=_signup_payload("duplicate@b.com"))

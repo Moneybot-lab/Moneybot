@@ -9,7 +9,6 @@ import sys
 import time
 import uuid
 import hmac
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -1098,22 +1097,53 @@ def user_watchlist():
     decision_logger = current_app.extensions.get("decision_logger")
     enriched_items: list[Dict[str, Any]] = []
 
+    def _safe_market_call(fn, fallback):
+        try:
+            result = fn()
+            return result if result is not None else fallback
+        except Exception:  # noqa: BLE001
+            return fallback
+
+    def _portfolio_signal_from_quote(symbol: str, quote: dict[str, Any]) -> dict[str, Any]:
+        change_percent = quote.get("change_percent")
+        action = "HOLD"
+        score = None
+        reason = "Portfolio row generated from live quote data; deeper signal enrichment is deferred to Quick Ask."
+        if isinstance(change_percent, (int, float)):
+            score = round(max(0.0, min(10.0, 5.0 + (float(change_percent) / 2.0))), 2)
+            if change_percent >= 5.0:
+                action = "BUY"
+                reason = "Live quote shows strong positive momentum today."
+            elif change_percent <= -5.0:
+                action = "SELL"
+                reason = "Live quote shows elevated downside pressure today."
+            else:
+                reason = "Live quote shows mixed or moderate momentum today."
+        return {
+            "symbol": symbol,
+            "action": action,
+            "verdict": action,
+            "hybrid_score": score,
+            "score": score,
+            "technical": {"rsi": None, "macd_histogram": None, "trend": "quote_only"},
+            "rsi": None,
+            "macd_hist": None,
+            "volume_today": None,
+            "volume_ratio": None,
+            "sentiment": {"score": None, "label": "neutral", "headlines": []},
+            "rationale": [reason],
+            "reasons": [reason],
+            "quote": quote,
+            "quote_data_available": bool(quote.get("live_data_available")),
+            "diagnostics": {"provider": "portfolio_quote_only", "error": None},
+        }
+
     def _load_market_inputs(symbol: str) -> tuple[dict[str, Any], dict[str, Any], list[float]]:
         if svc is None:
-            return {}, {}, []
-
-        def _safe_call(fn, fallback):
-            try:
-                result = fn()
-                return result if result is not None else fallback
-            except Exception:  # noqa: BLE001
-                return fallback
-
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            signal_future = pool.submit(lambda: _safe_call(lambda: svc.get_signal(symbol), {}))
-            quote_future = pool.submit(lambda: _safe_call(lambda: svc.get_quote(symbol), {}))
-            history_future = pool.submit(lambda: _safe_call(lambda: svc.get_price_history(symbol, days=30), []))
-            return signal_future.result(), quote_future.result(), history_future.result()
+            quote: dict[str, Any] = {}
+        else:
+            quote = _safe_market_call(lambda: svc.get_quote(symbol), {})
+        return _portfolio_signal_from_quote(symbol, quote), quote, []
 
     for item in base_items:
         signal, quote, history30 = _load_market_inputs(item["symbol"])

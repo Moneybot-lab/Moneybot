@@ -317,3 +317,19 @@ def test_create_app_auto_applies_recalibration_plan(tmp_path, monkeypatch):
     assert advisor.calibration_enabled is True
     assert advisor.calibration_slope == 0.646989
     assert advisor.calibration_intercept == 0.666503
+
+
+def test_portfolio_page_uses_base_items_when_enrichment_is_empty(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+
+    app = create_app()
+    client = app.test_client()
+
+    res = client.get("/portfolio")
+
+    assert res.status_code == 200
+    body = res.get_data(as_text=True)
+    assert "function selectPortfolioRows(data)" in body
+    assert "return enriched.length ? enriched : base;" in body
+    assert "Portfolio data did not load completely. Please refresh in a moment." in body

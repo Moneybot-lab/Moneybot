@@ -234,6 +234,46 @@ def test_get_quote_uses_massive_primary_when_configured(monkeypatch):
     assert captured["params"]["apiKey"] == "massive-key"
 
 
+def test_get_quote_uses_massive_minute_trade_when_day_close_zero(monkeypatch):
+    svc = MarketDataService()
+
+    monkeypatch.setenv("MASSIVE_API_KEY", "massive-key")
+    monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
+    monkeypatch.delenv("FINNHUB_TOKEN", raising=False)
+    monkeypatch.delenv("X_FINNHUB_TOKEN", raising=False)
+
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "ticker": {
+                    "ticker": "MRLN",
+                    "todaysChangePerc": 29.6685,
+                    "day": {"o": 0, "h": 0, "l": 0, "c": 0, "v": 0, "vw": 0},
+                    "lastQuote": {"P": 9.32, "p": 9.31},
+                    "lastTrade": {"p": 9.3102},
+                    "min": {"c": 9.3307, "vw": 9.3552},
+                    "prevDay": {"c": 7.18},
+                },
+                "status": "OK",
+            }
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        return DummyResponse()
+
+    monkeypatch.setattr("moneybot.services.market_data.requests.get", fake_get)
+
+    quote = svc.get_quote("MRLN")
+
+    assert quote["quote_source"] == "massive"
+    assert quote["price"] == 9.3307
+    assert quote["live_data_available"] is True
+    assert round(quote["change_percent"], 2) == 29.95
+    assert quote["diagnostics"]["massive_price_source"] == "minute_close"
+
+
 def test_get_quote_falls_back_to_finnhub_when_massive_unavailable(monkeypatch):
     svc = MarketDataService()
 
@@ -1029,3 +1069,43 @@ def test_get_hot_momentum_buys_enforces_score_floor_when_market_not_down(monkeyp
 
     out = svc.get_hot_momentum_buys()
     assert all(float(item["score"]) >= 5.0 for item in out)
+
+
+def test_get_signal_can_skip_company_snapshot(monkeypatch):
+    from trade_signal import SignalResult
+
+    svc = MarketDataService()
+    snapshot_calls = {"count": 0}
+
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda symbol: {"symbol": symbol, "price": 10.0, "change_percent": 1.0, "live_data_available": True},
+    )
+    monkeypatch.setattr(
+        "moneybot.services.market_data.analyze_ticker",
+        lambda symbol: SignalResult(
+            ticker=symbol,
+            price=10.0,
+            rsi=45.0,
+            macd_hist=0.1,
+            volume_today=1000,
+            volume_ratio=1.2,
+            score=7.1,
+            verdict="BUY",
+            reasons=["Momentum improved."],
+        ),
+    )
+
+    def fake_snapshot(symbol):
+        snapshot_calls["count"] += 1
+        return {"latest_news": [{"title": "Good news", "publisher": "Reuters"}]}
+
+    monkeypatch.setattr(svc, "get_company_snapshot", fake_snapshot)
+
+    signal = svc.get_signal("AAPL", include_company_snapshot=False)
+
+    assert signal["symbol"] == "AAPL"
+    assert signal["score"] == 7.1
+    assert signal["sentiment"]["headlines"] == []
+    assert snapshot_calls["count"] == 0
