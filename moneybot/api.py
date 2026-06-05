@@ -2311,6 +2311,7 @@ def decision_outcomes():
     include_skipped = (request.args.get("include_skipped") or "").strip().lower() == "true"
     decision_source_filter = (request.args.get("decision_source") or "").strip()
     force_live = (request.args.get("force_live") or "").strip().lower() == "true"
+    allow_stale_snapshot = (request.args.get("allow_stale_snapshot") or "").strip().lower() == "true"
     if decision_source_filter:
         # Snapshot payload is pre-aggregated and may not match source filtering.
         force_live = True
@@ -2325,7 +2326,7 @@ def decision_outcomes():
         snapshot = _load_materialized_outcomes_snapshot(
             str(snapshot_path),
             max_age_seconds=snapshot_max_age_seconds,
-            allow_stale=True,
+            allow_stale=allow_stale_snapshot,
         )
         if snapshot is not None:
             return jsonify(
