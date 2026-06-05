@@ -1102,6 +1102,37 @@ def test_update_sold_trade_recalculates_realized_gain_and_restores_shares():
     assert sold_payload["total_realized"] == 50.0
     assert sold_payload["items"][0]["shares_sold"] == 2.0
 
+
+def test_update_sold_trade_allows_correction_when_portfolio_shares_are_already_fixed():
+    client = _client()
+    signup = client.post("/api/auth/signup", json=_signup_payload("edit-sold-fixed@b.com"))
+    assert signup.status_code == 201
+
+    add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 1, "shares": 575})
+    assert add.status_code == 201
+    item_id = add.get_json()["item"]["id"]
+
+    sell = client.post(f"/api/user-watchlist/{item_id}/sell", json={"sold_price": 415, "shares_sold": 3.59})
+    assert sell.status_code == 200
+    trade_id = sell.get_json()["sold_trade"]["id"]
+
+    manual_fix = client.patch(f"/api/user-watchlist/{item_id}", json={"shares": 160})
+    assert manual_fix.status_code == 200
+
+    update = client.patch(f"/api/sold-trades/{trade_id}", json={"sold_price": 3.59, "shares_sold": 415})
+    assert update.status_code == 200
+    payload = update.get_json()
+    assert payload["sold_trade"]["sold_price"] == 3.59
+    assert payload["sold_trade"]["shares_sold"] == 415.0
+    assert payload["sold_trade"]["realized_amount"] == 1074.85
+    assert payload["portfolio_adjustment_skipped"] is True
+    assert "already been corrected" in payload["portfolio_adjustment_note"]
+
+    watchlist = client.get("/api/user-watchlist")
+    assert watchlist.status_code == 200
+    assert watchlist.get_json()["items"][0]["shares"] == 160.0
+
+
 def test_update_sold_trade_restores_position_after_all_shares_were_sold():
     client = _client()
     signup = client.post("/api/auth/signup", json=_signup_payload("edit-sold-all@b.com"))

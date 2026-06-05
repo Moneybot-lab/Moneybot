@@ -1483,14 +1483,17 @@ def update_sold_trade(trade_id: int):
         user_id=session["user_id"],
         symbol=sold_trade.symbol,
     ).first()
+    portfolio_adjustment_skipped = False
+    portfolio_adjustment_note = None
 
     if shares_delta != 0:
         if portfolio_item:
             current_shares = portfolio_item.shares or Decimal("0")
             corrected_shares = current_shares + shares_delta
             if corrected_shares < 0:
-                return jsonify({"error": "corrected shares_sold exceeds current shares", "request_id": g.request_id}), 400
-            if corrected_shares == 0:
+                portfolio_adjustment_skipped = True
+                portfolio_adjustment_note = "Portfolio shares were left unchanged because they appear to have already been corrected."
+            elif corrected_shares == 0:
                 db.session.delete(portfolio_item)
                 portfolio_item = None
             else:
@@ -1504,7 +1507,8 @@ def update_sold_trade(trade_id: int):
             )
             db.session.add(portfolio_item)
         else:
-            return jsonify({"error": "cannot increase shares_sold without an open portfolio position", "request_id": g.request_id}), 400
+            portfolio_adjustment_skipped = True
+            portfolio_adjustment_note = "Sold trade was updated without changing portfolio shares because there is no open position to reduce."
 
     sold_trade.sold_price = sold_price
     sold_trade.shares_sold = shares_sold
@@ -1517,6 +1521,8 @@ def update_sold_trade(trade_id: int):
         {
             "sold_trade": _sold_trade_payload(sold_trade),
             "remaining_item": _watchlist_item_payload(portfolio_item) if portfolio_item else None,
+            "portfolio_adjustment_skipped": portfolio_adjustment_skipped,
+            "portfolio_adjustment_note": portfolio_adjustment_note,
             "total_realized": total_realized,
             "request_id": g.request_id,
         }

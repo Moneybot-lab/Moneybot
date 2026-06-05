@@ -1876,7 +1876,8 @@ def create_app() -> Flask:
                   return;
                 }
                 const realized = updateData.sold_trade && typeof updateData.sold_trade.realized_amount === 'number' ? updateData.sold_trade.realized_amount : 0;
-                outEl.textContent = `Sold trade updated (${formatMoney(realized)} realized).`;
+                const adjustmentNote = updateData.portfolio_adjustment_note ? ` ${updateData.portfolio_adjustment_note}` : '';
+                outEl.textContent = `Sold trade updated (${formatMoney(realized)} realized).${adjustmentNote}`;
                 await load();
                 await loadSoldTrades();
               }
