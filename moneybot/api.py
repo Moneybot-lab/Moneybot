@@ -1109,9 +1109,15 @@ def user_watchlist():
             except Exception:  # noqa: BLE001
                 return fallback
 
+        def _portfolio_signal():
+            try:
+                return svc.get_signal(symbol, include_company_snapshot=False)
+            except TypeError:
+                return svc.get_signal(symbol)
+
         quote = _safe_call(lambda: svc.get_quote(symbol), {})
         with ThreadPoolExecutor(max_workers=2) as pool:
-            signal_future = pool.submit(lambda: _safe_call(lambda: svc.get_signal(symbol), {}))
+            signal_future = pool.submit(lambda: _safe_call(_portfolio_signal, {}))
             history_future = pool.submit(lambda: _safe_call(lambda: svc.get_price_history(symbol, days=30), []))
             return signal_future.result(), quote, history_future.result()
 

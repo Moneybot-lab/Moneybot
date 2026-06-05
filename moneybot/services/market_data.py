@@ -1401,16 +1401,17 @@ class MarketDataService:
         self.quote_cache.set(cache_key, fallback)
         return fallback
 
-    def get_signal(self, symbol: str) -> Dict[str, Any]:
-        cache_key = symbol.upper()
+    def get_signal(self, symbol: str, include_company_snapshot: bool = True) -> Dict[str, Any]:
+        symbol_key = symbol.upper()
+        cache_key = f"{symbol_key}:company" if include_company_snapshot else f"{symbol_key}:lite"
         cached = self.signal_cache.get(cache_key)
         if cached:
             return cached
 
-        quote = self.get_quote(cache_key)
+        quote = self.get_quote(symbol_key)
         if not quote.get("live_data_available"):
             payload = {
-                "symbol": cache_key,
+                "symbol": symbol_key,
                 "action": "HOLD",
                 "verdict": "HOLD",
                 "hybrid_score": None,
@@ -1431,13 +1432,16 @@ class MarketDataService:
             return payload
 
         try:
-            result = analyze_ticker(cache_key)
-            company_snapshot = self.get_company_snapshot(cache_key)
-            ranked_news = company_snapshot.get("latest_news") if isinstance(company_snapshot.get("latest_news"), list) else []
+            result = analyze_ticker(symbol_key)
+            if include_company_snapshot:
+                company_snapshot = self.get_company_snapshot(symbol_key)
+                ranked_news = company_snapshot.get("latest_news") if isinstance(company_snapshot.get("latest_news"), list) else []
+            else:
+                ranked_news = []
             sentiment_payload = self._sentiment_from_news(ranked_news)
             verdict = "STRONG BUY" if (result.score is not None and result.score >= 9) else result.verdict.upper()
             payload = {
-                "symbol": cache_key,
+                "symbol": symbol_key,
                 "action": verdict,
                 "verdict": verdict,
                 "hybrid_score": result.score,
@@ -1455,9 +1459,9 @@ class MarketDataService:
                 "diagnostics": {"provider": "yfinance", "error": None},
             }
         except Exception as exc:  # noqa: BLE001
-            logging.warning("Signal fetch failed for %s: %s", cache_key, exc)
+            logging.warning("Signal fetch failed for %s: %s", symbol_key, exc)
             payload = {
-                "symbol": cache_key,
+                "symbol": symbol_key,
                 "action": "HOLD",
                 "verdict": "HOLD",
                 "hybrid_score": None,
