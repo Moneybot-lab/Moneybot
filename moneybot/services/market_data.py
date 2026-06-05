@@ -58,6 +58,7 @@ class MarketDataService:
         self.sector_cache = TTLCache(ttl_seconds=3600)
         self.company_snapshot_cache = TTLCache(ttl_seconds=600)
         self._company_snapshot_backoff_until_by_symbol: dict[str, float] = {}
+        self._company_snapshot_global_backoff_until = 0.0
         self._market_timezone = ZoneInfo("America/New_York")
         self._daily_lists_last_refreshed_at: datetime | None = None
         self._daily_lists_cache: dict[str, list[Dict[str, Any]]] = {}
@@ -330,7 +331,10 @@ class MarketDataService:
         latest_news: list[Dict[str, Any]] = []
 
         now = time.time()
-        backoff_until = float(self._company_snapshot_backoff_until_by_symbol.get(ticker_symbol, 0.0))
+        backoff_until = max(
+            float(self._company_snapshot_backoff_until_by_symbol.get(ticker_symbol, 0.0)),
+            float(self._company_snapshot_global_backoff_until),
+        )
         if now < backoff_until:
             fallback_news = self._google_news_headlines(
                 symbol=ticker_symbol,
@@ -419,6 +423,7 @@ class MarketDataService:
         except Exception as exc:  # noqa: BLE001
             if "Too Many Requests" in str(exc):
                 self._company_snapshot_backoff_until_by_symbol[ticker_symbol] = now + 300.0
+                self._company_snapshot_global_backoff_until = now + 300.0
             company_name = default_name
             summary = default_summary
             try:
@@ -1118,6 +1123,78 @@ class MarketDataService:
                 return raw.strip(), env_name
         return None, None
 
+
+    def _quote_payload_from_massive_snapshot(
+        self,
+        symbol: str,
+        data: Dict[str, Any],
+        key_source: str | None,
+    ) -> Dict[str, Any] | None:
+        ticker_data = data.get("ticker") if isinstance(data, dict) else {}
+        if not isinstance(ticker_data, dict):
+            return None
+
+        day = ticker_data.get("day") if isinstance(ticker_data.get("day"), dict) else {}
+        minute = ticker_data.get("min") if isinstance(ticker_data.get("min"), dict) else {}
+        prev_day = ticker_data.get("prevDay") if isinstance(ticker_data.get("prevDay"), dict) else {}
+        last_trade = ticker_data.get("lastTrade") if isinstance(ticker_data.get("lastTrade"), dict) else {}
+        last_quote = ticker_data.get("lastQuote") if isinstance(ticker_data.get("lastQuote"), dict) else {}
+
+        price_candidates = (
+            ("day_close", day.get("c")),
+            ("minute_close", minute.get("c")),
+            ("minute_vwap", minute.get("vw")),
+            ("last_trade", last_trade.get("p")),
+        )
+        price = None
+        price_source = None
+        for source, raw_value in price_candidates:
+            numeric_value = self._num_or_none(raw_value)
+            if numeric_value is not None and numeric_value > 0:
+                price = numeric_value
+                price_source = source
+                break
+
+        if price is None:
+            ask = self._num_or_none(last_quote.get("P"))
+            bid = self._num_or_none(last_quote.get("p"))
+            if ask is not None and ask > 0 and bid is not None and bid > 0:
+                price = (ask + bid) / 2.0
+                price_source = "last_quote_midpoint"
+            elif ask is not None and ask > 0:
+                price = ask
+                price_source = "last_quote_ask"
+            elif bid is not None and bid > 0:
+                price = bid
+                price_source = "last_quote_bid"
+
+        if price is None:
+            return None
+
+        prev_close = self._num_or_none(prev_day.get("c"))
+        change_percent = self._num_or_none(ticker_data.get("todaysChangePerc"))
+        if prev_close is not None and prev_close > 0:
+            calculated_change = ((price - prev_close) / prev_close) * 100
+            if change_percent is None or price_source != "day_close":
+                change_percent = calculated_change
+
+        if change_percent is None:
+            return None
+
+        return {
+            "symbol": symbol,
+            "price": float(price),
+            "change_percent": float(change_percent),
+            "live_data_available": True,
+            "quote_source": "massive",
+            "diagnostics": {
+                "provider": "massive",
+                "error": None,
+                "massive_key_source": key_source,
+                "massive_price_source": price_source,
+            },
+        }
+
     def get_quote(self, symbol: str) -> Dict[str, Any]:
         cache_key = symbol.upper()
         cached = self.quote_cache.get(cache_key)
@@ -1174,25 +1251,8 @@ class MarketDataService:
                 )
                 resp.raise_for_status()
                 data = resp.json() or {}
-                ticker_data = data.get("ticker") or {}
-                day = ticker_data.get("day") or {}
-                prev_day = ticker_data.get("prevDay") or {}
-
-                price = day.get("c")
-                prev_close = prev_day.get("c")
-                change_percent = None
-                if price not in (None, 0) and prev_close not in (None, 0):
-                    change_percent = ((float(price) - float(prev_close)) / float(prev_close)) * 100
-
-                if price not in (None, 0) and change_percent is not None:
-                    payload = {
-                        "symbol": cache_key,
-                        "price": float(price),
-                        "change_percent": float(change_percent),
-                        "live_data_available": True,
-                        "quote_source": "massive",
-                        "diagnostics": {"provider": "massive", "error": None, "massive_key_source": massive_key_source},
-                    }
+                payload = self._quote_payload_from_massive_snapshot(cache_key, data, massive_key_source)
+                if payload is not None:
                     self.quote_cache.set(cache_key, payload)
                     return payload
 
@@ -1341,16 +1401,17 @@ class MarketDataService:
         self.quote_cache.set(cache_key, fallback)
         return fallback
 
-    def get_signal(self, symbol: str) -> Dict[str, Any]:
-        cache_key = symbol.upper()
+    def get_signal(self, symbol: str, include_company_snapshot: bool = True) -> Dict[str, Any]:
+        symbol_key = symbol.upper()
+        cache_key = f"{symbol_key}:company" if include_company_snapshot else f"{symbol_key}:lite"
         cached = self.signal_cache.get(cache_key)
         if cached:
             return cached
 
-        quote = self.get_quote(cache_key)
+        quote = self.get_quote(symbol_key)
         if not quote.get("live_data_available"):
             payload = {
-                "symbol": cache_key,
+                "symbol": symbol_key,
                 "action": "HOLD",
                 "verdict": "HOLD",
                 "hybrid_score": None,
@@ -1371,13 +1432,16 @@ class MarketDataService:
             return payload
 
         try:
-            result = analyze_ticker(cache_key)
-            company_snapshot = self.get_company_snapshot(cache_key)
-            ranked_news = company_snapshot.get("latest_news") if isinstance(company_snapshot.get("latest_news"), list) else []
+            result = analyze_ticker(symbol_key)
+            if include_company_snapshot:
+                company_snapshot = self.get_company_snapshot(symbol_key)
+                ranked_news = company_snapshot.get("latest_news") if isinstance(company_snapshot.get("latest_news"), list) else []
+            else:
+                ranked_news = []
             sentiment_payload = self._sentiment_from_news(ranked_news)
             verdict = "STRONG BUY" if (result.score is not None and result.score >= 9) else result.verdict.upper()
             payload = {
-                "symbol": cache_key,
+                "symbol": symbol_key,
                 "action": verdict,
                 "verdict": verdict,
                 "hybrid_score": result.score,
@@ -1395,9 +1459,9 @@ class MarketDataService:
                 "diagnostics": {"provider": "yfinance", "error": None},
             }
         except Exception as exc:  # noqa: BLE001
-            logging.warning("Signal fetch failed for %s: %s", cache_key, exc)
+            logging.warning("Signal fetch failed for %s: %s", symbol_key, exc)
             payload = {
-                "symbol": cache_key,
+                "symbol": symbol_key,
                 "action": "HOLD",
                 "verdict": "HOLD",
                 "hybrid_score": None,
