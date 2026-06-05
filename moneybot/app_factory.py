@@ -1502,8 +1502,8 @@ def create_app() -> Flask:
               <div id="lifetimePanel" style="display:none;background:#ecfccb;border:1px solid #d9f99d;border-radius:10px;padding:12px;margin-bottom:12px">
                 <div style="font-weight:700;margin-bottom:8px">Lifetime Realized Gains/Losses: <span id="lifetimeTotal">$0.00</span></div>
                 <div style="overflow-x:auto"><table style="width:100%;background:#f0fdf4;border-collapse:collapse;min-width:640px">
-                  <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Sold At</th><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Sold Price</th><th style="border:1px solid #e5e7eb;padding:8px">Shares Sold</th><th style="border:1px solid #e5e7eb;padding:8px">Realized</th></tr></thead>
-                  <tbody id="soldRows"><tr><td colspan="6" style="padding:8px;color:#3f6212">No sold trades yet.</td></tr></tbody>
+                  <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Sold At</th><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Sold Price</th><th style="border:1px solid #e5e7eb;padding:8px">Shares Sold</th><th style="border:1px solid #e5e7eb;padding:8px">Realized</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
+                  <tbody id="soldRows"><tr><td colspan="7" style="padding:8px;color:#3f6212">No sold trades yet.</td></tr></tbody>
                 </table></div>
               </div>
               <div style="overflow-x:auto"><table style="width:100%;background:#f0fdf4;border-collapse:collapse;min-width:980px">
@@ -1833,10 +1833,52 @@ def create_app() -> Flask:
                 lifetimeTotalEl.textContent = formatMoney(totalRealized || 0);
                 lifetimeTotalEl.style.color = amountColor(totalRealized);
                 if(!items || !items.length){
-                  soldRowsEl.innerHTML = '<tr><td colspan="6" style="padding:8px;color:#3f6212">No sold trades yet.</td></tr>';
+                  soldRowsEl.innerHTML = '<tr><td colspan="7" style="padding:8px;color:#3f6212">No sold trades yet.</td></tr>';
                   return;
                 }
-                soldRowsEl.innerHTML = items.map((item)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px">${formatDate(item.sold_at)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(item.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(item.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(item.sold_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(item.shares_sold)}</td><td style="border:1px solid #e5e7eb;padding:8px;color:${amountColor(item.realized_amount)}">${formatMoney(item.realized_amount)}</td></tr>`).join('');
+                soldRowsEl.innerHTML = items.map((item)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px">${formatDate(item.sold_at)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(item.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(item.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(item.sold_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(item.shares_sold)}</td><td style="border:1px solid #e5e7eb;padding:8px;color:${amountColor(item.realized_amount)}">${formatMoney(item.realized_amount)}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="editSoldTrade(${item.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:700;cursor:pointer">Edit</button></td></tr>`).join('');
+              }
+
+              async function editSoldTrade(id){
+                const res = await apiFetch('/api/sold-trades');
+                const soldData = await res.json();
+                if(!res.ok){
+                  outEl.textContent = soldData.error || 'Unable to load sold trade.';
+                  return;
+                }
+                const item = (soldData.items || []).find((entry)=> entry.id === id);
+                if(!item){
+                  outEl.textContent = 'Unable to find sold trade.';
+                  return;
+                }
+                const soldPriceRaw = prompt(`Correct sold price for ${item.symbol}:`, item.sold_price ?? '');
+                if(soldPriceRaw === null) return;
+                const soldPrice = Number(soldPriceRaw);
+                if(!Number.isFinite(soldPrice) || soldPrice <= 0){
+                  outEl.textContent = 'Sold price must be a positive number.';
+                  return;
+                }
+                const sharesRaw = prompt(`Correct shares sold for ${item.symbol}:`, item.shares_sold ?? '');
+                if(sharesRaw === null) return;
+                const sharesSold = Number(sharesRaw);
+                if(!Number.isFinite(sharesSold) || sharesSold <= 0){
+                  outEl.textContent = 'Shares sold must be a positive number.';
+                  return;
+                }
+                const updateRes = await apiFetch('/api/sold-trades/' + id, {
+                  method:'PATCH',
+                  headers:{'Content-Type':'application/json'},
+                  body:JSON.stringify({ sold_price:soldPrice, shares_sold:sharesSold })
+                });
+                const updateData = await updateRes.json();
+                if(!updateRes.ok){
+                  outEl.textContent = updateData.error || 'Unable to update sold trade.';
+                  return;
+                }
+                const realized = updateData.sold_trade && typeof updateData.sold_trade.realized_amount === 'number' ? updateData.sold_trade.realized_amount : 0;
+                outEl.textContent = `Sold trade updated (${formatMoney(realized)} realized).`;
+                await load();
+                await loadSoldTrades();
               }
 
               async function loadSoldTrades(){
