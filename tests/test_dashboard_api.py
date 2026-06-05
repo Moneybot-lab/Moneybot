@@ -1070,6 +1070,95 @@ def test_sell_watchlist_item_rejects_selling_more_than_owned():
     assert sell.get_json()["error"] == "shares_sold cannot exceed current shares"
 
 
+def test_update_sold_trade_recalculates_realized_gain_and_restores_shares():
+    client = _client()
+    signup = client.post("/api/auth/signup", json=_signup_payload("edit-sold@b.com"))
+    assert signup.status_code == 201
+
+    add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 10})
+    assert add.status_code == 201
+    item_id = add.get_json()["item"]["id"]
+
+    sell = client.post(f"/api/user-watchlist/{item_id}/sell", json={"sold_price": 120, "shares_sold": 4})
+    assert sell.status_code == 200
+    trade_id = sell.get_json()["sold_trade"]["id"]
+
+    update = client.patch(f"/api/sold-trades/{trade_id}", json={"sold_price": 125, "shares_sold": 2})
+    assert update.status_code == 200
+    payload = update.get_json()
+    assert payload["sold_trade"]["sold_price"] == 125.0
+    assert payload["sold_trade"]["shares_sold"] == 2.0
+    assert payload["sold_trade"]["realized_amount"] == 50.0
+    assert payload["remaining_item"]["shares"] == 8.0
+    assert payload["total_realized"] == 50.0
+
+    watchlist = client.get("/api/user-watchlist")
+    assert watchlist.status_code == 200
+    assert watchlist.get_json()["items"][0]["shares"] == 8.0
+
+    sold_trades = client.get("/api/sold-trades")
+    assert sold_trades.status_code == 200
+    sold_payload = sold_trades.get_json()
+    assert sold_payload["total_realized"] == 50.0
+    assert sold_payload["items"][0]["shares_sold"] == 2.0
+
+
+def test_update_sold_trade_allows_correction_when_portfolio_shares_are_already_fixed():
+    client = _client()
+    signup = client.post("/api/auth/signup", json=_signup_payload("edit-sold-fixed@b.com"))
+    assert signup.status_code == 201
+
+    add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 1, "shares": 575})
+    assert add.status_code == 201
+    item_id = add.get_json()["item"]["id"]
+
+    sell = client.post(f"/api/user-watchlist/{item_id}/sell", json={"sold_price": 415, "shares_sold": 3.59})
+    assert sell.status_code == 200
+    trade_id = sell.get_json()["sold_trade"]["id"]
+
+    manual_fix = client.patch(f"/api/user-watchlist/{item_id}", json={"shares": 160})
+    assert manual_fix.status_code == 200
+
+    update = client.patch(f"/api/sold-trades/{trade_id}", json={"sold_price": 3.59, "shares_sold": 415})
+    assert update.status_code == 200
+    payload = update.get_json()
+    assert payload["sold_trade"]["sold_price"] == 3.59
+    assert payload["sold_trade"]["shares_sold"] == 415.0
+    assert payload["sold_trade"]["realized_amount"] == 1074.85
+    assert payload["portfolio_adjustment_skipped"] is True
+    assert "already been corrected" in payload["portfolio_adjustment_note"]
+
+    watchlist = client.get("/api/user-watchlist")
+    assert watchlist.status_code == 200
+    assert watchlist.get_json()["items"][0]["shares"] == 160.0
+
+
+def test_update_sold_trade_restores_position_after_all_shares_were_sold():
+    client = _client()
+    signup = client.post("/api/auth/signup", json=_signup_payload("edit-sold-all@b.com"))
+    assert signup.status_code == 201
+
+    add = client.post("/api/user-watchlist", json={"symbol": "TSLA", "buy_price": 200, "shares": 5})
+    assert add.status_code == 201
+    item_id = add.get_json()["item"]["id"]
+
+    sell = client.post(f"/api/user-watchlist/{item_id}/sell", json={"sold_price": 220, "shares_sold": 5})
+    assert sell.status_code == 200
+    assert sell.get_json()["removed"] is True
+    trade_id = sell.get_json()["sold_trade"]["id"]
+
+    update = client.patch(f"/api/sold-trades/{trade_id}", json={"sold_price": 220, "shares_sold": 3})
+    assert update.status_code == 200
+    payload = update.get_json()
+    assert payload["sold_trade"]["realized_amount"] == 60.0
+    assert payload["remaining_item"]["symbol"] == "TSLA"
+    assert payload["remaining_item"]["entry_price"] == 200.0
+    assert payload["remaining_item"]["shares"] == 2.0
+
+    watchlist = client.get("/api/user-watchlist")
+    assert watchlist.status_code == 200
+    assert watchlist.get_json()["items"][0]["shares"] == 2.0
+
 def test_buy_watchlist_item_increases_shares_and_recalculates_entry_price():
     client = _client()
     signup = client.post("/api/auth/signup", json=_signup_payload("buy@b.com"))
