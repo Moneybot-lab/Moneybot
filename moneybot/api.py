@@ -1462,6 +1462,67 @@ def sold_trades():
     return jsonify({"items": payload, "total_realized": total_realized, "request_id": g.request_id})
 
 
+@api_bp.patch("/sold-trades/<int:trade_id>")
+@login_required
+def update_sold_trade(trade_id: int):
+    data = request.get_json(silent=True) or {}
+    sold_trade = SoldTrade.query.filter_by(id=trade_id, user_id=session["user_id"]).first()
+    if not sold_trade:
+        return jsonify({"error": "sold trade not found", "request_id": g.request_id}), 404
+
+    sold_price = _to_decimal(data.get("sold_price"))
+    shares_sold = _to_decimal(data.get("shares_sold"))
+
+    if sold_price is None or sold_price <= 0:
+        return jsonify({"error": "sold_price must be > 0", "request_id": g.request_id}), 400
+    if shares_sold is None or shares_sold <= 0:
+        return jsonify({"error": "shares_sold must be > 0", "request_id": g.request_id}), 400
+
+    shares_delta = sold_trade.shares_sold - shares_sold
+    portfolio_item = WatchlistItem.query.filter_by(
+        user_id=session["user_id"],
+        symbol=sold_trade.symbol,
+    ).first()
+
+    if shares_delta != 0:
+        if portfolio_item:
+            current_shares = portfolio_item.shares or Decimal("0")
+            corrected_shares = current_shares + shares_delta
+            if corrected_shares < 0:
+                return jsonify({"error": "corrected shares_sold exceeds current shares", "request_id": g.request_id}), 400
+            if corrected_shares == 0:
+                db.session.delete(portfolio_item)
+                portfolio_item = None
+            else:
+                portfolio_item.shares = corrected_shares
+        elif shares_delta > 0:
+            portfolio_item = WatchlistItem(
+                user_id=session["user_id"],
+                symbol=sold_trade.symbol,
+                buy_price=sold_trade.entry_price,
+                shares=shares_delta,
+            )
+            db.session.add(portfolio_item)
+        else:
+            return jsonify({"error": "cannot increase shares_sold without an open portfolio position", "request_id": g.request_id}), 400
+
+    sold_trade.sold_price = sold_price
+    sold_trade.shares_sold = shares_sold
+    sold_trade.realized_amount = (sold_price - sold_trade.entry_price) * shares_sold
+    db.session.commit()
+
+    payload = [_sold_trade_payload(i) for i in SoldTrade.query.filter_by(user_id=session["user_id"]).all()]
+    total_realized = round(sum(i["realized_amount"] for i in payload), 2)
+    return jsonify(
+        {
+            "sold_trade": _sold_trade_payload(sold_trade),
+            "remaining_item": _watchlist_item_payload(portfolio_item) if portfolio_item else None,
+            "total_realized": total_realized,
+            "request_id": g.request_id,
+        }
+    )
+
+
 @api_bp.get("/portfolio-summary")
 @login_required
 def portfolio_summary():
