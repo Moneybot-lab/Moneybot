@@ -616,6 +616,15 @@ def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> 
     }
 
 
+def _safe_market_payload(label: str, symbol: str, fn, fallback):
+    try:
+        value = fn()
+    except Exception:  # noqa: BLE001
+        logging.exception("Quick Ask %s fetch failed for symbol=%s", label, symbol)
+        return fallback
+    return value if value is not None else fallback
+
+
 def _quick_score_payload(signal_data: Dict[str, Any], decision: Dict[str, Any]) -> tuple[Any, Any, Any, str | None]:
     signal_score = signal_data.get("score")
     if signal_score is None:
@@ -1645,58 +1654,77 @@ def quick_ask():
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
     decision_logger = current_app.extensions.get("decision_logger")
 
-    signal_data = svc.get_signal(symbol)
-    quote_data = signal_data.get("quote") or svc.get_quote(symbol)
-    history30 = svc.get_price_history(symbol, days=30)
+    signal_data = _safe_market_payload("signal", symbol, lambda: svc.get_signal(symbol), {})
+    if not isinstance(signal_data, dict):
+        signal_data = {}
+    signal_data.setdefault("symbol", symbol)
+
+    quote_data = signal_data.get("quote") if isinstance(signal_data.get("quote"), dict) else None
+    if quote_data is None:
+        quote_data = _safe_market_payload("quote", symbol, lambda: svc.get_quote(symbol), {})
+    if not isinstance(quote_data, dict):
+        quote_data = {}
+
+    history30 = _safe_market_payload("history", symbol, lambda: svc.get_price_history(symbol, days=30), [])
+    if not isinstance(history30, list):
+        history30 = []
     decision = None
     if deterministic_svc is not None:
-        decision = deterministic_svc.predict_quick_decision(
-            signal_data=signal_data,
-            quote_data=quote_data,
-            symbol=symbol,
-        )
-        if decision is None and getattr(deterministic_svc, "rollout_dry_run", False):
-            shadow = deterministic_svc.predict_shadow_decision(
+        try:
+            decision = deterministic_svc.predict_quick_decision(
                 signal_data=signal_data,
                 quote_data=quote_data,
+                symbol=symbol,
             )
-            if shadow is not None and decision_logger is not None:
-                decision_logger.log(
-                    endpoint="quick_ask_shadow",
-                    symbol=symbol,
-                    decision_source=shadow.get("decision_source"),
-                    payload={
-                        "shadow_only": True,
-                        "recommendation": shadow.get("recommendation"),
-                        "model_version": shadow.get("model_version"),
-                        "probability_up": shadow.get("probability_up"),
-                        "confidence": shadow.get("confidence"),
-                    },
-                    snapshot=build_decision_snapshot(
-                        symbol=symbol,
-                        endpoint="quick_ask_shadow",
-                        decision_source=str(shadow.get("decision_source") or "unknown"),
-                        recommendation=str(shadow.get("recommendation") or "HOLD"),
-                        probability_up=shadow.get("probability_up"),
-                        model_version=shadow.get("model_version"),
-                        quote=quote_data,
-                        features=signal_data.get("features") if isinstance(signal_data.get("features"), dict) else {},
-                        signals=signal_data,
-                        explanation={"rationale": (shadow.get("advice_reason") or shadow.get("rationale"))},
-                    ),
-                    experiment=_experiment_metadata(cohort_id="shadow"),
+            if decision is None and getattr(deterministic_svc, "rollout_dry_run", False):
+                shadow = deterministic_svc.predict_shadow_decision(
+                    signal_data=signal_data,
+                    quote_data=quote_data,
                 )
+                if shadow is not None and decision_logger is not None:
+                    decision_logger.log(
+                        endpoint="quick_ask_shadow",
+                        symbol=symbol,
+                        decision_source=shadow.get("decision_source"),
+                        payload={
+                            "shadow_only": True,
+                            "recommendation": shadow.get("recommendation"),
+                            "model_version": shadow.get("model_version"),
+                            "probability_up": shadow.get("probability_up"),
+                            "confidence": shadow.get("confidence"),
+                        },
+                        snapshot=build_decision_snapshot(
+                            symbol=symbol,
+                            endpoint="quick_ask_shadow",
+                            decision_source=str(shadow.get("decision_source") or "unknown"),
+                            recommendation=str(shadow.get("recommendation") or "HOLD"),
+                            probability_up=shadow.get("probability_up"),
+                            model_version=shadow.get("model_version"),
+                            quote=quote_data,
+                            features=signal_data.get("features") if isinstance(signal_data.get("features"), dict) else {},
+                            signals=signal_data,
+                            explanation={"rationale": (shadow.get("advice_reason") or shadow.get("rationale"))},
+                        ),
+                        experiment=_experiment_metadata(cohort_id="shadow"),
+                    )
+        except Exception:  # noqa: BLE001
+            logging.exception("Deterministic Quick Ask prediction failed for symbol=%s", symbol)
+            decision = None
     if decision is None:
         decision = _quick_decision(signal_data, quote_data)
 
     ai_payload = None
     if ai_svc is not None:
-        ai_payload = ai_svc.enhance_quick_decision(
-            symbol=symbol,
-            quick_decision=decision,
-            signal_data=signal_data,
-            quote_data=quote_data,
-        )
+        try:
+            ai_payload = ai_svc.enhance_quick_decision(
+                symbol=symbol,
+                quick_decision=decision,
+                signal_data=signal_data,
+                quote_data=quote_data,
+            )
+        except Exception:  # noqa: BLE001
+            logging.exception("AI Quick Ask enhancement failed for symbol=%s", symbol)
+            ai_payload = None
 
     ai_mode = (ai_payload or {}).get("mode")
 
