@@ -405,3 +405,39 @@ def test_portfolio_aggregates_duplicate_sectors_with_partial_holdings():
     assert all(item["sector"] == "Technology" for item in items)
     assert all(item["sector_weight_percent"] == 100.0 for item in items)
     assert all(item["weight_basis"] == "invested_positions_only_cash_excluded" for item in items)
+
+
+def test_quick_ask_and_portfolio_register_bounded_stream_demand():
+    client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = None
+    client.application.extensions["market_data_service"].get_signal = lambda symbol: {
+        "symbol": symbol, "action": "HOLD", "score": 5.0,
+        "quote": {"symbol": symbol, "price": 100.0, "change_percent": 0.0, "quote_source": "test"},
+    }
+    client.application.extensions["market_data_service"].get_price_history_data = lambda symbol, days=30: {
+        "symbol": symbol, "closes": [99.0, 100.0], "source": "test", "source_mode": "fallback", "schema_version": "market-data.v1",
+    }
+    _signup(client, email="stream-demand@example.com", username="stream_demand")
+    assert client.post("/api/user-watchlist", json={"symbol": "MSFT", "buy_price": 100, "shares": 1}).status_code == 201
+
+    assert client.get("/api/quick-ask?symbol=AAPL").status_code == 200
+    assert client.get("/api/user-watchlist").status_code == 200
+
+    demand = client.application.extensions["market_stream_state"].desired_demand()
+    assert any(symbols == {"AAPL"} for source, symbols in demand.items() if source.startswith("quick:"))
+    assert any(symbols == {"MSFT"} for source, symbols in demand.items() if source.startswith("portfolio:"))
+
+
+def test_market_stream_health_requires_auth_and_returns_shadow_status():
+    client = _client()
+    assert client.get("/api/market-stream-health").status_code == 401
+    _signup(client, email="stream-health@example.com", username="stream_health")
+    state = client.application.extensions["market_stream_state"]
+    state.set_health({"connection_state": "connected", "metrics": {"parse_failures": 0}}, ttl_seconds=30)
+
+    response = client.get("/api/market-stream-health")
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["shadow_mode"] is True
+    assert data["worker"]["connection_state"] == "connected"

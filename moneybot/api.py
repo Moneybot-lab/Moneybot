@@ -54,6 +54,7 @@ from .services.investor_profile import (
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
 from .services.decision_snapshot import build_decision_snapshot
 from .services.suitability_policy import UserDecisionContext
+from .services.market_stream import register_demand_safely
 from .services.outcome_tracking import (
     close_values,
     evaluate_decision_events,
@@ -435,6 +436,23 @@ def _personalize_action(
         user_id=user_id, context=context, endpoint=endpoint, symbol=symbol,
         base_action=base_action, forecast_horizon=forecast_horizon, **policy_inputs,
     )
+
+
+def _register_stream_demand(source: str, symbols) -> bool:
+    config = current_app.config.get("MASSIVE_STREAM_CONFIG")
+    ttl_seconds = int(getattr(config, "demand_ttl_seconds", 90))
+    return register_demand_safely(current_app.extensions.get("market_stream_state"), source, symbols, ttl_seconds=ttl_seconds)
+
+
+def _market_stream_health_payload() -> dict[str, Any]:
+    state = current_app.extensions.get("market_stream_state")
+    if state is None:
+        return {}
+    try:
+        return state.get_health()
+    except Exception:  # noqa: BLE001
+        logging.exception("Unable to read market-stream health state")
+        return {"connection_state": "redis_unavailable"}
 
 
 def _is_regular_market_hours(now_utc: datetime | None = None) -> bool:
@@ -1176,7 +1194,9 @@ def update_notification_triggers():
 @login_required
 def get_clearview_symbols():
     item = _ensure_notification_trigger_preferences(session["user_id"])
-    return jsonify({"symbols": _parse_clearview_symbols(item.clearview_symbols_csv), "request_id": g.request_id})
+    symbols = _parse_clearview_symbols(item.clearview_symbols_csv)
+    _register_stream_demand(f"clearview:{session['user_id']}", symbols)
+    return jsonify({"symbols": symbols, "request_id": g.request_id})
 
 
 @api_bp.put("/clearview-symbols")
@@ -1195,6 +1215,7 @@ def update_clearview_symbols():
     item = _ensure_notification_trigger_preferences(session["user_id"])
     item.clearview_symbols_csv = ",".join(parsed)
     db.session.commit()
+    _register_stream_demand(f"clearview:{session['user_id']}", parsed)
     return jsonify({"symbols": parsed, "request_id": g.request_id})
 
 
@@ -1292,6 +1313,7 @@ def user_watchlist():
         .all()
     )
     base_items = [_watchlist_item_payload(i) for i in items]
+    _register_stream_demand(f"portfolio:{session['user_id']}", {str(item.get("symbol") or "") for item in base_items})
 
     svc = current_app.extensions.get("market_data_service")
     ai_svc = current_app.extensions.get("ai_advisor_service")
@@ -1958,6 +1980,7 @@ def quick_ask():
     if not symbol:
         return jsonify({"error": "symbol required", "request_id": g.request_id}), 400
 
+    _register_stream_demand(f"quick:{session.get('user_id') or g.request_id}", [symbol])
     svc = current_app.extensions["market_data_service"]
     ai_svc = current_app.extensions.get("ai_advisor_service")
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
@@ -2553,6 +2576,23 @@ def hot_momentum_buys():
     return jsonify({"items": items, "request_id": g.request_id})
 
 
+@api_bp.get("/market-stream-health")
+@login_required
+def market_stream_health():
+    state = current_app.extensions.get("market_stream_state")
+    config = current_app.config.get("MASSIVE_STREAM_CONFIG")
+    health = _market_stream_health_payload()
+    return jsonify({
+        "data": {
+            "enabled": bool(getattr(config, "enabled", False)),
+            "shadow_mode": bool(getattr(config, "shadow_mode", True)),
+            "symbol_cap": int(getattr(config, "symbol_cap", 0)),
+            "worker": health,
+        },
+        "request_id": g.request_id,
+    })
+
+
 @api_bp.get("/model-health")
 def model_health():
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
@@ -2615,6 +2655,7 @@ def model_health():
                 "suitability_policy_mode": current_app.config.get("SUITABILITY_POLICY_MODE"),
                 "suitability_rollout_percentage": current_app.config.get("SUITABILITY_ROLLOUT_PERCENTAGE"),
                 "personalization_metrics": personalization_runtime.metrics.snapshot() if personalization_runtime else {},
+                "market_stream_health": _market_stream_health_payload(),
                 "market_data_provider_health": (
                     current_app.extensions["market_data_service"].get_provider_health()
                     if current_app.extensions.get("market_data_service") is not None

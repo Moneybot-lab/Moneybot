@@ -38,6 +38,26 @@ Set these env vars on the web service:
 - `MASSIVE_REGULAR_STALE_SECONDS` = regular-session freshness limit (default `15`)
 - `MASSIVE_EXTENDED_STALE_SECONDS` = pre/after-hours freshness limit (default `60`)
 - `MASSIVE_CLOSED_STALE_SECONDS` = closed-session freshness limit (default `86400`)
+- `REDIS_URL` = internal Render Key Value connection string shared by the web and `moneybot-market-stream` worker
+- `MASSIVE_STREAM_ENABLED` = `true` only on the dedicated worker; leave `false` on the web service
+- `MASSIVE_STREAM_SHADOW_MODE` = `true` while Page 4 validates stream data without changing REST-driven recommendations
+- `MASSIVE_STREAM_URL` = provider socket URL (default `wss://socket.massive.com/stocks`)
+- `MASSIVE_STREAM_SYMBOL_CAP` = hard global symbol budget (default `250`)
+- `MASSIVE_STREAM_QUOTE_CAP` / `MASSIVE_STREAM_TRADE_CAP` = tighter caps for high-volume quote/trade subscriptions
+- `MASSIVE_STREAM_SERVER_SYMBOLS` = comma-separated server-owned symbols (default `SPY,QQQ`; wildcards are discarded)
+- `MASSIVE_STREAM_STATE_TTL_SECONDS` = latest-event TTL (default `120`)
+- `MASSIVE_STREAM_STALE_TTL_SECONDS` = stale recovery-state TTL (default `300`)
+- `MASSIVE_STREAM_DEMAND_TTL_SECONDS` = browser/endpoint demand TTL (default `90`)
+- `MASSIVE_STREAM_RECONCILE_SECONDS` = desired/actual subscription reconciliation interval (default `2`)
+- `MASSIVE_STREAM_PUBLISH_COALESCE_MS` = Redis Pub/Sub coalescing interval (default `250`)
+- `MASSIVE_STREAM_HEARTBEAT_TIMEOUT_SECONDS` = no-message reconnect threshold (default `45`)
+- `MASSIVE_STREAM_RECONNECT_MIN_SECONDS` / `MASSIVE_STREAM_RECONNECT_MAX_SECONDS` = jittered exponential reconnect bounds
+- `MASSIVE_STREAM_MAX_QUEUE` = WebSocket receive high-water bound (default `64`)
+- `MASSIVE_STREAM_ACK_TIMEOUT_SECONDS` = authentication/subscription acknowledgement timeout (default `10`)
+- `MASSIVE_STREAM_RECOVERY_CONCURRENCY` = maximum concurrent REST gap recoveries (default `8`)
+- `MASSIVE_STREAM_SHADOW_COMPARE_SECONDS` = stream-versus-REST comparison interval (default `30`)
+- `MASSIVE_STREAM_SLOW_CONSUMER_LAG_MS` = slow-consumer metric threshold (default `2000`)
+- `MASSIVE_STREAM_REST_TOLERANCE_BPS` = stream-versus-REST shadow discrepancy threshold (default `50` bps)
 - `FINNHUB_API_KEY` = your Finnhub key (optional; secondary quote fallback when Massive is unavailable)
 - `INVESTOR_PROFILE_ENABLED` = `true` to load profile context; set `false` to disable personalization without rollback
 - `SUITABILITY_POLICY_ENABLED` = `true` to evaluate suitability rules
@@ -47,6 +67,14 @@ Set these env vars on the web service:
 - `SUITABILITY_ROLLOUT_ALLOWLIST` = comma-separated numeric user IDs that always enter the configured mode
 - `INVESTOR_PROFILE_REVISION_RETENTION_DAYS` = revision-history retention window enforced when history is read (default `2555`, approximately seven years)
   - MoneyBot also accepts `FINNHUB_TOKEN` or `X_FINNHUB_TOKEN` for compatibility with different secret naming conventions.
+
+## Market stream worker and shared hot state
+
+`render.yaml` now declares a Render Key Value instance and a separate `moneybot-market-stream` background worker. Keep the worker at one instance during shadow validation because Massive connection entitlements and subscription ownership are coordinated as a single connection. Render restarts a failed background worker automatically; the process also reconnects with bounded exponential backoff and restores subscriptions from database and Redis demand.
+
+Use `allkeys-lru` for the hot-state datastore because every quote/bar/health key has a TTL and REST remains the system fallback. Page 4 stores latest events and coalesced notifications only. Minute bars are **not** durably persisted in this phase; durable research history remains Page 6 work.
+
+The worker must stay in `MASSIVE_STREAM_SHADOW_MODE=true` until the Page 4 latency, parse-rate, discrepancy, and resource gates pass. Turning `MASSIVE_STREAM_ENABLED=false` stops streaming without changing REST behavior.
 
 ## 3) Install + migrate + run (Render Web Service)
 Configure the web service with the following commands:

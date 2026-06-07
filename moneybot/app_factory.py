@@ -19,6 +19,7 @@ from .services.ai_advisor import AIAdvisorService
 from .services.decision_log import DecisionLogger
 from .services.deterministic_advisor import DeterministicQuickAdvisor
 from .services.market_data import MarketDataService
+from .services.market_stream import create_stream_state, worker_config_from_env
 from .services.suitability_policy import PersonalizationRuntime
 from .models import WaitlistSignup
 from .services.runtime_paths import (
@@ -391,6 +392,8 @@ def create_app() -> Flask:
         SUITABILITY_ROLLOUT_SEED=os.environ.get("SUITABILITY_ROLLOUT_SEED", "moneybot-profile"),
         SUITABILITY_ROLLOUT_ALLOWLIST={int(value) for value in os.environ.get("SUITABILITY_ROLLOUT_ALLOWLIST", "").split(",") if value.strip().isdigit()},
         INVESTOR_PROFILE_REVISION_RETENTION_DAYS=int(os.environ.get("INVESTOR_PROFILE_REVISION_RETENTION_DAYS", "2555")),
+        REDIS_URL=os.environ.get("REDIS_URL", ""),
+        MASSIVE_STREAM_CONFIG=worker_config_from_env(os.environ),
         DETERMINISTIC_QUICK_ENABLED=(os.environ.get("DETERMINISTIC_QUICK_ENABLED", "true").lower() == "true"),
         DETERMINISTIC_MODEL_PATH=default_model_path,
         DETERMINISTIC_MOMENTUM_ENABLED=(os.environ.get("DETERMINISTIC_MOMENTUM_ENABLED", "true").lower() == "true"),
@@ -502,6 +505,8 @@ def create_app() -> Flask:
         enabled=app.config["DECISION_LOGGING_ENABLED"],
         output_path=app.config["DECISION_LOG_PATH"],
     )
+    app.extensions["market_stream_state"] = create_stream_state(app.config["REDIS_URL"] or None)
+
     app.extensions["personalization_runtime"] = PersonalizationRuntime(
         profile_enabled=app.config["INVESTOR_PROFILE_ENABLED"],
         policy_enabled=app.config["SUITABILITY_POLICY_ENABLED"],

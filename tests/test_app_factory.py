@@ -352,3 +352,26 @@ def test_create_app_reads_personalization_rollout_settings(monkeypatch):
     assert runtime.mode == "shadow"
     assert runtime.rollout_percentage == 25
     assert runtime.allowlist == {3, 8}
+
+
+def test_create_app_reads_market_stream_shadow_configuration(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MASSIVE_STREAM_ENABLED", "true")
+    monkeypatch.setenv("MASSIVE_STREAM_SHADOW_MODE", "true")
+    monkeypatch.setenv("MASSIVE_STREAM_SYMBOL_CAP", "125")
+    monkeypatch.setenv("MASSIVE_STREAM_QUOTE_CAP", "40")
+    monkeypatch.setenv("MASSIVE_STREAM_TRADE_CAP", "10")
+    monkeypatch.setenv("MASSIVE_STREAM_SERVER_SYMBOLS", "SPY,QQQ,IWM,*")
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
+    app = create_app()
+    config = app.config["MASSIVE_STREAM_CONFIG"]
+
+    assert config.enabled is True
+    assert config.shadow_mode is True
+    assert config.symbol_cap == 125
+    assert config.quote_cap == 40
+    assert config.trade_cap == 10
+    assert config.server_symbols == ("SPY", "QQQ", "IWM")
+    assert app.extensions["market_stream_state"].get_health() == {}
