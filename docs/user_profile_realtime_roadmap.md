@@ -1,5 +1,7 @@
 # User Profile and Real-Time Market Data Roadmap
 
+> **Progress tracking:** Use the [User Profile + Real-Time Setup pages](user-profile-realtime/README.md) for the current status, remaining checklists, and implementation order. This document remains the architectural reference.
+
 ## Executive decision
 
 **Build the investor profile first, then add a bounded server-side Massive WebSocket pilot.**
