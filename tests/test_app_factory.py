@@ -333,3 +333,22 @@ def test_portfolio_page_uses_base_items_when_enrichment_is_empty(monkeypatch):
     assert "function selectPortfolioRows(data)" in body
     assert "return enriched.length ? enriched : base;" in body
     assert "Portfolio data did not load completely. Please refresh in a moment." in body
+
+
+def test_create_app_reads_personalization_rollout_settings(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("INVESTOR_PROFILE_ENABLED", "true")
+    monkeypatch.setenv("SUITABILITY_POLICY_ENABLED", "true")
+    monkeypatch.setenv("SUITABILITY_POLICY_MODE", "shadow")
+    monkeypatch.setenv("SUITABILITY_ROLLOUT_PERCENTAGE", "25")
+    monkeypatch.setenv("SUITABILITY_ROLLOUT_ALLOWLIST", "3,8")
+
+    app = create_app()
+    runtime = app.extensions["personalization_runtime"]
+
+    assert app.config["INVESTOR_PROFILE_ENABLED"] is True
+    assert app.config["SUITABILITY_POLICY_MODE"] == "shadow"
+    assert runtime.mode == "shadow"
+    assert runtime.rollout_percentage == 25
+    assert runtime.allowlist == {3, 8}

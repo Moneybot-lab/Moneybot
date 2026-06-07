@@ -31,6 +31,13 @@ Set these env vars on the web service:
 - `MASSIVE_API_KEY` = your Massive (Polygon) API key (optional but recommended; primary quote source when set)
   - MoneyBot also accepts `POLYGON_API_KEY` as an alias.
 - `FINNHUB_API_KEY` = your Finnhub key (optional; secondary quote fallback when Massive is unavailable)
+- `INVESTOR_PROFILE_ENABLED` = `true` to load profile context; set `false` to disable personalization without rollback
+- `SUITABILITY_POLICY_ENABLED` = `true` to evaluate suitability rules
+- `SUITABILITY_POLICY_MODE` = `off`, `shadow`, or `enforce` (`shadow` records what would change without changing displayed actions)
+- `SUITABILITY_ROLLOUT_PERCENTAGE` = deterministic percentage of authenticated users eligible for shadow/enforcement
+- `SUITABILITY_ROLLOUT_SEED` = stable cohort seed
+- `SUITABILITY_ROLLOUT_ALLOWLIST` = comma-separated numeric user IDs that always enter the configured mode
+- `INVESTOR_PROFILE_REVISION_RETENTION_DAYS` = revision-history retention window enforced when history is read (default `2555`, approximately seven years)
   - MoneyBot also accepts `FINNHUB_TOKEN` or `X_FINNHUB_TOKEN` for compatibility with different secret naming conventions.
 
 ## 3) Install + migrate + run (Render Web Service)

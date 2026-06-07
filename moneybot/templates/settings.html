@@ -198,6 +198,11 @@
             </section>
 
             <div class="safe-note"><span>🛡️</span><span><strong>Safe until complete.</strong> Missing answers use conservative effective defaults. MoneyBot will never silently treat an incomplete profile as aggressive.</span></div>
+            <div class="safe-note"><span>🕘</span><span><strong>Future decisions only.</strong> Updating this profile changes future recommendations. Historical decision records keep the profile and policy versions originally used.</span></div>
+            <details id="revisionPanel" style="margin-top:18px;border:1px solid #d8e4dc;border-radius:15px;padding:14px;background:#fbfdfb">
+              <summary style="cursor:pointer;font-weight:850;color:#294739">Profile revision history</summary>
+              <div id="profileRevisions" style="display:grid;gap:9px;margin-top:12px;color:#5d6f65;font-size:.86rem">Open to load recent changes.</div>
+            </details>
             <div class="actions">
               <span id="investorProfileStatus" class="save-status" role="status"></span>
               <div class="button-row">

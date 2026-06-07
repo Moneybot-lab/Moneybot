@@ -218,3 +218,147 @@ def apply_suitability_policy(
         profile_version=context.profile_version,
         profile_complete=context.profile_complete,
     )
+
+POLICY_SCHEMA_VERSION = "suitability.v1"
+
+
+@dataclass(frozen=True)
+class PersonalizedDecision:
+    base_action: str
+    policy_action: str
+    action: str
+    enforcement_mode: str
+    cohort: str
+    policy_schema_version: str
+    forecast_horizon: str
+    suitability: SuitabilityDecision
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "base_action": self.base_action,
+            "policy_action": self.policy_action,
+            "action": self.action,
+            "changed": self.action != self.base_action,
+            "would_change": self.policy_action != self.base_action,
+            "enforcement_mode": self.enforcement_mode,
+            "cohort": self.cohort,
+            "policy_schema_version": self.policy_schema_version,
+            "forecast_horizon": self.forecast_horizon,
+            "profile_version": self.suitability.profile_version,
+            "profile_complete": self.suitability.profile_complete,
+            "applied_rules": [dict(rule) for rule in self.suitability.applied_rules],
+        }
+
+
+class PersonalizationMetrics:
+    def __init__(self) -> None:
+        self.evaluations = 0
+        self.enforced_overrides = 0
+        self.shadow_overrides = 0
+        self.rule_counts: dict[str, int] = {}
+        self.mode_counts: dict[str, int] = {}
+        self.last_actions: dict[str, str] = {}
+        self.action_changes = 0
+
+    def record(self, *, user_id: int | None, endpoint: str, symbol: str, decision: PersonalizedDecision) -> None:
+        self.evaluations += 1
+        self.mode_counts[decision.enforcement_mode] = self.mode_counts.get(decision.enforcement_mode, 0) + 1
+        if decision.action != decision.base_action:
+            self.enforced_overrides += 1
+        elif decision.policy_action != decision.base_action:
+            self.shadow_overrides += 1
+        for rule in decision.suitability.applied_rules:
+            code = str(rule.get("code") or "unknown")
+            self.rule_counts[code] = self.rule_counts.get(code, 0) + 1
+        key = f"{user_id if user_id is not None else 'anonymous'}:{endpoint}:{symbol.upper()}"
+        previous = self.last_actions.get(key)
+        if previous is not None and previous != decision.action:
+            self.action_changes += 1
+        self.last_actions[key] = decision.action
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "evaluations": self.evaluations,
+            "enforced_overrides": self.enforced_overrides,
+            "shadow_overrides": self.shadow_overrides,
+            "rule_counts": dict(self.rule_counts),
+            "mode_counts": dict(self.mode_counts),
+            "recommendation_churn_count": self.action_changes,
+        }
+
+
+class PersonalizationRuntime:
+    def __init__(
+        self,
+        *,
+        profile_enabled: bool = True,
+        policy_enabled: bool = True,
+        mode: str = "enforce",
+        rollout_percentage: float = 100.0,
+        rollout_seed: str = "moneybot-profile",
+        allowlist: set[int] | None = None,
+        metrics: PersonalizationMetrics | None = None,
+    ) -> None:
+        normalized_mode = str(mode or "enforce").strip().lower()
+        self.profile_enabled = bool(profile_enabled)
+        self.policy_enabled = bool(policy_enabled)
+        self.mode = normalized_mode if normalized_mode in {"off", "shadow", "enforce"} else "off"
+        self.rollout_percentage = max(0.0, min(100.0, float(rollout_percentage)))
+        self.rollout_seed = str(rollout_seed or "moneybot-profile")
+        self.allowlist = set(allowlist or set())
+        self.metrics = metrics or PersonalizationMetrics()
+
+    def cohort_for_user(self, user_id: int | None) -> str:
+        if not self.profile_enabled or not self.policy_enabled or self.mode == "off" or user_id is None:
+            return "off"
+        if user_id in self.allowlist:
+            return "allowlist"
+        import hashlib
+
+        digest = hashlib.sha256(f"{self.rollout_seed}:{user_id}".encode("utf-8")).hexdigest()
+        bucket = int(digest[:8], 16) / 0xFFFFFFFF * 100.0
+        return "rollout" if bucket < self.rollout_percentage else "control"
+
+    def evaluate(
+        self,
+        *,
+        user_id: int | None,
+        context: UserDecisionContext,
+        endpoint: str,
+        symbol: str,
+        base_action: str,
+        forecast_horizon: str,
+        **policy_inputs: Any,
+    ) -> PersonalizedDecision:
+        if self.profile_enabled and self.policy_enabled:
+            suitability = apply_suitability_policy(
+                base_action=base_action,
+                context=context,
+                symbol=symbol,
+                **policy_inputs,
+            )
+        else:
+            normalized_action = str(base_action or "HOLD").strip().upper()
+            suitability = SuitabilityDecision(
+                base_action=normalized_action,
+                action=normalized_action,
+                changed=False,
+                applied_rules=(),
+                profile_version=context.profile_version,
+                profile_complete=context.profile_complete,
+            )
+        cohort = self.cohort_for_user(user_id)
+        effective_mode = self.mode if cohort in {"allowlist", "rollout"} else "off"
+        action = suitability.action if effective_mode == "enforce" else suitability.base_action
+        decision = PersonalizedDecision(
+            base_action=suitability.base_action,
+            policy_action=suitability.action,
+            action=action,
+            enforcement_mode=effective_mode,
+            cohort=cohort,
+            policy_schema_version=POLICY_SCHEMA_VERSION,
+            forecast_horizon=forecast_horizon,
+            suitability=suitability,
+        )
+        self.metrics.record(user_id=user_id, endpoint=endpoint, symbol=symbol, decision=decision)
+        return decision

@@ -131,3 +131,69 @@ def test_preservation_goal_and_low_loss_capacity_raise_buy_threshold():
     assert details["required_confidence"] == 0.75
     assert "capital-preservation goal" in details["reasons"]
     assert "low loss capacity" in details["reasons"]
+
+
+def test_runtime_modes_and_rollout_preserve_shared_contract():
+    from moneybot.services.suitability_policy import PersonalizationRuntime
+
+    context = _context(risk_tolerance="conservative")
+    off = PersonalizationRuntime(mode="off")
+    shadow = PersonalizationRuntime(mode="shadow", allowlist={7})
+    enforce = PersonalizationRuntime(mode="enforce", allowlist={7})
+
+    off_decision = off.evaluate(user_id=7, context=context, endpoint="quick_ask", symbol="AAPL", base_action="BUY", forecast_horizon="short_term", probability_up=0.5)
+    shadow_decision = shadow.evaluate(user_id=7, context=context, endpoint="quick_ask", symbol="AAPL", base_action="BUY", forecast_horizon="short_term", probability_up=0.5)
+    enforce_decision = enforce.evaluate(user_id=7, context=context, endpoint="quick_ask", symbol="AAPL", base_action="BUY", forecast_horizon="short_term", probability_up=0.5)
+
+    assert off_decision.payload()["action"] == "BUY"
+    assert shadow_decision.payload()["action"] == "BUY"
+    assert shadow_decision.payload()["policy_action"] == "HOLD"
+    assert shadow_decision.payload()["would_change"] is True
+    assert enforce_decision.payload()["action"] == "HOLD"
+    assert enforce_decision.payload()["policy_schema_version"] == "suitability.v1"
+
+    disabled = PersonalizationRuntime(profile_enabled=False, policy_enabled=False, mode="enforce")
+    disabled_decision = disabled.evaluate(user_id=7, context=context, endpoint="quick_ask", symbol="AAPL", base_action="BUY", forecast_horizon="short_term", probability_up=0.5)
+    assert disabled_decision.payload()["action"] == "BUY"
+    assert disabled_decision.payload()["policy_action"] == "BUY"
+    assert disabled_decision.payload()["applied_rules"] == []
+
+
+def test_unknown_sector_and_missing_quote_do_not_claim_false_compliance():
+    result = apply_suitability_policy(
+        base_action="BUY",
+        context=_context(
+            risk_tolerance="aggressive",
+            recommendation_style="opportunity_seeking",
+            penny_stocks_allowed=True,
+        ),
+        symbol="UNKNOWN",
+        current_price=None,
+        probability_up=0.80,
+        position_weight_percent=0,
+        sector=None,
+        sector_weight_percent=None,
+    )
+
+    assert result.action == "BUY"
+    assert result.applied_rules == ()
+    assert all(rule["code"] != "sector_limit_reached" for rule in result.applied_rules)
+
+
+def test_zero_value_position_is_not_treated_as_concentrated():
+    result = apply_suitability_policy(
+        base_action="BUY",
+        context=_context(
+            position_size_limit_percent=10,
+            risk_tolerance="aggressive",
+            recommendation_style="opportunity_seeking",
+            penny_stocks_allowed=True,
+        ),
+        symbol="CASHLESS",
+        current_price=100,
+        probability_up=0.80,
+        position_weight_percent=0,
+    )
+
+    assert result.action == "BUY"
+    assert "position_limit_reached" not in [rule["code"] for rule in result.applied_rules]

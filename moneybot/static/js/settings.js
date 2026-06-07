@@ -219,6 +219,30 @@
     return payload.error || 'Unable to save investor profile.';
   }
 
+
+  function escapeHtml(value) {
+    const node = document.createElement('div');
+    node.textContent = String(value ?? '');
+    return node.innerHTML;
+  }
+
+  async function loadProfileRevisions() {
+    const container = document.getElementById('profileRevisions');
+    container.textContent = 'Loading revision history…';
+    try {
+      const response = await apiFetch('/api/me/investor-profile/revisions');
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Unable to load revision history.');
+      const items = payload.items || [];
+      container.innerHTML = items.length ? items.slice(0, 10).map((item) => {
+        const date = new Date(item.created_at).toLocaleString();
+        return `<div style="padding:9px;border-radius:10px;background:#eef5f0"><strong>Version ${escapeHtml(item.profile_version)}</strong> · ${escapeHtml(date)}<br>${escapeHtml(item.change_reason || 'Profile updated')}</div>`;
+      }).join('') : 'No profile changes have been recorded yet.';
+    } catch (error) {
+      container.textContent = error.message || 'Unable to load revision history.';
+    }
+  }
+
   document.getElementById('accountForm').addEventListener('submit', async (event) => {
     event.preventDefault();
     setBusy('saveAccountBtn', true, 'Saving…', 'Save account');
@@ -272,6 +296,7 @@
     }
   });
 
+  document.getElementById('revisionPanel').addEventListener('toggle', (event) => { if (event.target.open) loadProfileRevisions(); });
   document.getElementById('cancelAccountBtn').addEventListener('click', resetAccountForm);
   document.getElementById('resetInvestorProfileBtn').addEventListener('click', () => {
     if (originalInvestorProfile) renderInvestorProfile(originalInvestorProfile);

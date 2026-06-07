@@ -23,6 +23,8 @@ def test_settings_page_renders_investor_profile_questionnaire():
     assert 'id="pennyStocksAllowed"' in html
     assert "Missing answers use conservative effective defaults" in html
     assert '/static/js/settings.js' in html
+    assert 'Profile revision history' in html
+    assert 'Future decisions only.' in html
 
 
 def test_settings_javascript_uses_versioned_profile_api_and_handles_conflicts():
@@ -35,3 +37,4 @@ def test_settings_javascript_uses_versioned_profile_api_and_handles_conflicts():
     assert "response.status === 409" in javascript
     assert "Latest values loaded" in javascript
     assert "change_reason: 'Updated investor profile from Account Settings'" in javascript
+    assert "/api/me/investor-profile/revisions" in javascript

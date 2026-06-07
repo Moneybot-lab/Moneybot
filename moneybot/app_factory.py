@@ -19,6 +19,7 @@ from .services.ai_advisor import AIAdvisorService
 from .services.decision_log import DecisionLogger
 from .services.deterministic_advisor import DeterministicQuickAdvisor
 from .services.market_data import MarketDataService
+from .services.suitability_policy import PersonalizationRuntime
 from .models import WaitlistSignup
 from .services.runtime_paths import (
     day1_baseline_model_path,
@@ -383,6 +384,13 @@ def create_app() -> Flask:
         AI_RESPONSE_CACHE_TTL_SECONDS=int(os.environ.get("AI_RESPONSE_CACHE_TTL_SECONDS", "300")),
         EXPERIMENT_ID=os.environ.get("EXPERIMENT_ID", "default"),
         EXPERIMENT_COHORT_DEFAULT=os.environ.get("EXPERIMENT_COHORT_DEFAULT", "control"),
+        INVESTOR_PROFILE_ENABLED=(os.environ.get("INVESTOR_PROFILE_ENABLED", "true").lower() == "true"),
+        SUITABILITY_POLICY_ENABLED=(os.environ.get("SUITABILITY_POLICY_ENABLED", "true").lower() == "true"),
+        SUITABILITY_POLICY_MODE=os.environ.get("SUITABILITY_POLICY_MODE", "enforce").lower(),
+        SUITABILITY_ROLLOUT_PERCENTAGE=float(os.environ.get("SUITABILITY_ROLLOUT_PERCENTAGE", "100.0")),
+        SUITABILITY_ROLLOUT_SEED=os.environ.get("SUITABILITY_ROLLOUT_SEED", "moneybot-profile"),
+        SUITABILITY_ROLLOUT_ALLOWLIST={int(value) for value in os.environ.get("SUITABILITY_ROLLOUT_ALLOWLIST", "").split(",") if value.strip().isdigit()},
+        INVESTOR_PROFILE_REVISION_RETENTION_DAYS=int(os.environ.get("INVESTOR_PROFILE_REVISION_RETENTION_DAYS", "2555")),
         DETERMINISTIC_QUICK_ENABLED=(os.environ.get("DETERMINISTIC_QUICK_ENABLED", "true").lower() == "true"),
         DETERMINISTIC_MODEL_PATH=default_model_path,
         DETERMINISTIC_MOMENTUM_ENABLED=(os.environ.get("DETERMINISTIC_MOMENTUM_ENABLED", "true").lower() == "true"),
@@ -493,6 +501,14 @@ def create_app() -> Flask:
     app.extensions["decision_logger"] = DecisionLogger(
         enabled=app.config["DECISION_LOGGING_ENABLED"],
         output_path=app.config["DECISION_LOG_PATH"],
+    )
+    app.extensions["personalization_runtime"] = PersonalizationRuntime(
+        profile_enabled=app.config["INVESTOR_PROFILE_ENABLED"],
+        policy_enabled=app.config["SUITABILITY_POLICY_ENABLED"],
+        mode=app.config["SUITABILITY_POLICY_MODE"],
+        rollout_percentage=app.config["SUITABILITY_ROLLOUT_PERCENTAGE"],
+        rollout_seed=app.config["SUITABILITY_ROLLOUT_SEED"],
+        allowlist=app.config["SUITABILITY_ROLLOUT_ALLOWLIST"],
     )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -1445,6 +1461,8 @@ def create_app() -> Flask:
                 const advice = String(item.advice || 'HOLD').toUpperCase();
                 const reason = item.advice_reason || 'Rule-based recommendation from technical momentum and sentiment checks.';
                 const aiPortfolio = (item && typeof item.ai_portfolio === 'object' && item.ai_portfolio) ? item.ai_portfolio : {};
+                const suitability = (item && typeof item.suitability === 'object' && item.suitability) ? item.suitability : {};
+                const profileRules = Array.isArray(suitability.applied_rules) ? suitability.applied_rules : [];
                 const mode = String(aiPortfolio.mode || 'rule_based').replaceAll('_', ' ');
                 const riskNotes = Array.isArray(aiPortfolio.risk_notes) ? aiPortfolio.risk_notes : [];
                 const nextChecks = Array.isArray(aiPortfolio.next_checks) ? aiPortfolio.next_checks : [];
@@ -1456,6 +1474,9 @@ def create_app() -> Flask:
                   <strong style="display:block;color:#bbf7d0;margin-bottom:6px">${escapeHtml(symbol)} · ${escapeHtml(mode)}</strong>
                   <ul style="margin:0;padding-left:18px;display:grid;gap:4px;color:#dcfce7">
                     <li>${escapeHtml(reason)}</li>
+                    ${item.base_advice && item.base_advice !== item.advice ? `<li><strong>Base market action:</strong> ${escapeHtml(item.base_advice)} → <strong>Profile-aware action:</strong> ${escapeHtml(item.advice)}</li>` : ''}
+                    ${profileRules.map((rule) => `<li><strong>Profile rule:</strong> ${escapeHtml(rule.message || rule.code)}</li>`).join('')}
+                    ${profileRules.length ? '<li><a href="/settings" style="color:#bbf7d0;font-weight:800">Review investor profile settings</a></li>' : ''}
                     <li><strong>Risk:</strong> ${escapeHtml(topRisk)}</li>
                     <li><strong>Next:</strong> ${escapeHtml(topCheck)}</li>
                   </ul>`;

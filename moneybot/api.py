@@ -53,7 +53,7 @@ from .services.investor_profile import (
 )
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
 from .services.decision_snapshot import build_decision_snapshot
-from .services.suitability_policy import UserDecisionContext, apply_suitability_policy
+from .services.suitability_policy import UserDecisionContext
 from .services.outcome_tracking import (
     close_values,
     evaluate_decision_events,
@@ -411,6 +411,36 @@ def _ensure_investor_profile(user_id: int) -> InvestorProfile:
             db.session.rollback()
             profile = InvestorProfile.query.filter_by(user_id=user_id).one()
     return profile
+
+
+def _decision_context_for_user(user_id: int) -> UserDecisionContext:
+    return UserDecisionContext.from_profile(_ensure_investor_profile(user_id))
+
+
+def _personalize_action(
+    *,
+    user_id: int | None,
+    context: UserDecisionContext,
+    endpoint: str,
+    symbol: str,
+    base_action: str,
+    forecast_horizon: str,
+    **policy_inputs: Any,
+):
+    runtime = current_app.extensions.get("personalization_runtime")
+    if runtime is None:
+        from .services.suitability_policy import PersonalizationRuntime
+        runtime = PersonalizationRuntime(profile_enabled=False, policy_enabled=False, mode="off")
+    return runtime.evaluate(
+        user_id=user_id, context=context, endpoint=endpoint, symbol=symbol,
+        base_action=base_action, forecast_horizon=forecast_horizon, **policy_inputs,
+    )
+
+
+def _is_regular_market_hours(now_utc: datetime | None = None) -> bool:
+    from zoneinfo import ZoneInfo
+    now = (now_utc or datetime.now(timezone.utc)).astimezone(ZoneInfo("America/New_York"))
+    return now.weekday() < 5 and (now.hour, now.minute) >= (9, 30) and (now.hour, now.minute) < (16, 0)
 
 
 def _watchlist_item_payload(item: WatchlistItem) -> Dict[str, Any]:
@@ -1014,6 +1044,22 @@ def update_investor_profile():
     return jsonify({"profile": profile_payload(profile), "request_id": g.request_id})
 
 
+def _prune_investor_profile_revisions(*, user_id: int) -> int:
+    retention_days = max(1, int(current_app.config.get("INVESTOR_PROFILE_REVISION_RETENTION_DAYS") or 2555))
+    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+    deleted = (
+        InvestorProfileRevision.query
+        .filter(
+            InvestorProfileRevision.user_id == user_id,
+            InvestorProfileRevision.created_at < cutoff,
+        )
+        .delete(synchronize_session=False)
+    )
+    if deleted:
+        db.session.commit()
+    return int(deleted or 0)
+
+
 @api_bp.get("/me/investor-profile/revisions")
 @login_required
 def get_investor_profile_revisions():
@@ -1022,6 +1068,7 @@ def get_investor_profile_revisions():
         session.clear()
         return jsonify({"error": "user not found", "request_id": g.request_id}), 404
 
+    pruned_count = _prune_investor_profile_revisions(user_id=user.id)
     revisions = (
         InvestorProfileRevision.query
         .filter_by(user_id=user.id)
@@ -1031,6 +1078,8 @@ def get_investor_profile_revisions():
     )
     return jsonify({
         "items": [revision_payload(item) for item in revisions],
+        "retention_days": max(1, int(current_app.config.get("INVESTOR_PROFILE_REVISION_RETENTION_DAYS") or 2555)),
+        "pruned_count": pruned_count,
         "request_id": g.request_id,
     })
 
@@ -1249,7 +1298,7 @@ def user_watchlist():
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
     decision_logger = current_app.extensions.get("decision_logger")
     investor_profile = _ensure_investor_profile(session["user_id"])
-    decision_context = UserDecisionContext.from_profile(investor_profile)
+    decision_context = _decision_context_for_user(session["user_id"])
     enriched_items: list[Dict[str, Any]] = []
 
     def _safe_market_call(fn, fallback):
@@ -1449,10 +1498,13 @@ def user_watchlist():
         sector = sector_by_id.get(item["id"])
         sector_value = sector_market_values.get(str(sector or "").lower(), 0.0)
         sector_weight_percent = (sector_value / portfolio_market_value * 100.0) if sector and portfolio_market_value > 0 else None
-        suitability_decision = apply_suitability_policy(
-            base_action=base_advice,
+        personalized_decision = _personalize_action(
+            user_id=session["user_id"],
             context=decision_context,
+            endpoint="user_watchlist",
             symbol=item["symbol"],
+            base_action=base_advice,
+            forecast_horizon="portfolio_position",
             current_price=current_price if isinstance(current_price, (int, float)) else None,
             probability_up=(deterministic_portfolio or {}).get("probability_up"),
             confidence=(deterministic_portfolio or {}).get("confidence"),
@@ -1460,9 +1512,9 @@ def user_watchlist():
             sector=sector,
             sector_weight_percent=sector_weight_percent,
         )
-        suitability = suitability_decision.payload()
-        advice = suitability_decision.action
-        if suitability_decision.changed:
+        suitability = personalized_decision.payload()
+        advice = personalized_decision.action
+        if suitability["changed"]:
             policy_messages = " ".join(rule["message"] for rule in suitability["applied_rules"])
             advice_reason = f"{advice_reason} Profile adjustment: {policy_messages}"
 
@@ -1485,6 +1537,7 @@ def user_watchlist():
                 "position_weight_percent": round(position_weight_percent, 2) if position_weight_percent is not None else None,
                 "sector": sector,
                 "sector_weight_percent": round(sector_weight_percent, 2) if sector_weight_percent is not None else None,
+                "weight_basis": "invested_positions_only_cash_excluded",
                 "deterministic_portfolio": deterministic_portfolio,
                 "ai_portfolio": ai_portfolio,
                 "history30": history30,
@@ -1507,7 +1560,7 @@ def user_watchlist():
                     "confidence": (deterministic_portfolio or {}).get("confidence"),
                     "profile_version": decision_context.profile_version,
                     "profile_complete": decision_context.profile_complete,
-                    "suitability_changed": suitability_decision.changed,
+                    "suitability_changed": suitability["changed"],
                     "suitability_rules": [rule["code"] for rule in suitability["applied_rules"]],
                 },
                 snapshot=build_decision_snapshot(
@@ -1978,6 +2031,18 @@ def quick_ask():
 
     ai_mode = (ai_payload or {}).get("mode")
 
+    personalization = None
+    user_id = session.get("user_id")
+    if user_id:
+        context = _decision_context_for_user(int(user_id))
+        quick_base = "BUY" if str(decision.get("recommendation") or "").upper() in {"BUY", "STRONG BUY"} else ("SELL" if str(decision.get("recommendation") or "").upper() == "SELL" else "HOLD")
+        personalized = _personalize_action(
+            user_id=int(user_id), context=context, endpoint="quick_ask", symbol=symbol,
+            base_action=quick_base, forecast_horizon="short_term",
+            current_price=quote_data.get("price"), probability_up=decision.get("probability_up"), confidence=decision.get("confidence"),
+        )
+        personalization = personalized.payload()
+
     if decision_logger is not None:
         decision_logger.log(
             endpoint="quick_ask",
@@ -1989,6 +2054,8 @@ def quick_ask():
                 "probability_up": decision.get("probability_up"),
                 "confidence": decision.get("confidence"),
                 "ai_mode": ai_mode,
+                "personalized_action": (personalization or {}).get("action"),
+                "policy_schema_version": (personalization or {}).get("policy_schema_version"),
             },
             snapshot=build_decision_snapshot(
                 symbol=symbol,
@@ -2001,6 +2068,7 @@ def quick_ask():
                 features=signal_data.get("features") if isinstance(signal_data.get("features"), dict) else {},
                 signals=signal_data,
                 explanation={"rationale": (decision.get("advice_reason") or decision.get("rationale"))},
+                personalization=personalization,
             ),
             experiment=_experiment_metadata(cohort_id="treatment" if str(decision.get("decision_source") or "") == "deterministic_model" else "control"),
         )
@@ -2020,6 +2088,8 @@ def quick_ask():
                 "ai": ai_payload,
                 "ai_status": "working" if ai_mode == "ai_enhanced" else "fallback",
                 "ai_mode": ai_mode,
+                "personalization": personalization,
+                "personalized_recommendation": (personalization or {}).get("action"),
             },
             "request_id": g.request_id,
         }
@@ -2129,6 +2199,7 @@ def run_notification_triggers():
     events_queued = 0
     sent_count = 0
     failed_count = 0
+    suppressed_after_hours = 0
     per_user_events: dict[int, list[dict[str, str]]] = {}
 
     def queue_user_event(user_id: int, *, title: str, body: str, kind: str, symbol: str = "") -> None:
@@ -2144,6 +2215,7 @@ def run_notification_triggers():
     for user in users:
         prefs = _ensure_notification_trigger_preferences(user.id)
         pref_cache[user.id] = prefs
+        decision_context = _decision_context_for_user(user.id)
         if not prefs.push_notifications_enabled:
             continue
         watchlist_items = (
@@ -2165,6 +2237,11 @@ def run_notification_triggers():
                 advice = "BUY"
             elif action == "SELL":
                 advice = "SELL"
+            personalized = _personalize_action(
+                user_id=user.id, context=decision_context, endpoint="notification_portfolio",
+                symbol=symbol, base_action=advice, forecast_horizon="portfolio_position",
+            )
+            advice = personalized.action
 
             state_key = f"{user.id}:{symbol}"
             previous = portfolio_state.get(state_key, "")
@@ -2199,6 +2276,13 @@ def run_notification_triggers():
                     symbol=symbol,
                 )
                 advice = str(clearview_decision.get("advice") or "HOLD").upper()
+                personalized = _personalize_action(
+                    user_id=user.id, context=decision_context, endpoint="clearview", symbol=symbol,
+                    base_action=advice, forecast_horizon="short_term",
+                    current_price=clearview_decision.get("current_price"),
+                )
+                advice = personalized.action
+                clearview_decision["personalization"] = personalized.payload()
                 previous_clearview = clearview_state.get(state_key, "")
                 clearview_state[state_key] = advice
                 if advice == "BUY" and previous_clearview != "BUY":
@@ -2284,6 +2368,10 @@ def run_notification_triggers():
         user_events = per_user_events.get(user.id) or []
         if not user_events:
             continue
+        context = _decision_context_for_user(user.id)
+        if not _is_regular_market_hours() and not context.after_hours_alerts:
+            suppressed_after_hours += len(user_events)
+            continue
         tokens = (
             FcmDeviceToken.query.filter_by(user_id=user.id)
             .order_by(FcmDeviceToken.updated_at.desc())
@@ -2343,6 +2431,7 @@ def run_notification_triggers():
                 "sent_count": sent_count,
                 "failed_count": failed_count,
                 "events_queued": events_queued,
+                "suppressed_after_hours": suppressed_after_hours,
                 "users_checked": len(users),
                 "message": "Notification trigger cron check completed.",
             },
@@ -2447,6 +2536,7 @@ def hot_momentum_buys():
 def model_health():
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
     decision_logger = current_app.extensions.get("decision_logger")
+    personalization_runtime = current_app.extensions.get("personalization_runtime")
     model_path = current_app.config.get("DETERMINISTIC_MODEL_PATH")
 
     calibration_report_path = str(day13_calibration_report_path())
@@ -2499,6 +2589,16 @@ def model_health():
             "data": {
                 "schema_version": "model_health.v1",
                 "deterministic_quick_enabled": bool(current_app.config.get("DETERMINISTIC_QUICK_ENABLED")),
+                "investor_profile_enabled": bool(current_app.config.get("INVESTOR_PROFILE_ENABLED")),
+                "suitability_policy_enabled": bool(current_app.config.get("SUITABILITY_POLICY_ENABLED")),
+                "suitability_policy_mode": current_app.config.get("SUITABILITY_POLICY_MODE"),
+                "suitability_rollout_percentage": current_app.config.get("SUITABILITY_ROLLOUT_PERCENTAGE"),
+                "personalization_metrics": personalization_runtime.metrics.snapshot() if personalization_runtime else {},
+                "profile_counts": {
+                    "total": User.query.count(),
+                    "complete": InvestorProfile.query.filter(InvestorProfile.questionnaire_completed_at.isnot(None)).count(),
+                    "incomplete": User.query.count() - InvestorProfile.query.filter(InvestorProfile.questionnaire_completed_at.isnot(None)).count(),
+                },
                 "deterministic_momentum_enabled": bool(current_app.config.get("DETERMINISTIC_MOMENTUM_ENABLED")),
                 "deterministic_model_path": model_path,
                 "model_loaded": bool(getattr(deterministic_svc, "artifact", None) is not None),

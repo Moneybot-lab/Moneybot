@@ -3,7 +3,7 @@
 **Status:** Operational foundation
 **Purpose:** Record what exists today so remaining work does not duplicate or accidentally bypass it.
 
-[Back to progress dashboard](README.md) · [Next: Profile closeout](02-profile-closeout.md)
+[Back to progress dashboard](README.md) · [Completed: Profile closeout](02-profile-closeout.md) · [Next: Massive REST foundation](03-massive-rest-foundation.md)
 
 ## Completed capabilities
 
@@ -54,14 +54,17 @@ Primary implementation:
 - `moneybot/services/decision_snapshot.py`
 - `moneybot/api.py` (`GET /api/user-watchlist`)
 
-## Known limitations
+## Page 2 closeout now completed
 
-- Suitability is integrated into portfolio/watchlist advice, not yet every recommendation path.
-- Quick Ask does not yet return a profile-aware action.
-- Notification severity/cadence does not yet use the investor profile.
-- Settings does not yet show revision history to the user.
-- No feature flag currently separates profile collection from profile enforcement.
-- No profile completion or suitability override metrics are exposed in model-health reporting.
+- [x] Portfolio, Quick Ask, ClearView-trigger, and notification paths use the shared personalization contract.
+- [x] Profile collection and suitability enforcement have independent feature flags, shadow mode, and deterministic rollout controls.
+- [x] After-hours notification delivery respects the profile preference.
+- [x] Settings exposes revision history and explains that edits affect only future recommendations.
+- [x] Model-health reporting includes completion, evaluation, override, rule, mode, and churn metrics without full questionnaire answers.
+- [x] Revision history has a configurable retention window.
+
+## Remaining limitations
+
 - Market data is still primarily request/REST driven with a process-local cache.
 - Massive prices and yfinance history can still be mixed in the same analysis path.
 - There is no shared Redis quote state or dedicated streaming worker.
