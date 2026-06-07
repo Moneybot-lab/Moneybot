@@ -29,12 +29,31 @@ from advice_engine import compute_user_advice
 from .extensions import db
 from sqlalchemy import or_, text
 from sqlalchemy import inspect
-from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
+from sqlalchemy.orm.exc import StaleDataError
 
-from .models import FcmDeviceToken, NotificationTriggerPreference, SoldTrade, User, WatchlistItem
+from .models import (
+    FcmDeviceToken,
+    InvestorProfile,
+    InvestorProfileRevision,
+    NotificationTriggerPreference,
+    SoldTrade,
+    User,
+    WatchlistItem,
+)
 from .services.decision_log import read_decision_events, summarize_decision_events
+from .services.investor_profile import (
+    InvestorProfileValidationError,
+    profile_payload,
+    revision_payload,
+    serialized_profile_values,
+    stored_profile_values,
+    update_completion_timestamp,
+    validate_profile_updates,
+)
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
 from .services.decision_snapshot import build_decision_snapshot
+from .services.suitability_policy import UserDecisionContext, apply_suitability_policy
 from .services.outcome_tracking import (
     close_values,
     evaluate_decision_events,
@@ -379,6 +398,19 @@ def _user_payload(user: User) -> Dict[str, Any]:
         "created_at": user.created_at.isoformat(),
         "updated_at": user.updated_at.isoformat(),
     }
+
+
+def _ensure_investor_profile(user_id: int) -> InvestorProfile:
+    profile = InvestorProfile.query.filter_by(user_id=user_id).first()
+    if profile is None:
+        profile = InvestorProfile(user_id=user_id)
+        db.session.add(profile)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            profile = InvestorProfile.query.filter_by(user_id=user_id).one()
+    return profile
 
 
 def _watchlist_item_payload(item: WatchlistItem) -> Dict[str, Any]:
@@ -882,6 +914,127 @@ def update_profile():
     return jsonify({"user": _user_payload(user), "request_id": g.request_id})
 
 
+@api_bp.get("/me/investor-profile")
+@login_required
+def get_investor_profile():
+    user = db.session.get(User, session["user_id"])
+    if not user:
+        session.clear()
+        return jsonify({"error": "user not found", "request_id": g.request_id}), 404
+
+    profile = _ensure_investor_profile(user.id)
+    return jsonify({"profile": profile_payload(profile), "request_id": g.request_id})
+
+
+@api_bp.put("/me/investor-profile")
+@login_required
+def update_investor_profile():
+    user = db.session.get(User, session["user_id"])
+    if not user:
+        session.clear()
+        return jsonify({"error": "user not found", "request_id": g.request_id}), 404
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON object required", "request_id": g.request_id}), 400
+
+    submitted_version = data.get("profile_version")
+    if isinstance(submitted_version, bool) or not isinstance(submitted_version, int):
+        return jsonify({
+            "error": "profile_version must be an integer",
+            "request_id": g.request_id,
+        }), 400
+
+    change_reason_raw = data.get("change_reason")
+    if change_reason_raw is not None and not isinstance(change_reason_raw, str):
+        return jsonify({
+            "error": "change_reason must be a string or null",
+            "request_id": g.request_id,
+        }), 400
+    change_reason = str(change_reason_raw or "").strip() or None
+    if change_reason and len(change_reason) > 255:
+        return jsonify({
+            "error": "change_reason must be 255 characters or fewer",
+            "request_id": g.request_id,
+        }), 400
+
+    try:
+        updates = validate_profile_updates(data)
+    except InvestorProfileValidationError as exc:
+        return jsonify({
+            "error": "invalid investor profile",
+            "fields": exc.errors,
+            "request_id": g.request_id,
+        }), 400
+    if not updates:
+        return jsonify({
+            "error": "at least one investor profile field is required",
+            "request_id": g.request_id,
+        }), 400
+
+    profile = _ensure_investor_profile(user.id)
+    if submitted_version != profile.profile_version:
+        return jsonify({
+            "error": "investor profile version conflict",
+            "current_profile": profile_payload(profile),
+            "request_id": g.request_id,
+        }), 409
+
+    previous_values = stored_profile_values(profile)
+    for field, value in updates.items():
+        setattr(profile, field, value)
+    update_completion_timestamp(profile)
+    new_values = stored_profile_values(profile)
+
+    if new_values == previous_values:
+        db.session.rollback()
+        profile = InvestorProfile.query.filter_by(user_id=user.id).one()
+        return jsonify({"profile": profile_payload(profile), "request_id": g.request_id})
+
+    next_version = profile.profile_version + 1
+    revision = InvestorProfileRevision(
+        user_id=user.id,
+        profile_version=next_version,
+        previous_profile_json=serialized_profile_values(previous_values),
+        new_profile_json=serialized_profile_values(new_values),
+        change_reason=change_reason,
+        source="settings",
+    )
+    db.session.add(revision)
+    try:
+        db.session.commit()
+    except StaleDataError:
+        db.session.rollback()
+        current_profile = InvestorProfile.query.filter_by(user_id=user.id).one()
+        return jsonify({
+            "error": "investor profile version conflict",
+            "current_profile": profile_payload(current_profile),
+            "request_id": g.request_id,
+        }), 409
+    return jsonify({"profile": profile_payload(profile), "request_id": g.request_id})
+
+
+@api_bp.get("/me/investor-profile/revisions")
+@login_required
+def get_investor_profile_revisions():
+    user = db.session.get(User, session["user_id"])
+    if not user:
+        session.clear()
+        return jsonify({"error": "user not found", "request_id": g.request_id}), 404
+
+    revisions = (
+        InvestorProfileRevision.query
+        .filter_by(user_id=user.id)
+        .order_by(InvestorProfileRevision.profile_version.desc())
+        .limit(100)
+        .all()
+    )
+    return jsonify({
+        "items": [revision_payload(item) for item in revisions],
+        "request_id": g.request_id,
+    })
+
+
 @api_bp.put("/me/security")
 @login_required
 def update_security():
@@ -1095,6 +1248,8 @@ def user_watchlist():
     ai_svc = current_app.extensions.get("ai_advisor_service")
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
     decision_logger = current_app.extensions.get("decision_logger")
+    investor_profile = _ensure_investor_profile(session["user_id"])
+    decision_context = UserDecisionContext.from_profile(investor_profile)
     enriched_items: list[Dict[str, Any]] = []
 
     def _safe_market_call(fn, fallback):
@@ -1145,8 +1300,33 @@ def user_watchlist():
             quote = _safe_market_call(lambda: svc.get_quote(symbol), {})
         return _portfolio_signal_from_quote(symbol, quote), quote, []
 
+    market_inputs_by_id: dict[int, tuple[dict[str, Any], dict[str, Any], list[float]]] = {}
+    position_values_by_id: dict[int, float] = {}
+    sector_by_id: dict[int, str | None] = {}
+    sector_market_values: dict[str, float] = defaultdict(float)
+    portfolio_market_value = 0.0
     for item in base_items:
-        signal, quote, history30 = _load_market_inputs(item["symbol"])
+        market_inputs = _load_market_inputs(item["symbol"])
+        market_inputs_by_id[item["id"]] = market_inputs
+        quote = market_inputs[1]
+        price = quote.get("price")
+        if not isinstance(price, (int, float)):
+            price = item.get("entry_price")
+        shares = item.get("shares")
+        shares_value = float(shares) if isinstance(shares, (int, float)) and shares > 0 else 1.0
+        position_value = max(0.0, float(price) * shares_value) if isinstance(price, (int, float)) else 0.0
+        position_values_by_id[item["id"]] = position_value
+        portfolio_market_value += position_value
+        sector = None
+        if svc is not None and hasattr(svc, "get_sector"):
+            sector_value = _safe_market_call(lambda: svc.get_sector(item["symbol"]), None)
+            if isinstance(sector_value, str) and sector_value.strip() and sector_value.lower() != "unknown":
+                sector = sector_value.strip()
+                sector_market_values[sector.lower()] += position_value
+        sector_by_id[item["id"]] = sector
+
+    for item in base_items:
+        signal, quote, history30 = market_inputs_by_id[item["id"]]
 
         sentiment_label = str((signal.get("sentiment") or {}).get("label") or "neutral").lower()
         if sentiment_label in {"positive", "bullish"}:
@@ -1263,6 +1443,29 @@ def user_watchlist():
                 "so BUY was softened to HOLD."
             )
 
+        base_advice = advice
+        position_value = position_values_by_id.get(item["id"], 0.0)
+        position_weight_percent = (position_value / portfolio_market_value * 100.0) if portfolio_market_value > 0 else None
+        sector = sector_by_id.get(item["id"])
+        sector_value = sector_market_values.get(str(sector or "").lower(), 0.0)
+        sector_weight_percent = (sector_value / portfolio_market_value * 100.0) if sector and portfolio_market_value > 0 else None
+        suitability_decision = apply_suitability_policy(
+            base_action=base_advice,
+            context=decision_context,
+            symbol=item["symbol"],
+            current_price=current_price if isinstance(current_price, (int, float)) else None,
+            probability_up=(deterministic_portfolio or {}).get("probability_up"),
+            confidence=(deterministic_portfolio or {}).get("confidence"),
+            position_weight_percent=position_weight_percent,
+            sector=sector,
+            sector_weight_percent=sector_weight_percent,
+        )
+        suitability = suitability_decision.payload()
+        advice = suitability_decision.action
+        if suitability_decision.changed:
+            policy_messages = " ".join(rule["message"] for rule in suitability["applied_rules"])
+            advice_reason = f"{advice_reason} Profile adjustment: {policy_messages}"
+
         enriched_items.append(
             {
                 **item,
@@ -1273,8 +1476,15 @@ def user_watchlist():
                 "today_change_amount": round(today_change_amount, 2) if today_change_amount is not None else None,
                 "performance_percent": round(performance_percent, 2) if performance_percent is not None else None,
                 "performance_amount": round(performance_amount, 2) if performance_amount is not None else None,
+                "base_advice": base_advice,
                 "advice": advice,
                 "advice_reason": advice_reason,
+                "suitability": suitability,
+                "profile_version": decision_context.profile_version,
+                "profile_complete": decision_context.profile_complete,
+                "position_weight_percent": round(position_weight_percent, 2) if position_weight_percent is not None else None,
+                "sector": sector,
+                "sector_weight_percent": round(sector_weight_percent, 2) if sector_weight_percent is not None else None,
                 "deterministic_portfolio": deterministic_portfolio,
                 "ai_portfolio": ai_portfolio,
                 "history30": history30,
@@ -1291,9 +1501,14 @@ def user_watchlist():
                 symbol=item.get("symbol"),
                 decision_source=watchlist_source,
                 payload={
+                    "base_advice": base_advice,
                     "advice": advice,
                     "model_version": (deterministic_portfolio or {}).get("model_version"),
                     "confidence": (deterministic_portfolio or {}).get("confidence"),
+                    "profile_version": decision_context.profile_version,
+                    "profile_complete": decision_context.profile_complete,
+                    "suitability_changed": suitability_decision.changed,
+                    "suitability_rules": [rule["code"] for rule in suitability["applied_rules"]],
                 },
                 snapshot=build_decision_snapshot(
                     symbol=str(item.get("symbol") or ""),
@@ -1306,6 +1521,11 @@ def user_watchlist():
                     features=signal.get("features") if isinstance(signal.get("features"), dict) else {},
                     signals=signal,
                     explanation={"rationale": advice_reason},
+                    personalization={
+                        "profile_version": decision_context.profile_version,
+                        "profile_complete": decision_context.profile_complete,
+                        "decision": suitability,
+                    },
                 ),
                 experiment=_experiment_metadata(cohort_id="treatment" if str(watchlist_source) == "deterministic_model" else "control"),
             )
