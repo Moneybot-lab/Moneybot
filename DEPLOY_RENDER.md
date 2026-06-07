@@ -30,6 +30,14 @@ Set these env vars on the web service:
 - `DATA_PROVIDER` = `yfinance` (optional; defaults to `yfinance`)
 - `MASSIVE_API_KEY` = your Massive (Polygon) API key (optional but recommended; primary quote source when set)
   - MoneyBot also accepts `POLYGON_API_KEY` as an alias.
+- `MASSIVE_TIMEOUT_SECONDS` = REST timeout in seconds (default follows the market-data service timeout)
+- `MASSIVE_RETRIES` = retry count for transport, 429, and server failures (default `2`)
+- `MASSIVE_RETRY_BACKOFF_SECONDS` = exponential retry base delay (default `0.2`)
+- `MASSIVE_QUOTE_CACHE_SECONDS` = normalized snapshot cache TTL (default `2`)
+- `MASSIVE_NEGATIVE_CACHE_SECONDS` = provider-error cache TTL (default `30`)
+- `MASSIVE_REGULAR_STALE_SECONDS` = regular-session freshness limit (default `15`)
+- `MASSIVE_EXTENDED_STALE_SECONDS` = pre/after-hours freshness limit (default `60`)
+- `MASSIVE_CLOSED_STALE_SECONDS` = closed-session freshness limit (default `86400`)
 - `FINNHUB_API_KEY` = your Finnhub key (optional; secondary quote fallback when Massive is unavailable)
 - `INVESTOR_PROFILE_ENABLED` = `true` to load profile context; set `false` to disable personalization without rollback
 - `SUITABILITY_POLICY_ENABLED` = `true` to evaluate suitability rules

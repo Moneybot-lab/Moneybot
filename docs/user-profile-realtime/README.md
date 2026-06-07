@@ -1,7 +1,7 @@
 # MoneyBot User Profile + Real-Time Setup
 
 **Status date:** June 7, 2026
-**Current stage:** Profile integration closeout is complete; Massive REST normalization is the next implementation stage; real-time ingestion has not started.
+**Current stage:** Massive REST normalization is complete; the bounded WebSocket stream worker is the next implementation stage.
 
 This folder turns the larger [architecture roadmap](../user_profile_realtime_roadmap.md) into short implementation pages that can be updated as work is completed.
 
@@ -11,8 +11,8 @@ This folder turns the larger [architecture roadmap](../user_profile_realtime_roa
 | --- | --- | --- | --- |
 | [1](01-current-state.md) | Current state and completed work | **Operational** | Versioned profiles, questionnaire, and portfolio suitability exist |
 | [2](02-profile-closeout.md) | Finish user-profile integration | **Complete** | One reusable decision context across advice, notifications, and logs |
-| [3](03-massive-rest-foundation.md) | Normalize Massive REST data | Not started | Fresh, timestamped, source-consistent quotes and bars |
-| [4](04-realtime-stream-worker.md) | Add Massive WebSocket worker | Not started | Bounded subscriptions feeding shared Redis state |
+| [3](03-massive-rest-foundation.md) | Normalize Massive REST data | **Complete** | Fresh, timestamped, source-consistent quotes and bars |
+| [4](04-realtime-stream-worker.md) | Add Massive WebSocket worker | **Next** | Bounded subscriptions feeding shared Redis state |
 | [5](05-live-ui-and-alerts.md) | Deliver live updates and triggers | Not started | Authenticated SSE, live portfolio prices, controlled alerts |
 | [6](06-history-validation-rollout.md) | Historical validation and rollout | Not started | Reproducible datasets, walk-forward evaluation, safe promotion |
 
@@ -23,8 +23,8 @@ This folder turns the larger [architecture roadmap](../user_profile_realtime_roa
 [Settings questionnaire]    DONE
 [Portfolio suitability]     DONE (first integration)
 [Profile integration]       DONE
-[Massive REST normalization]WAITING
-[WebSocket + Redis]         WAITING
+[Massive REST normalization]DONE
+[WebSocket + Redis]         NEXT
 [SSE + live alerts]         WAITING
 [Historical validation]     WAITING
 ```
@@ -56,7 +56,6 @@ When a task is completed:
 
 ## Recommended immediate order
 
-1. Implement [Page 3 — Massive REST Foundation](03-massive-rest-foundation.md).
-2. Run the WebSocket in shadow mode using [Page 4](04-realtime-stream-worker.md).
-3. Add live browser delivery only after shadow metrics pass using [Page 5](05-live-ui-and-alerts.md).
-4. Validate and roll out with [Page 6](06-history-validation-rollout.md).
+1. Run the WebSocket in shadow mode using [Page 4](04-realtime-stream-worker.md).
+2. Add live browser delivery only after shadow metrics pass using [Page 5](05-live-ui-and-alerts.md).
+3. Validate and roll out with [Page 6](06-history-validation-rollout.md).

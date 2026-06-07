@@ -28,6 +28,7 @@ def test_decision_snapshot_structure_valid():
         signals={"trend": "up"},
         explanation={"rationale": "Momentum", "risk_notes": ["volatility"], "next_checks": ["earnings"]},
         personalization={"profile_version": 3, "decision": {"changed": True}},
+        market_data={"quote_source": "massive", "history_source": "massive", "mixed_sources": False},
     )
 
     assert snapshot["schema_version"] == "decision_snapshot.v1"
@@ -37,6 +38,8 @@ def test_decision_snapshot_structure_valid():
     assert snapshot["explanation"]["risk_notes"] == ["volatility"]
     assert snapshot["personalization"]["profile_version"] == 3
     assert snapshot["personalization"]["decision"]["changed"] is True
+    assert snapshot["market_data"]["mixed_sources"] is False
+    assert snapshot["quote"]["source_mode"] is None
 
 
 def test_decision_logger_writes_snapshot(tmp_path):

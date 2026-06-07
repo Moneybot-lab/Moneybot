@@ -312,6 +312,8 @@ def test_authenticated_quick_ask_uses_shared_personalization_contract():
     assert data["personalization"]["action"] == "HOLD"
     assert data["personalization"]["forecast_horizon"] == "short_term"
     assert data["personalization"]["policy_schema_version"] == "suitability.v1"
+    assert data["market_data_provenance"]["quote_source"] == "test"
+    assert data["market_data_provenance"]["mixed_sources"] is True
 
 
 def test_model_health_reports_profile_counts_and_policy_metrics():

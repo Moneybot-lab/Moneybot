@@ -1571,6 +1571,12 @@ def user_watchlist():
                     probability_up=(deterministic_portfolio or {}).get("probability_up"),
                     model_version=(deterministic_portfolio or {}).get("model_version"),
                     quote=quote,
+                    market_data={
+                        "quote_source": quote.get("source") or quote.get("quote_source"),
+                        "quote_source_mode": quote.get("source_mode") or (quote.get("diagnostics") or {}).get("source_mode"),
+                        "quote_schema_version": quote.get("schema_version") or (quote.get("diagnostics") or {}).get("schema_version"),
+                        "quote_is_stale": quote.get("is_stale"),
+                    },
                     features=signal.get("features") if isinstance(signal.get("features"), dict) else {},
                     signals=signal,
                     explanation={"rationale": advice_reason},
@@ -1968,9 +1974,20 @@ def quick_ask():
     if not isinstance(quote_data, dict):
         quote_data = {}
 
-    history30 = _safe_market_payload("history", symbol, lambda: svc.get_price_history(symbol, days=30), [])
-    if not isinstance(history30, list):
-        history30 = []
+    history_payload = _safe_market_payload("history", symbol, lambda: svc.get_price_history_data(symbol, days=30), {})
+    if not isinstance(history_payload, dict):
+        history_payload = {}
+    history30 = list(history_payload.get("closes") or [])
+    market_data_provenance = {
+        "quote_source": quote_data.get("source") or quote_data.get("quote_source"),
+        "quote_source_mode": quote_data.get("source_mode") or (quote_data.get("diagnostics") or {}).get("source_mode"),
+        "quote_schema_version": quote_data.get("schema_version") or (quote_data.get("diagnostics") or {}).get("schema_version"),
+        "quote_is_stale": quote_data.get("is_stale"),
+        "history_source": history_payload.get("source"),
+        "history_source_mode": history_payload.get("source_mode"),
+        "history_schema_version": history_payload.get("schema_version"),
+        "mixed_sources": bool(history_payload.get("mixed_sources") or ((quote_data.get("source") or quote_data.get("quote_source")) != history_payload.get("source"))),
+    }
     decision = None
     if deterministic_svc is not None:
         try:
@@ -2004,6 +2021,7 @@ def quick_ask():
                             probability_up=shadow.get("probability_up"),
                             model_version=shadow.get("model_version"),
                             quote=quote_data,
+                            market_data=market_data_provenance,
                             features=signal_data.get("features") if isinstance(signal_data.get("features"), dict) else {},
                             signals=signal_data,
                             explanation={"rationale": (shadow.get("advice_reason") or shadow.get("rationale"))},
@@ -2056,6 +2074,7 @@ def quick_ask():
                 "ai_mode": ai_mode,
                 "personalized_action": (personalization or {}).get("action"),
                 "policy_schema_version": (personalization or {}).get("policy_schema_version"),
+                "market_data_provenance": market_data_provenance,
             },
             snapshot=build_decision_snapshot(
                 symbol=symbol,
@@ -2065,6 +2084,7 @@ def quick_ask():
                 probability_up=decision.get("probability_up"),
                 model_version=decision.get("model_version"),
                 quote=quote_data,
+                market_data=market_data_provenance,
                 features=signal_data.get("features") if isinstance(signal_data.get("features"), dict) else {},
                 signals=signal_data,
                 explanation={"rationale": (decision.get("advice_reason") or decision.get("rationale"))},
@@ -2090,6 +2110,7 @@ def quick_ask():
                 "ai_mode": ai_mode,
                 "personalization": personalization,
                 "personalized_recommendation": (personalization or {}).get("action"),
+                "market_data_provenance": market_data_provenance,
             },
             "request_id": g.request_id,
         }
@@ -2594,6 +2615,12 @@ def model_health():
                 "suitability_policy_mode": current_app.config.get("SUITABILITY_POLICY_MODE"),
                 "suitability_rollout_percentage": current_app.config.get("SUITABILITY_ROLLOUT_PERCENTAGE"),
                 "personalization_metrics": personalization_runtime.metrics.snapshot() if personalization_runtime else {},
+                "market_data_provider_health": (
+                    current_app.extensions["market_data_service"].get_provider_health()
+                    if current_app.extensions.get("market_data_service") is not None
+                    and hasattr(current_app.extensions["market_data_service"], "get_provider_health")
+                    else {}
+                ),
                 "profile_counts": {
                     "total": User.query.count(),
                     "complete": InvestorProfile.query.filter(InvestorProfile.questionnaire_completed_at.isnot(None)).count(),
