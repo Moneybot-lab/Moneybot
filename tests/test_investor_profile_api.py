@@ -3,6 +3,20 @@ import os
 from moneybot.app_factory import create_app
 
 
+class StubSuitabilityAdvisor:
+    def predict_portfolio_position(self, *, symbol, entry_price, current_price, shares, signal_data, quote_data):
+        return {
+            "mode": "deterministic_model",
+            "symbol": symbol,
+            "advice": "BUY",
+            "advice_reason": f"Deterministic portfolio signal for {symbol}.",
+            "decision_source": "deterministic_model",
+            "model_version": "alpha-atlas-v1",
+            "probability_up": 0.71,
+            "confidence": 71.0,
+        }
+
+
 def _client():
     os.environ["MONEYBOT_SECRET_KEY"] = "test-secret"
     os.environ["DATABASE_URL"] = "sqlite:///:memory:"
@@ -183,3 +197,94 @@ def test_profile_revisions_are_isolated_to_authenticated_user():
 
     assert response.status_code == 200
     assert response.get_json()["items"] == []
+
+
+def test_incomplete_profile_softens_portfolio_buy_and_exposes_policy_trace():
+    client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = StubSuitabilityAdvisor()
+    client.application.extensions["ai_advisor_service"] = None
+    captured_events = []
+
+    class CapturingDecisionLogger:
+        def log(self, **kwargs):
+            captured_events.append(kwargs)
+
+    client.application.extensions["decision_logger"] = CapturingDecisionLogger()
+    client.application.extensions["market_data_service"].get_sector = lambda symbol: "Technology"
+    client.application.extensions["market_data_service"].get_quote = lambda symbol: {
+        "symbol": symbol,
+        "price": 150.0,
+        "change_percent": 6.0,
+        "live_data_available": True,
+        "quote_source": "test",
+        "diagnostics": {"provider": "test", "error": None},
+    }
+    _signup(client, email="suitability@example.com", username="suitability_user")
+    added = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 1})
+    assert added.status_code == 201
+
+    response = client.get("/api/user-watchlist")
+
+    assert response.status_code == 200
+    item = response.get_json()["enriched_items"][0]
+    assert item["base_advice"] == "BUY"
+    assert item["advice"] == "HOLD"
+    assert item["profile_version"] == 1
+    assert item["profile_complete"] is False
+    assert item["suitability"]["changed"] is True
+    assert "position_limit_reached" in [rule["code"] for rule in item["suitability"]["applied_rules"]]
+    assert "Profile adjustment:" in item["advice_reason"]
+    assert len(captured_events) == 1
+    logged = captured_events[0]
+    assert logged["payload"]["profile_version"] == 1
+    assert logged["payload"]["suitability_changed"] is True
+    assert logged["snapshot"]["personalization"]["profile_version"] == 1
+    assert "primary_goal" not in logged["snapshot"]["personalization"]
+
+
+def test_completed_aggressive_profile_can_preserve_portfolio_buy():
+    client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = StubSuitabilityAdvisor()
+    client.application.extensions["ai_advisor_service"] = None
+    client.application.extensions["market_data_service"].get_sector = lambda symbol: "Technology" if symbol == "AAPL" else "Software"
+    client.application.extensions["market_data_service"].get_quote = lambda symbol: {
+        "symbol": symbol,
+        "price": 150.0,
+        "change_percent": 6.0,
+        "live_data_available": True,
+        "quote_source": "test",
+        "diagnostics": {"provider": "test", "error": None},
+    }
+    _signup(client, email="aggressive@example.com", username="aggressive_user")
+    profile_response = client.put(
+        "/api/me/investor-profile",
+        json={
+            "profile_version": 1,
+            "primary_goal": "growth",
+            "time_horizon_years": 10,
+            "risk_tolerance": "aggressive",
+            "loss_capacity_percent": 50,
+            "liquidity_need": "low",
+            "experience_level": "advanced",
+            "account_type": "taxable",
+            "position_size_limit_percent": 60,
+            "sector_limit_percent": 80,
+            "penny_stocks_allowed": True,
+            "after_hours_alerts": True,
+            "recommendation_style": "opportunity_seeking",
+        },
+    )
+    assert profile_response.status_code == 200
+    assert client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 1}).status_code == 201
+    assert client.post("/api/user-watchlist", json={"symbol": "MSFT", "buy_price": 100, "shares": 1}).status_code == 201
+
+    response = client.get("/api/user-watchlist")
+
+    assert response.status_code == 200
+    items = response.get_json()["enriched_items"]
+    assert len(items) == 2
+    assert all(item["base_advice"] == "BUY" for item in items)
+    assert all(item["advice"] == "BUY" for item in items)
+    assert all(item["suitability"]["changed"] is False for item in items)
+    assert all(item["profile_version"] == 2 for item in items)
+    assert all(item["profile_complete"] is True for item in items)

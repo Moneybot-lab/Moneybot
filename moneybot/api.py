@@ -53,6 +53,7 @@ from .services.investor_profile import (
 )
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
 from .services.decision_snapshot import build_decision_snapshot
+from .services.suitability_policy import UserDecisionContext, apply_suitability_policy
 from .services.outcome_tracking import (
     close_values,
     evaluate_decision_events,
@@ -1247,6 +1248,8 @@ def user_watchlist():
     ai_svc = current_app.extensions.get("ai_advisor_service")
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
     decision_logger = current_app.extensions.get("decision_logger")
+    investor_profile = _ensure_investor_profile(session["user_id"])
+    decision_context = UserDecisionContext.from_profile(investor_profile)
     enriched_items: list[Dict[str, Any]] = []
 
     def _safe_market_call(fn, fallback):
@@ -1297,8 +1300,33 @@ def user_watchlist():
             quote = _safe_market_call(lambda: svc.get_quote(symbol), {})
         return _portfolio_signal_from_quote(symbol, quote), quote, []
 
+    market_inputs_by_id: dict[int, tuple[dict[str, Any], dict[str, Any], list[float]]] = {}
+    position_values_by_id: dict[int, float] = {}
+    sector_by_id: dict[int, str | None] = {}
+    sector_market_values: dict[str, float] = defaultdict(float)
+    portfolio_market_value = 0.0
     for item in base_items:
-        signal, quote, history30 = _load_market_inputs(item["symbol"])
+        market_inputs = _load_market_inputs(item["symbol"])
+        market_inputs_by_id[item["id"]] = market_inputs
+        quote = market_inputs[1]
+        price = quote.get("price")
+        if not isinstance(price, (int, float)):
+            price = item.get("entry_price")
+        shares = item.get("shares")
+        shares_value = float(shares) if isinstance(shares, (int, float)) and shares > 0 else 1.0
+        position_value = max(0.0, float(price) * shares_value) if isinstance(price, (int, float)) else 0.0
+        position_values_by_id[item["id"]] = position_value
+        portfolio_market_value += position_value
+        sector = None
+        if svc is not None and hasattr(svc, "get_sector"):
+            sector_value = _safe_market_call(lambda: svc.get_sector(item["symbol"]), None)
+            if isinstance(sector_value, str) and sector_value.strip() and sector_value.lower() != "unknown":
+                sector = sector_value.strip()
+                sector_market_values[sector.lower()] += position_value
+        sector_by_id[item["id"]] = sector
+
+    for item in base_items:
+        signal, quote, history30 = market_inputs_by_id[item["id"]]
 
         sentiment_label = str((signal.get("sentiment") or {}).get("label") or "neutral").lower()
         if sentiment_label in {"positive", "bullish"}:
@@ -1415,6 +1443,29 @@ def user_watchlist():
                 "so BUY was softened to HOLD."
             )
 
+        base_advice = advice
+        position_value = position_values_by_id.get(item["id"], 0.0)
+        position_weight_percent = (position_value / portfolio_market_value * 100.0) if portfolio_market_value > 0 else None
+        sector = sector_by_id.get(item["id"])
+        sector_value = sector_market_values.get(str(sector or "").lower(), 0.0)
+        sector_weight_percent = (sector_value / portfolio_market_value * 100.0) if sector and portfolio_market_value > 0 else None
+        suitability_decision = apply_suitability_policy(
+            base_action=base_advice,
+            context=decision_context,
+            symbol=item["symbol"],
+            current_price=current_price if isinstance(current_price, (int, float)) else None,
+            probability_up=(deterministic_portfolio or {}).get("probability_up"),
+            confidence=(deterministic_portfolio or {}).get("confidence"),
+            position_weight_percent=position_weight_percent,
+            sector=sector,
+            sector_weight_percent=sector_weight_percent,
+        )
+        suitability = suitability_decision.payload()
+        advice = suitability_decision.action
+        if suitability_decision.changed:
+            policy_messages = " ".join(rule["message"] for rule in suitability["applied_rules"])
+            advice_reason = f"{advice_reason} Profile adjustment: {policy_messages}"
+
         enriched_items.append(
             {
                 **item,
@@ -1425,8 +1476,15 @@ def user_watchlist():
                 "today_change_amount": round(today_change_amount, 2) if today_change_amount is not None else None,
                 "performance_percent": round(performance_percent, 2) if performance_percent is not None else None,
                 "performance_amount": round(performance_amount, 2) if performance_amount is not None else None,
+                "base_advice": base_advice,
                 "advice": advice,
                 "advice_reason": advice_reason,
+                "suitability": suitability,
+                "profile_version": decision_context.profile_version,
+                "profile_complete": decision_context.profile_complete,
+                "position_weight_percent": round(position_weight_percent, 2) if position_weight_percent is not None else None,
+                "sector": sector,
+                "sector_weight_percent": round(sector_weight_percent, 2) if sector_weight_percent is not None else None,
                 "deterministic_portfolio": deterministic_portfolio,
                 "ai_portfolio": ai_portfolio,
                 "history30": history30,
@@ -1443,9 +1501,14 @@ def user_watchlist():
                 symbol=item.get("symbol"),
                 decision_source=watchlist_source,
                 payload={
+                    "base_advice": base_advice,
                     "advice": advice,
                     "model_version": (deterministic_portfolio or {}).get("model_version"),
                     "confidence": (deterministic_portfolio or {}).get("confidence"),
+                    "profile_version": decision_context.profile_version,
+                    "profile_complete": decision_context.profile_complete,
+                    "suitability_changed": suitability_decision.changed,
+                    "suitability_rules": [rule["code"] for rule in suitability["applied_rules"]],
                 },
                 snapshot=build_decision_snapshot(
                     symbol=str(item.get("symbol") or ""),
@@ -1458,6 +1521,11 @@ def user_watchlist():
                     features=signal.get("features") if isinstance(signal.get("features"), dict) else {},
                     signals=signal,
                     explanation={"rationale": advice_reason},
+                    personalization={
+                        "profile_version": decision_context.profile_version,
+                        "profile_complete": decision_context.profile_complete,
+                        "decision": suitability,
+                    },
                 ),
                 experiment=_experiment_metadata(cohort_id="treatment" if str(watchlist_source) == "deterministic_model" else "control"),
             )
