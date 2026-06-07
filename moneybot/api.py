@@ -29,10 +29,28 @@ from advice_engine import compute_user_advice
 from .extensions import db
 from sqlalchemy import or_, text
 from sqlalchemy import inspect
-from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
+from sqlalchemy.orm.exc import StaleDataError
 
-from .models import FcmDeviceToken, NotificationTriggerPreference, SoldTrade, User, WatchlistItem
+from .models import (
+    FcmDeviceToken,
+    InvestorProfile,
+    InvestorProfileRevision,
+    NotificationTriggerPreference,
+    SoldTrade,
+    User,
+    WatchlistItem,
+)
 from .services.decision_log import read_decision_events, summarize_decision_events
+from .services.investor_profile import (
+    InvestorProfileValidationError,
+    profile_payload,
+    revision_payload,
+    serialized_profile_values,
+    stored_profile_values,
+    update_completion_timestamp,
+    validate_profile_updates,
+)
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
 from .services.decision_snapshot import build_decision_snapshot
 from .services.outcome_tracking import (
@@ -379,6 +397,19 @@ def _user_payload(user: User) -> Dict[str, Any]:
         "created_at": user.created_at.isoformat(),
         "updated_at": user.updated_at.isoformat(),
     }
+
+
+def _ensure_investor_profile(user_id: int) -> InvestorProfile:
+    profile = InvestorProfile.query.filter_by(user_id=user_id).first()
+    if profile is None:
+        profile = InvestorProfile(user_id=user_id)
+        db.session.add(profile)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            profile = InvestorProfile.query.filter_by(user_id=user_id).one()
+    return profile
 
 
 def _watchlist_item_payload(item: WatchlistItem) -> Dict[str, Any]:
@@ -880,6 +911,127 @@ def update_profile():
     user.profile_image_url = profile_image_url
     db.session.commit()
     return jsonify({"user": _user_payload(user), "request_id": g.request_id})
+
+
+@api_bp.get("/me/investor-profile")
+@login_required
+def get_investor_profile():
+    user = db.session.get(User, session["user_id"])
+    if not user:
+        session.clear()
+        return jsonify({"error": "user not found", "request_id": g.request_id}), 404
+
+    profile = _ensure_investor_profile(user.id)
+    return jsonify({"profile": profile_payload(profile), "request_id": g.request_id})
+
+
+@api_bp.put("/me/investor-profile")
+@login_required
+def update_investor_profile():
+    user = db.session.get(User, session["user_id"])
+    if not user:
+        session.clear()
+        return jsonify({"error": "user not found", "request_id": g.request_id}), 404
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON object required", "request_id": g.request_id}), 400
+
+    submitted_version = data.get("profile_version")
+    if isinstance(submitted_version, bool) or not isinstance(submitted_version, int):
+        return jsonify({
+            "error": "profile_version must be an integer",
+            "request_id": g.request_id,
+        }), 400
+
+    change_reason_raw = data.get("change_reason")
+    if change_reason_raw is not None and not isinstance(change_reason_raw, str):
+        return jsonify({
+            "error": "change_reason must be a string or null",
+            "request_id": g.request_id,
+        }), 400
+    change_reason = str(change_reason_raw or "").strip() or None
+    if change_reason and len(change_reason) > 255:
+        return jsonify({
+            "error": "change_reason must be 255 characters or fewer",
+            "request_id": g.request_id,
+        }), 400
+
+    try:
+        updates = validate_profile_updates(data)
+    except InvestorProfileValidationError as exc:
+        return jsonify({
+            "error": "invalid investor profile",
+            "fields": exc.errors,
+            "request_id": g.request_id,
+        }), 400
+    if not updates:
+        return jsonify({
+            "error": "at least one investor profile field is required",
+            "request_id": g.request_id,
+        }), 400
+
+    profile = _ensure_investor_profile(user.id)
+    if submitted_version != profile.profile_version:
+        return jsonify({
+            "error": "investor profile version conflict",
+            "current_profile": profile_payload(profile),
+            "request_id": g.request_id,
+        }), 409
+
+    previous_values = stored_profile_values(profile)
+    for field, value in updates.items():
+        setattr(profile, field, value)
+    update_completion_timestamp(profile)
+    new_values = stored_profile_values(profile)
+
+    if new_values == previous_values:
+        db.session.rollback()
+        profile = InvestorProfile.query.filter_by(user_id=user.id).one()
+        return jsonify({"profile": profile_payload(profile), "request_id": g.request_id})
+
+    next_version = profile.profile_version + 1
+    revision = InvestorProfileRevision(
+        user_id=user.id,
+        profile_version=next_version,
+        previous_profile_json=serialized_profile_values(previous_values),
+        new_profile_json=serialized_profile_values(new_values),
+        change_reason=change_reason,
+        source="settings",
+    )
+    db.session.add(revision)
+    try:
+        db.session.commit()
+    except StaleDataError:
+        db.session.rollback()
+        current_profile = InvestorProfile.query.filter_by(user_id=user.id).one()
+        return jsonify({
+            "error": "investor profile version conflict",
+            "current_profile": profile_payload(current_profile),
+            "request_id": g.request_id,
+        }), 409
+    return jsonify({"profile": profile_payload(profile), "request_id": g.request_id})
+
+
+@api_bp.get("/me/investor-profile/revisions")
+@login_required
+def get_investor_profile_revisions():
+    user = db.session.get(User, session["user_id"])
+    if not user:
+        session.clear()
+        return jsonify({"error": "user not found", "request_id": g.request_id}), 404
+
+    revisions = (
+        InvestorProfileRevision.query
+        .filter_by(user_id=user.id)
+        .order_by(InvestorProfileRevision.profile_version.desc())
+        .limit(100)
+        .all()
+    )
+    return jsonify({
+        "items": [revision_payload(item) for item in revisions],
+        "request_id": g.request_id,
+    })
 
 
 @api_bp.put("/me/security")

@@ -45,6 +45,19 @@ class User(db.Model):
         lazy=True,
         uselist=False,
     )
+    investor_profile = db.relationship(
+        "InvestorProfile",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy=True,
+        uselist=False,
+    )
+    investor_profile_revisions = db.relationship(
+        "InvestorProfileRevision",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        lazy=True,
+    )
 
 
 class WatchlistItem(db.Model):
@@ -120,6 +133,61 @@ class NotificationTriggerPreference(db.Model):
     )
 
     user = db.relationship("User", back_populates="notification_trigger_preferences")
+
+
+class InvestorProfile(db.Model):
+    __tablename__ = "investor_profiles"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, unique=True, index=True)
+    profile_version = db.Column(db.Integer, nullable=False, default=1)
+    primary_goal = db.Column(db.String(32), nullable=True)
+    time_horizon_years = db.Column(db.Integer, nullable=True)
+    risk_tolerance = db.Column(db.String(32), nullable=True)
+    loss_capacity_percent = db.Column(db.Numeric(5, 2), nullable=True)
+    liquidity_need = db.Column(db.String(32), nullable=True)
+    experience_level = db.Column(db.String(32), nullable=True)
+    account_type = db.Column(db.String(32), nullable=True)
+    position_size_limit_percent = db.Column(db.Numeric(5, 2), nullable=True)
+    sector_limit_percent = db.Column(db.Numeric(5, 2), nullable=True)
+    excluded_sectors_csv = db.Column(db.Text, nullable=False, default="")
+    penny_stocks_allowed = db.Column(db.Boolean, nullable=True)
+    after_hours_alerts = db.Column(db.Boolean, nullable=True)
+    recommendation_style = db.Column(db.String(32), nullable=True)
+    questionnaire_completed_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(
+        db.DateTime,
+        nullable=False,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+    )
+
+    user = db.relationship("User", back_populates="investor_profile")
+
+    __mapper_args__ = {
+        "version_id_col": profile_version,
+        "version_id_generator": lambda version: (version or 0) + 1,
+    }
+
+
+class InvestorProfileRevision(db.Model):
+    __tablename__ = "investor_profile_revisions"
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    profile_version = db.Column(db.Integer, nullable=False, index=True)
+    previous_profile_json = db.Column(db.Text, nullable=False)
+    new_profile_json = db.Column(db.Text, nullable=False)
+    change_reason = db.Column(db.String(255), nullable=True)
+    source = db.Column(db.String(32), nullable=False, default="settings")
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+    user = db.relationship("User", back_populates="investor_profile_revisions")
+
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "profile_version", name="uq_profile_revision_user_version"),
+    )
 
 
 class WaitlistSignup(db.Model):
