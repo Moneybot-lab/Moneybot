@@ -44,6 +44,7 @@ def build_decision_snapshot(
     features: Dict[str, Any] | None = None,
     signals: Dict[str, Any] | None = None,
     explanation: Dict[str, Any] | None = None,
+    personalization: Dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     quote_raw = _as_dict(quote)
     explanation_raw = _as_dict(explanation)
@@ -64,6 +65,7 @@ def build_decision_snapshot(
         },
         "features": _as_dict(features),
         "signals": _as_dict(signals),
+        "personalization": _as_dict(personalization),
         "explanation": {
             "rationale": _as_str(explanation_raw.get("rationale")),
             "risk_notes": _as_list_of_str(explanation_raw.get("risk_notes")),
