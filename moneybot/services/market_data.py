@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 from dataclasses import dataclass
 from urllib.parse import quote_plus
 from xml.etree import ElementTree as ET
@@ -15,6 +15,7 @@ import yfinance as yf
 
 from trade_signal import analyze_ticker
 from .deterministic_advisor import DeterministicQuickAdvisor
+from .market_data_providers import MassiveRestClient, NormalizedQuote, ProviderError, normalized_fallback_quote
 
 
 @dataclass
@@ -67,6 +68,11 @@ class MarketDataService:
         self._finnhub_forbidden_symbols: dict[str, float] = {}
         self._finnhub_forbidden_ttl_seconds = int(os.environ.get("FINNHUB_FORBIDDEN_SYMBOL_TTL_SECONDS", "21600"))
         self._twelve_data_backoff_until = 0.0
+        self._massive_client_instance: MassiveRestClient | None = None
+        self._massive_client_key: str | None = None
+        self.history_cache = TTLCache(ttl_seconds=300)
+        self._history_diagnostics_by_symbol: dict[str, dict[str, Any]] = {}
+        self._fallback_counts: dict[str, int] = {}
 
     def _build_fallback_company_summary(self, symbol: str, info: dict[str, Any]) -> str:
         company_name = str(info.get("longName") or info.get("shortName") or symbol).strip()
@@ -462,17 +468,123 @@ class MarketDataService:
             self.company_snapshot_cache.set(cache_key, payload)
             return payload
 
-    def get_price_history(self, symbol: str, days: int = 30) -> list[float]:
+    def get_price_history_data(self, symbol: str, days: int = 30) -> Dict[str, Any]:
+        symbol_key = symbol.upper()
+        requested_days = max(1, int(days))
+        cache_key = f"history:{symbol_key}:{requested_days}:adjusted"
+        cached = self.history_cache.get(cache_key)
+        if cached:
+            return cached
+
+        client = self._massive_client()
+        if client is not None:
+            end_date = datetime.now(timezone.utc).date()
+            start_date = end_date - timedelta(days=max(requested_days * 2, requested_days + 10))
+            try:
+                result = client.get_aggregates(
+                    symbol_key,
+                    multiplier=1,
+                    timespan="day",
+                    start=start_date,
+                    end=end_date,
+                    adjusted=True,
+                    limit=min(50000, max(100, requested_days * 3)),
+                )
+                bars = result.data[-requested_days:]
+                if bars:
+                    payload = {
+                        "symbol": symbol_key,
+                        "closes": [round(float(bar.close), 4) for bar in bars],
+                        "bars": [bar.payload() for bar in bars],
+                        "source": "massive",
+                        "source_mode": "rest",
+                        "schema_version": "market-data.v1",
+                        "adjusted_for_splits": True,
+                        "dividend_adjusted": False,
+                        "request_id": result.request_id,
+                        "mixed_sources": False,
+                        "quality_flags": [],
+                    }
+                    self.history_cache.set(cache_key, payload)
+                    self._history_diagnostics_by_symbol[symbol_key] = {key: value for key, value in payload.items() if key not in {"closes", "bars"}}
+                    return payload
+            except ProviderError as exc:
+                logging.warning("Massive adjusted history fetch failed for %s: %s", symbol_key, exc)
+                massive_error = exc.code
+            else:
+                massive_error = "empty_response"
+        else:
+            massive_error = "missing_api_key"
+
         try:
-            ticker = yf.Ticker(symbol.upper())
-            hist = ticker.history(period="3mo", interval="1d")
+            ticker = yf.Ticker(symbol_key)
+            try:
+                hist = ticker.history(period="3mo", interval="1d", auto_adjust=True)
+            except TypeError:
+                hist = ticker.history(period="3mo", interval="1d")
             if hist is None or hist.empty:
-                return []
-            closes = [round(float(v), 2) for v in hist["Close"].tail(max(days, 1))]
-            return closes
+                raise ValueError("empty yfinance history")
+            closes = [round(float(value), 4) for value in hist["Close"].tail(requested_days)]
+            payload = {
+                "symbol": symbol_key,
+                "closes": closes,
+                "bars": [],
+                "source": "yfinance",
+                "source_mode": "fallback",
+                "schema_version": "market-data.v1",
+                "adjusted_for_splits": True,
+                "dividend_adjusted": True,
+                "request_id": None,
+                "mixed_sources": True,
+                "quality_flags": ["fallback_provider", "massive_history_unavailable"],
+                "massive_error": massive_error,
+            }
         except Exception as exc:  # noqa: BLE001
-            logging.warning("History fetch failed for %s: %s", symbol, exc)
-            return []
+            logging.warning("History fetch failed for %s: %s", symbol_key, exc)
+            payload = {
+                "symbol": symbol_key, "closes": [], "bars": [], "source": "none", "source_mode": "fallback",
+                "schema_version": "market-data.v1", "adjusted_for_splits": None, "dividend_adjusted": None,
+                "request_id": None, "mixed_sources": True,
+                "quality_flags": ["history_unavailable"], "massive_error": massive_error, "fallback_error": str(exc),
+            }
+        self.history_cache.set(cache_key, payload)
+        self._history_diagnostics_by_symbol[symbol_key] = {key: value for key, value in payload.items() if key not in {"closes", "bars"}}
+        return payload
+
+    def get_price_history(self, symbol: str, days: int = 30) -> list[float]:
+        return list(self.get_price_history_data(symbol, days=days).get("closes") or [])
+
+    def get_massive_aggregates(self, symbol: str, *, multiplier: int, timespan: str, start: date | datetime | str, end: date | datetime | str, adjusted: bool = True) -> Dict[str, Any]:
+        client = self._massive_client()
+        if client is None:
+            raise ProviderError("Massive API key is not configured")
+        result = client.get_aggregates(symbol, multiplier=multiplier, timespan=timespan, start=start, end=end, adjusted=adjusted)
+        return {
+            "symbol": symbol.upper(), "bars": [bar.payload() for bar in result.data], "source": "massive", "source_mode": "rest",
+            "schema_version": "market-data.v1", "request_id": result.request_id, **dict(result.diagnostics),
+        }
+
+    def get_corporate_actions(self, symbol: str) -> Dict[str, Any]:
+        client = self._massive_client()
+        if client is None:
+            raise ProviderError("Massive API key is not configured")
+        splits = client.splits(symbol)
+        dividends = client.dividends(symbol)
+        return {
+            "symbol": symbol.upper(), "splits": list((splits.data or {}).get("results") or []),
+            "dividends": list((dividends.data or {}).get("results") or []), "source": "massive",
+            "schema_version": "market-data.v1", "adjustment_order": ["splits", "dividends"],
+        }
+
+    def get_provider_health(self) -> Dict[str, Any]:
+        client = self._massive_client()
+        return {
+            "normalized_schema_version": "market-data.v1",
+            "massive_configured": client is not None,
+            "massive": client.metrics.snapshot() if client is not None else {},
+            "fallback_counts": dict(self._fallback_counts),
+            "history_by_symbol": dict(self._history_diagnostics_by_symbol),
+        }
 
     def get_sector(self, symbol: str) -> str:
         cache_key = f"sector:{symbol.upper()}"
@@ -1090,14 +1202,13 @@ class MarketDataService:
         return out
 
     def _fallback_quote(self, symbol: str, error: str) -> Dict[str, Any]:
-        return {
-            "symbol": symbol,
-            "price": "DATA_MISSING",
-            "change_percent": "DATA_MISSING",
-            "live_data_available": False,
-            "quote_source": "yfinance",
-            "diagnostics": {"provider": "yfinance", "error": error},
-        }
+        payload = self._normalized_fallback_payload(
+            symbol=symbol, price=None, change_percent=None, source="yfinance",
+            diagnostics={"error": error},
+        )
+        payload["diagnostics"]["error"] = error
+        payload["quality_flags"] = list(dict.fromkeys([*payload.get("quality_flags", []), "data_missing"]))
+        return payload
 
     def _get_massive_key(self) -> tuple[str | None, str | None]:
         key_env_names = ("MASSIVE_API_KEY", "POLYGON_API_KEY")
@@ -1124,76 +1235,60 @@ class MarketDataService:
         return None, None
 
 
-    def _quote_payload_from_massive_snapshot(
-        self,
-        symbol: str,
-        data: Dict[str, Any],
-        key_source: str | None,
-    ) -> Dict[str, Any] | None:
-        ticker_data = data.get("ticker") if isinstance(data, dict) else {}
-        if not isinstance(ticker_data, dict):
+    def _massive_client(self) -> MassiveRestClient | None:
+        api_key, key_source = self._get_massive_key()
+        if not api_key:
             return None
+        if self._massive_client_instance is None or self._massive_client_key != api_key:
+            self._massive_client_instance = MassiveRestClient(
+                api_key=api_key,
+                key_source=key_source or "MASSIVE_API_KEY",
+                timeout_seconds=float(os.environ.get("MASSIVE_TIMEOUT_SECONDS", self.timeout_s)),
+                retries=int(os.environ.get("MASSIVE_RETRIES", self.retries)),
+                retry_backoff_seconds=float(os.environ.get("MASSIVE_RETRY_BACKOFF_SECONDS", "0.2")),
+                quote_cache_seconds=float(os.environ.get("MASSIVE_QUOTE_CACHE_SECONDS", "2")),
+                negative_cache_seconds=float(os.environ.get("MASSIVE_NEGATIVE_CACHE_SECONDS", "30")),
+                regular_stale_seconds=float(os.environ.get("MASSIVE_REGULAR_STALE_SECONDS", "15")),
+                extended_stale_seconds=float(os.environ.get("MASSIVE_EXTENDED_STALE_SECONDS", "60")),
+                closed_stale_seconds=float(os.environ.get("MASSIVE_CLOSED_STALE_SECONDS", "86400")),
+                http_get=lambda *args, **kwargs: requests.get(*args, **kwargs),
+            )
+            self._massive_client_key = api_key
+        return self._massive_client_instance
 
-        day = ticker_data.get("day") if isinstance(ticker_data.get("day"), dict) else {}
-        minute = ticker_data.get("min") if isinstance(ticker_data.get("min"), dict) else {}
-        prev_day = ticker_data.get("prevDay") if isinstance(ticker_data.get("prevDay"), dict) else {}
-        last_trade = ticker_data.get("lastTrade") if isinstance(ticker_data.get("lastTrade"), dict) else {}
-        last_quote = ticker_data.get("lastQuote") if isinstance(ticker_data.get("lastQuote"), dict) else {}
-
-        price_candidates = (
-            ("day_close", day.get("c")),
-            ("minute_close", minute.get("c")),
-            ("minute_vwap", minute.get("vw")),
-            ("last_trade", last_trade.get("p")),
-        )
-        price = None
-        price_source = None
-        for source, raw_value in price_candidates:
-            numeric_value = self._num_or_none(raw_value)
-            if numeric_value is not None and numeric_value > 0:
-                price = numeric_value
-                price_source = source
-                break
-
-        if price is None:
-            ask = self._num_or_none(last_quote.get("P"))
-            bid = self._num_or_none(last_quote.get("p"))
-            if ask is not None and ask > 0 and bid is not None and bid > 0:
-                price = (ask + bid) / 2.0
-                price_source = "last_quote_midpoint"
-            elif ask is not None and ask > 0:
-                price = ask
-                price_source = "last_quote_ask"
-            elif bid is not None and bid > 0:
-                price = bid
-                price_source = "last_quote_bid"
-
-        if price is None:
-            return None
-
-        prev_close = self._num_or_none(prev_day.get("c"))
-        change_percent = self._num_or_none(ticker_data.get("todaysChangePerc"))
-        if prev_close is not None and prev_close > 0:
-            calculated_change = ((price - prev_close) / prev_close) * 100
-            if change_percent is None or price_source != "day_close":
-                change_percent = calculated_change
-
-        if change_percent is None:
-            return None
-
-        return {
-            "symbol": symbol,
-            "price": float(price),
-            "change_percent": float(change_percent),
-            "live_data_available": True,
-            "quote_source": "massive",
+    @staticmethod
+    def _compatible_quote_payload(quote: NormalizedQuote, *, key_source: str | None = None, diagnostics: dict[str, Any] | None = None) -> Dict[str, Any]:
+        payload = quote.payload()
+        payload.update({
+            "price": float(quote.price) if quote.price is not None else "DATA_MISSING",
+            "change_percent": float(quote.change_percent) if quote.change_percent is not None else "DATA_MISSING",
+            "live_data_available": quote.price is not None and not quote.is_stale,
+            "quote_source": quote.source,
             "diagnostics": {
-                "provider": "massive",
+                "provider": quote.source,
+                "source_mode": quote.source_mode,
+                "schema_version": quote.schema_version,
                 "error": None,
                 "massive_key_source": key_source,
-                "massive_price_source": price_source,
+                "massive_price_source": quote.price_source,
+                **(diagnostics or {}),
             },
-        }
+        })
+        return payload
+
+    def _normalized_fallback_payload(self, *, symbol: str, price: Any, change_percent: Any, source: str, event_timestamp: datetime | None = None, diagnostics: dict[str, Any] | None = None) -> Dict[str, Any]:
+        normalized = normalized_fallback_quote(symbol=symbol, price=price, change_percent=change_percent, source=source, event_timestamp=event_timestamp)
+        numeric_price = normalized.get("price")
+        numeric_change = normalized.get("change_percent")
+        normalized.update({
+            "price": numeric_price if numeric_price is not None else "DATA_MISSING",
+            "change_percent": numeric_change if numeric_change is not None else "DATA_MISSING",
+            "live_data_available": numeric_price is not None and not normalized["is_stale"],
+            "quote_source": source,
+            "diagnostics": {"provider": source, "source_mode": "fallback", "schema_version": normalized["schema_version"], "error": None, **(diagnostics or {})},
+        })
+        self._fallback_counts[source] = self._fallback_counts.get(source, 0) + 1
+        return normalized
 
     def get_quote(self, symbol: str) -> Dict[str, Any]:
         cache_key = symbol.upper()
@@ -1223,14 +1318,13 @@ class MarketDataService:
                             if prev not in (None, 0):
                                 change = ((price - prev) / prev) * 100
 
-                    return {
-                        "symbol": cache_key,
-                        "price": float(price) if price is not None else "DATA_MISSING",
-                        "change_percent": float(change) if change is not None else "DATA_MISSING",
-                        "live_data_available": price is not None and change is not None,
-                        "quote_source": "yfinance",
-                        "diagnostics": {"provider": "yfinance", "error": None},
-                    }
+                    event_timestamp = None
+                    market_time = info.get("regularMarketTime")
+                    if isinstance(market_time, (int, float)):
+                        event_timestamp = datetime.fromtimestamp(float(market_time), tz=timezone.utc)
+                    return self._normalized_fallback_payload(
+                        symbol=cache_key, price=price, change_percent=change, source="yfinance", event_timestamp=event_timestamp,
+                    )
                 except Exception as exc:  # noqa: BLE001
                     last_error = str(exc)
                     logging.warning("Quote fetch failed for %s: %s", cache_key, exc)
@@ -1242,31 +1336,24 @@ class MarketDataService:
 
         massive_key, massive_key_source = self._get_massive_key()
         massive_error: str | None = None
-        if massive_key:
+        massive_client = self._massive_client()
+        if massive_client is not None:
             try:
-                resp = requests.get(
-                    f"https://api.massive.com/v2/snapshot/locale/us/markets/stocks/tickers/{cache_key}",
-                    params={"apiKey": massive_key},
-                    timeout=self.timeout_s,
+                result = massive_client.get_quote(cache_key)
+                payload = self._compatible_quote_payload(
+                    result.data,
+                    key_source=massive_key_source,
+                    diagnostics={"request_id": result.request_id, "latency_ms": round(result.latency_ms, 2), "cache_status": result.cache_status},
                 )
-                resp.raise_for_status()
-                data = resp.json() or {}
-                payload = self._quote_payload_from_massive_snapshot(cache_key, data, massive_key_source)
-                if payload is not None:
-                    self.quote_cache.set(cache_key, payload)
-                    return payload
-
-                massive_error = f"incomplete_response:{data}"
-                logging.warning("Massive returned incomplete quote for %s: %s", cache_key, data)
-            except Exception as exc:  # noqa: BLE001
-                massive_error = str(exc)
-                logging.warning("Massive quote fetch failed for %s: %s", cache_key, exc)
+                self.quote_cache.set(cache_key, payload)
+                return payload
+            except ProviderError as exc:
+                massive_error = exc.code
+                logging.warning("Massive normalized quote fetch failed for %s: %s", cache_key, exc)
         else:
             massive_error = "missing_api_key"
             if not self._logged_missing_massive_key:
-                logging.info(
-                    "Massive key missing; quote requests will use Finnhub/yfinance fallback until MASSIVE_API_KEY is set."
-                )
+                logging.info("Massive key missing; using explicit fallback providers until MASSIVE_API_KEY is set.")
                 self._logged_missing_massive_key = True
 
         finnhub_key, finnhub_key_source = self._get_finnhub_key()
@@ -1297,14 +1384,13 @@ class MarketDataService:
                             change_percent = ((float(price) - float(prev_close)) / float(prev_close)) * 100
 
                         if change_percent is not None:
-                            payload = {
-                                "symbol": cache_key,
-                                "price": float(price),
-                                "change_percent": float(change_percent),
-                                "live_data_available": True,
-                                "quote_source": "finnhub",
-                                "diagnostics": {"provider": "finnhub", "error": None, "finnhub_key_source": finnhub_key_source},
-                            }
+                            event_timestamp = None
+                            if isinstance(data.get("t"), (int, float)):
+                                event_timestamp = datetime.fromtimestamp(float(data["t"]), tz=timezone.utc)
+                            payload = self._normalized_fallback_payload(
+                                symbol=cache_key, price=price, change_percent=change_percent, source="finnhub",
+                                event_timestamp=event_timestamp, diagnostics={"finnhub_key_source": finnhub_key_source},
+                            )
                             self.quote_cache.set(cache_key, payload)
                             return payload
 
@@ -1357,18 +1443,17 @@ class MarketDataService:
                             change_percent = ((price - prev_close) / prev_close) * 100
 
                     if price is not None and change_percent is not None:
-                        payload = {
-                            "symbol": cache_key,
-                            "price": float(price),
-                            "change_percent": float(change_percent),
-                            "live_data_available": True,
-                            "quote_source": "twelve_data",
-                            "diagnostics": {
-                                "provider": "twelve_data",
-                                "error": None,
-                                "twelve_data_key_source": twelve_data_key_source,
-                            },
-                        }
+                        event_timestamp = None
+                        timestamp_raw = data.get("timestamp")
+                        if timestamp_raw not in (None, ""):
+                            try:
+                                event_timestamp = datetime.fromtimestamp(float(timestamp_raw), tz=timezone.utc)
+                            except (TypeError, ValueError, OSError, OverflowError):
+                                event_timestamp = None
+                        payload = self._normalized_fallback_payload(
+                            symbol=cache_key, price=price, change_percent=change_percent, source="twelve_data",
+                            event_timestamp=event_timestamp, diagnostics={"twelve_data_key_source": twelve_data_key_source},
+                        )
                         self.quote_cache.set(cache_key, payload)
                         return payload
 
@@ -1400,6 +1485,39 @@ class MarketDataService:
         fallback["diagnostics"] = fallback_diagnostics
         self.quote_cache.set(cache_key, fallback)
         return fallback
+
+    @staticmethod
+    def _technical_indicators_from_closes(closes: list[float]) -> tuple[float | None, float | None]:
+        values = [float(value) for value in closes if isinstance(value, (int, float))]
+        if len(values) < 15:
+            return None, None
+
+        gains: list[float] = []
+        losses: list[float] = []
+        for previous, current in zip(values[-15:-1], values[-14:]):
+            delta = current - previous
+            gains.append(max(0.0, delta))
+            losses.append(max(0.0, -delta))
+        average_gain = sum(gains) / len(gains)
+        average_loss = sum(losses) / len(losses)
+        if average_loss == 0:
+            rsi = 100.0 if average_gain > 0 else 50.0
+        else:
+            relative_strength = average_gain / average_loss
+            rsi = 100.0 - (100.0 / (1.0 + relative_strength))
+
+        def ema(series: list[float], period: int) -> list[float]:
+            alpha = 2.0 / (period + 1.0)
+            output = [series[0]]
+            for value in series[1:]:
+                output.append(alpha * value + (1.0 - alpha) * output[-1])
+            return output
+
+        ema12 = ema(values, 12)
+        ema26 = ema(values, 26)
+        macd = [fast - slow for fast, slow in zip(ema12, ema26)]
+        signal = ema(macd, 9)
+        return round(rsi, 4), round(macd[-1] - signal[-1], 6)
 
     def get_signal(self, symbol: str, include_company_snapshot: bool = True) -> Dict[str, Any]:
         symbol_key = symbol.upper()
@@ -1439,6 +1557,17 @@ class MarketDataService:
             else:
                 ranked_news = []
             sentiment_payload = self._sentiment_from_news(ranked_news)
+            technical_rsi = result.rsi
+            technical_macd = result.macd_hist
+            technical_source = "yfinance"
+            if self._massive_client() is not None:
+                technical_history = self.get_price_history_data(symbol_key, days=90)
+                if technical_history.get("source") == "massive":
+                    massive_rsi, massive_macd = self._technical_indicators_from_closes(technical_history.get("closes") or [])
+                    if massive_rsi is not None and massive_macd is not None:
+                        technical_rsi = massive_rsi
+                        technical_macd = massive_macd
+                        technical_source = "massive_adjusted_aggregates"
             verdict = "STRONG BUY" if (result.score is not None and result.score >= 9) else result.verdict.upper()
             payload = {
                 "symbol": symbol_key,
@@ -1446,9 +1575,9 @@ class MarketDataService:
                 "verdict": verdict,
                 "hybrid_score": result.score,
                 "score": result.score,
-                "technical": {"rsi": result.rsi, "macd_histogram": result.macd_hist},
-                "rsi": result.rsi,
-                "macd_hist": result.macd_hist,
+                "technical": {"rsi": technical_rsi, "macd_histogram": technical_macd, "source": technical_source},
+                "rsi": technical_rsi,
+                "macd_hist": technical_macd,
                 "volume_today": result.volume_today,
                 "volume_ratio": result.volume_ratio,
                 "sentiment": sentiment_payload,
@@ -1456,7 +1585,7 @@ class MarketDataService:
                 "reasons": result.reasons,
                 "quote": quote,
                 "quote_data_available": bool(quote.get("live_data_available")),
-                "diagnostics": {"provider": "yfinance", "error": None},
+                "diagnostics": {"provider": "mixed" if technical_source.startswith("massive") else "yfinance", "technical_source": technical_source, "error": None},
             }
         except Exception as exc:  # noqa: BLE001
             logging.warning("Signal fetch failed for %s: %s", symbol_key, exc)
