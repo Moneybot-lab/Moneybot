@@ -2703,11 +2703,26 @@ def market_stream_health():
     state = current_app.extensions.get("market_stream_state")
     config = current_app.config.get("MASSIVE_STREAM_CONFIG")
     health = _market_stream_health_payload()
+    worker_state = str(health.get("connection_state") or "no_worker_heartbeat")
+    worker_enabled = bool(health.get("enabled")) if health else False
+    if not health:
+        diagnosis = "No worker heartbeat is present in Redis. Confirm the moneybot-market-stream service is deployed and running."
+    elif worker_state == "idle_no_demand":
+        diagnosis = "Worker is healthy but has no subscribed symbols. Add portfolio/ClearView demand or configure MASSIVE_STREAM_SERVER_SYMBOLS."
+    elif worker_state == "connected" and not health.get("last_message_at"):
+        diagnosis = "Worker authenticated and subscribed, but no market event has arrived yet; closed-market activity can be sparse."
+    elif worker_state == "reconnecting":
+        diagnosis = str(health.get("last_error") or "Worker is reconnecting after a provider or network error.")
+    else:
+        diagnosis = "Worker health is available. Inspect subscription counts, last message time, and metrics below."
     return jsonify({
         "data": {
-            "enabled": bool(getattr(config, "enabled", False)),
-            "shadow_mode": bool(getattr(config, "shadow_mode", True)),
-            "symbol_cap": int(getattr(config, "symbol_cap", 0)),
+            "enabled": worker_enabled,
+            "configured_on_web_service": bool(getattr(config, "enabled", False)),
+            "shadow_mode": bool(health.get("shadow_mode", getattr(config, "shadow_mode", True))),
+            "symbol_cap": int(health.get("symbol_budget") or getattr(config, "symbol_cap", 0)),
+            "worker_state": worker_state,
+            "diagnosis": diagnosis,
             "worker": health,
         },
         "request_id": g.request_id,

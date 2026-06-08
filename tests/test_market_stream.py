@@ -306,3 +306,23 @@ def test_disconnect_marks_stale_recovers_from_rest_and_enters_backoff():
         assert instance.health_payload()["connection_state"] == "reconnecting"
 
     asyncio.run(scenario())
+
+
+def test_worker_health_exposes_connection_diagnostics_without_credentials():
+    config = WorkerConfig(
+        enabled=True,
+        shadow_mode=True,
+        websocket_url="wss://socket.massive.com/stocks",
+        server_symbols=("SPY", "QQQ"),
+    )
+    stream_worker = worker(config=config)
+    plan = stream_worker.subscriptions.plan({})
+
+    health = stream_worker.health_payload(plan)
+
+    assert health["websocket_url"] == "wss://socket.massive.com/stocks"
+    assert health["server_symbols"] == ["SPY", "QQQ"]
+    assert health["desired_symbols"] == ["QQQ", "SPY"]
+    assert health["connection_state"] == "starting"
+    assert health["last_error"] is None
+    assert "secret" not in str(health)

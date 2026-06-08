@@ -882,7 +882,7 @@ def test_get_hot_momentum_buys_includes_dynamic_early_breakout_scanner_names(mon
     assert "Early momentum alert" in astc["rationale"]
 
 
-def test_get_hot_momentum_buys_returns_empty_without_trustworthy_scores(monkeypatch):
+def test_get_hot_momentum_buys_uses_curated_seed_when_live_score_is_missing(monkeypatch):
     svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
     _disable_hot_momentum_scanner(monkeypatch, svc)
 
@@ -899,7 +899,9 @@ def test_get_hot_momentum_buys_returns_empty_without_trustworthy_scores(monkeypa
 
     out = svc.get_hot_momentum_buys()
 
-    assert out == []
+    assert len(out) == 20
+    assert all(item["score_basis"] == "watchlist_seed" for item in out)
+    assert all(any("curated watchlist seed" in component for component in item["score_components"]) for item in out)
 
 
 def test_get_hot_momentum_buys_exposes_live_signal_score_basis(monkeypatch):
@@ -1175,3 +1177,60 @@ def test_market_data_service_does_not_label_stale_massive_daily_close_live(monke
     assert quote["is_stale"] is True
     assert quote["live_data_available"] is False
     assert "daily_close_not_realtime" in quote["quality_flags"]
+
+
+def test_stable_watchlist_keeps_company_transparency_when_quote_signal_is_unavailable(monkeypatch):
+    svc = MarketDataService()
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda symbol: {"symbol": symbol, "price": None, "change_percent": None, "live_data_available": False, "quote_source": "none"},
+    )
+    monkeypatch.setattr(
+        svc,
+        "get_signal",
+        lambda symbol: {
+            "symbol": symbol,
+            "action": "HOLD",
+            "score": None,
+            "quote_data_available": False,
+            "reasons": ["Signal skipped because quote data was unavailable."],
+        },
+    )
+
+    stable = svc.get_stable_watchlist()
+
+    assert len(stable) == 5
+    assert all("Signal skipped" not in item["transparency"] for item in stable)
+    assert stable[0]["transparency"] == "Strong balance sheet and recurring revenue."
+    assert stable[0]["live_data_available"] is False
+
+
+def test_hot_momentum_keeps_ranked_seed_fallback_when_live_data_is_unavailable(monkeypatch):
+    svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
+    _disable_hot_momentum_scanner(monkeypatch, svc)
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda symbol: {"symbol": symbol, "price": None, "change_percent": None, "live_data_available": False, "quote_source": "none"},
+    )
+    monkeypatch.setattr(
+        svc,
+        "get_signal",
+        lambda symbol: {
+            "symbol": symbol,
+            "action": "HOLD",
+            "score": None,
+            "quote_data_available": False,
+            "volume_ratio": None,
+            "reasons": ["Signal skipped because quote data was unavailable."],
+        },
+    )
+
+    momentum = svc.get_hot_momentum_buys()
+
+    assert len(momentum) == 20
+    assert all(item["score_basis"] == "watchlist_seed" for item in momentum)
+    assert all(item["live_data_available"] is False for item in momentum)
+    assert all("Signal skipped" not in item["rationale"] for item in momentum)
+    assert all(any("curated watchlist seed" in part for part in item["score_components"]) for item in momentum)

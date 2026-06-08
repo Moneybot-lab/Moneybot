@@ -18,6 +18,7 @@ from moneybot.services.market_stream import MassiveWebSocketWorker, create_strea
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     config = worker_config_from_env(os.environ)
     redis_url = os.environ.get("REDIS_URL")
     api_key = (os.environ.get("MASSIVE_API_KEY") or os.environ.get("POLYGON_API_KEY") or "").strip()
@@ -29,6 +30,13 @@ def main() -> int:
     if not api_key:
         raise RuntimeError("MASSIVE_API_KEY is required when MASSIVE_STREAM_ENABLED=true")
 
+    logging.info(
+        "Starting Massive stream worker url=%s shadow_mode=%s server_symbols=%s symbol_cap=%s",
+        config.websocket_url,
+        config.shadow_mode,
+        list(config.server_symbols),
+        config.symbol_cap,
+    )
     state = create_stream_state(redis_url)
     rest_client = MassiveRestClient(
         api_key=api_key,

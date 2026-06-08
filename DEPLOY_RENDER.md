@@ -240,3 +240,9 @@ Set these on the web service and weekly operations job:
 - `DAILY_OPS_TOKEN` = secret required by `GET /api/historical-validation`
 
 Generate the report after outcome materialization with `python scripts/page6_historical_validation_report.py`. The weekly model refresh runs this automatically. Keep rollout in shadow whenever the report is missing, stale, or has blocking gates.
+
+### WebSocket activity verification
+
+The web process should keep `MASSIVE_STREAM_ENABLED=false`; only `moneybot-market-stream` should set it to `true`. After deployment, the worker logs should show startup, authentication, and active subscription counts. Then sign in and request `/api/market-stream-health` to verify the shared Redis heartbeat and `last_message_at`.
+
+A closed market does not prevent connection/authentication, but event volume can be sparse. Massive aggregate channels emit bars only when qualifying trades occur. If there is no worker heartbeat at all, the cause is deployment/configuration rather than market hours.

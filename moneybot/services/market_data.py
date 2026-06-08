@@ -783,9 +783,14 @@ class MarketDataService:
     def _reason_from_signal(self, signal: Dict[str, Any], fallback: str) -> str:
         reasons = signal.get("reasons") or signal.get("rationale") or []
         if isinstance(reasons, list) and reasons:
-            return str(reasons[0])
-        if isinstance(reasons, str) and reasons.strip():
-            return reasons.strip()
+            reason = str(reasons[0]).strip()
+        elif isinstance(reasons, str) and reasons.strip():
+            reason = reasons.strip()
+        else:
+            reason = ""
+        lowered = reason.lower()
+        if reason and not lowered.startswith("signal skipped because") and lowered != "signal unavailable; using safe fallback.":
+            return reason
         return fallback
 
     def _is_buy_like(self, signal: Dict[str, Any]) -> bool:
@@ -896,8 +901,11 @@ class MarketDataService:
         if candidate_source.startswith("scanner:") and candidate_score is not None:
             score = round(float(candidate_score), 2)
             return score, "live_scanner", [f"{candidate_source} score from live screener move {score:.2f}"]
+        if candidate_score is not None:
+            score = round(min(7.75, max(7.0, float(candidate_score) - 1.8)), 2)
+            return score, "watchlist_seed", [f"curated watchlist seed normalized to {score:.2f} until live signal recovers"]
 
-        return None, "unscored", ["No trustworthy live signal/model/scanner score is available; item will not be shown."]
+        return None, "unscored", ["No trustworthy live signal/model/scanner/watchlist seed score is available; item will not be shown."]
 
     def _hot_momentum_score_components(
         self,
@@ -1110,9 +1118,20 @@ class MarketDataService:
                 merged["probability_up"] = deterministic_decision.get("probability_up")
                 merged["confidence"] = deterministic_decision.get("confidence")
                 if model_is_buy:
-                    merged["score"] = model_score if rule_score is None else max(rule_score, model_score)
-                    merged["score_basis"] = "deterministic_model" if rule_score is None or model_score >= rule_score else score_basis
-                    merged["score_components"] = score_components + [f"model probability score {model_score:.2f} considered alongside rule score"]
+                    model_candidate_score = model_score
+                    if bool(getattr(self.deterministic_quick_advisor, "rollout_dry_run", False)):
+                        adjusted_model_score, _ = self._hot_momentum_score_components(
+                            base_score=model_score,
+                            score_basis="deterministic_model",
+                            base_components=[],
+                            quote=quote,
+                            signal=signal,
+                        )
+                        if adjusted_model_score is not None:
+                            model_candidate_score = adjusted_model_score
+                    merged["score"] = model_candidate_score if rule_score is None else max(rule_score, model_candidate_score)
+                    merged["score_basis"] = "deterministic_model" if rule_score is None or model_candidate_score >= rule_score else score_basis
+                    merged["score_components"] = score_components + [f"model probability score {model_candidate_score:.2f} considered alongside rule score"]
                     merged["rationale"] = self._clean_deterministic_rationale(str(deterministic_decision.get("rationale") or rule_rationale))
                     merged["decision_source"] = str(deterministic_decision.get("decision_source") or "deterministic_model")
                 else:
@@ -1128,11 +1147,11 @@ class MarketDataService:
                 and numeric_score is not None
                 and numeric_score >= 7.0
             )
+            fallback_seed = str(merged.get("score_basis") or "") == "watchlist_seed"
             merged["qualified"] = bool(
-                merged["live_data_available"]
-                and numeric_score is not None
+                numeric_score is not None
                 and numeric_score >= 7.0
-                and (self._is_buy_like(signal) or explosive_move or str(item.get("candidate_source") or "").startswith("scanner:"))
+                and (self._is_buy_like(signal) or explosive_move or fallback_seed or str(item.get("candidate_source") or "").startswith("scanner:"))
             )
 
             enriched.append(merged)

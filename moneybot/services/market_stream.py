@@ -471,6 +471,8 @@ class MassiveWebSocketWorker:
         self._last_publish_monotonic = time.monotonic()
         self._connection_state = "disabled" if not config.enabled else "starting"
         self._last_message_at: datetime | None = None
+        self._connected_at: datetime | None = None
+        self._last_error: str | None = None
         self._stop = False
 
     async def _send_action(self, websocket: Any, action: str, channels: list[str], *, check_ack: bool = False) -> None:
@@ -643,6 +645,11 @@ class MassiveWebSocketWorker:
         return {
             "schema_version": STREAM_SCHEMA_VERSION, "enabled": self.config.enabled, "shadow_mode": self.config.shadow_mode,
             "connection_state": self._connection_state, "last_message_at": self._last_message_at.isoformat() if self._last_message_at else None,
+            "connected_at": self._connected_at.isoformat() if self._connected_at else None,
+            "last_error": self._last_error,
+            "websocket_url": self.config.websocket_url,
+            "server_symbols": list(self.config.server_symbols),
+            "desired_symbols": sorted(plan.symbols) if plan else [],
             "desired_subscription_counts": desired_counts, "actual_subscription_counts": actual_counts,
             "symbol_budget": self.config.symbol_cap, "redis_memory_bytes": self.state.memory_usage_bytes(),
             "metrics": self.metrics.snapshot(), "updated_at": self.clock().isoformat(),
@@ -652,7 +659,16 @@ class MassiveWebSocketWorker:
         self._connection_state = "authenticating"
         await self.authenticate(websocket)
         self._connection_state = "connected"
+        self._connected_at = self.clock()
+        self._last_error = None
+        logging.info("Massive WebSocket authenticated url=%s", self.config.websocket_url)
         plan = await self.reconcile(websocket, check_ack=True)
+        logging.info(
+            "Massive WebSocket subscriptions active symbols=%s counts=%s shadow_mode=%s",
+            sorted(plan.symbols),
+            {event: len(symbols) for event, symbols in plan.desired_by_event.items()},
+            self.config.shadow_mode,
+        )
         self.state.set_health(self.health_payload(plan), ttl_seconds=self.config.health_ttl_seconds)
         next_reconcile = time.monotonic() + self.config.reconcile_seconds
         next_shadow_compare = time.monotonic() + self.config.shadow_compare_seconds
@@ -702,8 +718,10 @@ class MassiveWebSocketWorker:
                     attempt = 0
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 self._connection_state = "reconnecting"
+                self._last_error = f"{type(exc).__name__}: {exc}"
+                logging.exception("Massive WebSocket connection failed; reconnecting symbols=%s", sorted(plan.symbols))
                 self.actual = {event: set() for event in ALLOWED_EVENT_TYPES}
                 self.state.mark_symbols_stale(plan.symbols, reason="stream_disconnected", ttl_seconds=self.config.stale_ttl_seconds)
                 await self._recover_symbols(plan.symbols, reason="stream_reconnect")

@@ -440,4 +440,6 @@ def test_market_stream_health_requires_auth_and_returns_shadow_status():
     assert response.status_code == 200
     data = response.get_json()["data"]
     assert data["shadow_mode"] is True
+    assert data["worker_state"] == "connected"
+    assert "no market event has arrived yet" in data["diagnosis"]
     assert data["worker"]["connection_state"] == "connected"

@@ -79,3 +79,19 @@ Keep the worker in shadow mode until production telemetry demonstrates:
 6. Provider entitlements permit the selected event types and symbol counts.
 
 The authenticated `/api/market-stream-health` endpoint and model-health payload expose connection, subscription, parsing, ordering, lag, Redis, recovery, and shadow-comparison metrics.
+
+## Troubleshooting missing Massive WebSocket activity
+
+The WebSocket connection is owned by the separate `moneybot-market-stream` Render worker, not the web service. The web service intentionally has `MASSIVE_STREAM_ENABLED=false`; the worker must have it set to `true`, share the same `REDIS_URL`, and receive `MASSIVE_API_KEY`.
+
+Check these in order:
+
+1. Confirm the `moneybot-market-stream` service exists and is running in Render.
+2. Look for `Starting Massive stream worker`, `authenticated`, and `subscriptions active` in the worker logs.
+3. Sign in to MoneyBot and call `GET /api/market-stream-health`. Review `worker_state`, `diagnosis`, `desired_symbols`, `actual_subscription_counts`, `last_message_at`, and `last_error`.
+4. If the response says `no_worker_heartbeat`, the worker is not writing health to the shared Redis instance.
+5. If it says `idle_no_demand`, add portfolio/ClearView symbols or set `MASSIVE_STREAM_SERVER_SYMBOLS=SPY,QQQ` on the worker.
+6. If it says `connected` with no last message, verify the subscription counts and wait for an eligible market event. Massive notes that off-hours update frequency varies, and aggregate bars are not emitted when no qualifying trades occur.
+7. If it says `reconnecting`, use `last_error` and the worker logs to identify authentication, entitlement, URL, or network failures.
+
+The worker never logs or returns the API key. Provider-account usage dashboards may also lag application logs, so MoneyBot's worker health and Render logs are the first operational source of truth.
