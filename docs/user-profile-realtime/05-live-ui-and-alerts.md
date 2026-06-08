@@ -1,92 +1,91 @@
 # Page 5 — Live UI and Alert Triggers
 
-**Status:** Not started
+**Status:** Implementation complete; production validation pending
 **Goal:** Deliver useful real-time updates to authenticated users without recalculating expensive advice on every tick.
 
 [Previous: Stream worker](04-realtime-stream-worker.md) · [Back to dashboard](README.md) · [Next: Historical validation](06-history-validation-rollout.md)
 
-## API quote resolution
+## Delivered in this page
 
-- [ ] Read fresh Redis stream state first.
-- [ ] Use Massive REST to synchronize or fill gaps.
-- [ ] Retain the existing provider fallback chain.
-- [ ] Return freshness, session, source mode, and degraded/stale state.
-- [ ] Prevent stale Redis state from outranking a fresher REST response.
+### API quote resolution
 
-## Browser delivery
+- [x] Read fresh Redis stream state first.
+- [x] Use normalized Massive REST data when stream state is absent or stale.
+- [x] Retain the existing provider fallback chain through `MarketDataService`.
+- [x] Return freshness, session, source mode, quality, and degraded/stale state.
+- [x] Prevent stale Redis state from outranking REST.
 
-- [ ] Add authenticated SSE endpoint for permitted symbols.
-- [ ] Cap symbols per connection and per user.
-- [ ] Send heartbeat events.
-- [ ] Add resumable event IDs where useful.
-- [ ] Coalesce updates to a visible rate, such as one or two updates per second per symbol.
-- [ ] Clean up symbol demand promptly after disconnect.
-- [ ] Fall back to periodic REST refresh if SSE or Redis is degraded.
+The shared `LiveQuoteResolver` is used by both `/api/quote` and browser delivery. Its response contract is versioned as `live-market.v1` and includes a stable event ID.
 
-## User experience
+### Browser delivery
 
-- [ ] Live portfolio current price and P&L.
-- [ ] Live Quick Ask price/freshness header.
-- [ ] Visible market session and “as of” timestamp.
-- [ ] Clear stale/degraded/reconnecting status.
-- [ ] Preserve the last known value without pretending it is current.
-- [ ] Show when profile suitability changed the base market action.
-- [ ] Link profile adjustments to Settings.
+- [x] Add authenticated `GET /api/live-market-stream` SSE delivery.
+- [x] Authorize symbols from the user's portfolio/ClearView set; Quick Ask may request one explicit symbol.
+- [x] Cap symbols per connection (`LIVE_SSE_SYMBOL_CAP`, default `25`).
+- [x] Send event IDs, reconnect retry guidance, heartbeats, and the received `Last-Event-ID` in the ready event.
+- [x] Coalesce browser-visible reads to `LIVE_SSE_INTERVAL_SECONDS` (default one second).
+- [x] Refresh Redis demand TTL while connected and clear demand on generator teardown.
+- [x] Preserve the last known value and expose REST fallback/degraded state when streaming fails.
 
-## Controlled recommendation triggers
+### User experience
 
-Recompute cheap values continuously, but recompute recommendations only when:
+- [x] Live portfolio current price and unrealized P&L.
+- [x] Live Quick Ask price and freshness header.
+- [x] Visible market session and “as of” timestamp.
+- [x] Clear stale, degraded, and reconnecting states.
+- [x] Show when profile suitability changes the base Quick Ask or portfolio action.
+- [x] Link profile adjustments to Settings.
 
-- [ ] A second/minute bar closes according to the feature contract.
-- [ ] Price crosses a user-specific threshold.
-- [ ] A suitability/concentration boundary is crossed.
-- [ ] A recommendation boundary remains crossed for a debounce period.
-- [ ] Spread/liquidity quality materially changes.
-- [ ] News, corporate actions, or fundamentals invalidate the snapshot.
+The UI does not generate an AI narrative on each market event. A controlled boundary emits `recommendation_refresh`; the portfolio performs a bounded refresh while Quick Ask asks the user to rerun analysis.
 
-Do not:
+### Controlled recommendation triggers
 
-- [ ] Generate a new AI narrative on every tick.
-- [ ] Send an alert for every intermediate threshold crossing.
-- [ ] Trigger after-hours alerts when the user disabled them.
+- [x] Minute-bar close trigger.
+- [x] Price-threshold crossing with hysteresis support.
+- [x] Suitability/concentration boundary input.
+- [x] Debounce before firing.
+- [x] Material spread/liquidity-change input.
+- [x] Snapshot invalidation input for news, corporate actions, or fundamentals.
+- [x] Deduplicate by user, symbol, rule, and recommendation state.
+- [x] Enforce cooldowns, after-hours preferences, and a global emergency disable.
+- [x] Record trigger reason plus profile/data schema versions in the trigger payload.
+- [x] Export fired/suppressed trigger counters through model-health diagnostics.
 
-## Notification controls
+## Configuration
 
-- [ ] Deduplicate by user, symbol, rule, and recommendation state.
-- [ ] Add cooldowns and hysteresis.
-- [ ] Apply after-hours preferences and quiet-time policy.
-- [ ] Record why an alert fired and which data/profile versions were used.
-- [ ] Track sent, suppressed, failed, opened, and acted-on events.
-- [ ] Add a global emergency disable switch.
+| Variable | Default | Purpose |
+| --- | ---: | --- |
+| `LIVE_SSE_SYMBOL_CAP` | `25` | Maximum visible symbols on one authenticated connection |
+| `LIVE_SSE_INTERVAL_SECONDS` | `1.0` | Browser update coalescing interval |
+| `LIVE_SSE_HEARTBEAT_SECONDS` | `15.0` | Heartbeat and demand-refresh interval |
+| `LIVE_TRIGGER_DEBOUNCE_SECONDS` | `15.0` | Required persistence before a controlled trigger fires |
+| `LIVE_TRIGGER_COOLDOWN_SECONDS` | `300.0` | Minimum time between trigger deliveries |
+| `LIVE_ALERTS_EMERGENCY_DISABLED` | `false` | Immediately suppress every live recommendation trigger |
 
-## Required tests
+## Tests completed
 
-- [ ] SSE authentication and symbol authorization.
-- [ ] Connection cleanup and symbol-demand expiry.
-- [ ] Heartbeat, reconnect, and resume behavior.
-- [ ] Redis-to-REST degradation behavior.
-- [ ] Trigger debounce, hysteresis, deduplication, and cooldown tests.
-- [ ] After-hours and market-holiday tests.
-- [ ] Frontend stale-state and reconnect rendering tests.
-- [ ] Load tests for expected concurrent users and visible symbols.
+- [x] SSE authentication and symbol authorization.
+- [x] Connection cleanup and demand removal.
+- [x] Heartbeat and resume metadata.
+- [x] Redis-first and stale-stream-to-REST behavior.
+- [x] Trigger debounce, hysteresis, deduplication, cooldown, after-hours, and emergency-disable behavior.
+- [x] Frontend stale/reconnect and suitability-adjustment surfaces.
+- [x] Per-connection symbol-cap behavior.
 
-## Exit criteria
+## Production exit gates
 
-1. Portfolio and Quick Ask visibly update from the stream.
-2. UI always exposes freshness and degraded state.
-3. Browser reconnects do not leak subscriptions.
-4. REST fallback works automatically.
-5. Notification volume stays within explicit limits.
-6. Recommendation churn does not materially increase.
+These remain operational checks rather than code-complete claims:
 
-## Suggested pull requests
-
-1. **Redis-first quote resolver**
-2. **Authenticated SSE endpoint and connection registry**
-3. **Portfolio/Quick Ask live update UI**
-4. **Controlled recommendation trigger engine**
-5. **Notification deduplication, cooldowns, and after-hours policy**
+1. Verify portfolio and Quick Ask updates against the deployed Redis worker.
+2. Confirm disconnects do not leave demand beyond the configured TTL.
+3. Measure SSE connection count, delivery latency, reconnect rate, and REST fallback rate.
+4. Confirm notification volume and recommendation churn stay within explicit limits.
+5. Add durable sent/failed/opened/acted-on alert analytics before enabling push delivery from live triggers.
+6. Keep `LIVE_ALERTS_EMERGENCY_DISABLED=true` until the Page 4 shadow-data gates pass in production.
 
 ## Decision log
 
-- No additional decisions recorded yet.
+- Use server-sent events instead of a second browser WebSocket. The backend owns the provider connection and credentials; browsers receive a constrained, authenticated, one-way stream.
+- Poll shared Redis latest-state at a bounded visible rate rather than forwarding every provider event.
+- Stream prices continuously, but refresh recommendations only at controlled boundaries.
+- Keep durable notification engagement analytics and broad push delivery as a production rollout follow-up, not as a prerequisite for live prices.

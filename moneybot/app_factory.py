@@ -20,6 +20,7 @@ from .services.decision_log import DecisionLogger
 from .services.deterministic_advisor import DeterministicQuickAdvisor
 from .services.market_data import MarketDataService
 from .services.market_stream import create_stream_state, worker_config_from_env
+from .services.live_market import ControlledTriggerEngine
 from .services.suitability_policy import PersonalizationRuntime
 from .models import WaitlistSignup
 from .services.runtime_paths import (
@@ -394,6 +395,12 @@ def create_app() -> Flask:
         INVESTOR_PROFILE_REVISION_RETENTION_DAYS=int(os.environ.get("INVESTOR_PROFILE_REVISION_RETENTION_DAYS", "2555")),
         REDIS_URL=os.environ.get("REDIS_URL", ""),
         MASSIVE_STREAM_CONFIG=worker_config_from_env(os.environ),
+        LIVE_SSE_SYMBOL_CAP=int(os.environ.get("LIVE_SSE_SYMBOL_CAP", "25")),
+        LIVE_SSE_INTERVAL_SECONDS=float(os.environ.get("LIVE_SSE_INTERVAL_SECONDS", "1.0")),
+        LIVE_SSE_HEARTBEAT_SECONDS=float(os.environ.get("LIVE_SSE_HEARTBEAT_SECONDS", "15.0")),
+        LIVE_TRIGGER_DEBOUNCE_SECONDS=float(os.environ.get("LIVE_TRIGGER_DEBOUNCE_SECONDS", "15.0")),
+        LIVE_TRIGGER_COOLDOWN_SECONDS=float(os.environ.get("LIVE_TRIGGER_COOLDOWN_SECONDS", "300.0")),
+        LIVE_ALERTS_EMERGENCY_DISABLED=(os.environ.get("LIVE_ALERTS_EMERGENCY_DISABLED", "false").lower() == "true"),
         DETERMINISTIC_QUICK_ENABLED=(os.environ.get("DETERMINISTIC_QUICK_ENABLED", "true").lower() == "true"),
         DETERMINISTIC_MODEL_PATH=default_model_path,
         DETERMINISTIC_MOMENTUM_ENABLED=(os.environ.get("DETERMINISTIC_MOMENTUM_ENABLED", "true").lower() == "true"),
@@ -506,6 +513,11 @@ def create_app() -> Flask:
         output_path=app.config["DECISION_LOG_PATH"],
     )
     app.extensions["market_stream_state"] = create_stream_state(app.config["REDIS_URL"] or None)
+    app.extensions["live_trigger_engine"] = ControlledTriggerEngine(
+        enabled=not app.config["LIVE_ALERTS_EMERGENCY_DISABLED"],
+        debounce_seconds=app.config["LIVE_TRIGGER_DEBOUNCE_SECONDS"],
+        cooldown_seconds=app.config["LIVE_TRIGGER_COOLDOWN_SECONDS"],
+    )
 
     app.extensions["personalization_runtime"] = PersonalizationRuntime(
         profile_enabled=app.config["INVESTOR_PROFILE_ENABLED"],
@@ -1320,6 +1332,7 @@ def create_app() -> Flask:
                 <button type="submit" style="border:none;background:#16a34a;color:#f0fdf4;padding:9px 14px;border-radius:8px;font-weight:700;cursor:pointer">Add</button>
               </form>
               <div id="out" style="margin:10px 0;color:#166534"></div>
+              <div id="portfolioLiveStatus" role="status" style="margin:0 0 12px;padding:9px 12px;border-radius:10px;background:#ecfccb;border:1px solid #bef264;color:#3f6212;font-size:13px;font-weight:700">Live prices: connecting…</div>
               <div id="loadingState" style="display:none;align-items:center;justify-content:center;gap:10px;position:fixed;top:16px;right:16px;background:rgba(236,252,203,.95);border:1px solid #bef264;border-radius:999px;padding:10px 14px;z-index:40;color:#14532d;font-weight:700;font-size:.95rem;pointer-events:none">
                 <span style="width:34px;height:34px;border:4px solid #86efac;border-top-color:#16a34a;border-radius:999px;display:inline-block;animation:spin .8s linear infinite"></span>
                 Loading latest portfolio stock data...
@@ -1418,6 +1431,8 @@ def create_app() -> Flask:
               symbolEl.addEventListener('input', (event) => normalizeTickerInputValue(event.target));
               let currentPortfolioItems = [];
               let currentAdviceContext = null;
+              let portfolioEventSource = null;
+              let portfolioReconnectTimer = null;
               document.getElementById('addForm').addEventListener('submit', addItem);
 
               async function logout(){ await apiFetch('/api/auth/logout',{method:'POST'}); sessionStorage.removeItem(TAB_SESSION_KEY); localStorage.removeItem(TAB_SESSION_KEY); location.href='/'; }
@@ -1447,6 +1462,60 @@ def create_app() -> Flask:
               function formatMoney(v){
                 return (typeof v === 'number' && isFinite(v)) ? ('$' + v.toLocaleString(undefined,{maximumFractionDigits:2})) : 'n/a';
               }
+              function livePriceCell(item){
+                const price = formatMoney(item.current_price);
+                const live = item.live_market || {};
+                const state = live.is_stale ? 'Stale' : (live.is_degraded ? 'REST fallback' : 'Live');
+                const color = live.is_stale ? '#b45309' : (live.is_degraded ? '#4d7c0f' : '#15803d');
+                const asOf = live.event_timestamp ? new Date(live.event_timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : 'unknown';
+                return `<div id="live-price-${escapeHtml(item.symbol)}"><strong>${price}</strong><div style="font-size:11px;color:${color};margin-top:3px">${state} · ${escapeHtml(live.market_session || 'session n/a')} · ${escapeHtml(asOf)}</div></div>`;
+              }
+              function setPortfolioLiveStatus(text, mode){
+                const el = document.getElementById('portfolioLiveStatus');
+                if(!el) return;
+                el.textContent = text;
+                el.style.background = mode === 'live' ? '#dcfce7' : (mode === 'stale' ? '#fef3c7' : '#ecfccb');
+                el.style.borderColor = mode === 'live' ? '#86efac' : (mode === 'stale' ? '#f59e0b' : '#bef264');
+              }
+              function applyPortfolioLiveQuotes(quotes){
+                let changed = false;
+                (quotes || []).forEach((quote) => {
+                  const item = currentPortfolioItems.find((row) => String(row.symbol).toUpperCase() === String(quote.symbol).toUpperCase());
+                  if(!item || typeof quote.price !== 'number') return;
+                  item.current_price = quote.price;
+                  const shares = typeof item.shares === 'number' ? item.shares : 1;
+                  if(typeof item.entry_price === 'number' && item.entry_price > 0){
+                    item.performance_amount = (quote.price - item.entry_price) * shares;
+                    item.performance_percent = ((quote.price - item.entry_price) / item.entry_price) * 100;
+                  }
+                  item.live_market = quote;
+                  changed = true;
+                });
+                if(changed) renderRows(currentPortfolioItems);
+                const stale = (quotes || []).some((quote) => quote.is_stale || quote.is_degraded);
+                setPortfolioLiveStatus(stale ? 'Live connection is degraded; showing the last known value or REST fallback.' : 'Live prices connected.', stale ? 'stale' : 'live');
+              }
+              function startPortfolioLive(){
+                const symbols = currentPortfolioItems.map((item) => String(item.symbol || '').toUpperCase()).filter(Boolean);
+                if(portfolioEventSource){ portfolioEventSource.close(); portfolioEventSource = null; }
+                if(portfolioReconnectTimer){ clearTimeout(portfolioReconnectTimer); portfolioReconnectTimer = null; }
+                if(!symbols.length){ setPortfolioLiveStatus('Live prices will connect after you add a position.', 'idle'); return; }
+                setPortfolioLiveStatus('Live prices: connecting…', 'idle');
+                portfolioEventSource = new EventSource('/api/live-market-stream?scope=portfolio&symbols=' + encodeURIComponent(symbols.join(',')));
+                portfolioEventSource.addEventListener('quotes', (event) => {
+                  try { applyPortfolioLiveQuotes((JSON.parse(event.data) || {}).quotes || []); } catch(_err) { setPortfolioLiveStatus('Live update could not be read; REST refresh remains available.', 'stale'); }
+                });
+                portfolioEventSource.addEventListener('heartbeat', () => setPortfolioLiveStatus('Live prices connected.', 'live'));
+                portfolioEventSource.addEventListener('recommendation_refresh', () => {
+                  setPortfolioLiveStatus('Market boundary changed. Refreshing recommendation without generating a new AI narrative…', 'idle');
+                  if(!portfolioReconnectTimer) portfolioReconnectTimer = setTimeout(() => { portfolioReconnectTimer = null; load(); }, 1200);
+                });
+                portfolioEventSource.onerror = () => {
+                  setPortfolioLiveStatus('Live connection interrupted. Keeping last known values and using REST refresh while reconnecting…', 'stale');
+                };
+              }
+              window.addEventListener('beforeunload', () => { if(portfolioEventSource) portfolioEventSource.close(); });
+
               function adviceBadge(value){
                 const advice = String(value || 'HOLD').toUpperCase();
                 const color = advice === 'BUY' ? '#166534' : (advice === 'SELL' ? '#4d7c0f' : '#3f3f46');
@@ -1626,7 +1695,7 @@ def create_app() -> Flask:
                 const totalTodayChange = items.reduce((sum, item) => sum + (typeof item.today_change_amount === 'number' ? item.today_change_amount : 0), 0);
                 const totalPerformance = items.reduce((sum, item) => sum + (typeof item.performance_amount === 'number' ? item.performance_amount : 0), 0);
 
-                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="editRow(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Edit</button></div></td></tr>`).join('')
+                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${livePriceCell(i)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="editRow(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Edit</button></div></td></tr>`).join('')
                 + `<tr style="background:#f7fee7;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px;color:#3f3f46;font-size:12px">Click advice badges to see why.</td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
                 items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || []));
               }
@@ -1648,6 +1717,7 @@ def create_app() -> Flask:
                     return;
                   }
                   renderRows(selectPortfolioRows(data));
+                  startPortfolioLive();
                   if (lifetimePanelEl.style.display !== 'none') {
                     await loadSoldTrades();
                   }

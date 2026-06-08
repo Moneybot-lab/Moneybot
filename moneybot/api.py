@@ -20,7 +20,7 @@ from functools import wraps
 from typing import Any, Dict, Tuple
 
 import yfinance as yf
-from flask import Blueprint, Response, current_app, g, jsonify, request, session, url_for
+from flask import Blueprint, Response, current_app, g, jsonify, request, session, stream_with_context, url_for
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -55,6 +55,7 @@ from .services.model_metadata import load_artifact_history, load_artifact_metada
 from .services.decision_snapshot import build_decision_snapshot
 from .services.suitability_policy import UserDecisionContext
 from .services.market_stream import register_demand_safely
+from .services.live_market import LiveQuoteResolver, sse_encode
 from .services.outcome_tracking import (
     close_values,
     evaluate_decision_events,
@@ -436,6 +437,41 @@ def _personalize_action(
         user_id=user_id, context=context, endpoint=endpoint, symbol=symbol,
         base_action=base_action, forecast_horizon=forecast_horizon, **policy_inputs,
     )
+
+
+def _live_quote_resolver() -> LiveQuoteResolver | None:
+    state = current_app.extensions.get("market_stream_state")
+    svc = current_app.extensions.get("market_data_service")
+    if state is None or svc is None:
+        return None
+    return LiveQuoteResolver(state=state, rest_quote=lambda symbol: svc.get_quote(symbol))
+
+
+def _live_quote_payload(symbol: str) -> dict[str, Any] | None:
+    resolver = _live_quote_resolver()
+    if resolver is None:
+        return None
+    return resolver.resolve(symbol).payload()
+
+
+def _clear_stream_demand(source: str) -> None:
+    state = current_app.extensions.get("market_stream_state")
+    if state is not None and hasattr(state, "clear_demand"):
+        try:
+            state.clear_demand(source)
+        except Exception:  # noqa: BLE001
+            logging.exception("Unable to clear market-stream demand source=%s", source)
+
+
+def _symbols_for_live_user(user_id: int) -> set[str]:
+    portfolio = {
+        str(symbol).upper()
+        for (symbol,) in WatchlistItem.query.filter_by(user_id=user_id).with_entities(WatchlistItem.symbol).all()
+        if symbol
+    }
+    prefs = NotificationTriggerPreference.query.filter_by(user_id=user_id).first()
+    clearview = set(_parse_clearview_symbols(prefs.clearview_symbols_csv)) if prefs else set()
+    return portfolio | clearview
 
 
 def _register_stream_demand(source: str, symbols) -> bool:
@@ -1954,12 +1990,96 @@ def company_details():
     return jsonify({"data": svc.get_company_snapshot(symbol), "request_id": g.request_id})
 
 
+@api_bp.get("/live-market-stream")
+@login_required
+def live_market_stream():
+    requested = [
+        _normalize_symbol(part)
+        for part in str(request.args.get("symbols") or "").replace(";", ",").split(",")
+        if _normalize_symbol(part)
+    ]
+    scope = str(request.args.get("scope") or "portfolio").strip().lower()
+    cap = max(1, int(current_app.config.get("LIVE_SSE_SYMBOL_CAP") or 25))
+    permitted = _symbols_for_live_user(int(session["user_id"]))
+    if scope == "quick" and requested:
+        permitted.add(requested[0])
+    symbols = requested or sorted(permitted)
+    symbols = [symbol for symbol in symbols if symbol in permitted][:cap]
+    if not symbols:
+        return jsonify({"error": "no permitted symbols", "request_id": g.request_id}), 400
+
+    demand_source = f"sse:{session['user_id']}:{g.request_id}"
+    interval = max(0.25, float(current_app.config.get("LIVE_SSE_INTERVAL_SECONDS") or 1.0))
+    heartbeat_seconds = max(2.0, float(current_app.config.get("LIVE_SSE_HEARTBEAT_SECONDS") or 15.0))
+    max_iterations = 1 if request.args.get("once") == "1" and current_app.testing else None
+    resolver = _live_quote_resolver()
+    trigger_engine = current_app.extensions.get("live_trigger_engine")
+    user_id = int(session["user_id"])
+    live_context = _decision_context_for_user(user_id)
+
+    _register_stream_demand(demand_source, symbols)
+
+    @stream_with_context
+    def generate():
+        last_ids: dict[str, str] = {}
+        last_minute_bar_ids: dict[str, str] = {}
+        last_heartbeat = 0.0
+        iterations = 0
+        try:
+            yield sse_encode(event="ready", event_id=f"ready:{g.request_id}", retry_ms=3000, data={"schema_version": "live-market.v1", "symbols": symbols, "resume_from": request.headers.get("Last-Event-ID")})
+            while True:
+                updates = []
+                if resolver is not None:
+                    for symbol in symbols:
+                        quote = resolver.resolve(symbol).payload()
+                        if quote["event_id"] != last_ids.get(symbol):
+                            last_ids[symbol] = quote["event_id"]
+                            updates.append(quote)
+                            if trigger_engine is not None:
+                                minute_bar = current_app.extensions["market_stream_state"].get_latest(symbol, "AM")
+                                minute_bar_id = None
+                                if minute_bar:
+                                    minute_bar_id = str(minute_bar.get("sequence_number") or minute_bar.get("provider_event_id") or minute_bar.get("event_timestamp"))
+                                trigger_event_type = quote.get("event_type")
+                                if minute_bar_id and minute_bar_id != last_minute_bar_ids.get(symbol):
+                                    last_minute_bar_ids[symbol] = minute_bar_id
+                                    trigger_event_type = "AM"
+                                trigger = trigger_engine.evaluate(
+                                    user_id=user_id, symbol=symbol, event_type=trigger_event_type, price=quote.get("price"),
+                                    market_session=quote.get("market_session"), after_hours_allowed=live_context.after_hours_alerts,
+                                    recommendation_state=None, price_threshold=None,
+                                    spread_bps=(abs((quote.get("ask") or 0) - (quote.get("bid") or 0)) / quote["price"] * 10000 if quote.get("price") and quote.get("bid") and quote.get("ask") else None),
+                                    profile_version=live_context.profile_version,
+                                    market_data_version=quote.get("schema_version") or "live-market.v1",
+                                )
+                                if trigger.get("fire"):
+                                    yield sse_encode(event="recommendation_refresh", event_id=f"trigger:{symbol}:{trigger['reason']}:{int(time.time()*1000)}", data=trigger)
+                if updates:
+                    yield sse_encode(event="quotes", event_id=updates[-1]["event_id"], data={"schema_version": "live-market.v1", "quotes": updates})
+                now = time.time()
+                if now - last_heartbeat >= heartbeat_seconds:
+                    _register_stream_demand(demand_source, symbols)
+                    last_heartbeat = now
+                    yield sse_encode(event="heartbeat", event_id=f"heartbeat:{int(now * 1000)}", data={"symbols": symbols, "ts": datetime.now(timezone.utc).isoformat()})
+                iterations += 1
+                if max_iterations is not None and iterations >= max_iterations:
+                    break
+                time.sleep(interval)
+        finally:
+            _clear_stream_demand(demand_source)
+
+    return Response(generate(), mimetype="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
 @api_bp.get("/quote")
 def api_quote():
     symbol = _normalize_symbol(request.args.get("symbol") or "")
     if not symbol:
         return jsonify({"error": "symbol required", "request_id": g.request_id}), 400
 
+    live_quote = _live_quote_payload(symbol)
+    if live_quote is not None:
+        return jsonify({"data": live_quote, "request_id": g.request_id})
     svc = current_app.extensions["market_data_service"]
     return jsonify({"data": svc.get_quote(symbol), "request_id": g.request_id})
 
@@ -2656,6 +2776,7 @@ def model_health():
                 "suitability_rollout_percentage": current_app.config.get("SUITABILITY_ROLLOUT_PERCENTAGE"),
                 "personalization_metrics": personalization_runtime.metrics.snapshot() if personalization_runtime else {},
                 "market_stream_health": _market_stream_health_payload(),
+                "live_trigger_metrics": (current_app.extensions.get("live_trigger_engine").snapshot() if current_app.extensions.get("live_trigger_engine") else {}),
                 "market_data_provider_health": (
                     current_app.extensions["market_data_service"].get_provider_health()
                     if current_app.extensions.get("market_data_service") is not None

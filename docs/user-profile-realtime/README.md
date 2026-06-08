@@ -1,7 +1,7 @@
 # MoneyBot User Profile + Real-Time Setup
 
-**Status date:** June 7, 2026
-**Current stage:** The bounded WebSocket/Redis shadow worker is implemented; production shadow validation is next before Page 5 live delivery.
+**Status date:** June 8, 2026
+**Current stage:** Page 5 live SSE delivery and controlled triggers are implemented; production stream and notification-volume validation is next.
 
 This folder turns the larger [architecture roadmap](../user_profile_realtime_roadmap.md) into short implementation pages that can be updated as work is completed.
 
@@ -13,7 +13,7 @@ This folder turns the larger [architecture roadmap](../user_profile_realtime_roa
 | [2](02-profile-closeout.md) | Finish user-profile integration | **Complete** | One reusable decision context across advice, notifications, and logs |
 | [3](03-massive-rest-foundation.md) | Normalize Massive REST data | **Complete** | Fresh, timestamped, source-consistent quotes and bars |
 | [4](04-realtime-stream-worker.md) | Add Massive WebSocket worker | **Shadow-ready** | Bounded subscriptions feeding shared Redis state |
-| [5](05-live-ui-and-alerts.md) | Deliver live updates and triggers | Not started | Authenticated SSE, live portfolio prices, controlled alerts |
+| [5](05-live-ui-and-alerts.md) | Deliver live updates and triggers | **Validation-ready** | Authenticated SSE, live portfolio prices, controlled refresh boundaries |
 | [6](06-history-validation-rollout.md) | Historical validation and rollout | Not started | Reproducible datasets, walk-forward evaluation, safe promotion |
 
 ## Where we are now
@@ -25,7 +25,7 @@ This folder turns the larger [architecture roadmap](../user_profile_realtime_roa
 [Profile integration]       DONE
 [Massive REST normalization]DONE
 [WebSocket + Redis]         SHADOW-READY
-[SSE + live alerts]         WAITING
+[SSE + live alerts]         VALIDATION-READY
 [Historical validation]     WAITING
 ```
 
@@ -57,5 +57,5 @@ When a task is completed:
 ## Recommended immediate order
 
 1. Deploy and validate the [Page 4 WebSocket shadow worker](04-realtime-stream-worker.md) against its production gates.
-2. Add live browser delivery only after shadow metrics pass using [Page 5](05-live-ui-and-alerts.md).
-3. Validate and roll out with [Page 6](06-history-validation-rollout.md).
+2. Keep Page 5 live triggers emergency-disabled until Page 4 passes, then validate SSE latency, reconnects, fallback rate, and notification volume.
+3. Build durable history and promote safely with [Page 6](06-history-validation-rollout.md).

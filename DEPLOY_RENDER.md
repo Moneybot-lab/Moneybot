@@ -213,3 +213,16 @@ Interpretation:
 Also check Render logs:
 - Repeated `WARNING: AI advisor unavailable, using fallback: ...` indicates timeout/auth/provider failures.
 - No warnings plus `ai_status: "working"` on requests indicates healthy AI responses.
+
+### Page 5 live browser delivery and controlled triggers
+
+Set these on the web service (not the dedicated provider worker):
+
+- `LIVE_SSE_SYMBOL_CAP` = maximum permitted symbols per authenticated SSE connection (default `25`)
+- `LIVE_SSE_INTERVAL_SECONDS` = coalesced browser update interval (default `1.0`)
+- `LIVE_SSE_HEARTBEAT_SECONDS` = heartbeat and Redis-demand refresh interval (default `15.0`)
+- `LIVE_TRIGGER_DEBOUNCE_SECONDS` = boundary persistence before recommendation refresh (default `15.0`)
+- `LIVE_TRIGGER_COOLDOWN_SECONDS` = minimum seconds between refresh triggers (default `300.0`)
+- `LIVE_ALERTS_EMERGENCY_DISABLED` = `true` to suppress all live recommendation triggers while preserving live prices
+
+Keep `LIVE_ALERTS_EMERGENCY_DISABLED=true` until the Page 4 production shadow-data gates pass. SSE automatically falls back to normalized REST quote data when Redis state is absent or stale.

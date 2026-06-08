@@ -34,6 +34,18 @@ services:
         value: "false"
       - key: MASSIVE_STREAM_SHADOW_MODE
         value: "true"
+      - key: LIVE_SSE_SYMBOL_CAP
+        value: "25"
+      - key: LIVE_SSE_INTERVAL_SECONDS
+        value: "1.0"
+      - key: LIVE_SSE_HEARTBEAT_SECONDS
+        value: "15.0"
+      - key: LIVE_TRIGGER_DEBOUNCE_SECONDS
+        value: "15.0"
+      - key: LIVE_TRIGGER_COOLDOWN_SECONDS
+        value: "300.0"
+      - key: LIVE_ALERTS_EMERGENCY_DISABLED
+        value: "true"
       - key: DETERMINISTIC_CALIBRATION_ENABLED
         value: "true"
       - key: DETERMINISTIC_CALIBRATION_SLOPE

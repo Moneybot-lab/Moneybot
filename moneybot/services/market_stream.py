@@ -155,6 +155,7 @@ class MarketStreamStateRepository(Protocol):
     def set_health(self, payload: Mapping[str, Any], *, ttl_seconds: int) -> None: ...
     def get_health(self) -> dict[str, Any]: ...
     def register_demand(self, source: str, symbols: Iterable[str], *, ttl_seconds: int) -> None: ...
+    def clear_demand(self, source: str) -> None: ...
     def desired_demand(self) -> dict[str, set[str]]: ...
     def memory_usage_bytes(self) -> int | None: ...
 
@@ -208,6 +209,9 @@ class InMemoryMarketStreamState:
     def register_demand(self, source: str, symbols: Iterable[str], *, ttl_seconds: int) -> None:
         normalized = {str(symbol).strip().upper() for symbol in symbols if str(symbol).strip() and str(symbol).strip() != "*"}
         self.demands[source] = (normalized, self.clock() + ttl_seconds)
+
+    def clear_demand(self, source: str) -> None:
+        self.demands.pop(source, None)
 
     def desired_demand(self) -> dict[str, set[str]]:
         now = self.clock()
@@ -267,6 +271,10 @@ class RedisMarketStreamState:
         normalized = sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip() and str(symbol).strip() != "*"})
         self.client.set(f"{self.namespace}:demand:{source}", json.dumps(normalized), ex=ttl_seconds)
         self.client.sadd(f"{self.namespace}:demand-sources", source)
+
+    def clear_demand(self, source: str) -> None:
+        self.client.delete(f"{self.namespace}:demand:{source}")
+        self.client.srem(f"{self.namespace}:demand-sources", source)
 
     def desired_demand(self) -> dict[str, set[str]]:
         output: dict[str, set[str]] = {}
