@@ -46,6 +46,16 @@ services:
         value: "300.0"
       - key: LIVE_ALERTS_EMERGENCY_DISABLED
         value: "true"
+      - key: HISTORICAL_VALIDATION_REPORT_MAX_AGE_SECONDS
+        value: "604800"
+      - key: HISTORICAL_VALIDATION_MIN_ROWS
+        value: "30"
+      - key: HISTORICAL_VALIDATION_LICENSING_REVIEW_COMPLETE
+        value: "false"
+      - key: HISTORICAL_VALIDATION_PRIVACY_REVIEW_COMPLETE
+        value: "false"
+      - key: DAILY_OPS_TOKEN
+        sync: false
       - key: DETERMINISTIC_CALIBRATION_ENABLED
         value: "true"
       - key: DETERMINISTIC_CALIBRATION_SLOPE

@@ -1,90 +1,111 @@
 # Page 6 — Historical Validation and Rollout
 
-**Status:** Not started
+**Status:** Validation foundation implemented; historical data pipeline and production gates pending
 **Goal:** Prove that fresher data and personalized actions improve decisions out of sample before broad promotion.
 
 [Previous: Live UI and alerts](05-live-ui-and-alerts.md) · [Back to dashboard](README.md)
 
-## Historical dataset
+## Delivered foundation
 
-- [ ] Use Massive flat files for broad historical ingestion where practical.
-- [ ] Build adjusted daily and intraday bars with explicit split/dividend treatment.
-- [ ] Add point-in-time reference and fundamental fields where used.
-- [ ] Include delisted/failed securities where available to reduce survivorship bias.
-- [ ] Store dataset date, schema version, adjustment method, and checksums.
-- [ ] Make model artifacts reference an immutable dataset manifest.
+- [x] Versioned `dataset_manifest.v1` with source, rows, date range, adjustment method, point-in-time declaration, delisted-security declaration, and SHA-256 checksum.
+- [x] Versioned `historical_validation.v1` report and `promotion_gates.v1` results.
+- [x] Brier score and expected calibration error.
+- [x] BUY/SELL precision and recall.
+- [x] Gross and friction-adjusted returns.
+- [x] Maximum adverse excursion fields when supplied.
+- [x] Recommendation churn, profile override, stale-data, fallback, and source-mode metrics.
+- [x] Privacy-safe aggregation by profile bucket.
+- [x] Explicit promotion blockers with a safe `hold_shadow` default.
+- [x] Licensing and privacy review blockers.
+- [x] Protected report API and model-health summary.
+- [x] Weekly report generation after outcome materialization.
+- [x] Unit, API, and command-line tests.
 
-## Leakage and realism controls
+See [Historical Validation Contract](../historical_validation_contract.md) for the artifact and gate schemas.
 
-- [ ] Ensure filings/fundamentals are not visible before their historical availability time.
-- [ ] Use time-based train, validation, and test partitions.
-- [ ] Use walk-forward evaluation.
-- [ ] Model spread, slippage, fees, and decision latency.
-- [ ] Separate pre-market, regular, and after-hours assumptions.
-- [ ] Test corporate-action and symbol-change handling.
+## Historical dataset work remaining
+
+- [ ] Ingest Massive flat files for broad historical daily and intraday coverage.
+- [ ] Build adjusted bars with explicit split/dividend treatment and corporate-action lineage.
+- [ ] Add point-in-time reference, filing, and fundamental availability timestamps.
+- [ ] Include delisted, failed, renamed, and merged securities where licensing permits.
+- [ ] Persist immutable manifests beside every derived dataset and model artifact.
+- [ ] Add dataset storage retention, encryption, and cost controls.
+
+The current report consumes materialized MoneyBot decision outcomes. It is intentionally compatible with a future Massive flat-file pipeline, but it does not claim that pipeline already exists.
+
+## Leakage and realism controls remaining
+
+- [ ] Enforce historical availability timestamps for filings and fundamentals.
+- [ ] Add time-based train, validation, and untouched test partitions.
+- [ ] Add rolling walk-forward folds with frozen configuration per fold.
+- [x] Support spread/slippage/fee inputs through `transaction_cost_bps` or `estimated_friction_bps`.
+- [ ] Separate pre-market, regular, and after-hours execution assumptions in backtests.
+- [ ] Test corporate-action, symbol-change, delisting, and market-holiday behavior end to end.
+- [ ] Record decision latency and reject fills that could not realistically occur.
 
 ## Evaluation dimensions
 
-- [ ] Brier score and calibration error by horizon.
-- [ ] BUY/SELL boundary precision and recall.
-- [ ] Realized return and maximum adverse excursion.
-- [ ] Results net of estimated trading friction.
-- [ ] Recommendation stability/churn.
-- [ ] Profile override rate and subsequent outcomes.
-- [ ] Results by risk profile, without exposing individual users.
-- [ ] Results by regime, volatility, sector, liquidity, and market cap.
-- [ ] Data freshness and fallback/source-mixing rates.
+- [x] Brier score and calibration error by report horizon.
+- [x] BUY/SELL boundary precision and recall.
+- [x] Realized return net of estimated trading friction.
+- [x] Maximum adverse excursion when available.
+- [x] Recommendation stability/churn.
+- [x] Profile override rate.
+- [x] Aggregation by risk/profile bucket without exposing users.
+- [x] Data freshness and fallback/source-mixing rates.
+- [ ] Regime, volatility, sector, liquidity, and market-cap slices from point-in-time data.
+- [ ] Statistical confidence intervals and multiple-comparison controls for subgroup review.
 
 ## Controlled rollout
 
-- [ ] Establish baseline metrics before stream enforcement.
-- [ ] Run normalized REST changes in shadow mode.
-- [ ] Run WebSocket state in shadow mode against REST.
-- [ ] Run profile policy changes in shadow mode by cohort.
-- [ ] Roll out to an allowlist first.
-- [ ] Add percentage-based cohorts with deterministic assignment.
-- [ ] Define automatic rollback gates.
-- [ ] Review subgroup regressions before increasing rollout.
+- [x] Existing normalized REST, WebSocket, and suitability shadow modes remain the first rollout stage.
+- [x] Existing deterministic allowlists and percentage cohorts remain available.
+- [x] Page 6 generates a machine-readable promotion or `hold_shadow` recommendation.
+- [x] Failed blocking gates identify required next steps.
+- [ ] Automatically apply rollback after a sustained production gate breach.
+- [ ] Require human subgroup review before increasing percentage rollout.
+- [ ] Record every rollout change with approver, cohort, policy version, model version, and dataset checksum.
 
-## Promotion gates
+## Default promotion gates
 
-A candidate should not be promoted unless:
+A candidate remains in shadow unless all blocking gates pass:
 
-- [ ] Calibration improves or stays within an approved tolerance.
-- [ ] Net outcomes improve for the intended horizon.
-- [ ] Drawdown and adverse excursion do not regress beyond limits.
-- [ ] Recommendation churn remains acceptable.
-- [ ] Stale-data and stream-recovery incidents stay below limits.
-- [ ] No material subgroup regression is found.
-- [ ] Operational cost remains within budget.
-- [ ] Licensing and privacy reviews are complete.
+- Minimum evaluated sample size.
+- Brier score below the absolute limit and within baseline regression tolerance.
+- Non-negative average return after configured friction.
+- Recommendation churn below its limit.
+- Stale-data and fallback rates below their limits.
+- No unacceptable maximum-adverse-excursion regression when baseline MAE exists.
+- Licensing review complete.
+- Privacy review complete.
 
-## Operations after launch
+Operational stream reliability, provider cost, subgroup regressions, and licensing terms still require production review before rollout increases.
 
-- [ ] Daily stream/data-quality report.
-- [ ] Weekly profile-policy and recommendation-churn report.
-- [ ] Weekly model/outcome materialization.
-- [ ] Monthly provider-cost and Redis-capacity review.
-- [ ] Incident runbooks for Massive, Redis, API, and notification outages.
-- [ ] Periodic review of profile questions and suitability thresholds.
+## Commands and API
+
+```bash
+python scripts/page6_historical_validation_report.py \
+  --outcomes data/decision_outcomes_snapshot.json \
+  --output data/historical_validation_report.json
+```
+
+- Protected report: `GET /api/historical-validation` with `X-Daily-Ops-Token`.
+- Summary: `GET /api/model-health` → `historical_validation`.
+- Weekly automation: `python scripts/run_weekly_model_refresh.py`.
 
 ## Exit criteria
 
-1. Historical datasets and model artifacts are reproducible.
-2. Walk-forward results satisfy promotion gates.
-3. Shadow and allowlist rollouts meet data-quality and reliability targets.
-4. Rollback controls are tested.
-5. Daily/weekly operational reports identify regressions quickly.
-6. Production rollout is documented with cohort and policy versions.
-
-## Suggested pull requests
-
-1. **Massive flat-file ingestion and dataset manifest**
-2. **Point-in-time feature and adjustment pipeline**
-3. **Walk-forward evaluation with transaction costs**
-4. **Shadow/cohort rollout controls and promotion gates**
-5. **Daily/weekly operational reporting and incident runbooks**
+1. Massive historical datasets and model artifacts are reproducible by manifest checksum.
+2. Point-in-time, survivorship-bias, corporate-action, and leakage controls are verified.
+3. Walk-forward results satisfy every automated gate and human subgroup review.
+4. Shadow and allowlist rollouts meet production reliability, latency, cost, and notification-volume targets.
+5. Automatic rollback is exercised in staging.
+6. Production rollout changes record cohort, policy, model, and dataset versions.
 
 ## Decision log
 
-- No additional decisions recorded yet.
+- Keep validation metrics independent of the historical data source so current decision outcomes and future Massive flat files share one promotion contract.
+- Treat missing evidence as a blocker rather than a pass.
+- Keep licensing and privacy as explicit blocking gates, not prose-only checklist items.
+- Expose only a summary through model health; require the operations token for the full report.

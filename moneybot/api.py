@@ -68,6 +68,7 @@ from .services.runtime_paths import (
     day13_calibration_report_path,
     day13_recalibration_plan_path,
     decision_events_log_path,
+    historical_validation_report_path,
     resolve_runtime_dir,
 )
 
@@ -2713,6 +2714,46 @@ def market_stream_health():
     })
 
 
+def _historical_validation_status() -> dict[str, Any]:
+    configured_path = str(current_app.config.get("HISTORICAL_VALIDATION_REPORT_PATH") or "").strip()
+    path = Path(configured_path) if configured_path else historical_validation_report_path()
+    diagnostics = _file_diagnostics(path)
+    max_age = max(60, int(current_app.config.get("HISTORICAL_VALIDATION_REPORT_MAX_AGE_SECONDS") or 604800))
+    report = _load_fresh_json_payload(str(path), max_age_seconds=max_age)
+    promotion_gates = report.get("promotion_gates") if isinstance(report, dict) and isinstance(report.get("promotion_gates"), dict) else {}
+    metrics = report.get("metrics") if isinstance(report, dict) and isinstance(report.get("metrics"), dict) else {}
+    return {
+        **diagnostics,
+        "fresh": report is not None,
+        "schema_version": report.get("schema_version") if isinstance(report, dict) else None,
+        "generated_at_utc": report.get("generated_at_utc") if isinstance(report, dict) else None,
+        "rollout_recommendation": report.get("rollout_recommendation") if isinstance(report, dict) else "hold_shadow",
+        "promotion_ready": bool(promotion_gates.get("promotion_ready")),
+        "failed_blockers": promotion_gates.get("failed_blockers"),
+        "evaluated_rows": metrics.get("evaluated_rows"),
+        "brier_score": metrics.get("brier_score"),
+        "avg_net_return": metrics.get("avg_net_return"),
+        "required_next_steps": report.get("required_next_steps", []) if isinstance(report, dict) else ["generate_historical_validation_report"],
+    }
+
+
+@api_bp.get("/historical-validation")
+def historical_validation():
+    expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
+    provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
+    if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
+    configured_path = str(current_app.config.get("HISTORICAL_VALIDATION_REPORT_PATH") or "").strip()
+    path = Path(configured_path) if configured_path else historical_validation_report_path()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return jsonify({"error": "historical validation report not found", "status": _historical_validation_status(), "request_id": g.request_id}), 404
+    except (OSError, json.JSONDecodeError):
+        return jsonify({"error": "historical validation report is unreadable", "status": _historical_validation_status(), "request_id": g.request_id}), 503
+    return jsonify({"data": payload, "status": _historical_validation_status(), "request_id": g.request_id})
+
+
 @api_bp.get("/model-health")
 def model_health():
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
@@ -2777,6 +2818,7 @@ def model_health():
                 "personalization_metrics": personalization_runtime.metrics.snapshot() if personalization_runtime else {},
                 "market_stream_health": _market_stream_health_payload(),
                 "live_trigger_metrics": (current_app.extensions.get("live_trigger_engine").snapshot() if current_app.extensions.get("live_trigger_engine") else {}),
+                "historical_validation": _historical_validation_status(),
                 "market_data_provider_health": (
                     current_app.extensions["market_data_service"].get_provider_health()
                     if current_app.extensions.get("market_data_service") is not None

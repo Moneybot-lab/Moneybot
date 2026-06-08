@@ -226,3 +226,17 @@ Set these on the web service (not the dedicated provider worker):
 - `LIVE_ALERTS_EMERGENCY_DISABLED` = `true` to suppress all live recommendation triggers while preserving live prices
 
 Keep `LIVE_ALERTS_EMERGENCY_DISABLED=true` until the Page 4 production shadow-data gates pass. SSE automatically falls back to normalized REST quote data when Redis state is absent or stale.
+
+
+### Page 6 historical validation and rollout
+
+Set these on the web service and weekly operations job:
+
+- `HISTORICAL_VALIDATION_REPORT_PATH` = optional explicit path to `historical_validation_report.json`; defaults to the MoneyBot runtime directory
+- `HISTORICAL_VALIDATION_REPORT_MAX_AGE_SECONDS` = maximum report age shown as fresh in model health (default `604800`, seven days)
+- `HISTORICAL_VALIDATION_MIN_ROWS` = minimum evaluated rows expected before promotion review (default `30`)
+- `HISTORICAL_VALIDATION_LICENSING_REVIEW_COMPLETE` = `true` only after the dataset/provider license review is recorded
+- `HISTORICAL_VALIDATION_PRIVACY_REVIEW_COMPLETE` = `true` only after privacy and subgroup-output review is recorded
+- `DAILY_OPS_TOKEN` = secret required by `GET /api/historical-validation`
+
+Generate the report after outcome materialization with `python scripts/page6_historical_validation_report.py`. The weekly model refresh runs this automatically. Keep rollout in shadow whenever the report is missing, stale, or has blocking gates.

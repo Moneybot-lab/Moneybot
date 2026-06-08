@@ -1,7 +1,7 @@
 # MoneyBot User Profile + Real-Time Setup
 
 **Status date:** June 8, 2026
-**Current stage:** Page 5 live SSE delivery and controlled triggers are implemented; production stream and notification-volume validation is next.
+**Current stage:** Page 6 validation contracts, promotion gates, protected reporting, and weekly generation are implemented; Massive historical ingestion and production validation remain.
 
 This folder turns the larger [architecture roadmap](../user_profile_realtime_roadmap.md) into short implementation pages that can be updated as work is completed.
 
@@ -14,7 +14,7 @@ This folder turns the larger [architecture roadmap](../user_profile_realtime_roa
 | [3](03-massive-rest-foundation.md) | Normalize Massive REST data | **Complete** | Fresh, timestamped, source-consistent quotes and bars |
 | [4](04-realtime-stream-worker.md) | Add Massive WebSocket worker | **Shadow-ready** | Bounded subscriptions feeding shared Redis state |
 | [5](05-live-ui-and-alerts.md) | Deliver live updates and triggers | **Validation-ready** | Authenticated SSE, live portfolio prices, controlled refresh boundaries |
-| [6](06-history-validation-rollout.md) | Historical validation and rollout | Not started | Reproducible datasets, walk-forward evaluation, safe promotion |
+| [6](06-history-validation-rollout.md) | Historical validation and rollout | **Foundation ready** | Reproducible manifests, evaluation metrics, promotion blockers, and safe shadow default |
 
 ## Where we are now
 
@@ -26,7 +26,7 @@ This folder turns the larger [architecture roadmap](../user_profile_realtime_roa
 [Massive REST normalization]DONE
 [WebSocket + Redis]         SHADOW-READY
 [SSE + live alerts]         VALIDATION-READY
-[Historical validation]     WAITING
+[Historical validation]     FOUNDATION READY
 ```
 
 ### Overall completion definition
@@ -58,4 +58,4 @@ When a task is completed:
 
 1. Deploy and validate the [Page 4 WebSocket shadow worker](04-realtime-stream-worker.md) against its production gates.
 2. Keep Page 5 live triggers emergency-disabled until Page 4 passes, then validate SSE latency, reconnects, fallback rate, and notification volume.
-3. Build durable history and promote safely with [Page 6](06-history-validation-rollout.md).
+3. Build Massive point-in-time historical datasets, run walk-forward validation through the Page 6 gate contract, and exercise rollback before promotion.
