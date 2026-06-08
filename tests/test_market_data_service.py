@@ -89,7 +89,9 @@ def test_get_quote_falls_back_to_yfinance_without_finnhub_key(monkeypatch):
     quote = svc.get_quote("MSFT")
 
     assert quote["quote_source"] == "yfinance"
-    assert quote["live_data_available"] is True
+    assert quote["live_data_available"] is False
+    assert quote["is_stale"] is True
+    assert "freshness_unknown" in quote["quality_flags"]
     assert quote["price"] == 250.0
     assert quote["diagnostics"]["finnhub_attempted"] is False
     assert quote["diagnostics"]["finnhub_error"] == "missing_api_key"
@@ -247,14 +249,15 @@ def test_get_quote_uses_massive_minute_trade_when_day_close_zero(monkeypatch):
             return None
 
         def json(self):
+            now_ns = int(datetime.now().timestamp() * 1_000_000_000)
             return {
                 "ticker": {
                     "ticker": "MRLN",
                     "todaysChangePerc": 29.6685,
                     "day": {"o": 0, "h": 0, "l": 0, "c": 0, "v": 0, "vw": 0},
-                    "lastQuote": {"P": 9.32, "p": 9.31},
-                    "lastTrade": {"p": 9.3102},
-                    "min": {"c": 9.3307, "vw": 9.3552},
+                    "lastQuote": {"P": 9.32, "p": 9.31, "t": now_ns},
+                    "lastTrade": {"p": 9.3102, "t": now_ns},
+                    "min": {"c": 9.3307, "vw": 9.3552, "t": now_ns // 1_000_000},
                     "prevDay": {"c": 7.18},
                 },
                 "status": "OK",
@@ -268,10 +271,10 @@ def test_get_quote_uses_massive_minute_trade_when_day_close_zero(monkeypatch):
     quote = svc.get_quote("MRLN")
 
     assert quote["quote_source"] == "massive"
-    assert quote["price"] == 9.3307
+    assert quote["price"] == 9.3102
     assert quote["live_data_available"] is True
-    assert round(quote["change_percent"], 2) == 29.95
-    assert quote["diagnostics"]["massive_price_source"] == "minute_close"
+    assert round(quote["change_percent"], 2) == 29.67
+    assert quote["diagnostics"]["massive_price_source"] == "last_trade"
 
 
 def test_get_quote_falls_back_to_finnhub_when_massive_unavailable(monkeypatch):
@@ -1109,3 +1112,66 @@ def test_get_signal_can_skip_company_snapshot(monkeypatch):
     assert signal["score"] == 7.1
     assert signal["sentiment"]["headlines"] == []
     assert snapshot_calls["count"] == 0
+
+
+def test_get_price_history_prefers_split_adjusted_massive_bars(monkeypatch):
+    svc = MarketDataService()
+    monkeypatch.setenv("MASSIVE_API_KEY", "massive-key")
+
+    class Response:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return {
+                "status": "OK",
+                "request_id": "history-1",
+                "adjusted": True,
+                "results": [
+                    {"o": 100, "h": 102, "l": 99, "c": 101, "v": 1000, "t": 1780704000000},
+                    {"o": 101, "h": 104, "l": 100, "c": 103, "v": 1200, "t": 1780790400000},
+                ],
+            }
+
+    monkeypatch.setattr("moneybot.services.market_data.requests.get", lambda *args, **kwargs: Response())
+
+    data = svc.get_price_history_data("AAPL", days=2)
+
+    assert data["closes"] == [101.0, 103.0]
+    assert data["source"] == "massive"
+    assert data["adjusted_for_splits"] is True
+    assert data["dividend_adjusted"] is False
+    assert data["mixed_sources"] is False
+    assert svc.get_provider_health()["massive"]["calls"]["aggregates_day"] == 1
+
+
+def test_massive_close_series_drives_normalized_technical_indicators():
+    increasing = [100.0 + index for index in range(40)]
+
+    rsi, macd_histogram = MarketDataService._technical_indicators_from_closes(increasing)
+
+    assert rsi == 100.0
+    assert isinstance(macd_histogram, float)
+    assert macd_histogram > 0
+
+
+def test_market_data_service_does_not_label_stale_massive_daily_close_live(monkeypatch):
+    svc = MarketDataService()
+    monkeypatch.setenv("MASSIVE_API_KEY", "massive-key")
+
+    class Response:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return {"status": "OK", "ticker": {"day": {"c": 150.0}, "prevDay": {"c": 149.0}}}
+
+    monkeypatch.setattr("moneybot.services.market_data.requests.get", lambda *args, **kwargs: Response())
+
+    quote = svc.get_quote("AAPL")
+
+    assert quote["quote_source"] == "massive"
+    assert quote["price"] == 150.0
+    assert quote["is_stale"] is True
+    assert quote["live_data_available"] is False
+    assert "daily_close_not_realtime" in quote["quality_flags"]
