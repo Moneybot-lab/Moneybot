@@ -9,15 +9,17 @@ def _client():
     return create_app().test_client()
 
 
-def test_home_quick_ask_has_live_freshness_and_profile_adjustment_ui():
+def test_home_quick_ask_uses_rest_without_live_status_noise_and_keeps_profile_adjustment_ui():
     client = _client()
     html = client.get("/").get_data(as_text=True)
     js = client.get("/static/js/home.js").get_data(as_text=True)
-    assert 'id="quickLiveStatus"' in html
-    assert "new EventSource('/api/live-market-stream?scope=quick" in js
+    assert 'id="quickLiveStatus"' not in html
+    assert "new EventSource('/api/live-market-stream?scope=quick" not in js
+    assert "price uses a REST snapshot" not in js
+    assert 'id="quickProfileNote"' in html
     assert "Profile adjusted" in js
+    assert "because your investor profile changed" in js
     assert 'href="/settings"' in js
-    assert "REST fallback" in js
 
 
 def test_portfolio_has_live_price_pnl_reconnect_and_controlled_refresh_ui():

@@ -117,7 +117,6 @@
                         <button id="quickAskBtn" onclick="quickAsk()" style="padding:10px 16px;border:none;background:#16a34a;color:#f0fdf4;border-radius:10px;font-weight:700;font-size:1.08rem">Analyze</button>
                       </div>
                       <div id="quickOut" style="margin-top:10px;color:#bbf7d0">Type a ticker to get an instant STRONG BUY / BUY / HOLD OFF FOR NOW call.</div>
-                      <div id="quickLiveStatus" role="status" style="margin-top:10px;color:#86efac;font-size:12px;font-weight:700">Live price connects after analysis.</div>
                       <div id="quickLoading" style="display:none;align-items:center;gap:8px;margin-top:10px;color:#86efac;font-weight:600">
                         <span style="display:inline-block;width:14px;height:14px;border:2px solid #86efac;border-top-color:#22c55e;border-radius:9999px;animation:spin .7s linear infinite"></span>
                         Analyzing signal...
@@ -130,9 +129,12 @@
                         <div id="quickTrendGraph" style="height:92px;margin-top:8px"></div>
                       </div>
                     </div>
-                    <div id="quickAdvice" style="min-height:72px;background:#052e16;border:1px solid #14532d;border-radius:10px;padding:10px 12px;color:#dcfce7">
-                      <strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong>
-                      <span style="color:#86efac">Advice will appear here after you analyze a ticker.</span>
+                    <div>
+                      <div id="quickAdvice" style="min-height:72px;background:#052e16;border:1px solid #14532d;border-radius:10px;padding:10px 12px;color:#dcfce7">
+                        <strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong>
+                        <span style="color:#86efac">Advice will appear here after you analyze a ticker.</span>
+                      </div>
+                      <div id="quickProfileNote" style="display:none;margin-top:10px;color:#fde68a;font-size:12px;font-weight:700;line-height:1.4"></div>
                     </div>
                   </div>
                 </section>

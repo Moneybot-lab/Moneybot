@@ -2101,7 +2101,6 @@ def quick_ask():
     if not symbol:
         return jsonify({"error": "symbol required", "request_id": g.request_id}), 400
 
-    _register_stream_demand(f"quick:{session.get('user_id') or g.request_id}", [symbol])
     svc = current_app.extensions["market_data_service"]
     ai_svc = current_app.extensions.get("ai_advisor_service")
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
