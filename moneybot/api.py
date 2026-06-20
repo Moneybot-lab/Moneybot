@@ -2404,18 +2404,62 @@ def run_notification_triggers():
             if not symbol:
                 continue
             advice = "HOLD"
+            deterministic_portfolio: dict[str, Any] | None = None
+            quote: dict[str, Any] = {}
             try:
                 signal = svc.get_signal(symbol) or {}
             except Exception:  # noqa: BLE001
                 signal = {}
+            if isinstance(signal.get("quote"), dict):
+                quote = signal.get("quote") or {}
+            elif hasattr(svc, "get_quote"):
+                try:
+                    quote = svc.get_quote(symbol) or {}
+                except Exception:  # noqa: BLE001
+                    quote = {}
+
             action = str(signal.get("action") or "").upper()
             if action in {"STRONG BUY", "BUY"}:
                 advice = "BUY"
             elif action == "SELL":
                 advice = "SELL"
+
+            current_price = quote.get("price")
+            if not isinstance(current_price, (int, float)):
+                current_price = item.buy_price
+            shares_value = float(item.shares) if isinstance(item.shares, (int, float, Decimal)) and float(item.shares) > 0 else 1.0
+            has_portfolio_market_context = isinstance(quote.get("price"), (int, float, Decimal))
+            if deterministic_svc is not None and has_portfolio_market_context:
+                try:
+                    deterministic_portfolio = deterministic_svc.predict_portfolio_position(
+                        symbol=symbol,
+                        entry_price=float(item.buy_price) if isinstance(item.buy_price, (int, float, Decimal)) else None,
+                        current_price=float(current_price) if isinstance(current_price, (int, float, Decimal)) else None,
+                        shares=shares_value,
+                        signal_data=signal,
+                        quote_data=quote,
+                    )
+                    deterministic_advice = str((deterministic_portfolio or {}).get("advice") or "").upper()
+                    if deterministic_advice in {"BUY", "HOLD", "SELL"}:
+                        advice = deterministic_advice
+                except Exception:  # noqa: BLE001
+                    deterministic_portfolio = None
+
+            try:
+                quick_alignment = str((_quick_decision(signal, quote) or {}).get("recommendation") or "").upper()
+            except Exception:  # noqa: BLE001
+                quick_alignment = ""
+            if quick_alignment in {"BUY", "STRONG BUY"} and advice == "SELL":
+                advice = "HOLD"
+            elif quick_alignment == "HOLD OFF FOR NOW" and advice == "BUY":
+                advice = "HOLD"
+
             personalized = _personalize_action(
                 user_id=user.id, context=decision_context, endpoint="notification_portfolio",
                 symbol=symbol, base_action=advice, forecast_horizon="portfolio_position",
+                current_price=float(current_price) if isinstance(current_price, (int, float, Decimal)) else None,
+                probability_up=(deterministic_portfolio or {}).get("probability_up"),
+                confidence=(deterministic_portfolio or {}).get("confidence"),
             )
             advice = personalized.action
 
