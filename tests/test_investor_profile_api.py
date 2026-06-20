@@ -407,7 +407,7 @@ def test_portfolio_aggregates_duplicate_sectors_with_partial_holdings():
     assert all(item["weight_basis"] == "invested_positions_only_cash_excluded" for item in items)
 
 
-def test_quick_ask_and_portfolio_register_bounded_stream_demand():
+def test_quick_ask_uses_rest_snapshot_and_only_portfolio_registers_stream_demand():
     client = _client()
     client.application.extensions["deterministic_quick_advisor"] = None
     client.application.extensions["market_data_service"].get_signal = lambda symbol: {
@@ -424,7 +424,7 @@ def test_quick_ask_and_portfolio_register_bounded_stream_demand():
     assert client.get("/api/user-watchlist").status_code == 200
 
     demand = client.application.extensions["market_stream_state"].desired_demand()
-    assert any(symbols == {"AAPL"} for source, symbols in demand.items() if source.startswith("quick:"))
+    assert not any(source.startswith("quick:") for source in demand)
     assert any(symbols == {"MSFT"} for source, symbols in demand.items() if source.startswith("portfolio:"))
 
 
