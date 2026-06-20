@@ -246,19 +246,6 @@ const fallbackData = {
                     }
                   }
 
-                  function setQuickLiveStatus(text, degraded){
-                    const el = document.getElementById('quickLiveStatus');
-                    if(!el) return;
-                    el.textContent = text;
-                    el.style.color = degraded ? '#fbbf24' : '#86efac';
-                  }
-                  function describeQuickRestSnapshot(symbol, data){
-                    const provenance = data.market_data_provenance || {};
-                    const mode = provenance.quote_source_mode || data.quote_source || 'REST snapshot';
-                    const stale = provenance.quote_is_stale === true;
-                    setQuickLiveStatus(`${symbol} price uses a REST snapshot (${mode}); portfolio is the only page that keeps a live stream open.`, stale);
-                  }
-
                   async function quickAsk(){
                     const inputEl = document.getElementById('quickSymbol');
                     const symbol = normalizeTickerInputValue(inputEl);
@@ -290,7 +277,6 @@ const fallbackData = {
                       const profileChanged = recommendation !== baseRecommendation;
                       const profileNote = profileChanged ? ` <span style="margin-left:8px;color:#fde68a">Profile adjusted ${escapeHtml(baseRecommendation)} → ${escapeHtml(recommendation)} · <a href="/settings" style="color:#fde68a;font-weight:800">review profile</a></span>` : '';
                       outEl.innerHTML = `${quickRecommendationBadge(recommendation)} <span style="margin-left:8px">· <span id="quickLivePrice">${formatMoney(data.current_price)}</span> · ${data.rationale || 'Signal generated from current indicators.'}</span>${profileNote}`;
-                      describeQuickRestSnapshot(symbol, data);
                       renderQuickTrend(symbol, data.history30 || []);
 
                       const ai = data.ai || {};
