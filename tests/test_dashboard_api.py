@@ -91,6 +91,18 @@ class StubMarketService:
     def get_price_history(self, symbol, days=30):
         return [150.25, 151.5, 152.0]
 
+    def get_price_history_data(self, symbol, days=30):
+        return {
+            "symbol": symbol.upper(),
+            "closes": [150.25, 151.5, 152.0],
+            "bars": [
+                {"open": 149.5, "high": 151.0, "low": 149.0, "close": 150.25},
+                {"open": 150.25, "high": 152.0, "low": 150.0, "close": 151.5},
+                {"open": 151.5, "high": 152.5, "low": 151.0, "close": 152.0},
+            ],
+            "source": "stub",
+        }
+
     def get_company_snapshot(self, symbol):
         return {"symbol": symbol, "company_name": f"{symbol} Corp", "summary": "Test summary."}
 
@@ -170,6 +182,9 @@ class FailingMarketService(StubMarketService):
         raise RuntimeError("quote unavailable")
 
     def get_price_history(self, symbol, days=30):
+        raise RuntimeError("history unavailable")
+
+    def get_price_history_data(self, symbol, days=30):
         raise RuntimeError("history unavailable")
 
 
@@ -1030,7 +1045,7 @@ def test_user_watchlist_exposes_quote_source_diagnostics():
     assert enriched["quote_diagnostics"]["provider"] == "finnhub"
 
 
-def test_user_watchlist_returns_rows_without_signal_or_history_enrichment():
+def test_user_watchlist_returns_rows_with_quote_and_history_enrichment():
     client = _client()
 
     class QuoteOnlyPortfolioService(StubMarketService):
@@ -1047,8 +1062,17 @@ def test_user_watchlist_returns_rows_without_signal_or_history_enrichment():
         def get_signal(self, symbol, include_company_snapshot=True):
             raise AssertionError("portfolio endpoint should not call slow signal enrichment")
 
-        def get_price_history(self, symbol, days=30):
-            raise AssertionError("portfolio endpoint should not call slow history enrichment")
+        def get_price_history_data(self, symbol, days=30):
+            return {
+                "symbol": symbol.upper(),
+                "closes": [40.0, 41.0, 42.5],
+                "bars": [
+                    {"open": 39.5, "high": 40.5, "low": 39.0, "close": 40.0},
+                    {"open": 40.0, "high": 41.5, "low": 39.8, "close": 41.0},
+                    {"open": 41.0, "high": 43.0, "low": 40.8, "close": 42.5},
+                ],
+                "source": "test_history",
+            }
 
     client.application.extensions["market_data_service"] = QuoteOnlyPortfolioService()
     signup = client.post("/api/auth/signup", json=_signup_payload("quote-only@b.com"))
@@ -1064,7 +1088,9 @@ def test_user_watchlist_returns_rows_without_signal_or_history_enrichment():
     assert len(payload["enriched_items"]) == 2
     assert {item["current_price"] for item in payload["enriched_items"]} == {42.5}
     assert {item["quote_source"] for item in payload["enriched_items"]} == {"test_quote"}
-    assert all(item["history30"] == [] for item in payload["enriched_items"])
+    assert all(item["history30"] == [40.0, 41.0, 42.5] for item in payload["enriched_items"])
+    assert all(len(item["history30_bars"]) == 3 for item in payload["enriched_items"])
+    assert {item["history30_source"] for item in payload["enriched_items"]} == {"test_history"}
 
 
 def test_user_watchlist_duplicate_symbol_points_to_buy_action():

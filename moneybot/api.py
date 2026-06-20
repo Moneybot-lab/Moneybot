@@ -1401,14 +1401,22 @@ def user_watchlist():
             "diagnostics": {"provider": "portfolio_quote_only", "error": None},
         }
 
-    def _load_market_inputs(symbol: str) -> tuple[dict[str, Any], dict[str, Any], list[float]]:
+    def _load_market_inputs(symbol: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         if svc is None:
             quote: dict[str, Any] = {}
+            history_payload: dict[str, Any] = {}
         else:
             quote = _safe_market_call(lambda: svc.get_quote(symbol), {})
-        return _portfolio_signal_from_quote(symbol, quote), quote, []
+            if hasattr(svc, "get_price_history_data"):
+                history_payload = _safe_market_call(lambda: svc.get_price_history_data(symbol, days=30), {})
+            else:
+                history_values = _safe_market_call(lambda: svc.get_price_history(symbol, days=30), [])
+                history_payload = {"closes": history_values if isinstance(history_values, list) else [], "bars": []}
+        if not isinstance(history_payload, dict):
+            history_payload = {}
+        return _portfolio_signal_from_quote(symbol, quote), quote, history_payload
 
-    market_inputs_by_id: dict[int, tuple[dict[str, Any], dict[str, Any], list[float]]] = {}
+    market_inputs_by_id: dict[int, tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = {}
     position_values_by_id: dict[int, float] = {}
     sector_by_id: dict[int, str | None] = {}
     sector_market_values: dict[str, float] = defaultdict(float)
@@ -1434,7 +1442,9 @@ def user_watchlist():
         sector_by_id[item["id"]] = sector
 
     for item in base_items:
-        signal, quote, history30 = market_inputs_by_id[item["id"]]
+        signal, quote, history_payload = market_inputs_by_id[item["id"]]
+        history30 = list(history_payload.get("closes") or [])
+        history30_bars = list(history_payload.get("bars") or [])
 
         sentiment_label = str((signal.get("sentiment") or {}).get("label") or "neutral").lower()
         if sentiment_label in {"positive", "bullish"}:
@@ -1600,6 +1610,8 @@ def user_watchlist():
                 "deterministic_portfolio": deterministic_portfolio,
                 "ai_portfolio": ai_portfolio,
                 "history30": history30,
+                "history30_bars": history30_bars,
+                "history30_source": history_payload.get("source"),
                 "quote_source": quote.get("quote_source"),
                 "quote_diagnostics": quote.get("diagnostics"),
                 "quick_alignment_recommendation": quick_alignment_recommendation,
