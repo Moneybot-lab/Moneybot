@@ -16,7 +16,9 @@ def test_home_quick_ask_uses_rest_without_live_status_noise_and_keeps_profile_ad
     assert 'id="quickLiveStatus"' not in html
     assert "new EventSource('/api/live-market-stream?scope=quick" not in js
     assert "price uses a REST snapshot" not in js
+    assert 'id="quickProfileNote"' in html
     assert "Profile adjusted" in js
+    assert "because your investor profile changed" in js
     assert 'href="/settings"' in js
 
 

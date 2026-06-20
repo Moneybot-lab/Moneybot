@@ -253,7 +253,9 @@ const fallbackData = {
                     const adviceEl = document.getElementById('quickAdvice');
                     const loadingEl = document.getElementById('quickLoading');
                     const quickAskBtn = document.getElementById('quickAskBtn');
+                    const profileNoteEl = document.getElementById('quickProfileNote');
                     inputEl.blur();
+                    if(profileNoteEl){ profileNoteEl.style.display = 'none'; profileNoteEl.innerHTML = ''; }
                     if(!symbol){ outEl.textContent='Please enter a ticker symbol.'; return; }
 
                     loadingEl.style.display = 'flex';
@@ -275,8 +277,11 @@ const fallbackData = {
                       const baseRecommendation = String(data.recommendation || 'HOLD OFF FOR NOW').toUpperCase();
                       const recommendation = String(data.personalized_recommendation || baseRecommendation).toUpperCase();
                       const profileChanged = recommendation !== baseRecommendation;
-                      const profileNote = profileChanged ? ` <span style="margin-left:8px;color:#fde68a">Profile adjusted ${escapeHtml(baseRecommendation)} → ${escapeHtml(recommendation)} · <a href="/settings" style="color:#fde68a;font-weight:800">review profile</a></span>` : '';
-                      outEl.innerHTML = `${quickRecommendationBadge(recommendation)} <span style="margin-left:8px">· <span id="quickLivePrice">${formatMoney(data.current_price)}</span> · ${data.rationale || 'Signal generated from current indicators.'}</span>${profileNote}`;
+                      outEl.innerHTML = `${quickRecommendationBadge(recommendation)} <span style="margin-left:8px">· <span id="quickLivePrice">${formatMoney(data.current_price)}</span> · ${data.rationale || 'Signal generated from current indicators.'}</span>`;
+                      if(profileNoteEl && profileChanged){
+                        profileNoteEl.innerHTML = `Profile adjusted ${escapeHtml(baseRecommendation)} → ${escapeHtml(recommendation)} because your investor profile changed how this signal fits your risk, horizon, or suitability settings. <a href="/settings" style="color:#fde68a;font-weight:800">Review profile</a>`;
+                        profileNoteEl.style.display = 'block';
+                      }
                       renderQuickTrend(symbol, data.history30 || []);
 
                       const ai = data.ai || {};
