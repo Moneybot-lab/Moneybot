@@ -219,3 +219,44 @@ def test_run_notification_triggers_suppresses_after_hours_for_profile(monkeypatc
     assert response.status_code == 200
     assert response.get_json()['data']['suppressed_after_hours'] >= 1
     assert sent == []
+
+
+def test_portfolio_notification_uses_same_deterministic_hold_as_portfolio_page(monkeypatch, tmp_path):
+    client = _client(daily_ops_token='cron-secret')
+    assert _signup(client, email='portfolio-hold@example.com', username='portfolio_hold').status_code == 201
+    assert client.put('/api/notifications/triggers', json={'push_notifications_enabled': True}).status_code == 200
+    assert client.post('/api/notifications/fcm-token', json={'token': 'fcm_token_' + ('h' * 48)}).status_code == 201
+    assert client.post('/api/user-watchlist', json={'symbol': 'AAPL', 'buy_price': 100, 'shares': 1}).status_code == 201
+    assert client.put('/api/me/investor-profile', json={
+        'profile_version': 1, 'primary_goal': 'growth', 'time_horizon_years': 10,
+        'risk_tolerance': 'aggressive', 'loss_capacity_percent': 50, 'liquidity_need': 'low',
+        'experience_level': 'advanced', 'account_type': 'taxable',
+        'position_size_limit_percent': 80, 'sector_limit_percent': 90,
+        'penny_stocks_allowed': True, 'after_hours_alerts': True,
+        'recommendation_style': 'opportunity_seeking',
+    }).status_code == 200
+
+    class _Svc:
+        def get_signal(self, symbol):
+            return {'action': 'BUY', 'score': 8.0, 'quote': self.get_quote(symbol)}
+        def get_quote(self, symbol):
+            return {'symbol': symbol, 'price': 101.0, 'change_percent': 1.0}
+        def get_hot_momentum_buys(self): return []
+        def get_wells_picks(self): return []
+
+    class _Deterministic:
+        def predict_portfolio_position(self, *, symbol, entry_price, current_price, shares, signal_data, quote_data):
+            return {'advice': 'HOLD', 'probability_up': 0.45, 'confidence': 45.0}
+
+    sent = []
+    monkeypatch.setitem(client.application.extensions, 'market_data_service', _Svc())
+    monkeypatch.setitem(client.application.extensions, 'deterministic_quick_advisor', _Deterministic())
+    monkeypatch.setattr('moneybot.api._notification_trigger_state_path', lambda: str(tmp_path / 'notification-state.json'))
+    monkeypatch.setattr('moneybot.api._is_regular_market_hours', lambda: True)
+    monkeypatch.setattr('moneybot.api._send_firebase_push_to_token', lambda **kwargs: sent.append(kwargs) or 'ok')
+
+    response = client.post('/api/run-notification-triggers', headers={'X-Daily-Ops-Token': 'cron-secret'})
+
+    assert response.status_code == 200
+    assert response.get_json()['data']['events_queued'] == 0
+    assert sent == []
