@@ -246,6 +246,23 @@ const fallbackData = {
                     }
                   }
 
+
+                  function profileAdjustmentExplanation(data, baseRecommendation, recommendation){
+                    const personalization = (data && typeof data.personalization === 'object' && data.personalization) ? data.personalization : {};
+                    const rules = Array.isArray(personalization.applied_rules) ? personalization.applied_rules : [];
+                    const reasonSet = new Set();
+                    rules.forEach((rule) => {
+                      const details = (rule && typeof rule.details === 'object' && rule.details) ? rule.details : {};
+                      if(Array.isArray(details.reasons)){
+                        details.reasons.forEach((reason) => { if(reason) reasonSet.add(String(reason)); });
+                      }
+                      if(rule && rule.message) reasonSet.add(String(rule.message));
+                    });
+                    const reasons = Array.from(reasonSet).slice(0, 3);
+                    const reasonText = reasons.length ? reasons.join('; ') : 'your risk, horizon, or suitability settings require a stronger setup before changing this to a buy';
+                    return `Profile adjusted ${escapeHtml(baseRecommendation)} → ${escapeHtml(recommendation)}. The market signal still matters, but your investor profile made the final Quick Ask more cautious because ${escapeHtml(reasonText)}. In plain English: the signal did not fit your selected risk tolerance, time horizon, or suitability guardrails strongly enough for the original action. <a href="/settings" style="color:#fde68a;font-weight:800">Review profile</a>`;
+                  }
+
                   async function quickAsk(){
                     const inputEl = document.getElementById('quickSymbol');
                     const symbol = normalizeTickerInputValue(inputEl);
@@ -279,7 +296,7 @@ const fallbackData = {
                       const profileChanged = recommendation !== baseRecommendation;
                       outEl.innerHTML = `${quickRecommendationBadge(recommendation)} <span style="margin-left:8px">· <span id="quickLivePrice">${formatMoney(data.current_price)}</span> · ${data.rationale || 'Signal generated from current indicators.'}</span>`;
                       if(profileNoteEl && profileChanged){
-                        profileNoteEl.innerHTML = `Profile adjusted ${escapeHtml(baseRecommendation)} → ${escapeHtml(recommendation)} because your investor profile changed how this signal fits your risk, horizon, or suitability settings. <a href="/settings" style="color:#fde68a;font-weight:800">Review profile</a>`;
+                        profileNoteEl.innerHTML = profileAdjustmentExplanation(data, baseRecommendation, recommendation);
                         profileNoteEl.style.display = 'block';
                       }
                       renderQuickTrend(symbol, data.history30 || []);
