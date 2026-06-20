@@ -1595,13 +1595,53 @@ def create_app() -> Flask:
                 const sign = up ? '+' : '';
                 return `<div style="color:${color};font-weight:700">${sign}${formatMoney(amount)}</div>`;
               }
-              function renderTrend(divId, series){
+              function trendCandleBars(series, bars){
+                const rawBars = Array.isArray(bars) ? bars : [];
+                const normalizedBars = rawBars.map((bar) => ({
+                  open: Number(bar.open ?? bar.o),
+                  high: Number(bar.high ?? bar.h),
+                  low: Number(bar.low ?? bar.l),
+                  close: Number(bar.close ?? bar.c),
+                })).filter((bar) => [bar.open, bar.high, bar.low, bar.close].every(Number.isFinite));
+                if(normalizedBars.length >= 2) return normalizedBars;
+                const closes = (Array.isArray(series) ? series : []).map(Number).filter(Number.isFinite);
+                return closes.map((close, index) => {
+                  const open = index > 0 ? closes[index - 1] : close;
+                  const high = Math.max(open, close);
+                  const low = Math.min(open, close);
+                  return {open, high, low, close};
+                });
+              }
+              function renderTrend(divId, series, currentPrice, bars){
                 if(!window.Plotly) return;
-                if(!Array.isArray(series) || series.length < 2){
-                  const el = document.getElementById(divId); if(el) el.innerHTML='<span style="color:#94a3b8">No trend data</span>'; return;
+                const el = document.getElementById(divId);
+                const candleBars = trendCandleBars(series, bars);
+                if(!candleBars.length){
+                  if(el) el.innerHTML='<span style="color:#94a3b8;font-size:12px">No trend data</span>'; return;
                 }
-                const up = series[series.length-1] >= series[0];
-                Plotly.newPlot(divId,[{y:series,mode:'lines',type:'scatter',line:{color:up?'#16a34a':'#dc2626',width:2},hoverinfo:'skip'}],{margin:{l:2,r:2,t:2,b:2},height:30,width:100,showlegend:false,xaxis:{visible:false,fixedrange:true},yaxis:{visible:false,fixedrange:true},paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)'},{displayModeBar:false,responsive:true,staticPlot:true});
+                const indicatorPrice = Number.isFinite(Number(currentPrice)) ? Number(currentPrice) : candleBars[candleBars.length - 1].close;
+                const trace = {
+                  x: candleBars.map((_, index) => index + 1),
+                  open: candleBars.map((bar) => bar.open),
+                  high: candleBars.map((bar) => bar.high),
+                  low: candleBars.map((bar) => bar.low),
+                  close: candleBars.map((bar) => bar.close),
+                  type:'candlestick',
+                  increasing:{line:{color:'#22c55e',width:1},fillcolor:'#22c55e'},
+                  decreasing:{line:{color:'#ef4444',width:1},fillcolor:'#ef4444'},
+                  hoverinfo:'skip',
+                };
+                Plotly.newPlot(divId,[trace],{
+                  margin:{l:4,r:4,t:4,b:4},
+                  height:44,
+                  width:160,
+                  showlegend:false,
+                  xaxis:{visible:false,fixedrange:true,rangeslider:{visible:false}},
+                  yaxis:{visible:false,fixedrange:true},
+                  shapes:[{type:'line',xref:'paper',x0:0,x1:1,yref:'y',y0:indicatorPrice,y1:indicatorPrice,line:{color:'#f8fafc',width:1,dash:'dot'}}],
+                  paper_bgcolor:'#000',
+                  plot_bgcolor:'#000'
+                },{displayModeBar:false,responsive:true,staticPlot:true});
               }
 
 
@@ -1698,9 +1738,9 @@ def create_app() -> Flask:
                 const totalTodayChange = items.reduce((sum, item) => sum + (typeof item.today_change_amount === 'number' ? item.today_change_amount : 0), 0);
                 const totalPerformance = items.reduce((sum, item) => sum + (typeof item.performance_amount === 'number' ? item.performance_amount : 0), 0);
 
-                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${livePriceCell(i)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="editRow(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Edit</button></div></td></tr>`).join('')
+                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${livePriceCell(i)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:6px;background:#000;min-width:172px"><div id="trend-${idx}" style="width:160px;height:44px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="editRow(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Edit</button></div></td></tr>`).join('')
                 + `<tr style="background:#f7fee7;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px;color:#3f3f46;font-size:12px">Click advice badges to see why.</td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
-                items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || []));
+                items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || [], item.current_price, item.history30_bars || []));
               }
 
               async function load(){
