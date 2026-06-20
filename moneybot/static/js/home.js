@@ -246,34 +246,18 @@ const fallbackData = {
                     }
                   }
 
-                  let quickLiveSource = null;
-                  let quickLiveSymbol = null;
                   function setQuickLiveStatus(text, degraded){
                     const el = document.getElementById('quickLiveStatus');
                     if(!el) return;
                     el.textContent = text;
                     el.style.color = degraded ? '#fbbf24' : '#86efac';
                   }
-                  function startQuickLive(symbol){
-                    if(quickLiveSource){ quickLiveSource.close(); quickLiveSource = null; }
-                    quickLiveSymbol = symbol;
-                    setQuickLiveStatus(`${symbol} live price: connecting…`, false);
-                    quickLiveSource = new EventSource('/api/live-market-stream?scope=quick&symbols=' + encodeURIComponent(symbol));
-                    quickLiveSource.addEventListener('quotes', (event) => {
-                      try {
-                        const quote = ((JSON.parse(event.data) || {}).quotes || [])[0];
-                        if(!quote || quote.symbol !== quickLiveSymbol) return;
-                        const priceEl = document.getElementById('quickLivePrice');
-                        if(priceEl && typeof quote.price === 'number') priceEl.textContent = formatMoney(quote.price);
-                        const asOf = quote.event_timestamp ? new Date(quote.event_timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : 'unknown time';
-                        const state = quote.is_stale ? 'stale' : (quote.is_degraded ? 'REST fallback' : 'live');
-                        setQuickLiveStatus(`${quote.symbol} · ${state} · ${quote.market_session || 'session n/a'} · as of ${asOf}`, quote.is_stale || quote.is_degraded);
-                      } catch(_err) { setQuickLiveStatus('Live price could not be read; periodic REST data remains available.', true); }
-                    });
-                    quickLiveSource.addEventListener('recommendation_refresh', () => setQuickLiveStatus(`${symbol} crossed a controlled refresh boundary. Re-run Analyze to refresh advice.`, true));
-                    quickLiveSource.onerror = () => setQuickLiveStatus(`${symbol} live connection interrupted; reconnecting while preserving the last value.`, true);
+                  function describeQuickRestSnapshot(symbol, data){
+                    const provenance = data.market_data_provenance || {};
+                    const mode = provenance.quote_source_mode || data.quote_source || 'REST snapshot';
+                    const stale = provenance.quote_is_stale === true;
+                    setQuickLiveStatus(`${symbol} price uses a REST snapshot (${mode}); portfolio is the only page that keeps a live stream open.`, stale);
                   }
-                  window.addEventListener('beforeunload', () => { if(quickLiveSource) quickLiveSource.close(); });
 
                   async function quickAsk(){
                     const inputEl = document.getElementById('quickSymbol');
@@ -306,11 +290,13 @@ const fallbackData = {
                       const profileChanged = recommendation !== baseRecommendation;
                       const profileNote = profileChanged ? ` <span style="margin-left:8px;color:#fde68a">Profile adjusted ${escapeHtml(baseRecommendation)} → ${escapeHtml(recommendation)} · <a href="/settings" style="color:#fde68a;font-weight:800">review profile</a></span>` : '';
                       outEl.innerHTML = `${quickRecommendationBadge(recommendation)} <span style="margin-left:8px">· <span id="quickLivePrice">${formatMoney(data.current_price)}</span> · ${data.rationale || 'Signal generated from current indicators.'}</span>${profileNote}`;
-                      startQuickLive(symbol);
+                      describeQuickRestSnapshot(symbol, data);
                       renderQuickTrend(symbol, data.history30 || []);
 
                       const ai = data.ai || {};
-                      const narrative = ai.narrative || data.rationale || 'No AI narrative available.';
+                      const narrative = profileChanged
+                        ? `Final Quick Ask call is ${recommendation}. Base Alpha Atlas signal was ${baseRecommendation} before profile suitability adjusted it, so use the left-side badge as the final action.`
+                        : (ai.narrative || data.rationale || 'No AI narrative available.');
                       const riskNotes = Array.isArray(ai.risk_notes) ? ai.risk_notes : [];
                       const nextChecks = Array.isArray(ai.next_checks) ? ai.next_checks : [];
                       const topRisk = riskNotes[0] || 'Keep strict risk controls and position sizing.';

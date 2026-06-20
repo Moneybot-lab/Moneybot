@@ -14,10 +14,11 @@ def test_home_quick_ask_has_live_freshness_and_profile_adjustment_ui():
     html = client.get("/").get_data(as_text=True)
     js = client.get("/static/js/home.js").get_data(as_text=True)
     assert 'id="quickLiveStatus"' in html
-    assert "new EventSource('/api/live-market-stream?scope=quick" in js
+    assert "new EventSource('/api/live-market-stream?scope=quick" not in js
+    assert "price uses a REST snapshot" in js
     assert "Profile adjusted" in js
     assert 'href="/settings"' in js
-    assert "REST fallback" in js
+    assert "portfolio is the only page that keeps a live stream open" in js
 
 
 def test_portfolio_has_live_price_pnl_reconnect_and_controlled_refresh_ui():
