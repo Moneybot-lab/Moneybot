@@ -197,6 +197,41 @@ def test_day10_trains_when_feature_columns_exist(tmp_path, monkeypatch):
     assert output_model.exists()
 
 
+def test_day10_trains_with_sparse_feature_columns_no_complete_raw_rows(tmp_path, monkeypatch):
+    rows = [
+        {"ts": 1, "feature_alpha": 0.10, "label_up_5d": 1, "return_1d": 0.01, "return_5d": 0.02},
+        {"ts": 2, "feature_alpha": 0.20, "label_up_5d": 0, "return_1d": -0.01, "return_5d": -0.02},
+        {"ts": 3, "feature_alpha": 0.30, "label_up_5d": 1, "return_1d": 0.02, "return_5d": 0.03},
+        {"ts": 4, "feature_beta": 1.10, "label_up_5d": 0, "return_1d": -0.02, "return_5d": -0.03},
+        {"ts": 5, "feature_beta": 1.20, "label_up_5d": 1, "return_1d": 0.03, "return_5d": 0.04},
+        {"ts": 6, "feature_beta": 1.30, "label_up_5d": 0, "return_1d": -0.03, "return_5d": -0.04},
+    ]
+    input_path = tmp_path / "sparse_decision_training_snapshot.jsonl"
+    input_path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    output_model = tmp_path / "candidate_model.json"
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "day10_train_candidate_model.py",
+            "--input",
+            str(input_path),
+            "--output-model",
+            str(output_model),
+            "--train-ratio",
+            "0.8",
+            "--min-rows",
+            "6",
+        ],
+    )
+
+    day10.main()
+
+    assert output_model.exists()
+    metrics = day11._evaluate(str(output_model), day11._load_jsonl(str(input_path)))
+    assert metrics["rows"] == 6
+
+
 def test_day11_compare_detects_win_and_loss():
     win, _ = day11._decide(
         {"accuracy": 0.60, "brier_score": 0.18, "rows": 250},

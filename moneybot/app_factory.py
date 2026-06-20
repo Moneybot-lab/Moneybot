@@ -413,7 +413,7 @@ def create_app() -> Flask:
             "DECISION_OUTCOMES_SNAPSHOT_PATH",
             str(decision_outcomes_snapshot_path()),
         ),
-        DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS=int(os.environ.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")),
+        DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS=int(os.environ.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "129600")),
         DETERMINISTIC_CALIBRATION_REPORT_PATH=os.environ.get(
             "DETERMINISTIC_CALIBRATION_REPORT_PATH",
             str(day13_calibration_report_path()),
