@@ -1,7 +1,13 @@
 services:
+  - type: keyvalue
+    name: moneybot-market-state
+    plan: starter
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []
+
   - type: web
     name: moneybot
-    env: python
+    runtime: python
     buildCommand: bash scripts/render_build.sh
     startCommand: |
       if [ -d migrations ]; then
@@ -17,11 +23,79 @@ services:
         sync: false
       - key: DATABASE_URL
         sync: false
+      - key: REDIS_URL
+        fromService:
+          name: moneybot-market-state
+          type: keyvalue
+          property: connectionString
       - key: DATA_PROVIDER
         value: yfinance
+      - key: MASSIVE_STREAM_ENABLED
+        value: "false"
+      - key: MASSIVE_STREAM_SHADOW_MODE
+        value: "true"
+      - key: LIVE_SSE_SYMBOL_CAP
+        value: "25"
+      - key: LIVE_SSE_INTERVAL_SECONDS
+        value: "1.0"
+      - key: LIVE_SSE_HEARTBEAT_SECONDS
+        value: "15.0"
+      - key: LIVE_TRIGGER_DEBOUNCE_SECONDS
+        value: "15.0"
+      - key: LIVE_TRIGGER_COOLDOWN_SECONDS
+        value: "300.0"
+      - key: LIVE_ALERTS_EMERGENCY_DISABLED
+        value: "true"
+      - key: HISTORICAL_VALIDATION_REPORT_MAX_AGE_SECONDS
+        value: "604800"
+      - key: HISTORICAL_VALIDATION_MIN_ROWS
+        value: "30"
+      - key: HISTORICAL_VALIDATION_LICENSING_REVIEW_COMPLETE
+        value: "false"
+      - key: HISTORICAL_VALIDATION_PRIVACY_REVIEW_COMPLETE
+        value: "false"
+      - key: DAILY_OPS_TOKEN
+        sync: false
       - key: DETERMINISTIC_CALIBRATION_ENABLED
         value: "true"
       - key: DETERMINISTIC_CALIBRATION_SLOPE
         value: "0.9"
       - key: DETERMINISTIC_CALIBRATION_INTERCEPT
         value: "-0.55"
+
+  - type: worker
+    name: moneybot-market-stream
+    runtime: python
+    plan: starter
+    buildCommand: bash scripts/render_build.sh
+    startCommand: python scripts/run_market_stream.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: MONEYBOT_SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: MASSIVE_API_KEY
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          name: moneybot-market-state
+          type: keyvalue
+          property: connectionString
+      - key: MASSIVE_STREAM_ENABLED
+        value: "true"
+      - key: MASSIVE_STREAM_SHADOW_MODE
+        value: "true"
+      - key: MASSIVE_STREAM_SYMBOL_CAP
+        value: "250"
+      - key: MASSIVE_STREAM_QUOTE_CAP
+        value: "100"
+      - key: MASSIVE_STREAM_TRADE_CAP
+        value: "50"
+      - key: MASSIVE_STREAM_MAX_QUEUE
+        value: "64"
+      - key: MASSIVE_STREAM_STATE_TTL_SECONDS
+        value: "120"
+      - key: MASSIVE_STREAM_HEALTH_TTL_SECONDS
+        value: "30"
