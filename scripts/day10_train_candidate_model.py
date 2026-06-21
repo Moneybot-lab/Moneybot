@@ -58,9 +58,28 @@ def _select_feature_columns(df: pd.DataFrame) -> list[str]:
             continue
         if not str(col).startswith("feature_"):
             continue
-        if pd.api.types.is_numeric_dtype(df[col]):
+        numeric = pd.to_numeric(df[col], errors="coerce")
+        if numeric.notna().any():
             cols.append(str(col))
     return sorted(cols)
+
+
+def _fill_feature_gaps(df: pd.DataFrame, feature_columns: list[str]) -> tuple[pd.DataFrame, dict[str, float]]:
+    """Coerce sparse feature columns to numeric and median-fill missing values.
+
+    Decision logs come from multiple endpoints and app versions, so feature maps are
+    naturally sparse. Requiring every selected feature to be present on the same
+    row can drop an otherwise large labeled dataset to zero rows.
+    """
+    out = df.copy()
+    fill_values: dict[str, float] = {}
+    for col in feature_columns:
+        numeric = pd.to_numeric(out[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        median = numeric.median(skipna=True)
+        fill_value = float(median) if pd.notna(median) else 0.0
+        out[col] = numeric.fillna(fill_value).astype(float)
+        fill_values[col] = fill_value
+    return out, fill_values
 
 
 def _prepare_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -118,6 +137,7 @@ def main() -> None:
         else:
             raise SystemExit("Missing target column label_up_5d and unable to derive from return_5d")
 
+    df[target_column] = pd.to_numeric(df[target_column], errors="coerce")
     filtered_target = df.dropna(subset=[target_column]).copy()
     rows_after_target_filter = len(filtered_target)
 
@@ -125,8 +145,7 @@ def main() -> None:
     if not feature_columns:
         raise SystemExit("No numeric feature columns found in decision dataset")
 
-    clean = filtered_target.dropna(subset=feature_columns + [target_column]).copy()
-    clean[target_column] = pd.to_numeric(clean[target_column], errors="coerce")
+    clean, feature_fill_values = _fill_feature_gaps(filtered_target, feature_columns)
     rows_after_feature_filter = len(clean)
 
     if len(clean) < max(1, args.min_rows):
@@ -172,6 +191,7 @@ def main() -> None:
                 "rows_after_target_filter": rows_after_target_filter,
                 "rows_after_feature_filter": rows_after_feature_filter,
                 "selected_feature_columns": feature_columns,
+                "feature_fill_values": feature_fill_values,
                 "target_column": target_column,
             },
             sort_keys=True,
