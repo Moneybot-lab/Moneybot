@@ -50,10 +50,15 @@ def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
     if not Path(artifact_path).exists():
         return {"accuracy": None, "avg_return": None, "brier_score": None, "rows": 0}
     artifact = load_artifact(artifact_path)
-    for col in artifact.feature_columns:
-        if col not in test_df.columns:
-            test_df[col] = np.nan
-    usable = test_df.dropna(subset=artifact.feature_columns + ["return_5d"]).copy()
+    usable = test_df.copy()
+    for idx, col in enumerate(artifact.feature_columns):
+        if col not in usable.columns:
+            usable[col] = np.nan
+        numeric = pd.to_numeric(usable[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        fallback = float(artifact.means[idx]) if idx < len(artifact.means) else 0.0
+        usable[col] = numeric.fillna(fallback).astype(float)
+    usable["return_5d"] = pd.to_numeric(usable.get("return_5d"), errors="coerce")
+    usable = usable.dropna(subset=["return_5d"]).copy()
     if usable.empty:
         return {"accuracy": None, "avg_return": None, "brier_score": None, "rows": 0}
 
