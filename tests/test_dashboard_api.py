@@ -1495,6 +1495,44 @@ def test_export_decision_log_returns_ndjson_with_token(tmp_path):
     assert payload['symbol'] == 'TSLA'
 
 
+def test_model_health_includes_safe_historical_validation_when_unconfigured():
+    client = _client()
+
+    res = client.get("/api/model-health")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["historical_validation"] == {
+        "available": False,
+        "configured": False,
+        "path": None,
+        "exists": False,
+        "mtime_utc": None,
+        "summary": None,
+        "error": None,
+    }
+
+
+def test_model_health_loads_historical_validation_summary(tmp_path):
+    report_path = tmp_path / "historical_validation.json"
+    report_path.write_text(
+        json.dumps({"generated_at_utc": "2026-06-21T00:00:00+00:00", "rows": 42, "accuracy": 0.72, "ignored": "large"}),
+        encoding="utf-8",
+    )
+    client = _client()
+    client.application.config["HISTORICAL_VALIDATION_REPORT_PATH"] = str(report_path)
+
+    res = client.get("/api/model-health")
+
+    assert res.status_code == 200
+    historical = res.get_json()["data"]["historical_validation"]
+    assert historical["available"] is True
+    assert historical["configured"] is True
+    assert historical["path"] == str(report_path)
+    assert historical["exists"] is True
+    assert historical["summary"] == {"generated_at_utc": "2026-06-21T00:00:00+00:00", "rows": 42, "accuracy": 0.72}
+
+
 def test_promote_track_b_candidate_requires_token():
     client = _client()
     client.application.config["TRACK_B_PROMOTION_TOKEN"] = "promote-token"

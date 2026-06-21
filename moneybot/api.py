@@ -2871,6 +2871,62 @@ def promote_track_b_candidate():
     ), status
 
 
+
+def _historical_validation_status() -> dict[str, Any]:
+    """Return optional historical-validation diagnostics without breaking model health."""
+    raw_path = str(
+        current_app.config.get("HISTORICAL_VALIDATION_REPORT_PATH")
+        or current_app.config.get("DETERMINISTIC_HISTORICAL_VALIDATION_REPORT_PATH")
+        or ""
+    ).strip()
+    if not raw_path:
+        return {
+            "available": False,
+            "configured": False,
+            "path": None,
+            "exists": False,
+            "mtime_utc": None,
+            "summary": None,
+            "error": None,
+        }
+
+    diag = _file_diagnostics(raw_path)
+    status: dict[str, Any] = {
+        "available": False,
+        "configured": True,
+        "path": diag["path"],
+        "exists": diag["exists"],
+        "mtime_utc": diag["mtime_utc"],
+        "summary": None,
+        "error": None,
+    }
+    if not diag["exists"]:
+        return status
+
+    try:
+        payload = json.loads(Path(raw_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        status["error"] = str(exc)
+        return status
+
+    if isinstance(payload, dict):
+        status["available"] = True
+        status["summary"] = {
+            key: payload.get(key)
+            for key in (
+                "generated_at_utc",
+                "rows",
+                "accuracy",
+                "brier_score",
+                "avg_return",
+                "candidate_win",
+                "status",
+            )
+            if key in payload
+        }
+    return status
+
+
 @api_bp.get("/model-health")
 def model_health():
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
@@ -2974,6 +3030,7 @@ def model_health():
                 "training_max_age_hours": training_max_age_hours,
                 "training_fresh": training_fresh,
                 "decision_logging": _normalized_decision_logging_health(decision_logger),
+                "historical_validation": _historical_validation_status(),
             },
             "request_id": g.request_id,
         }
