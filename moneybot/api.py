@@ -2752,76 +2752,123 @@ def hot_momentum_buys():
     return jsonify({"items": items, "request_id": g.request_id})
 
 
-@api_bp.get("/market-stream-health")
-@login_required
-def market_stream_health():
-    state = current_app.extensions.get("market_stream_state")
-    config = current_app.config.get("MASSIVE_STREAM_CONFIG")
-    health = _market_stream_health_payload()
-    worker_state = str(health.get("connection_state") or "no_worker_heartbeat")
-    worker_enabled = bool(health.get("enabled")) if health else False
-    if not health:
-        diagnosis = "No worker heartbeat is present in Redis. Confirm the moneybot-market-stream service is deployed and running."
-    elif worker_state == "idle_no_demand":
-        diagnosis = "Worker is healthy but has no subscribed symbols. Add portfolio/ClearView demand or configure MASSIVE_STREAM_SERVER_SYMBOLS."
-    elif worker_state == "connected" and not health.get("last_message_at"):
-        diagnosis = "Worker authenticated and subscribed, but no market event has arrived yet; closed-market activity can be sparse."
-    elif worker_state == "reconnecting":
-        diagnosis = str(health.get("last_error") or "Worker is reconnecting after a provider or network error.")
-    else:
-        diagnosis = "Worker health is available. Inspect subscription counts, last message time, and metrics below."
-    return jsonify({
-        "data": {
-            "enabled": worker_enabled,
-            "configured_on_web_service": bool(getattr(config, "enabled", False)),
-            "shadow_mode": bool(health.get("shadow_mode", getattr(config, "shadow_mode", True))),
-            "symbol_cap": int(health.get("symbol_budget") or getattr(config, "symbol_cap", 0)),
-            "worker_state": worker_state,
-            "diagnosis": diagnosis,
-            "worker": health,
-        },
-        "request_id": g.request_id,
-    })
 
-
-def _historical_validation_status() -> dict[str, Any]:
-    configured_path = str(current_app.config.get("HISTORICAL_VALIDATION_REPORT_PATH") or "").strip()
-    path = Path(configured_path) if configured_path else historical_validation_report_path()
-    diagnostics = _file_diagnostics(path)
-    max_age = max(60, int(current_app.config.get("HISTORICAL_VALIDATION_REPORT_MAX_AGE_SECONDS") or 604800))
-    report = _load_fresh_json_payload(str(path), max_age_seconds=max_age)
-    promotion_gates = report.get("promotion_gates") if isinstance(report, dict) and isinstance(report.get("promotion_gates"), dict) else {}
-    metrics = report.get("metrics") if isinstance(report, dict) and isinstance(report.get("metrics"), dict) else {}
-    return {
-        **diagnostics,
-        "fresh": report is not None,
-        "schema_version": report.get("schema_version") if isinstance(report, dict) else None,
-        "generated_at_utc": report.get("generated_at_utc") if isinstance(report, dict) else None,
-        "rollout_recommendation": report.get("rollout_recommendation") if isinstance(report, dict) else "hold_shadow",
-        "promotion_ready": bool(promotion_gates.get("promotion_ready")),
-        "failed_blockers": promotion_gates.get("failed_blockers"),
-        "evaluated_rows": metrics.get("evaluated_rows"),
-        "brier_score": metrics.get("brier_score"),
-        "avg_net_return": metrics.get("avg_net_return"),
-        "required_next_steps": report.get("required_next_steps", []) if isinstance(report, dict) else ["generate_historical_validation_report"],
-    }
-
-
-@api_bp.get("/historical-validation")
-def historical_validation():
-    expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
-    provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
+@api_bp.post("/promote-track-b-candidate")
+def promote_track_b_candidate():
+    expected_token = str(
+        current_app.config.get("TRACK_B_PROMOTION_TOKEN") or current_app.config.get("DAILY_OPS_TOKEN") or ""
+    ).strip()
+    provided_token = str(
+        request.headers.get("X-Track-B-Promotion-Token") or request.headers.get("X-Daily-Ops-Token") or ""
+    ).strip()
     if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
         return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
-    configured_path = str(current_app.config.get("HISTORICAL_VALIDATION_REPORT_PATH") or "").strip()
-    path = Path(configured_path) if configured_path else historical_validation_report_path()
+
+    comparison_file = request.files.get("comparison_report")
+    candidate_file = request.files.get("candidate_model")
+    if comparison_file is None or candidate_file is None:
+        return jsonify({"error": "comparison_report and candidate_model files are required", "request_id": g.request_id}), 400
+
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return jsonify({"error": "historical validation report not found", "status": _historical_validation_status(), "request_id": g.request_id}), 404
-    except (OSError, json.JSONDecodeError):
-        return jsonify({"error": "historical validation report is unreadable", "status": _historical_validation_status(), "request_id": g.request_id}), 503
-    return jsonify({"data": payload, "status": _historical_validation_status(), "request_id": g.request_id})
+        comparison_bytes = comparison_file.read()
+        candidate_bytes = candidate_file.read()
+        comparison_report = json.loads(comparison_bytes.decode("utf-8"))
+        json.loads(candidate_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return jsonify({"error": "uploaded files must be valid JSON", "request_id": g.request_id}), 400
+
+    if not isinstance(comparison_report, dict):
+        return jsonify({"error": "comparison_report must be a JSON object", "request_id": g.request_id}), 400
+
+    force_raw = str(request.form.get("force") or request.args.get("force") or "").strip().lower()
+    force = force_raw in {"1", "true", "yes", "y"}
+    candidate_win = bool(comparison_report.get("candidate_win"))
+    if not candidate_win and not force:
+        return jsonify(
+            {
+                "data": {
+                    "success": False,
+                    "promoted": False,
+                    "candidate_win": False,
+                    "reasons": comparison_report.get("reasons") or [],
+                    "message": "comparison report does not approve promotion",
+                },
+                "request_id": g.request_id,
+            }
+        ), 409
+
+    project_root = Path(__file__).resolve().parents[1]
+    track_b_dir = resolve_runtime_dir() / "track_b"
+    track_b_dir.mkdir(parents=True, exist_ok=True)
+    comparison_path = track_b_dir / "model_comparison_track_b.json"
+    candidate_path = track_b_dir / "candidate_model_track_b.json"
+    comparison_path.write_bytes(comparison_bytes)
+    candidate_path.write_bytes(candidate_bytes)
+
+    production_model_path = Path(
+        str(current_app.config.get("DETERMINISTIC_MODEL_PATH") or (resolve_runtime_dir() / "day1_baseline_model.json"))
+    )
+    command = [
+        "python3",
+        "scripts/day14_promote_candidate.py",
+        "--comparison-report",
+        str(comparison_path),
+        "--candidate-model",
+        str(candidate_path),
+        "--production-model",
+        str(production_model_path),
+    ]
+    if force:
+        command.append("--force")
+
+    logging.info("Running Track B candidate promotion via protected API endpoint.")
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.exception("promote-track-b-candidate failed to execute.")
+        return jsonify(
+            {
+                "data": {
+                    "success": False,
+                    "promoted": False,
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": str(exc),
+                    "comparison_report_path": str(comparison_path),
+                    "candidate_model_path": str(candidate_path),
+                    "production_model_path": str(production_model_path),
+                },
+                "request_id": g.request_id,
+            }
+        ), 500
+
+    promoted = completed.returncode == 0 and "promoted candidate" in (completed.stdout or "")
+    status = 200 if completed.returncode == 0 else 500
+    return jsonify(
+        {
+            "data": {
+                "success": completed.returncode == 0,
+                "promoted": promoted,
+                "candidate_win": candidate_win,
+                "reasons": comparison_report.get("reasons") or [],
+                "command": command,
+                "returncode": completed.returncode,
+                "exit_code": completed.returncode,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+                "comparison_report_path": str(comparison_path),
+                "candidate_model_path": str(candidate_path),
+                "production_model_path": str(production_model_path),
+            },
+            "request_id": g.request_id,
+        }
+    ), status
 
 
 @api_bp.get("/model-health")

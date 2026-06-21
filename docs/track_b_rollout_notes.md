@@ -9,9 +9,10 @@ Set or verify these in **GitHub → Moneybot → Settings → Secrets and variab
 ```text
 MONEYBOT_BASE_URL=https://<your-render-service-hostname>
 DAILY_OPS_TOKEN=<same-secret-token-configured-in-render>
+TRACK_B_PROMOTION_TOKEN=<same-secret-token-configured-in-render-for-manual-promotion>
 ```
 
-`MONEYBOT_BASE_URL` is used by `.github/workflows/track-b-offline.yml` to export the live decision log, and `DAILY_OPS_TOKEN` authorizes `/api/export-decision-log`.
+`MONEYBOT_BASE_URL` is used by `.github/workflows/track-b-offline.yml` to export the live decision log, `DAILY_OPS_TOKEN` authorizes `/api/export-decision-log`, and `TRACK_B_PROMOTION_TOKEN` authorizes the manual Track B promotion endpoint.
 
 ## Render environment variables
 
@@ -20,6 +21,9 @@ Set or verify these in **Render → Moneybot service → Environment**:
 ```text
 # Required for authenticated daily ops / decision-log export endpoints
 DAILY_OPS_TOKEN=<strong-shared-secret>
+
+# Required for manual GitHub-to-Render Track B promotion
+TRACK_B_PROMOTION_TOKEN=<strong-shared-secret>
 
 # Keep runtime artifacts on the Render disk instead of ephemeral app storage
 MONEYBOT_PERSISTENT_DATA_DIR=/var/data/moneybot
@@ -86,6 +90,32 @@ data/track_b/decision_training_snapshot_track_b.jsonl
 data/track_b/candidate_model_track_b.json
 data/track_b/model_comparison_track_b.json
 ```
+
+## Manual GitHub promotion workflow
+
+After a successful Track B run is explicitly approved for rollout, run **Promote Track B Candidate** manually from GitHub Actions.
+
+Required GitHub secret:
+
+```text
+TRACK_B_PROMOTION_TOKEN=<same-value-as-render-track-b-promotion-token>
+```
+
+Required Render env var:
+
+```text
+TRACK_B_PROMOTION_TOKEN=<strong-shared-secret>
+```
+
+Workflow input:
+
+```text
+track_b_run_id=<successful Track B Offline Challenger run id>
+```
+
+The workflow downloads the `track-b-offline-output` artifact for that run, verifies `model_comparison_track_b.json` and `candidate_model_track_b.json`, blocks by default unless `candidate_win=true`, then posts both JSON files to `/api/promote-track-b-candidate`. The protected Render endpoint stores them under the persistent runtime `track_b/` directory and runs `scripts/day14_promote_candidate.py` against the configured production model path.
+
+Leave `force=false` unless a human has separately approved overriding the comparison report.
 
 ## Expected Track B run signals
 
