@@ -129,6 +129,7 @@ def train_logistic_baseline(
     epochs: int = 400,
     l2: float = 1e-3,
     decision_threshold: float = 0.55,
+    sample_weight: np.ndarray | None = None,
 ) -> BaselineModelArtifact:
     """Train deterministic logistic regression using full-batch gradient descent."""
     if X.ndim != 2:
@@ -146,11 +147,28 @@ def train_logistic_baseline(
     weights = np.zeros(Xn.shape[1], dtype=float)
     bias = 0.0
 
+    if sample_weight is None:
+        row_weights = np.ones_like(y, dtype=float)
+    else:
+        row_weights = np.asarray(sample_weight, dtype=float)
+        if row_weights.ndim != 1:
+            raise ValueError("sample_weight must be a 1D array")
+        if row_weights.shape[0] != y.shape[0]:
+            raise ValueError("sample_weight and y must have matching rows")
+        if not np.isfinite(row_weights).all():
+            raise ValueError("sample_weight must contain finite values")
+        if (row_weights < 0).any():
+            raise ValueError("sample_weight cannot contain negative values")
+        mean_weight = float(row_weights.mean())
+        if mean_weight <= 0.0:
+            raise ValueError("sample_weight must contain at least one positive value")
+        row_weights = row_weights / mean_weight
+
     n = float(Xn.shape[0])
     for _ in range(epochs):
         logits = (Xn @ weights) + bias
         preds = _sigmoid(logits)
-        error = preds - y
+        error = (preds - y) * row_weights
 
         grad_w = (Xn.T @ error) / n + (l2 * weights)
         grad_b = float(error.mean())

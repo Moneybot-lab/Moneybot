@@ -128,11 +128,13 @@ day11 candidate_metrics.rows >= 200
 day11 candidate_metrics.accuracy > production_metrics.accuracy
 day11 candidate_metrics.brier_score < production_metrics.brier_score
 day11 candidate_metrics.avg_return >= production_metrics.avg_return OR candidate_metrics.downside_risk <= production_metrics.downside_risk
+day11 candidate_metrics.big_loss_prediction_rate <= production_metrics.big_loss_prediction_rate
+day11 candidate_metrics.big_gain_capture_rate >= production_metrics.big_gain_capture_rate
 day10/day11 return buckets include big_loss, loss, flat, gain, big_gain
 ```
 
 
-Track B uses 5-day return buckets (`big_loss`, `loss`, `flat`, `gain`, `big_gain`) so a tiny positive move is treated as `flat` instead of being trained/evaluated the same as a meaningful gain. Candidate training now targets `label_gain_5d`, where only `gain` and `big_gain` are positive classes, and day11 evaluates accuracy/Brier against the same gain/big-gain target.
+Track B uses 5-day return buckets (`big_loss`, `loss`, `flat`, `gain`, `big_gain`) so a tiny positive move is treated as `flat` instead of being trained/evaluated the same as a meaningful gain. Candidate training now targets `label_gain_5d`, where only `gain` and `big_gain` are positive classes, and day10 applies extra sample weight to `big_loss` and `big_gain` rows so the learner pays more attention to tail outcomes. Day11 evaluates accuracy/Brier against the same gain/big-gain target and only promotes candidates that avoid signaling big-loss rows at least as well as production while capturing big-gain rows at least as well as production.
 
 Warnings from yfinance for invalid/delisted symbols are expected as long as day8 still reports enough labeled rows and day10 keeps enough rows after sparse feature filling. Day8 now applies a symbol-quality filter before yfinance lookup: it normalizes common typos such as `NVDIA`/`NVSIA` to `NVDA`, rejects unsupported foreign suffix/non-equity/fund-like symbols, and records repeated yfinance failures in the runtime cache at `track_b/bad_symbols.json` so noisy symbols can be skipped in later runs.
 

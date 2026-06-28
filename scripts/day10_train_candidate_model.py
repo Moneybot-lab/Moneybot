@@ -24,6 +24,7 @@ from moneybot.services.model_metadata import append_artifact_history, build_arti
 
 RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
 TARGET_GAIN_BUCKETS = {"gain", "big_gain"}
+RETURN_BIN_SAMPLE_WEIGHTS = {"big_loss": 2.0, "loss": 1.25, "flat": 0.75, "gain": 1.0, "big_gain": 2.0}
 
 RESERVED_COLUMNS = {
     "ts",
@@ -64,6 +65,11 @@ def _ensure_return_bucket_labels(df: pd.DataFrame) -> pd.DataFrame:
     bins = out["return_bin_5d"].fillna("").astype(str)
     out["label_gain_5d"] = bins.isin(TARGET_GAIN_BUCKETS).astype(float)
     return out
+
+
+def _bucket_sample_weights(df: pd.DataFrame) -> pd.Series:
+    bins = df.get("return_bin_5d", pd.Series("", index=df.index)).fillna("").astype(str)
+    return bins.map(RETURN_BIN_SAMPLE_WEIGHTS).fillna(1.0).astype(float)
 
 
 def _bucket_counts(df: pd.DataFrame) -> dict[str, int]:
@@ -195,7 +201,8 @@ def main() -> None:
 
     X_train = train_df[feature_columns].to_numpy(dtype=float)
     y_train = train_df[target_column].to_numpy(dtype=float)
-    base_artifact = train_logistic_baseline(X_train, y_train)
+    sample_weight = _bucket_sample_weights(train_df).to_numpy(dtype=float)
+    base_artifact = train_logistic_baseline(X_train, y_train, sample_weight=sample_weight)
     artifact = _build_artifact_with_features(base_artifact, feature_columns)
 
     X_test = test_df[feature_columns].to_numpy(dtype=float)
@@ -207,6 +214,7 @@ def main() -> None:
             "avg_return_1d": round(float(test_df["return_1d"].dropna().mean()), 4) if test_df["return_1d"].notna().any() else None,
             "avg_return_5d": round(float(test_df["return_5d"].dropna().mean()), 4) if test_df["return_5d"].notna().any() else None,
             "return_bin_counts": _bucket_counts(test_df),
+            "return_bin_sample_weights": RETURN_BIN_SAMPLE_WEIGHTS,
         }
     )
 
@@ -235,6 +243,7 @@ def main() -> None:
                 "feature_fill_values": feature_fill_values,
                 "target_column": target_column,
                 "return_bin_counts": _bucket_counts(clean),
+                "return_bin_sample_weights": RETURN_BIN_SAMPLE_WEIGHTS,
             },
             sort_keys=True,
         )

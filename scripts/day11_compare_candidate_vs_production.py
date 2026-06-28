@@ -72,6 +72,23 @@ def _ensure_return_bins(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _bucket_signal_rates(usable: pd.DataFrame, preds: np.ndarray) -> dict[str, float | int | None]:
+    work = usable.copy()
+    work["_pred"] = preds
+    big_loss = work[work["return_bin_5d"].fillna("").astype(str) == "big_loss"]
+    big_gain = work[work["return_bin_5d"].fillna("").astype(str) == "big_gain"]
+    big_loss_positive = int((big_loss["_pred"] == 1).sum()) if len(big_loss) else 0
+    big_gain_positive = int((big_gain["_pred"] == 1).sum()) if len(big_gain) else 0
+    return {
+        "big_loss_rows": int(len(big_loss)),
+        "big_loss_predictions": big_loss_positive,
+        "big_loss_prediction_rate": round(big_loss_positive / len(big_loss), 4) if len(big_loss) else None,
+        "big_gain_rows": int(len(big_gain)),
+        "big_gain_predictions": big_gain_positive,
+        "big_gain_capture_rate": round(big_gain_positive / len(big_gain), 4) if len(big_gain) else None,
+    }
+
+
 def _bucket_metrics(usable: pd.DataFrame, preds: np.ndarray, probs: np.ndarray) -> dict[str, dict[str, float | int | None]]:
     out: dict[str, dict[str, float | int | None]] = {}
     work = usable.copy()
@@ -120,12 +137,14 @@ def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
         negative_signal_returns = signal_returns[signal_returns < 0.0]
         downside_risk = 0.0 if negative_signal_returns.empty else float(abs(negative_signal_returns.mean()))
     brier = _brier_score(y.astype(float), probs.astype(float))
+    signal_rates = _bucket_signal_rates(usable, preds)
     return {
         "accuracy": round(accuracy, 4),
         "avg_return": round(avg_return, 4) if avg_return is not None else None,
         "brier_score": round(brier, 4),
         "downside_risk": round(downside_risk, 4) if downside_risk is not None else None,
         "positive_predictions": int((preds == 1).sum()),
+        **signal_rates,
         "return_bin_counts": {str(k): int(v) for k, v in sorted(usable["return_bin_5d"].fillna("unknown").astype(str).value_counts().to_dict().items())},
         "bucket_metrics": _bucket_metrics(usable, preds, probs),
         "rows": int(len(usable)),
@@ -162,10 +181,17 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
         reasons.append("insufficient comparable accuracy, brier, return, or downside metrics")
         return False, reasons
 
+    c_big_loss_rate = _numeric_metric(candidate, "big_loss_prediction_rate")
+    p_big_loss_rate = _numeric_metric(production, "big_loss_prediction_rate")
+    c_big_gain_rate = _numeric_metric(candidate, "big_gain_capture_rate")
+    p_big_gain_rate = _numeric_metric(production, "big_gain_capture_rate")
+
     accuracy_ok = c_acc > p_acc
     brier_ok = c_brier < p_brier
     return_ok = c_return >= p_return
     downside_ok = c_downside <= p_downside
+    big_loss_ok = True if c_big_loss_rate is None or p_big_loss_rate is None else c_big_loss_rate <= p_big_loss_rate
+    big_gain_ok = True if c_big_gain_rate is None or p_big_gain_rate is None else c_big_gain_rate >= p_big_gain_rate
 
     if not accuracy_ok:
         reasons.append("candidate accuracy does not exceed production")
@@ -173,9 +199,13 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
         reasons.append("candidate brier score does not improve production")
     if not (return_ok or downside_ok):
         reasons.append("candidate avg_return is lower and downside_risk is higher than production")
+    if not big_loss_ok:
+        reasons.append("candidate signals too many big-loss rows versus production")
+    if not big_gain_ok:
+        reasons.append("candidate captures fewer big-gain rows than production")
 
-    if accuracy_ok and brier_ok and (return_ok or downside_ok):
-        reasons.append("candidate improves accuracy and brier with acceptable return/downside")
+    if accuracy_ok and brier_ok and (return_ok or downside_ok) and big_loss_ok and big_gain_ok:
+        reasons.append("candidate improves accuracy and brier with acceptable return/downside, big-loss avoidance, and big-gain capture")
         return True, reasons
 
     reasons.append("candidate did not satisfy profit-aware promotion thresholds")

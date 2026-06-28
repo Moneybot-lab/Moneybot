@@ -220,6 +220,29 @@ def test_day11_return_bins_drive_gain_evaluation():
     assert y == [0, 0, 0, 1, 1]
 
 
+def test_day10_bucket_sample_weights_prioritize_tail_outcomes():
+    import pandas as pd
+
+    df = pd.DataFrame({"return_bin_5d": ["big_loss", "loss", "flat", "gain", "big_gain", "unknown"]})
+
+    weights = day10._bucket_sample_weights(df)
+
+    assert weights.tolist() == [2.0, 1.25, 0.75, 1.0, 2.0, 1.0]
+
+
+def test_day11_bucket_signal_rates_track_big_loss_and_big_gain():
+    import numpy as np
+    import pandas as pd
+
+    df = pd.DataFrame({"return_bin_5d": ["big_loss", "big_loss", "big_gain", "big_gain", "gain"]})
+    rates = day11._bucket_signal_rates(df, np.array([1, 0, 1, 0, 1]))
+
+    assert rates["big_loss_prediction_rate"] == 0.5
+    assert rates["big_gain_capture_rate"] == 0.5
+    assert rates["big_loss_predictions"] == 1
+    assert rates["big_gain_predictions"] == 1
+
+
 def test_day10_candidate_trainer_fails_if_rows_below_min(tmp_path, monkeypatch):
     input_path = tmp_path / "train.jsonl"
     input_path.write_text(json.dumps({"ts": 1, "return_5d": 0.01, "return_1d": 0.01, "x1": 1.0}) + "\n", encoding="utf-8")
@@ -322,26 +345,44 @@ def test_day10_trains_with_sparse_feature_columns_no_complete_raw_rows(tmp_path,
 
 def test_day11_compare_detects_profit_aware_win_and_loss():
     win, win_reasons = day11._decide(
-        {"accuracy": 0.60, "brier_score": 0.18, "avg_return": 0.015, "downside_risk": 0.02, "rows": 250},
-        {"accuracy": 0.57, "brier_score": 0.20, "avg_return": 0.010, "downside_risk": 0.03, "rows": 250},
+        {"accuracy": 0.60, "brier_score": 0.18, "avg_return": 0.015, "downside_risk": 0.02, "big_loss_prediction_rate": 0.10, "big_gain_capture_rate": 0.80, "rows": 250},
+        {"accuracy": 0.57, "brier_score": 0.20, "avg_return": 0.010, "downside_risk": 0.03, "big_loss_prediction_rate": 0.20, "big_gain_capture_rate": 0.60, "rows": 250},
         min_rows=200,
     )
     worse_return_loss, loss_reasons = day11._decide(
-        {"accuracy": 0.60, "brier_score": 0.18, "avg_return": -0.015, "downside_risk": 0.04, "rows": 250},
-        {"accuracy": 0.57, "brier_score": 0.20, "avg_return": -0.010, "downside_risk": 0.03, "rows": 250},
+        {"accuracy": 0.60, "brier_score": 0.18, "avg_return": -0.015, "downside_risk": 0.04, "big_loss_prediction_rate": 0.10, "big_gain_capture_rate": 0.80, "rows": 250},
+        {"accuracy": 0.57, "brier_score": 0.20, "avg_return": -0.010, "downside_risk": 0.03, "big_loss_prediction_rate": 0.20, "big_gain_capture_rate": 0.60, "rows": 250},
         min_rows=200,
     )
     lower_downside_win, _ = day11._decide(
-        {"accuracy": 0.60, "brier_score": 0.18, "avg_return": -0.015, "downside_risk": 0.02, "rows": 250},
-        {"accuracy": 0.57, "brier_score": 0.20, "avg_return": -0.010, "downside_risk": 0.03, "rows": 250},
+        {"accuracy": 0.60, "brier_score": 0.18, "avg_return": -0.015, "downside_risk": 0.02, "big_loss_prediction_rate": 0.10, "big_gain_capture_rate": 0.80, "rows": 250},
+        {"accuracy": 0.57, "brier_score": 0.20, "avg_return": -0.010, "downside_risk": 0.03, "big_loss_prediction_rate": 0.20, "big_gain_capture_rate": 0.60, "rows": 250},
         min_rows=200,
     )
 
     assert win is True
-    assert "candidate improves accuracy and brier with acceptable return/downside" in win_reasons
+    assert "candidate improves accuracy and brier with acceptable return/downside, big-loss avoidance, and big-gain capture" in win_reasons
     assert worse_return_loss is False
     assert "candidate avg_return is lower and downside_risk is higher than production" in loss_reasons
     assert lower_downside_win is True
+
+
+def test_day11_compare_blocks_worse_tail_bucket_behavior():
+    worse_big_loss, big_loss_reasons = day11._decide(
+        {"accuracy": 0.62, "brier_score": 0.17, "avg_return": 0.02, "downside_risk": 0.02, "big_loss_prediction_rate": 0.30, "big_gain_capture_rate": 0.80, "rows": 250},
+        {"accuracy": 0.57, "brier_score": 0.20, "avg_return": 0.01, "downside_risk": 0.03, "big_loss_prediction_rate": 0.20, "big_gain_capture_rate": 0.60, "rows": 250},
+        min_rows=200,
+    )
+    worse_big_gain, big_gain_reasons = day11._decide(
+        {"accuracy": 0.62, "brier_score": 0.17, "avg_return": 0.02, "downside_risk": 0.02, "big_loss_prediction_rate": 0.10, "big_gain_capture_rate": 0.40, "rows": 250},
+        {"accuracy": 0.57, "brier_score": 0.20, "avg_return": 0.01, "downside_risk": 0.03, "big_loss_prediction_rate": 0.20, "big_gain_capture_rate": 0.60, "rows": 250},
+        min_rows=200,
+    )
+
+    assert worse_big_loss is False
+    assert "candidate signals too many big-loss rows versus production" in big_loss_reasons
+    assert worse_big_gain is False
+    assert "candidate captures fewer big-gain rows than production" in big_gain_reasons
 
 
 def test_day11_compare_handles_missing_model_file_gracefully(tmp_path):
