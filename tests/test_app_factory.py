@@ -317,3 +317,61 @@ def test_create_app_auto_applies_recalibration_plan(tmp_path, monkeypatch):
     assert advisor.calibration_enabled is True
     assert advisor.calibration_slope == 0.646989
     assert advisor.calibration_intercept == 0.666503
+
+
+def test_portfolio_page_uses_base_items_when_enrichment_is_empty(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+
+    app = create_app()
+    client = app.test_client()
+
+    res = client.get("/portfolio")
+
+    assert res.status_code == 200
+    body = res.get_data(as_text=True)
+    assert "function selectPortfolioRows(data)" in body
+    assert "return enriched.length ? enriched : base;" in body
+    assert "Portfolio data did not load completely. Please refresh in a moment." in body
+
+
+def test_create_app_reads_personalization_rollout_settings(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("INVESTOR_PROFILE_ENABLED", "true")
+    monkeypatch.setenv("SUITABILITY_POLICY_ENABLED", "true")
+    monkeypatch.setenv("SUITABILITY_POLICY_MODE", "shadow")
+    monkeypatch.setenv("SUITABILITY_ROLLOUT_PERCENTAGE", "25")
+    monkeypatch.setenv("SUITABILITY_ROLLOUT_ALLOWLIST", "3,8")
+
+    app = create_app()
+    runtime = app.extensions["personalization_runtime"]
+
+    assert app.config["INVESTOR_PROFILE_ENABLED"] is True
+    assert app.config["SUITABILITY_POLICY_MODE"] == "shadow"
+    assert runtime.mode == "shadow"
+    assert runtime.rollout_percentage == 25
+    assert runtime.allowlist == {3, 8}
+
+
+def test_create_app_reads_market_stream_shadow_configuration(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MASSIVE_STREAM_ENABLED", "true")
+    monkeypatch.setenv("MASSIVE_STREAM_SHADOW_MODE", "true")
+    monkeypatch.setenv("MASSIVE_STREAM_SYMBOL_CAP", "125")
+    monkeypatch.setenv("MASSIVE_STREAM_QUOTE_CAP", "40")
+    monkeypatch.setenv("MASSIVE_STREAM_TRADE_CAP", "10")
+    monkeypatch.setenv("MASSIVE_STREAM_SERVER_SYMBOLS", "SPY,QQQ,IWM,*")
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
+    app = create_app()
+    config = app.config["MASSIVE_STREAM_CONFIG"]
+
+    assert config.enabled is True
+    assert config.shadow_mode is True
+    assert config.symbol_cap == 125
+    assert config.quote_cap == 40
+    assert config.trade_cap == 10
+    assert config.server_symbols == ("SPY", "QQQ", "IWM")
+    assert app.extensions["market_stream_state"].get_health() == {}
