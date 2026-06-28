@@ -8,6 +8,7 @@ import pytest
 
 from moneybot.services.decision_log import DecisionLogger, read_decision_events
 from moneybot.services.decision_snapshot import build_decision_snapshot
+from scripts import day8_build_decision_training_dataset as day8
 from scripts import day10_train_candidate_model as day10
 from scripts import day11_compare_candidate_vs_production as day11
 from scripts import day14_promote_candidate as day14_promote
@@ -68,7 +69,7 @@ def test_day8_builder_skips_immature_rows(monkeypatch):
         {"ts": fresh_ts, "symbol": "MSFT", "endpoint": "user_watchlist", "decision_source": "ai_enhanced", "payload": {"recommendation": "BUY"}},
     ]
 
-    monkeypatch.setattr("scripts.day8_build_decision_training_dataset._future_return", lambda symbol, ts, days: 0.02)
+    monkeypatch.setattr("scripts.day8_build_decision_training_dataset._future_return", lambda symbol, ts, days, bad_symbol_cache=None: 0.02)
     rows, summary = build_rows(events, horizon_days=5)
 
     assert summary["rows_scanned"] == 2
@@ -96,7 +97,7 @@ def test_day8_builder_outputs_labeled_rows_with_snapshot_fields(monkeypatch):
             "experiment": {"experiment_id": "exp-a", "cohort_id": "treatment", "rollout_dry_run": True},
         }
     ]
-    monkeypatch.setattr("scripts.day8_build_decision_training_dataset._future_return", lambda symbol, ts, days: 0.03 if days == 1 else -0.01)
+    monkeypatch.setattr("scripts.day8_build_decision_training_dataset._future_return", lambda symbol, ts, days, bad_symbol_cache=None: 0.03 if days == 1 else -0.01)
 
     rows, _ = build_rows(events, horizon_days=5)
     assert rows[0]["recommendation"] == "BUY"
@@ -127,7 +128,7 @@ def test_day8_builder_backward_compatible_without_snapshot(monkeypatch):
             "payload": {"recommendation": "BUY", "probability_up": 0.55},
         }
     ]
-    monkeypatch.setattr("scripts.day8_build_decision_training_dataset._future_return", lambda symbol, ts, days: 0.02 if days == 1 else 0.01)
+    monkeypatch.setattr("scripts.day8_build_decision_training_dataset._future_return", lambda symbol, ts, days, bad_symbol_cache=None: 0.02 if days == 1 else 0.01)
     rows, _ = build_rows(events, horizon_days=5)
     assert rows[0]["recommendation"] == "BUY"
     assert rows[0]["feature_probability_up"] == 0.55
@@ -136,6 +137,56 @@ def test_day8_builder_backward_compatible_without_snapshot(monkeypatch):
     assert rows[0]["has_snapshot"] == 0
     assert rows[0]["experiment_id"] == "default"
     assert rows[0]["cohort_id"] == "unknown"
+
+
+def test_day8_symbol_quality_filter_normalizes_and_rejects(monkeypatch):
+    mature_ts = int((datetime.now(timezone.utc) - timedelta(days=12)).timestamp())
+    events = [
+        {"ts": mature_ts, "symbol": "NVDIA", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}},
+        {"ts": mature_ts, "symbol": "MAD.TO", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}},
+        {"ts": mature_ts, "symbol": "FDRXX", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}},
+    ]
+    seen_symbols = []
+
+    def fake_return(symbol, ts, days, bad_symbol_cache=None):
+        seen_symbols.append(symbol)
+        return 0.02
+
+    monkeypatch.setattr("scripts.day8_build_decision_training_dataset._future_return", fake_return)
+
+    rows, summary = build_rows(events, horizon_days=5, bad_symbol_cache={"symbols": {}})
+
+    assert [row["symbol"] for row in rows] == ["NVDA"]
+    assert seen_symbols == ["NVDA", "NVDA"]
+    assert summary["symbols_normalized"] == 1
+    assert summary["symbols_rejected"] == 2
+
+
+def test_day8_symbol_quality_filter_uses_bad_symbol_cache(monkeypatch):
+    mature_ts = int((datetime.now(timezone.utc) - timedelta(days=12)).timestamp())
+    events = [
+        {"ts": mature_ts, "symbol": "ADLX", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}},
+        {"ts": mature_ts, "symbol": "AAPL", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}},
+    ]
+    cache = {"symbols": {"AAPL": {"failures": 2, "reason": "no_price_data"}}}
+
+    monkeypatch.setattr("scripts.day8_build_decision_training_dataset._future_return", lambda symbol, ts, days, bad_symbol_cache=None: 0.02)
+
+    rows, summary = build_rows(events, horizon_days=5, bad_symbol_cache=cache)
+
+    assert rows == []
+    assert summary["symbols_rejected"] == 2
+
+
+def test_day8_records_yfinance_failures_in_bad_symbol_cache(monkeypatch):
+    cache = {"symbols": {}}
+
+    monkeypatch.setattr("scripts.day8_build_decision_training_dataset.yf.download", lambda *args, **kwargs: [])
+
+    assert day8._future_return("OLFS", int(datetime.now(timezone.utc).timestamp()) - 864000, 1, cache) is None
+
+    assert cache["symbols"]["OLFS"]["failures"] == 1
+    assert cache["symbols"]["OLFS"]["reason"] == "no_price_data"
 
 
 def test_day10_candidate_trainer_fails_if_rows_below_min(tmp_path, monkeypatch):

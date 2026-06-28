@@ -130,7 +130,7 @@ day11 candidate_metrics.brier_score < production_metrics.brier_score
 day11 candidate_metrics.avg_return >= production_metrics.avg_return OR candidate_metrics.downside_risk <= production_metrics.downside_risk
 ```
 
-Warnings from yfinance for invalid/delisted symbols are expected as long as day8 still reports enough labeled rows and day10 keeps enough rows after sparse feature filling.
+Warnings from yfinance for invalid/delisted symbols are expected as long as day8 still reports enough labeled rows and day10 keeps enough rows after sparse feature filling. Day8 now applies a symbol-quality filter before yfinance lookup: it normalizes common typos such as `NVDIA`/`NVSIA` to `NVDA`, rejects unsupported foreign suffix/non-equity/fund-like symbols, and records repeated yfinance failures in the runtime cache at `track_b/bad_symbols.json` so noisy symbols can be skipped in later runs.
 
 ## Production safety notes
 
