@@ -16,6 +16,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from moneybot.services.deterministic_model import load_artifact, predict_proba
 
+RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
+TARGET_GAIN_BUCKETS = {"gain", "big_gain"}
+
 
 def _load_jsonl(path: str) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
@@ -46,6 +49,46 @@ def _brier_score(y_true: np.ndarray, y_prob: np.ndarray) -> float:
     return float(np.mean((y_prob - y_true) ** 2))
 
 
+def _return_bin(value: float | None) -> str | None:
+    if not isinstance(value, (int, float)):
+        return None
+    ret = float(value)
+    if ret < RETURN_BIN_EDGES[0]:
+        return "big_loss"
+    if ret < RETURN_BIN_EDGES[1]:
+        return "loss"
+    if ret <= RETURN_BIN_EDGES[2]:
+        return "flat"
+    if ret <= RETURN_BIN_EDGES[3]:
+        return "gain"
+    return "big_gain"
+
+
+def _ensure_return_bins(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if "return_bin_5d" not in out.columns:
+        returns = pd.to_numeric(out.get("return_5d"), errors="coerce")
+        out["return_bin_5d"] = [_return_bin(value) if pd.notna(value) else None for value in returns]
+    return out
+
+
+def _bucket_metrics(usable: pd.DataFrame, preds: np.ndarray, probs: np.ndarray) -> dict[str, dict[str, float | int | None]]:
+    out: dict[str, dict[str, float | int | None]] = {}
+    work = usable.copy()
+    work["_pred"] = preds
+    work["_prob"] = probs
+    for bucket, group in work.groupby("return_bin_5d", dropna=False):
+        key = str(bucket or "unknown")
+        returns = pd.to_numeric(group["return_5d"], errors="coerce")
+        out[key] = {
+            "rows": int(len(group)),
+            "positive_predictions": int((group["_pred"] == 1).sum()),
+            "avg_probability": round(float(group["_prob"].mean()), 4) if len(group) else None,
+            "avg_return": round(float(returns.mean()), 4) if returns.notna().any() else None,
+        }
+    return dict(sorted(out.items()))
+
+
 def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
     if not Path(artifact_path).exists():
         return {"accuracy": None, "avg_return": None, "brier_score": None, "downside_risk": None, "positive_predictions": 0, "rows": 0}
@@ -59,11 +102,12 @@ def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
         usable[col] = numeric.fillna(fallback).astype(float)
     usable["return_5d"] = pd.to_numeric(usable.get("return_5d"), errors="coerce")
     usable = usable.dropna(subset=["return_5d"]).copy()
+    usable = _ensure_return_bins(usable)
     if usable.empty:
         return {"accuracy": None, "avg_return": None, "brier_score": None, "downside_risk": None, "positive_predictions": 0, "rows": 0}
 
     X = usable[artifact.feature_columns].to_numpy(dtype=float)
-    y = (usable["return_5d"].astype(float) > 0.0).astype(int).to_numpy()
+    y = usable["return_bin_5d"].fillna("").astype(str).isin(TARGET_GAIN_BUCKETS).astype(int).to_numpy()
     probs = predict_proba(artifact, X)
     preds = (probs >= artifact.decision_threshold).astype(int)
     accuracy = float((preds == y).mean())
@@ -82,6 +126,8 @@ def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
         "brier_score": round(brier, 4),
         "downside_risk": round(downside_risk, 4) if downside_risk is not None else None,
         "positive_predictions": int((preds == 1).sum()),
+        "return_bin_counts": {str(k): int(v) for k, v in sorted(usable["return_bin_5d"].fillna("unknown").astype(str).value_counts().to_dict().items())},
+        "bucket_metrics": _bucket_metrics(usable, preds, probs),
         "rows": int(len(usable)),
     }
 

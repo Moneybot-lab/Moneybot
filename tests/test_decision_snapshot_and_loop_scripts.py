@@ -189,6 +189,37 @@ def test_day8_records_yfinance_failures_in_bad_symbol_cache(monkeypatch):
     assert cache["symbols"]["OLFS"]["reason"] == "no_price_data"
 
 
+def test_day10_uses_return_buckets_for_gain_target():
+    import pandas as pd
+
+    df = pd.DataFrame(
+        [
+            {"return_5d": -0.08},
+            {"return_5d": -0.01},
+            {"return_5d": 0.001},
+            {"return_5d": 0.02},
+            {"return_5d": 0.12},
+        ]
+    )
+
+    labeled = day10._ensure_return_bucket_labels(df)
+
+    assert labeled["return_bin_5d"].tolist() == ["big_loss", "loss", "flat", "gain", "big_gain"]
+    assert labeled["label_gain_5d"].tolist() == [0.0, 0.0, 0.0, 1.0, 1.0]
+
+
+def test_day11_return_bins_drive_gain_evaluation():
+    import pandas as pd
+
+    df = pd.DataFrame({"return_5d": [-0.08, -0.01, 0.001, 0.02, 0.12]})
+
+    binned = day11._ensure_return_bins(df)
+
+    assert binned["return_bin_5d"].tolist() == ["big_loss", "loss", "flat", "gain", "big_gain"]
+    y = binned["return_bin_5d"].fillna("").astype(str).isin(day11.TARGET_GAIN_BUCKETS).astype(int).tolist()
+    assert y == [0, 0, 0, 1, 1]
+
+
 def test_day10_candidate_trainer_fails_if_rows_below_min(tmp_path, monkeypatch):
     input_path = tmp_path / "train.jsonl"
     input_path.write_text(json.dumps({"ts": 1, "return_5d": 0.01, "return_1d": 0.01, "x1": 1.0}) + "\n", encoding="utf-8")

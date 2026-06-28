@@ -22,6 +22,9 @@ from moneybot.services.deterministic_model import (
 )
 from moneybot.services.model_metadata import append_artifact_history, build_artifact_metadata, save_artifact_metadata
 
+RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
+TARGET_GAIN_BUCKETS = {"gain", "big_gain"}
+
 RESERVED_COLUMNS = {
     "ts",
     "symbol",
@@ -32,7 +35,42 @@ RESERVED_COLUMNS = {
     "return_5d",
     "outcome_1d",
     "outcome_5d",
+    "return_bin_5d",
+    "label_up_5d",
+    "label_gain_5d",
 }
+
+
+def _return_bin(value: float | None) -> str | None:
+    if not isinstance(value, (int, float)):
+        return None
+    ret = float(value)
+    if ret < RETURN_BIN_EDGES[0]:
+        return "big_loss"
+    if ret < RETURN_BIN_EDGES[1]:
+        return "loss"
+    if ret <= RETURN_BIN_EDGES[2]:
+        return "flat"
+    if ret <= RETURN_BIN_EDGES[3]:
+        return "gain"
+    return "big_gain"
+
+
+def _ensure_return_bucket_labels(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if "return_bin_5d" not in out.columns:
+        returns = pd.to_numeric(out.get("return_5d"), errors="coerce")
+        out["return_bin_5d"] = [_return_bin(value) if pd.notna(value) else None for value in returns]
+    bins = out["return_bin_5d"].fillna("").astype(str)
+    out["label_gain_5d"] = bins.isin(TARGET_GAIN_BUCKETS).astype(float)
+    return out
+
+
+def _bucket_counts(df: pd.DataFrame) -> dict[str, int]:
+    if "return_bin_5d" not in df.columns:
+        return {}
+    counts = df["return_bin_5d"].fillna("unknown").astype(str).value_counts().to_dict()
+    return {str(key): int(value) for key, value in sorted(counts.items())}
 
 
 def _load_jsonl(path: str) -> pd.DataFrame:
@@ -137,6 +175,8 @@ def main() -> None:
         else:
             raise SystemExit("Missing target column label_up_5d and unable to derive from return_5d")
 
+    df = _ensure_return_bucket_labels(df)
+    target_column = "label_gain_5d"
     df[target_column] = pd.to_numeric(df[target_column], errors="coerce")
     filtered_target = df.dropna(subset=[target_column]).copy()
     rows_after_target_filter = len(filtered_target)
@@ -166,6 +206,7 @@ def main() -> None:
         {
             "avg_return_1d": round(float(test_df["return_1d"].dropna().mean()), 4) if test_df["return_1d"].notna().any() else None,
             "avg_return_5d": round(float(test_df["return_5d"].dropna().mean()), 4) if test_df["return_5d"].notna().any() else None,
+            "return_bin_counts": _bucket_counts(test_df),
         }
     )
 
@@ -193,6 +234,7 @@ def main() -> None:
                 "selected_feature_columns": feature_columns,
                 "feature_fill_values": feature_fill_values,
                 "target_column": target_column,
+                "return_bin_counts": _bucket_counts(clean),
             },
             sort_keys=True,
         )
