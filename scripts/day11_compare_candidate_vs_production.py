@@ -16,6 +16,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from moneybot.services.deterministic_model import load_artifact, predict_proba
 
+RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
+TARGET_GAIN_BUCKETS = {"gain", "big_gain"}
+
 
 def _load_jsonl(path: str) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
@@ -46,30 +49,98 @@ def _brier_score(y_true: np.ndarray, y_prob: np.ndarray) -> float:
     return float(np.mean((y_prob - y_true) ** 2))
 
 
+def _return_bin(value: float | None) -> str | None:
+    if not isinstance(value, (int, float)):
+        return None
+    ret = float(value)
+    if ret < RETURN_BIN_EDGES[0]:
+        return "big_loss"
+    if ret < RETURN_BIN_EDGES[1]:
+        return "loss"
+    if ret <= RETURN_BIN_EDGES[2]:
+        return "flat"
+    if ret <= RETURN_BIN_EDGES[3]:
+        return "gain"
+    return "big_gain"
+
+
+def _ensure_return_bins(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if "return_bin_5d" not in out.columns:
+        returns = pd.to_numeric(out.get("return_5d"), errors="coerce")
+        out["return_bin_5d"] = [_return_bin(value) if pd.notna(value) else None for value in returns]
+    return out
+
+
+def _bucket_metrics(usable: pd.DataFrame, preds: np.ndarray, probs: np.ndarray) -> dict[str, dict[str, float | int | None]]:
+    out: dict[str, dict[str, float | int | None]] = {}
+    work = usable.copy()
+    work["_pred"] = preds
+    work["_prob"] = probs
+    for bucket, group in work.groupby("return_bin_5d", dropna=False):
+        key = str(bucket or "unknown")
+        returns = pd.to_numeric(group["return_5d"], errors="coerce")
+        out[key] = {
+            "rows": int(len(group)),
+            "positive_predictions": int((group["_pred"] == 1).sum()),
+            "avg_probability": round(float(group["_prob"].mean()), 4) if len(group) else None,
+            "avg_return": round(float(returns.mean()), 4) if returns.notna().any() else None,
+        }
+    return dict(sorted(out.items()))
+
+
 def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
     if not Path(artifact_path).exists():
-        return {"accuracy": None, "avg_return": None, "brier_score": None, "rows": 0}
+        return {"accuracy": None, "avg_return": None, "brier_score": None, "downside_risk": None, "positive_predictions": 0, "rows": 0}
     artifact = load_artifact(artifact_path)
-    for col in artifact.feature_columns:
-        if col not in test_df.columns:
-            test_df[col] = np.nan
-    usable = test_df.dropna(subset=artifact.feature_columns + ["return_5d"]).copy()
+    usable = test_df.copy()
+    for idx, col in enumerate(artifact.feature_columns):
+        if col not in usable.columns:
+            usable[col] = np.nan
+        numeric = pd.to_numeric(usable[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        fallback = float(artifact.means[idx]) if idx < len(artifact.means) else 0.0
+        usable[col] = numeric.fillna(fallback).astype(float)
+    usable["return_5d"] = pd.to_numeric(usable.get("return_5d"), errors="coerce")
+    usable = usable.dropna(subset=["return_5d"]).copy()
+    usable = _ensure_return_bins(usable)
     if usable.empty:
-        return {"accuracy": None, "avg_return": None, "brier_score": None, "rows": 0}
+        return {"accuracy": None, "avg_return": None, "brier_score": None, "downside_risk": None, "positive_predictions": 0, "rows": 0}
 
     X = usable[artifact.feature_columns].to_numpy(dtype=float)
-    y = (usable["return_5d"].astype(float) > 0.0).astype(int).to_numpy()
+    y = usable["return_bin_5d"].fillna("").astype(str).isin(TARGET_GAIN_BUCKETS).astype(int).to_numpy()
     probs = predict_proba(artifact, X)
     preds = (probs >= artifact.decision_threshold).astype(int)
     accuracy = float((preds == y).mean())
-    avg_return = float(usable["return_5d"].mean())
+    signal_returns = usable.loc[preds == 1, "return_5d"].astype(float)
+    if signal_returns.empty:
+        avg_return = None
+        downside_risk = None
+    else:
+        avg_return = float(signal_returns.mean())
+        negative_signal_returns = signal_returns[signal_returns < 0.0]
+        downside_risk = 0.0 if negative_signal_returns.empty else float(abs(negative_signal_returns.mean()))
     brier = _brier_score(y.astype(float), probs.astype(float))
     return {
         "accuracy": round(accuracy, 4),
-        "avg_return": round(avg_return, 4),
+        "avg_return": round(avg_return, 4) if avg_return is not None else None,
         "brier_score": round(brier, 4),
+        "downside_risk": round(downside_risk, 4) if downside_risk is not None else None,
+        "positive_predictions": int((preds == 1).sum()),
+        "return_bin_counts": {str(k): int(v) for k, v in sorted(usable["return_bin_5d"].fillna("unknown").astype(str).value_counts().to_dict().items())},
+        "bucket_metrics": _bucket_metrics(usable, preds, probs),
         "rows": int(len(usable)),
     }
+
+
+def _numeric_metric(metrics: dict[str, Any], key: str) -> float | None:
+    value = metrics.get(key)
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if np.isfinite(numeric) else None
 
 
 def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: int = 200) -> tuple[bool, list[str]]:
@@ -79,23 +150,35 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
         reasons.append(f"candidate rows below minimum ({rows} < {min_rows})")
         return False, reasons
 
-    c_acc = candidate.get("accuracy")
-    p_acc = production.get("accuracy")
-    c_brier = candidate.get("brier_score")
-    p_brier = production.get("brier_score")
-    if None in {c_acc, p_acc, c_brier, p_brier}:
-        reasons.append("insufficient comparable metrics")
+    c_acc = _numeric_metric(candidate, "accuracy")
+    p_acc = _numeric_metric(production, "accuracy")
+    c_brier = _numeric_metric(candidate, "brier_score")
+    p_brier = _numeric_metric(production, "brier_score")
+    c_return = _numeric_metric(candidate, "avg_return")
+    p_return = _numeric_metric(production, "avg_return")
+    c_downside = _numeric_metric(candidate, "downside_risk")
+    p_downside = _numeric_metric(production, "downside_risk")
+    if None in {c_acc, p_acc, c_brier, p_brier, c_return, p_return, c_downside, p_downside}:
+        reasons.append("insufficient comparable accuracy, brier, return, or downside metrics")
         return False, reasons
 
-    if c_acc >= p_acc + 0.02:
-        reasons.append("candidate accuracy exceeds production by at least 0.02")
+    accuracy_ok = c_acc > p_acc
+    brier_ok = c_brier < p_brier
+    return_ok = c_return >= p_return
+    downside_ok = c_downside <= p_downside
+
+    if not accuracy_ok:
+        reasons.append("candidate accuracy does not exceed production")
+    if not brier_ok:
+        reasons.append("candidate brier score does not improve production")
+    if not (return_ok or downside_ok):
+        reasons.append("candidate avg_return is lower and downside_risk is higher than production")
+
+    if accuracy_ok and brier_ok and (return_ok or downside_ok):
+        reasons.append("candidate improves accuracy and brier with acceptable return/downside")
         return True, reasons
 
-    if c_acc >= p_acc and c_brier <= p_brier - 0.01:
-        reasons.append("candidate matches/exceeds accuracy and improves brier by at least 0.01")
-        return True, reasons
-
-    reasons.append("candidate did not satisfy promotion thresholds")
+    reasons.append("candidate did not satisfy profit-aware promotion thresholds")
     return False, reasons
 
 
