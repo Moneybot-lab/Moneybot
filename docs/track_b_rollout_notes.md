@@ -125,6 +125,9 @@ A healthy Track B challenger run should show:
 day8 labeled_rows >= 200
 day10 rows_after_feature_filter >= 200
 day11 candidate_metrics.rows >= 200
+day11 candidate_metrics.accuracy > production_metrics.accuracy
+day11 candidate_metrics.brier_score < production_metrics.brier_score
+day11 candidate_metrics.avg_return >= production_metrics.avg_return OR candidate_metrics.downside_risk <= production_metrics.downside_risk
 ```
 
 Warnings from yfinance for invalid/delisted symbols are expected as long as day8 still reports enough labeled rows and day10 keeps enough rows after sparse feature filling.

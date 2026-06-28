@@ -238,19 +238,28 @@ def test_day10_trains_with_sparse_feature_columns_no_complete_raw_rows(tmp_path,
     assert metrics["rows"] == 6
 
 
-def test_day11_compare_detects_win_and_loss():
-    win, _ = day11._decide(
-        {"accuracy": 0.60, "brier_score": 0.18, "rows": 250},
-        {"accuracy": 0.57, "brier_score": 0.20, "rows": 250},
+def test_day11_compare_detects_profit_aware_win_and_loss():
+    win, win_reasons = day11._decide(
+        {"accuracy": 0.60, "brier_score": 0.18, "avg_return": 0.015, "downside_risk": 0.02, "rows": 250},
+        {"accuracy": 0.57, "brier_score": 0.20, "avg_return": 0.010, "downside_risk": 0.03, "rows": 250},
         min_rows=200,
     )
-    loss, _ = day11._decide(
-        {"accuracy": 0.58, "brier_score": 0.21, "rows": 250},
-        {"accuracy": 0.58, "brier_score": 0.20, "rows": 250},
+    worse_return_loss, loss_reasons = day11._decide(
+        {"accuracy": 0.60, "brier_score": 0.18, "avg_return": -0.015, "downside_risk": 0.04, "rows": 250},
+        {"accuracy": 0.57, "brier_score": 0.20, "avg_return": -0.010, "downside_risk": 0.03, "rows": 250},
         min_rows=200,
     )
+    lower_downside_win, _ = day11._decide(
+        {"accuracy": 0.60, "brier_score": 0.18, "avg_return": -0.015, "downside_risk": 0.02, "rows": 250},
+        {"accuracy": 0.57, "brier_score": 0.20, "avg_return": -0.010, "downside_risk": 0.03, "rows": 250},
+        min_rows=200,
+    )
+
     assert win is True
-    assert loss is False
+    assert "candidate improves accuracy and brier with acceptable return/downside" in win_reasons
+    assert worse_return_loss is False
+    assert "candidate avg_return is lower and downside_risk is higher than production" in loss_reasons
+    assert lower_downside_win is True
 
 
 def test_day11_compare_handles_missing_model_file_gracefully(tmp_path):

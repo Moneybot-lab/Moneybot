@@ -48,7 +48,7 @@ def _brier_score(y_true: np.ndarray, y_prob: np.ndarray) -> float:
 
 def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
     if not Path(artifact_path).exists():
-        return {"accuracy": None, "avg_return": None, "brier_score": None, "rows": 0}
+        return {"accuracy": None, "avg_return": None, "brier_score": None, "downside_risk": None, "positive_predictions": 0, "rows": 0}
     artifact = load_artifact(artifact_path)
     usable = test_df.copy()
     for idx, col in enumerate(artifact.feature_columns):
@@ -60,21 +60,41 @@ def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
     usable["return_5d"] = pd.to_numeric(usable.get("return_5d"), errors="coerce")
     usable = usable.dropna(subset=["return_5d"]).copy()
     if usable.empty:
-        return {"accuracy": None, "avg_return": None, "brier_score": None, "rows": 0}
+        return {"accuracy": None, "avg_return": None, "brier_score": None, "downside_risk": None, "positive_predictions": 0, "rows": 0}
 
     X = usable[artifact.feature_columns].to_numpy(dtype=float)
     y = (usable["return_5d"].astype(float) > 0.0).astype(int).to_numpy()
     probs = predict_proba(artifact, X)
     preds = (probs >= artifact.decision_threshold).astype(int)
     accuracy = float((preds == y).mean())
-    avg_return = float(usable["return_5d"].mean())
+    signal_returns = usable.loc[preds == 1, "return_5d"].astype(float)
+    if signal_returns.empty:
+        avg_return = None
+        downside_risk = None
+    else:
+        avg_return = float(signal_returns.mean())
+        negative_signal_returns = signal_returns[signal_returns < 0.0]
+        downside_risk = 0.0 if negative_signal_returns.empty else float(abs(negative_signal_returns.mean()))
     brier = _brier_score(y.astype(float), probs.astype(float))
     return {
         "accuracy": round(accuracy, 4),
-        "avg_return": round(avg_return, 4),
+        "avg_return": round(avg_return, 4) if avg_return is not None else None,
         "brier_score": round(brier, 4),
+        "downside_risk": round(downside_risk, 4) if downside_risk is not None else None,
+        "positive_predictions": int((preds == 1).sum()),
         "rows": int(len(usable)),
     }
+
+
+def _numeric_metric(metrics: dict[str, Any], key: str) -> float | None:
+    value = metrics.get(key)
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if np.isfinite(numeric) else None
 
 
 def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: int = 200) -> tuple[bool, list[str]]:
@@ -84,23 +104,35 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
         reasons.append(f"candidate rows below minimum ({rows} < {min_rows})")
         return False, reasons
 
-    c_acc = candidate.get("accuracy")
-    p_acc = production.get("accuracy")
-    c_brier = candidate.get("brier_score")
-    p_brier = production.get("brier_score")
-    if None in {c_acc, p_acc, c_brier, p_brier}:
-        reasons.append("insufficient comparable metrics")
+    c_acc = _numeric_metric(candidate, "accuracy")
+    p_acc = _numeric_metric(production, "accuracy")
+    c_brier = _numeric_metric(candidate, "brier_score")
+    p_brier = _numeric_metric(production, "brier_score")
+    c_return = _numeric_metric(candidate, "avg_return")
+    p_return = _numeric_metric(production, "avg_return")
+    c_downside = _numeric_metric(candidate, "downside_risk")
+    p_downside = _numeric_metric(production, "downside_risk")
+    if None in {c_acc, p_acc, c_brier, p_brier, c_return, p_return, c_downside, p_downside}:
+        reasons.append("insufficient comparable accuracy, brier, return, or downside metrics")
         return False, reasons
 
-    if c_acc >= p_acc + 0.02:
-        reasons.append("candidate accuracy exceeds production by at least 0.02")
+    accuracy_ok = c_acc > p_acc
+    brier_ok = c_brier < p_brier
+    return_ok = c_return >= p_return
+    downside_ok = c_downside <= p_downside
+
+    if not accuracy_ok:
+        reasons.append("candidate accuracy does not exceed production")
+    if not brier_ok:
+        reasons.append("candidate brier score does not improve production")
+    if not (return_ok or downside_ok):
+        reasons.append("candidate avg_return is lower and downside_risk is higher than production")
+
+    if accuracy_ok and brier_ok and (return_ok or downside_ok):
+        reasons.append("candidate improves accuracy and brier with acceptable return/downside")
         return True, reasons
 
-    if c_acc >= p_acc and c_brier <= p_brier - 0.01:
-        reasons.append("candidate matches/exceeds accuracy and improves brier by at least 0.01")
-        return True, reasons
-
-    reasons.append("candidate did not satisfy promotion thresholds")
+    reasons.append("candidate did not satisfy profit-aware promotion thresholds")
     return False, reasons
 
 
