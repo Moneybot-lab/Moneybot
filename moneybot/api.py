@@ -3113,11 +3113,14 @@ def decision_outcomes():
             allow_stale=True,
         )
         if snapshot is not None:
+            snapshot_data = dict(snapshot["data"] or {})
+            if "paper_pnl_by_recommendation" not in snapshot_data:
+                snapshot_data["paper_pnl_by_recommendation"] = summarize_paper_pnl_by_action(snapshot_data.get("rows") or [])
             return jsonify(
                 {
                     "data": {
                         "schema_version": "decision_outcomes.v1",
-                        **snapshot["data"],
+                        **snapshot_data,
                         "snapshot_source": "materialized_stale" if snapshot["stale"] else "materialized",
                         "snapshot_stale": bool(snapshot["stale"]),
                         "snapshot_computed_at_utc": snapshot["computed_at_utc"],

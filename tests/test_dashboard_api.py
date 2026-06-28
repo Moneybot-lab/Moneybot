@@ -778,6 +778,7 @@ def test_decision_outcomes_uses_materialized_snapshot_when_fresh(tmp_path, monke
     data = res.get_json()["data"]
     assert data["snapshot_source"] == "materialized"
     assert data["rows"][0]["symbol"] == "AAPL"
+    assert data["paper_pnl_by_recommendation"]["BUY"]["rows"] == 1
     assert data["snapshot_age_seconds"] >= 0
 
 
@@ -839,6 +840,7 @@ def test_decision_outcomes_serves_stale_snapshot_instead_of_live_fanout(tmp_path
     assert data["snapshot_source"] == "materialized_stale"
     assert data["snapshot_stale"] is True
     assert data["rows"][0]["symbol"] == "STALE"
+    assert data["paper_pnl_by_recommendation"]["BUY"]["rows"] == 1
 
 
 def test_decision_outcomes_force_live_bypasses_materialized_snapshot(tmp_path, monkeypatch):
