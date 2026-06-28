@@ -43,11 +43,13 @@ from .services.outcome_tracking import (
     rows_with_any_horizon_return,
     rows_with_horizon_return,
     summarize_outcome_rows,
+    summarize_paper_pnl_by_action,
 )
 from .services.runtime_paths import (
     day13_calibration_report_path,
     day13_recalibration_plan_path,
     decision_events_log_path,
+    historical_validation_report_path,
     resolve_runtime_dir,
 )
 
@@ -89,7 +91,12 @@ def _file_diagnostics(path: str | Path) -> dict[str, Any]:
     return diagnostics
 
 
-def _load_materialized_outcomes_snapshot(path: str, *, max_age_seconds: int) -> dict[str, Any] | None:
+def _load_materialized_outcomes_snapshot(
+    path: str,
+    *,
+    max_age_seconds: int,
+    allow_stale: bool = False,
+) -> dict[str, Any] | None:
     file_path = Path(path)
     if not file_path.exists():
         return None
@@ -108,12 +115,17 @@ def _load_materialized_outcomes_snapshot(path: str, *, max_age_seconds: int) -> 
     except ValueError:
         return None
     age_seconds = (datetime.now(timezone.utc) - computed_dt.astimezone(timezone.utc)).total_seconds()
-    if age_seconds < 0 or age_seconds > max(1, int(max_age_seconds)):
+    max_age = max(1, int(max_age_seconds))
+    if age_seconds < 0:
+        return None
+    stale = age_seconds > max_age
+    if stale and not allow_stale:
         return None
     return {
         "data": data,
         "computed_at_utc": computed_dt.astimezone(timezone.utc).isoformat(),
         "age_seconds": int(age_seconds),
+        "stale": stale,
     }
 
 
@@ -2088,6 +2100,181 @@ def hot_momentum_buys():
     return jsonify({"items": items, "request_id": g.request_id})
 
 
+
+@api_bp.post("/promote-track-b-candidate")
+def promote_track_b_candidate():
+    expected_token = str(
+        current_app.config.get("TRACK_B_PROMOTION_TOKEN") or current_app.config.get("DAILY_OPS_TOKEN") or ""
+    ).strip()
+    provided_token = str(
+        request.headers.get("X-Track-B-Promotion-Token") or request.headers.get("X-Daily-Ops-Token") or ""
+    ).strip()
+    if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
+
+    comparison_file = request.files.get("comparison_report")
+    candidate_file = request.files.get("candidate_model")
+    if comparison_file is None or candidate_file is None:
+        return jsonify({"error": "comparison_report and candidate_model files are required", "request_id": g.request_id}), 400
+
+    try:
+        comparison_bytes = comparison_file.read()
+        candidate_bytes = candidate_file.read()
+        comparison_report = json.loads(comparison_bytes.decode("utf-8"))
+        json.loads(candidate_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return jsonify({"error": "uploaded files must be valid JSON", "request_id": g.request_id}), 400
+
+    if not isinstance(comparison_report, dict):
+        return jsonify({"error": "comparison_report must be a JSON object", "request_id": g.request_id}), 400
+
+    force_raw = str(request.form.get("force") or request.args.get("force") or "").strip().lower()
+    force = force_raw in {"1", "true", "yes", "y"}
+    candidate_win = bool(comparison_report.get("candidate_win"))
+    if not candidate_win and not force:
+        return jsonify(
+            {
+                "data": {
+                    "success": False,
+                    "promoted": False,
+                    "candidate_win": False,
+                    "reasons": comparison_report.get("reasons") or [],
+                    "message": "comparison report does not approve promotion",
+                },
+                "request_id": g.request_id,
+            }
+        ), 409
+
+    project_root = Path(__file__).resolve().parents[1]
+    track_b_dir = resolve_runtime_dir() / "track_b"
+    track_b_dir.mkdir(parents=True, exist_ok=True)
+    comparison_path = track_b_dir / "model_comparison_track_b.json"
+    candidate_path = track_b_dir / "candidate_model_track_b.json"
+    comparison_path.write_bytes(comparison_bytes)
+    candidate_path.write_bytes(candidate_bytes)
+
+    production_model_path = Path(
+        str(current_app.config.get("DETERMINISTIC_MODEL_PATH") or (resolve_runtime_dir() / "day1_baseline_model.json"))
+    )
+    command = [
+        "python3",
+        "scripts/day14_promote_candidate.py",
+        "--comparison-report",
+        str(comparison_path),
+        "--candidate-model",
+        str(candidate_path),
+        "--production-model",
+        str(production_model_path),
+    ]
+    if force:
+        command.append("--force")
+
+    logging.info("Running Track B candidate promotion via protected API endpoint.")
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.exception("promote-track-b-candidate failed to execute.")
+        return jsonify(
+            {
+                "data": {
+                    "success": False,
+                    "promoted": False,
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": str(exc),
+                    "comparison_report_path": str(comparison_path),
+                    "candidate_model_path": str(candidate_path),
+                    "production_model_path": str(production_model_path),
+                },
+                "request_id": g.request_id,
+            }
+        ), 500
+
+    promoted = completed.returncode == 0 and "promoted candidate" in (completed.stdout or "")
+    status = 200 if completed.returncode == 0 else 500
+    return jsonify(
+        {
+            "data": {
+                "success": completed.returncode == 0,
+                "promoted": promoted,
+                "candidate_win": candidate_win,
+                "reasons": comparison_report.get("reasons") or [],
+                "command": command,
+                "returncode": completed.returncode,
+                "exit_code": completed.returncode,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+                "comparison_report_path": str(comparison_path),
+                "candidate_model_path": str(candidate_path),
+                "production_model_path": str(production_model_path),
+            },
+            "request_id": g.request_id,
+        }
+    ), status
+
+
+
+def _historical_validation_status() -> dict[str, Any]:
+    """Return optional historical-validation diagnostics without breaking model health."""
+    raw_path = str(
+        current_app.config.get("HISTORICAL_VALIDATION_REPORT_PATH")
+        or current_app.config.get("DETERMINISTIC_HISTORICAL_VALIDATION_REPORT_PATH")
+        or historical_validation_report_path()
+    ).strip()
+    if not raw_path:
+        return {
+            "available": False,
+            "configured": False,
+            "path": None,
+            "exists": False,
+            "mtime_utc": None,
+            "summary": None,
+            "error": None,
+        }
+
+    diag = _file_diagnostics(raw_path)
+    status: dict[str, Any] = {
+        "available": False,
+        "configured": True,
+        "path": diag["path"],
+        "exists": diag["exists"],
+        "mtime_utc": diag["mtime_utc"],
+        "summary": None,
+        "error": None,
+    }
+    if not diag["exists"]:
+        return status
+
+    try:
+        payload = json.loads(Path(raw_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        status["error"] = str(exc)
+        return status
+
+    if isinstance(payload, dict):
+        status["available"] = True
+        status["summary"] = {
+            key: payload.get(key)
+            for key in (
+                "generated_at_utc",
+                "rows",
+                "accuracy",
+                "brier_score",
+                "avg_return",
+                "candidate_win",
+                "status",
+            )
+            if key in payload
+        }
+    return status
+
+
 @api_bp.get("/model-health")
 def model_health():
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
@@ -2171,6 +2358,7 @@ def model_health():
                 "training_max_age_hours": training_max_age_hours,
                 "training_fresh": training_fresh,
                 "decision_logging": _normalized_decision_logging_health(decision_logger),
+                "historical_validation": _historical_validation_status(),
             },
             "request_id": g.request_id,
         }
@@ -2243,11 +2431,12 @@ def decision_outcomes():
         return jsonify({"error": "limit must be an integer", "request_id": g.request_id}), 400
 
     snapshot_path = current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_PATH") or _runtime_data_path("decision_outcomes_snapshot.json")
-    snapshot_max_age_seconds = int(current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS") or 900)
+    snapshot_max_age_seconds = int(current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS") or 129600)
     if not force_live:
         snapshot = _load_materialized_outcomes_snapshot(
             str(snapshot_path),
             max_age_seconds=snapshot_max_age_seconds,
+            allow_stale=True,
         )
         if snapshot is not None:
             return jsonify(
@@ -2255,7 +2444,8 @@ def decision_outcomes():
                     "data": {
                         "schema_version": "decision_outcomes.v1",
                         **snapshot["data"],
-                        "snapshot_source": "materialized",
+                        "snapshot_source": "materialized_stale" if snapshot["stale"] else "materialized",
+                        "snapshot_stale": bool(snapshot["stale"]),
                         "snapshot_computed_at_utc": snapshot["computed_at_utc"],
                         "snapshot_age_seconds": snapshot["age_seconds"],
                     },
@@ -2269,6 +2459,8 @@ def decision_outcomes():
         or _runtime_data_path("decision_events.jsonl")
     )
     lookup_cache: dict[tuple[str, int, int], float | None] = {}
+    price_path_cache: dict[tuple[str, int, int], list[float]] = {}
+    benchmark_cache: dict[tuple[int, int], float | None] = {}
     cache_hits = 0
     cache_misses = 0
     lookup_errors = 0
@@ -2289,6 +2481,18 @@ def decision_outcomes():
         lookup_cache[key] = value
         return value
 
+    def cached_price_path_lookup(symbol: str, ts: int, days: int) -> list[float]:
+        key = (str(symbol).upper(), int(ts), int(days))
+        if key not in price_path_cache:
+            price_path_cache[key] = _price_path_for_outcomes(symbol, ts, days)
+        return price_path_cache[key]
+
+    def cached_benchmark_return_lookup(ts: int, days: int) -> float | None:
+        key = (int(ts), int(days))
+        if key not in benchmark_cache:
+            benchmark_cache[key] = cached_future_return_lookup("SPY", ts, days)
+        return benchmark_cache[key]
+
     # Read progressively wider windows so the endpoint can still find older evaluated rows
     # when very recent logs are mostly too fresh for 1D / 5D outcomes.
     read_cap = 5000
@@ -2299,7 +2503,12 @@ def decision_outcomes():
     evaluated_rows_5d: list[dict[str, Any]] = []
     while True:
         events = read_decision_events(str(output_path), limit=read_limit)
-        rows = evaluate_decision_events(events, future_return_lookup=cached_future_return_lookup)
+        rows = evaluate_decision_events(
+            events,
+            future_return_lookup=cached_future_return_lookup,
+            price_path_lookup=cached_price_path_lookup,
+            benchmark_return_lookup=cached_benchmark_return_lookup,
+        )
         evaluated_rows_1d = rows_with_horizon_return(rows, "1d")
         evaluated_rows_5d = rows_with_horizon_return(rows, "5d")
         evaluated_rows = rows_with_any_horizon_return(rows)
@@ -2340,6 +2549,7 @@ def decision_outcomes():
                 "rows_5d": visible_rows_5d,
                 "summary_1d": summary_1d,
                 "summary_5d": summary_5d,
+                "paper_pnl_by_recommendation": summarize_paper_pnl_by_action(rows),
                 "include_skipped": include_skipped,
                 "decision_source_filter": decision_source_filter or None,
                 "rows_scanned": len(rows),
@@ -2364,6 +2574,32 @@ def decision_outcomes():
 def wells_picks():
     svc = current_app.extensions["market_data_service"]
     return jsonify({"items": svc.get_wells_picks(), "request_id": g.request_id})
+
+
+def _price_path_for_outcomes(symbol: str, start_ts: int, days: int) -> list[float]:
+    start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
+    now_utc = datetime.now(timezone.utc)
+    if start_dt >= now_utc:
+        return []
+    if start_dt + timedelta(days=days) > now_utc:
+        return []
+
+    end_dt = start_dt + timedelta(days=max(days + 3, 7))
+    safe_end_dt = min(end_dt, now_utc + timedelta(days=1))
+    try:
+        history = yf.download(
+            symbol,
+            start=start_dt.strftime("%Y-%m-%d"),
+            end=safe_end_dt.strftime("%Y-%m-%d"),
+            interval="1d",
+            progress=False,
+            auto_adjust=False,
+        )
+    except Exception:  # noqa: BLE001
+        return []
+    return close_values(history)
+
+
 def _future_return_for_outcomes(symbol: str, start_ts: int, days: int) -> float | None:
     start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
     now_utc = datetime.now(timezone.utc)

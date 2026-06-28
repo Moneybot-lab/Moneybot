@@ -22,6 +22,10 @@ from moneybot.services.deterministic_model import (
 )
 from moneybot.services.model_metadata import append_artifact_history, build_artifact_metadata, save_artifact_metadata
 
+RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
+TARGET_GAIN_BUCKETS = {"gain", "big_gain"}
+RETURN_BIN_SAMPLE_WEIGHTS = {"big_loss": 2.0, "loss": 1.25, "flat": 0.75, "gain": 1.0, "big_gain": 2.0}
+
 RESERVED_COLUMNS = {
     "ts",
     "symbol",
@@ -32,7 +36,47 @@ RESERVED_COLUMNS = {
     "return_5d",
     "outcome_1d",
     "outcome_5d",
+    "return_bin_5d",
+    "label_up_5d",
+    "label_gain_5d",
 }
+
+
+def _return_bin(value: float | None) -> str | None:
+    if not isinstance(value, (int, float)):
+        return None
+    ret = float(value)
+    if ret < RETURN_BIN_EDGES[0]:
+        return "big_loss"
+    if ret < RETURN_BIN_EDGES[1]:
+        return "loss"
+    if ret <= RETURN_BIN_EDGES[2]:
+        return "flat"
+    if ret <= RETURN_BIN_EDGES[3]:
+        return "gain"
+    return "big_gain"
+
+
+def _ensure_return_bucket_labels(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if "return_bin_5d" not in out.columns:
+        returns = pd.to_numeric(out.get("return_5d"), errors="coerce")
+        out["return_bin_5d"] = [_return_bin(value) if pd.notna(value) else None for value in returns]
+    bins = out["return_bin_5d"].fillna("").astype(str)
+    out["label_gain_5d"] = bins.isin(TARGET_GAIN_BUCKETS).astype(float)
+    return out
+
+
+def _bucket_sample_weights(df: pd.DataFrame) -> pd.Series:
+    bins = df.get("return_bin_5d", pd.Series("", index=df.index)).fillna("").astype(str)
+    return bins.map(RETURN_BIN_SAMPLE_WEIGHTS).fillna(1.0).astype(float)
+
+
+def _bucket_counts(df: pd.DataFrame) -> dict[str, int]:
+    if "return_bin_5d" not in df.columns:
+        return {}
+    counts = df["return_bin_5d"].fillna("unknown").astype(str).value_counts().to_dict()
+    return {str(key): int(value) for key, value in sorted(counts.items())}
 
 
 def _load_jsonl(path: str) -> pd.DataFrame:
@@ -58,9 +102,28 @@ def _select_feature_columns(df: pd.DataFrame) -> list[str]:
             continue
         if not str(col).startswith("feature_"):
             continue
-        if pd.api.types.is_numeric_dtype(df[col]):
+        numeric = pd.to_numeric(df[col], errors="coerce")
+        if numeric.notna().any():
             cols.append(str(col))
     return sorted(cols)
+
+
+def _fill_feature_gaps(df: pd.DataFrame, feature_columns: list[str]) -> tuple[pd.DataFrame, dict[str, float]]:
+    """Coerce sparse feature columns to numeric and median-fill missing values.
+
+    Decision logs come from multiple endpoints and app versions, so feature maps are
+    naturally sparse. Requiring every selected feature to be present on the same
+    row can drop an otherwise large labeled dataset to zero rows.
+    """
+    out = df.copy()
+    fill_values: dict[str, float] = {}
+    for col in feature_columns:
+        numeric = pd.to_numeric(out[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        median = numeric.median(skipna=True)
+        fill_value = float(median) if pd.notna(median) else 0.0
+        out[col] = numeric.fillna(fill_value).astype(float)
+        fill_values[col] = fill_value
+    return out, fill_values
 
 
 def _prepare_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -118,6 +181,9 @@ def main() -> None:
         else:
             raise SystemExit("Missing target column label_up_5d and unable to derive from return_5d")
 
+    df = _ensure_return_bucket_labels(df)
+    target_column = "label_gain_5d"
+    df[target_column] = pd.to_numeric(df[target_column], errors="coerce")
     filtered_target = df.dropna(subset=[target_column]).copy()
     rows_after_target_filter = len(filtered_target)
 
@@ -125,8 +191,7 @@ def main() -> None:
     if not feature_columns:
         raise SystemExit("No numeric feature columns found in decision dataset")
 
-    clean = filtered_target.dropna(subset=feature_columns + [target_column]).copy()
-    clean[target_column] = pd.to_numeric(clean[target_column], errors="coerce")
+    clean, feature_fill_values = _fill_feature_gaps(filtered_target, feature_columns)
     rows_after_feature_filter = len(clean)
 
     if len(clean) < max(1, args.min_rows):
@@ -136,7 +201,8 @@ def main() -> None:
 
     X_train = train_df[feature_columns].to_numpy(dtype=float)
     y_train = train_df[target_column].to_numpy(dtype=float)
-    base_artifact = train_logistic_baseline(X_train, y_train)
+    sample_weight = _bucket_sample_weights(train_df).to_numpy(dtype=float)
+    base_artifact = train_logistic_baseline(X_train, y_train, sample_weight=sample_weight)
     artifact = _build_artifact_with_features(base_artifact, feature_columns)
 
     X_test = test_df[feature_columns].to_numpy(dtype=float)
@@ -147,6 +213,8 @@ def main() -> None:
         {
             "avg_return_1d": round(float(test_df["return_1d"].dropna().mean()), 4) if test_df["return_1d"].notna().any() else None,
             "avg_return_5d": round(float(test_df["return_5d"].dropna().mean()), 4) if test_df["return_5d"].notna().any() else None,
+            "return_bin_counts": _bucket_counts(test_df),
+            "return_bin_sample_weights": RETURN_BIN_SAMPLE_WEIGHTS,
         }
     )
 
@@ -172,7 +240,10 @@ def main() -> None:
                 "rows_after_target_filter": rows_after_target_filter,
                 "rows_after_feature_filter": rows_after_feature_filter,
                 "selected_feature_columns": feature_columns,
+                "feature_fill_values": feature_fill_values,
                 "target_column": target_column,
+                "return_bin_counts": _bucket_counts(clean),
+                "return_bin_sample_weights": RETURN_BIN_SAMPLE_WEIGHTS,
             },
             sort_keys=True,
         )
