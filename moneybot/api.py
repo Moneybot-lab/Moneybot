@@ -63,6 +63,7 @@ from .services.outcome_tracking import (
     rows_with_any_horizon_return,
     rows_with_horizon_return,
     summarize_outcome_rows,
+    summarize_paper_pnl_by_action,
 )
 from .services.runtime_paths import (
     day13_calibration_report_path,
@@ -3132,6 +3133,8 @@ def decision_outcomes():
         or _runtime_data_path("decision_events.jsonl")
     )
     lookup_cache: dict[tuple[str, int, int], float | None] = {}
+    price_path_cache: dict[tuple[str, int, int], list[float]] = {}
+    benchmark_cache: dict[tuple[int, int], float | None] = {}
     cache_hits = 0
     cache_misses = 0
     lookup_errors = 0
@@ -3152,6 +3155,18 @@ def decision_outcomes():
         lookup_cache[key] = value
         return value
 
+    def cached_price_path_lookup(symbol: str, ts: int, days: int) -> list[float]:
+        key = (str(symbol).upper(), int(ts), int(days))
+        if key not in price_path_cache:
+            price_path_cache[key] = _price_path_for_outcomes(symbol, ts, days)
+        return price_path_cache[key]
+
+    def cached_benchmark_return_lookup(ts: int, days: int) -> float | None:
+        key = (int(ts), int(days))
+        if key not in benchmark_cache:
+            benchmark_cache[key] = cached_future_return_lookup("SPY", ts, days)
+        return benchmark_cache[key]
+
     # Read progressively wider windows so the endpoint can still find older evaluated rows
     # when very recent logs are mostly too fresh for 1D / 5D outcomes.
     read_cap = 5000
@@ -3162,7 +3177,12 @@ def decision_outcomes():
     evaluated_rows_5d: list[dict[str, Any]] = []
     while True:
         events = read_decision_events(str(output_path), limit=read_limit)
-        rows = evaluate_decision_events(events, future_return_lookup=cached_future_return_lookup)
+        rows = evaluate_decision_events(
+            events,
+            future_return_lookup=cached_future_return_lookup,
+            price_path_lookup=cached_price_path_lookup,
+            benchmark_return_lookup=cached_benchmark_return_lookup,
+        )
         evaluated_rows_1d = rows_with_horizon_return(rows, "1d")
         evaluated_rows_5d = rows_with_horizon_return(rows, "5d")
         evaluated_rows = rows_with_any_horizon_return(rows)
@@ -3203,6 +3223,7 @@ def decision_outcomes():
                 "rows_5d": visible_rows_5d,
                 "summary_1d": summary_1d,
                 "summary_5d": summary_5d,
+                "paper_pnl_by_recommendation": summarize_paper_pnl_by_action(rows),
                 "include_skipped": include_skipped,
                 "decision_source_filter": decision_source_filter or None,
                 "rows_scanned": len(rows),
@@ -3227,6 +3248,32 @@ def decision_outcomes():
 def wells_picks():
     svc = current_app.extensions["market_data_service"]
     return jsonify({"items": svc.get_wells_picks(), "request_id": g.request_id})
+
+
+def _price_path_for_outcomes(symbol: str, start_ts: int, days: int) -> list[float]:
+    start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
+    now_utc = datetime.now(timezone.utc)
+    if start_dt >= now_utc:
+        return []
+    if start_dt + timedelta(days=days) > now_utc:
+        return []
+
+    end_dt = start_dt + timedelta(days=max(days + 3, 7))
+    safe_end_dt = min(end_dt, now_utc + timedelta(days=1))
+    try:
+        history = yf.download(
+            symbol,
+            start=start_dt.strftime("%Y-%m-%d"),
+            end=safe_end_dt.strftime("%Y-%m-%d"),
+            interval="1d",
+            progress=False,
+            auto_adjust=False,
+        )
+    except Exception:  # noqa: BLE001
+        return []
+    return close_values(history)
+
+
 def _future_return_for_outcomes(symbol: str, start_ts: int, days: int) -> float | None:
     start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
     now_utc = datetime.now(timezone.utc)

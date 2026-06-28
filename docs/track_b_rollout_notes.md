@@ -138,6 +138,10 @@ Track B uses 5-day return buckets (`big_loss`, `loss`, `flat`, `gain`, `big_gain
 
 Warnings from yfinance for invalid/delisted symbols are expected as long as day8 still reports enough labeled rows and day10 keeps enough rows after sparse feature filling. Day8 now applies a symbol-quality filter before yfinance lookup: it normalizes common typos such as `NVDIA`/`NVSIA` to `NVDA`, rejects unsupported foreign suffix/non-equity/fund-like symbols, and records repeated yfinance failures in the runtime cache at `track_b/bad_symbols.json` so noisy symbols can be skipped in later runs.
 
+## Live paper P&L by recommendation
+
+Decision outcomes now track action-level paper P&L for `BUY`, `SELL`, `HOLD`, `HOLD OFF FOR NOW`, and `STRONG BUY`. Each evaluated row can include 1D/5D/10D/20D raw returns, action-adjusted paper returns, 20D max drawdown, 20D max favorable excursion, SPY benchmark return, and benchmark-relative 20D paper return. The `paper_pnl_by_recommendation` summary groups those metrics by recommendation so Track B can optimize toward avoiding large adverse moves and capturing large favorable moves instead of only counting up/down labels.
+
 ## Production safety notes
 
 - Track B offline does **not** promote a model or change live routing.
