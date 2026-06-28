@@ -60,6 +60,23 @@ const fallbackData = {
                     }
                     return fetch(url, Object.assign({}, options, { headers }));
                   }
+
+                  function normalizeTickerInputValue(inputEl){
+                    if(!inputEl) return '';
+                    const normalized = String(inputEl.value || '').toUpperCase();
+                    if(inputEl.value !== normalized){
+                      inputEl.value = normalized;
+                    }
+                    return normalized.trim();
+                  }
+
+                  async function readJsonResponse(response){
+                    try {
+                      return await response.json();
+                    } catch (_err) {
+                      return {};
+                    }
+                  }
                   
                   function initialsFromName(name){
                     const tokens = String(name || '').trim().replaceAll('-', ' ').split(/\s+/).filter(Boolean);
@@ -229,14 +246,33 @@ const fallbackData = {
                     }
                   }
 
+
+                  function profileAdjustmentExplanation(data, baseRecommendation, recommendation){
+                    const personalization = (data && typeof data.personalization === 'object' && data.personalization) ? data.personalization : {};
+                    const rules = Array.isArray(personalization.applied_rules) ? personalization.applied_rules : [];
+                    const reasonSet = new Set();
+                    rules.forEach((rule) => {
+                      const details = (rule && typeof rule.details === 'object' && rule.details) ? rule.details : {};
+                      if(Array.isArray(details.reasons)){
+                        details.reasons.forEach((reason) => { if(reason) reasonSet.add(String(reason)); });
+                      }
+                      if(rule && rule.message) reasonSet.add(String(rule.message));
+                    });
+                    const reasons = Array.from(reasonSet).slice(0, 3);
+                    const reasonText = reasons.length ? reasons.join('; ') : 'your risk, horizon, or suitability settings require a stronger setup before changing this to a buy';
+                    return `Profile adjusted ${escapeHtml(baseRecommendation)} → ${escapeHtml(recommendation)}. The market signal still matters, but your investor profile made the final Quick Ask more cautious because ${escapeHtml(reasonText)}. In plain English: the signal did not fit your selected risk tolerance, time horizon, or suitability guardrails strongly enough for the original action. <a href="/settings" style="color:#fde68a;font-weight:800">Review profile</a>`;
+                  }
+
                   async function quickAsk(){
                     const inputEl = document.getElementById('quickSymbol');
-                    const symbol = (inputEl.value || '').trim().toUpperCase();
+                    const symbol = normalizeTickerInputValue(inputEl);
                     const outEl = document.getElementById('quickOut');
                     const adviceEl = document.getElementById('quickAdvice');
                     const loadingEl = document.getElementById('quickLoading');
                     const quickAskBtn = document.getElementById('quickAskBtn');
+                    const profileNoteEl = document.getElementById('quickProfileNote');
                     inputEl.blur();
+                    if(profileNoteEl){ profileNoteEl.style.display = 'none'; profileNoteEl.innerHTML = ''; }
                     if(!symbol){ outEl.textContent='Please enter a ticker symbol.'; return; }
 
                     loadingEl.style.display = 'flex';
@@ -248,19 +284,27 @@ const fallbackData = {
 
                     try {
                       const res = await fetch('/api/quick-ask?symbol=' + encodeURIComponent(symbol));
-                      const payload = await res.json();
+                      const payload = await readJsonResponse(res);
                       if(!res.ok){
                         outEl.textContent = payload.error || 'Unable to analyze this ticker.';
                         adviceEl.innerHTML = `<strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong><span style="color:#fca5a5">Unable to load assistant notes right now.</span>`;
                         return;
                       }
                       const data = payload.data || {};
-                      const recommendation = String(data.recommendation || 'HOLD OFF FOR NOW').toUpperCase();
-                      outEl.innerHTML = `${quickRecommendationBadge(recommendation)} <span style="margin-left:8px">· ${formatMoney(data.current_price)} · ${data.rationale || 'Signal generated from current indicators.'}</span>`;
+                      const baseRecommendation = String(data.recommendation || 'HOLD OFF FOR NOW').toUpperCase();
+                      const recommendation = String(data.personalized_recommendation || baseRecommendation).toUpperCase();
+                      const profileChanged = recommendation !== baseRecommendation;
+                      outEl.innerHTML = `${quickRecommendationBadge(recommendation)} <span style="margin-left:8px">· <span id="quickLivePrice">${formatMoney(data.current_price)}</span> · ${data.rationale || 'Signal generated from current indicators.'}</span>`;
+                      if(profileNoteEl && profileChanged){
+                        profileNoteEl.innerHTML = profileAdjustmentExplanation(data, baseRecommendation, recommendation);
+                        profileNoteEl.style.display = 'block';
+                      }
                       renderQuickTrend(symbol, data.history30 || []);
 
                       const ai = data.ai || {};
-                      const narrative = ai.narrative || data.rationale || 'No AI narrative available.';
+                      const narrative = profileChanged
+                        ? `Final Quick Ask call is ${recommendation}. Base Alpha Atlas signal was ${baseRecommendation} before profile suitability adjusted it, so use the left-side badge as the final action.`
+                        : (ai.narrative || data.rationale || 'No AI narrative available.');
                       const riskNotes = Array.isArray(ai.risk_notes) ? ai.risk_notes : [];
                       const nextChecks = Array.isArray(ai.next_checks) ? ai.next_checks : [];
                       const topRisk = riskNotes[0] || 'Keep strict risk controls and position sizing.';
@@ -539,7 +583,7 @@ const fallbackData = {
                   }
                   async function addClearviewTicker(){
                     const el = document.getElementById('clearviewInput');
-                    const value = (el?.value || '').trim().toUpperCase();
+                    const value = normalizeTickerInputValue(el);
                     if(!value) return;
                     const symbols = await loadClearviewSymbols();
                     if(!symbols.includes(value)) symbols.push(value);
@@ -587,12 +631,19 @@ const fallbackData = {
                   function renderClearview(items){
                     document.getElementById('clearview').innerHTML = `
                     <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-                      <input id="clearviewInput" placeholder="Add ticker (e.g. AMD)" style="padding:8px 10px;border:1px solid #86efac;border-radius:8px;min-width:210px" />
+                      <input id="clearviewInput" placeholder="Add ticker (e.g. AMD)" autocapitalize="characters" style="text-transform:uppercase;padding:8px 10px;border:1px solid #86efac;border-radius:8px;min-width:210px" />
                       <button onclick="addClearviewTicker()" style="padding:8px 12px;border:none;background:#166534;color:#ecfdf5;border-radius:8px;font-weight:700">Add</button>
                       <span style="font-size:12px;color:#166534;align-self:center">Model: alpha-atlas-v1</span>
                     </div>
                     <table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Trend</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Advice</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Remove</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.current_price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${Number(item.score||0).toFixed(1)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${trendMiniGraph(item.history30 || [])}</td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="showAdviceReason('${item.symbol}','${encodeURIComponent(item.rationale || 'Signal generated from current indicators.')}')" style="border:none;background:${item.recommendation==='BUY'?'#166534':'#b91c1c'};color:#f8fafc;padding:6px 10px;border-radius:999px;font-weight:800;cursor:pointer">${escapeHtml(item.recommendation || 'HOLD OFF')}</button></td><td style="padding:8px;border-bottom:1px solid #dcfce7"><button onclick="removeClearviewTicker('${item.symbol}')" style="border:none;background:#fee2e2;color:#991b1b;border-radius:8px;padding:6px 10px;cursor:pointer">Remove</button></td></tr>`).join('')}</tbody></table><p style="margin:10px 0 0 0;color:#166534;font-size:12px;font-weight:700">Click on advice badges to see why.</p>`;
                   }
+
+                  document.addEventListener('input', (event) => {
+                    const target = event.target;
+                    if(target instanceof HTMLElement && target.id === 'clearviewInput'){
+                      normalizeTickerInputValue(target);
+                    }
+                  });
 
                   document.addEventListener('keydown', (event) => {
                     const input = document.getElementById('clearviewInput');
@@ -676,6 +727,7 @@ const fallbackData = {
                     }
                   }
 
+                  document.getElementById('quickSymbol').addEventListener('input', (event) => normalizeTickerInputValue(event.target));
                   document.getElementById('quickSymbol').addEventListener('keydown', (event) => { if(event.key==='Enter'){event.preventDefault();quickAsk();} });
                   document.getElementById('quickSymbol').addEventListener('focus', (event) => {
                     if(event.target.value){ event.target.value = ''; }

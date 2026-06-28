@@ -44,6 +44,8 @@ def build_decision_snapshot(
     features: Dict[str, Any] | None = None,
     signals: Dict[str, Any] | None = None,
     explanation: Dict[str, Any] | None = None,
+    personalization: Dict[str, Any] | None = None,
+    market_data: Dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     quote_raw = _as_dict(quote)
     explanation_raw = _as_dict(explanation)
@@ -60,10 +62,16 @@ def build_decision_snapshot(
         "quote": {
             "price": _as_float(quote_raw.get("price")),
             "change_percent": _as_float(quote_raw.get("change_percent")),
-            "source": _as_str(quote_raw.get("source")),
+            "source": _as_str(quote_raw.get("source") or quote_raw.get("quote_source")),
+            "source_mode": _as_str(quote_raw.get("source_mode") or _as_dict(quote_raw.get("diagnostics")).get("source_mode")),
+            "event_timestamp": _as_str(quote_raw.get("event_timestamp")),
+            "is_stale": quote_raw.get("is_stale") if isinstance(quote_raw.get("is_stale"), bool) else None,
+            "quality_flags": list(quote_raw.get("quality_flags") or []) if isinstance(quote_raw.get("quality_flags"), list) else [],
         },
+        "market_data": _as_dict(market_data),
         "features": _as_dict(features),
         "signals": _as_dict(signals),
+        "personalization": _as_dict(personalization),
         "explanation": {
             "rationale": _as_str(explanation_raw.get("rationale")),
             "risk_notes": _as_list_of_str(explanation_raw.get("risk_notes")),

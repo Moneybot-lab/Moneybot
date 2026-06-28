@@ -237,6 +237,14 @@ To bypass the snapshot and force live computation for debugging:
 GET /api/decision-outcomes?limit=20&force_live=true
 ```
 
+Stale snapshots are ignored by default so the Recent Decisions & Outcomes table
+does not silently show outdated results. If you need the old no-live-fanout
+behavior during an outage, opt in explicitly:
+
+```bash
+GET /api/decision-outcomes?limit=20&allow_stale_snapshot=true
+```
+
 ## Day-12 deterministic calibration + rollout controls
 
 You can gradually roll out deterministic decisions and apply simple logit calibration without retraining.
