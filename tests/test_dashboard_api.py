@@ -92,6 +92,18 @@ class StubMarketService:
     def get_price_history(self, symbol, days=30):
         return [150.25, 151.5, 152.0]
 
+    def get_price_history_data(self, symbol, days=30):
+        return {
+            "symbol": symbol.upper(),
+            "closes": [150.25, 151.5, 152.0],
+            "bars": [
+                {"open": 149.5, "high": 151.0, "low": 149.0, "close": 150.25},
+                {"open": 150.25, "high": 152.0, "low": 150.0, "close": 151.5},
+                {"open": 151.5, "high": 152.5, "low": 151.0, "close": 152.0},
+            ],
+            "source": "stub",
+        }
+
     def get_company_snapshot(self, symbol):
         return {"symbol": symbol, "company_name": f"{symbol} Corp", "summary": "Test summary."}
 
@@ -161,6 +173,37 @@ def test_quick_ask_normalizes_symbol_from_url_like_input():
     assert res.status_code == 200
     data = res.get_json()["data"]
     assert data["symbol"] == "TSLA"
+
+
+class FailingMarketService(StubMarketService):
+    def get_signal(self, symbol):
+        raise RuntimeError("provider unavailable")
+
+    def get_quote(self, symbol):
+        raise RuntimeError("quote unavailable")
+
+    def get_price_history(self, symbol, days=30):
+        raise RuntimeError("history unavailable")
+
+    def get_price_history_data(self, symbol, days=30):
+        raise RuntimeError("history unavailable")
+
+
+def test_quick_ask_returns_json_fallback_when_market_provider_fails():
+    client = _client()
+    client.application.extensions["market_data_service"] = FailingMarketService()
+    client.application.extensions["deterministic_quick_advisor"] = None
+    client.application.extensions["ai_advisor_service"] = None
+
+    res = client.get("/api/quick-ask?symbol=aapl")
+
+    assert res.status_code == 200
+    assert res.content_type.startswith("application/json")
+    data = res.get_json()["data"]
+    assert data["symbol"] == "AAPL"
+    assert data["recommendation"] == "HOLD OFF FOR NOW"
+    assert data["history30"] == []
+    assert data["current_price"] is None
 
 
 def test_quick_ask_includes_ai_fallback_payload_when_ai_not_configured():
@@ -975,6 +1018,54 @@ def test_user_watchlist_exposes_quote_source_diagnostics():
     assert enriched["quote_diagnostics"]["provider"] == "finnhub"
 
 
+def test_user_watchlist_returns_rows_with_quote_and_history_enrichment():
+    client = _client()
+
+    class QuoteOnlyPortfolioService(StubMarketService):
+        def get_quote(self, symbol):
+            return {
+                "symbol": symbol,
+                "price": 42.5,
+                "change_percent": 2.0,
+                "live_data_available": True,
+                "quote_source": "test_quote",
+                "diagnostics": {"provider": "test_quote", "error": None},
+            }
+
+        def get_signal(self, symbol, include_company_snapshot=True):
+            raise AssertionError("portfolio endpoint should not call slow signal enrichment")
+
+        def get_price_history_data(self, symbol, days=30):
+            return {
+                "symbol": symbol.upper(),
+                "closes": [40.0, 41.0, 42.5],
+                "bars": [
+                    {"open": 39.5, "high": 40.5, "low": 39.0, "close": 40.0},
+                    {"open": 40.0, "high": 41.5, "low": 39.8, "close": 41.0},
+                    {"open": 41.0, "high": 43.0, "low": 40.8, "close": 42.5},
+                ],
+                "source": "test_history",
+            }
+
+    client.application.extensions["market_data_service"] = QuoteOnlyPortfolioService()
+    signup = client.post("/api/auth/signup", json=_signup_payload("quote-only@b.com"))
+    assert signup.status_code == 201
+    assert client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 40, "shares": 1}).status_code == 201
+    assert client.post("/api/user-watchlist", json={"symbol": "TSLA", "buy_price": 50, "shares": 2}).status_code == 201
+
+    res = client.get("/api/user-watchlist")
+
+    assert res.status_code == 200
+    payload = res.get_json()
+    assert len(payload["items"]) == 2
+    assert len(payload["enriched_items"]) == 2
+    assert {item["current_price"] for item in payload["enriched_items"]} == {42.5}
+    assert {item["quote_source"] for item in payload["enriched_items"]} == {"test_quote"}
+    assert all(item["history30"] == [40.0, 41.0, 42.5] for item in payload["enriched_items"])
+    assert all(len(item["history30_bars"]) == 3 for item in payload["enriched_items"])
+    assert {item["history30_source"] for item in payload["enriched_items"]} == {"test_history"}
+
+
 def test_user_watchlist_duplicate_symbol_points_to_buy_action():
     client = _client()
     signup = client.post("/api/auth/signup", json=_signup_payload("duplicate@b.com"))
@@ -1070,6 +1161,95 @@ def test_sell_watchlist_item_rejects_selling_more_than_owned():
     assert sell.status_code == 400
     assert sell.get_json()["error"] == "shares_sold cannot exceed current shares"
 
+
+def test_update_sold_trade_recalculates_realized_gain_and_restores_shares():
+    client = _client()
+    signup = client.post("/api/auth/signup", json=_signup_payload("edit-sold@b.com"))
+    assert signup.status_code == 201
+
+    add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 10})
+    assert add.status_code == 201
+    item_id = add.get_json()["item"]["id"]
+
+    sell = client.post(f"/api/user-watchlist/{item_id}/sell", json={"sold_price": 120, "shares_sold": 4})
+    assert sell.status_code == 200
+    trade_id = sell.get_json()["sold_trade"]["id"]
+
+    update = client.patch(f"/api/sold-trades/{trade_id}", json={"sold_price": 125, "shares_sold": 2})
+    assert update.status_code == 200
+    payload = update.get_json()
+    assert payload["sold_trade"]["sold_price"] == 125.0
+    assert payload["sold_trade"]["shares_sold"] == 2.0
+    assert payload["sold_trade"]["realized_amount"] == 50.0
+    assert payload["remaining_item"]["shares"] == 8.0
+    assert payload["total_realized"] == 50.0
+
+    watchlist = client.get("/api/user-watchlist")
+    assert watchlist.status_code == 200
+    assert watchlist.get_json()["items"][0]["shares"] == 8.0
+
+    sold_trades = client.get("/api/sold-trades")
+    assert sold_trades.status_code == 200
+    sold_payload = sold_trades.get_json()
+    assert sold_payload["total_realized"] == 50.0
+    assert sold_payload["items"][0]["shares_sold"] == 2.0
+
+
+def test_update_sold_trade_allows_correction_when_portfolio_shares_are_already_fixed():
+    client = _client()
+    signup = client.post("/api/auth/signup", json=_signup_payload("edit-sold-fixed@b.com"))
+    assert signup.status_code == 201
+
+    add = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 1, "shares": 575})
+    assert add.status_code == 201
+    item_id = add.get_json()["item"]["id"]
+
+    sell = client.post(f"/api/user-watchlist/{item_id}/sell", json={"sold_price": 415, "shares_sold": 3.59})
+    assert sell.status_code == 200
+    trade_id = sell.get_json()["sold_trade"]["id"]
+
+    manual_fix = client.patch(f"/api/user-watchlist/{item_id}", json={"shares": 160})
+    assert manual_fix.status_code == 200
+
+    update = client.patch(f"/api/sold-trades/{trade_id}", json={"sold_price": 3.59, "shares_sold": 415})
+    assert update.status_code == 200
+    payload = update.get_json()
+    assert payload["sold_trade"]["sold_price"] == 3.59
+    assert payload["sold_trade"]["shares_sold"] == 415.0
+    assert payload["sold_trade"]["realized_amount"] == 1074.85
+    assert payload["portfolio_adjustment_skipped"] is True
+    assert "already been corrected" in payload["portfolio_adjustment_note"]
+
+    watchlist = client.get("/api/user-watchlist")
+    assert watchlist.status_code == 200
+    assert watchlist.get_json()["items"][0]["shares"] == 160.0
+
+
+def test_update_sold_trade_restores_position_after_all_shares_were_sold():
+    client = _client()
+    signup = client.post("/api/auth/signup", json=_signup_payload("edit-sold-all@b.com"))
+    assert signup.status_code == 201
+
+    add = client.post("/api/user-watchlist", json={"symbol": "TSLA", "buy_price": 200, "shares": 5})
+    assert add.status_code == 201
+    item_id = add.get_json()["item"]["id"]
+
+    sell = client.post(f"/api/user-watchlist/{item_id}/sell", json={"sold_price": 220, "shares_sold": 5})
+    assert sell.status_code == 200
+    assert sell.get_json()["removed"] is True
+    trade_id = sell.get_json()["sold_trade"]["id"]
+
+    update = client.patch(f"/api/sold-trades/{trade_id}", json={"sold_price": 220, "shares_sold": 3})
+    assert update.status_code == 200
+    payload = update.get_json()
+    assert payload["sold_trade"]["realized_amount"] == 60.0
+    assert payload["remaining_item"]["symbol"] == "TSLA"
+    assert payload["remaining_item"]["entry_price"] == 200.0
+    assert payload["remaining_item"]["shares"] == 2.0
+
+    watchlist = client.get("/api/user-watchlist")
+    assert watchlist.status_code == 200
+    assert watchlist.get_json()["items"][0]["shares"] == 2.0
 
 def test_buy_watchlist_item_increases_shares_and_recalculates_entry_price():
     client = _client()

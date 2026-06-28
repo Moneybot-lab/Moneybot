@@ -19,6 +19,9 @@ from .services.ai_advisor import AIAdvisorService
 from .services.decision_log import DecisionLogger
 from .services.deterministic_advisor import DeterministicQuickAdvisor
 from .services.market_data import MarketDataService
+from .services.market_stream import create_stream_state, worker_config_from_env
+from .services.live_market import ControlledTriggerEngine
+from .services.suitability_policy import PersonalizationRuntime
 from .models import WaitlistSignup
 from .services.runtime_paths import (
     day1_baseline_model_path,
@@ -384,6 +387,24 @@ def create_app() -> Flask:
         AI_RESPONSE_CACHE_TTL_SECONDS=int(os.environ.get("AI_RESPONSE_CACHE_TTL_SECONDS", "300")),
         EXPERIMENT_ID=os.environ.get("EXPERIMENT_ID", "default"),
         EXPERIMENT_COHORT_DEFAULT=os.environ.get("EXPERIMENT_COHORT_DEFAULT", "control"),
+        INVESTOR_PROFILE_ENABLED=(os.environ.get("INVESTOR_PROFILE_ENABLED", "true").lower() == "true"),
+        SUITABILITY_POLICY_ENABLED=(os.environ.get("SUITABILITY_POLICY_ENABLED", "true").lower() == "true"),
+        SUITABILITY_POLICY_MODE=os.environ.get("SUITABILITY_POLICY_MODE", "enforce").lower(),
+        SUITABILITY_ROLLOUT_PERCENTAGE=float(os.environ.get("SUITABILITY_ROLLOUT_PERCENTAGE", "100.0")),
+        SUITABILITY_ROLLOUT_SEED=os.environ.get("SUITABILITY_ROLLOUT_SEED", "moneybot-profile"),
+        SUITABILITY_ROLLOUT_ALLOWLIST={int(value) for value in os.environ.get("SUITABILITY_ROLLOUT_ALLOWLIST", "").split(",") if value.strip().isdigit()},
+        INVESTOR_PROFILE_REVISION_RETENTION_DAYS=int(os.environ.get("INVESTOR_PROFILE_REVISION_RETENTION_DAYS", "2555")),
+        REDIS_URL=os.environ.get("REDIS_URL", ""),
+        MASSIVE_STREAM_CONFIG=worker_config_from_env(os.environ),
+        LIVE_SSE_SYMBOL_CAP=int(os.environ.get("LIVE_SSE_SYMBOL_CAP", "25")),
+        LIVE_SSE_INTERVAL_SECONDS=float(os.environ.get("LIVE_SSE_INTERVAL_SECONDS", "1.0")),
+        LIVE_SSE_HEARTBEAT_SECONDS=float(os.environ.get("LIVE_SSE_HEARTBEAT_SECONDS", "15.0")),
+        LIVE_TRIGGER_DEBOUNCE_SECONDS=float(os.environ.get("LIVE_TRIGGER_DEBOUNCE_SECONDS", "15.0")),
+        LIVE_TRIGGER_COOLDOWN_SECONDS=float(os.environ.get("LIVE_TRIGGER_COOLDOWN_SECONDS", "300.0")),
+        LIVE_ALERTS_EMERGENCY_DISABLED=(os.environ.get("LIVE_ALERTS_EMERGENCY_DISABLED", "false").lower() == "true"),
+        HISTORICAL_VALIDATION_REPORT_PATH=os.environ.get("HISTORICAL_VALIDATION_REPORT_PATH", ""),
+        HISTORICAL_VALIDATION_REPORT_MAX_AGE_SECONDS=_parse_int_env("HISTORICAL_VALIDATION_REPORT_MAX_AGE_SECONDS", 604800),
+        HISTORICAL_VALIDATION_MIN_ROWS=_parse_int_env("HISTORICAL_VALIDATION_MIN_ROWS", 30),
         DETERMINISTIC_QUICK_ENABLED=(os.environ.get("DETERMINISTIC_QUICK_ENABLED", "true").lower() == "true"),
         DETERMINISTIC_MODEL_PATH=default_model_path,
         DETERMINISTIC_MOMENTUM_ENABLED=(os.environ.get("DETERMINISTIC_MOMENTUM_ENABLED", "true").lower() == "true"),
@@ -494,6 +515,21 @@ def create_app() -> Flask:
     app.extensions["decision_logger"] = DecisionLogger(
         enabled=app.config["DECISION_LOGGING_ENABLED"],
         output_path=app.config["DECISION_LOG_PATH"],
+    )
+    app.extensions["market_stream_state"] = create_stream_state(app.config["REDIS_URL"] or None)
+    app.extensions["live_trigger_engine"] = ControlledTriggerEngine(
+        enabled=not app.config["LIVE_ALERTS_EMERGENCY_DISABLED"],
+        debounce_seconds=app.config["LIVE_TRIGGER_DEBOUNCE_SECONDS"],
+        cooldown_seconds=app.config["LIVE_TRIGGER_COOLDOWN_SECONDS"],
+    )
+
+    app.extensions["personalization_runtime"] = PersonalizationRuntime(
+        profile_enabled=app.config["INVESTOR_PROFILE_ENABLED"],
+        policy_enabled=app.config["SUITABILITY_POLICY_ENABLED"],
+        mode=app.config["SUITABILITY_POLICY_MODE"],
+        rollout_percentage=app.config["SUITABILITY_ROLLOUT_PERCENTAGE"],
+        rollout_seed=app.config["SUITABILITY_ROLLOUT_SEED"],
+        allowlist=app.config["SUITABILITY_ROLLOUT_ALLOWLIST"],
     )
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -937,7 +973,7 @@ def create_app() -> Flask:
                 <h3>Clicking Portfolio Advice for an Explanation</h3><p>In the User Portfolio, the advice field is clickable. When you click the advice, MoneyBot Labs opens an Advice Reasoning window.</p><p>This window is designed to explain the recommendation in plain English.</p><p>It may include: Why the system gave that advice; whether the position looks strong, weak, or mixed; risk notes; what to check next; recent headlines; and a button to explain the recommendation in simpler language.</p><p>Why this matters: a basic label like Buy, Hold, or Sell is not enough by itself. The explanation window helps users understand the reasoning behind the signal so they are not blindly following a recommendation.</p>
                 <h3>Lifetime Gains and Losses</h3><p>The User Portfolio page includes a Show Lifetime Gains/Losses option. This area is used to track sold trades and realized gains or losses.</p><p>When available, it may show sold symbol, entry price, sold price, shares sold, realized gain/loss, and lifetime total.</p><p>This helps users separate unrealized gains/losses from stocks they still hold and realized gains/losses from positions they already sold.</p>
                 <h2>Account Creation and Login</h2><p>Users can create an account using the Sign Up page.</p><p>During signup, users may be asked for display name, username, email address, password, and optional profile picture.</p><p>If a profile picture is not added, MoneyBot Labs can display initials inside a basic profile circle.</p><p>Users can log in with their account credentials and access profile, portfolio, notification, and security features.</p>
-                <h2>Profile and Account Settings</h2><p>The Profile / Account Settings area lets users update basic profile information: display name, username, and profile picture.</p><p>The profile image tool may include crop-style controls such as zoom, horizontal position, and vertical position before saving the picture.</p>
+                <h2>Profile and Account Settings</h2><p>The Profile / Account Settings area lets users update their display name, username, profile picture, and investor preferences.</p><p>The investor profile records goals, time horizon, risk tolerance, loss capacity, liquidity needs, experience, account context, portfolio concentration limits, and security preferences. Incomplete profiles use conservative defaults until all required questions are answered.</p><p>The profile image tool includes crop-style controls such as zoom, horizontal position, and vertical position before saving the picture.</p>
                 <h2>Security</h2><p>The Security page lets users update sensitive account information, including email address and password.</p><p>For protection, MoneyBot Labs may require the current password before saving security changes.</p>
                 <h2>Password Recovery</h2><p>If you forget your password, use the Forgot Password option on the login page.</p><p>MoneyBot Labs may send password recovery instructions to the email address on the account, if email delivery is configured.</p><p>For security, the website may show the same general message whether or not an email exists. This helps protect user privacy.</p>
                 <h2>Notifications</h2><p>The Notifications page is used to manage push alerts.</p><p>Depending on browser and device support, users may enable push notifications for certain MoneyBot activity.</p><p>Possible notification types include portfolio advice changes, buy advice changes, sell advice changes, hot momentum score changes, whale investor list changes, and new whale-related stock activity.</p><p>To receive notifications, the browser may ask for permission. If permission is blocked, users may need to adjust browser or device notification settings.</p>
@@ -1279,202 +1315,7 @@ def create_app() -> Flask:
     @app.get("/settings")
     @app.get("/settings/")
     def settings_page():
-        return render_template_string(
-            """
-            <html><body style="font-family:Inter,sans-serif;padding:18px;background:#e5e7eb;max-width:760px;margin:0 auto">
-              <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-                <h2 style="margin:0;font-size:2rem;color:#111827">Edit profile</h2>
-                <a href="/" style="text-decoration:none;color:#166534;font-weight:700">Back Home</a>
-              </div>
-              <section style="background:#e5e7eb;border-radius:12px;padding:4px 2px 12px">
-                <div style="display:flex;justify-content:center;position:relative;margin:18px 0 18px">
-                  <div style="position:relative;width:168px;height:168px">
-                    <img id="avatarImage" alt="Profile image" style="display:none;width:168px;height:168px;border-radius:999px;object-fit:cover" />
-                    <div id="avatarInitials" style="width:168px;height:168px;border-radius:999px;background:#e879f9;color:#ffffff;display:flex;align-items:center;justify-content:center;font-weight:500;font-size:3rem;letter-spacing:.02em">U</div>
-                    <button id="avatarEditBtn" type="button" style="position:absolute;right:6px;bottom:8px;border:1px solid #d1d5db;background:#fff;color:#374151;width:36px;height:36px;border-radius:999px;font-size:18px;cursor:pointer">📷</button>
-                    <input id="profileImage" type="file" accept="image/*" style="display:none" />
-                  </div>
-                </div>
-                <form id="profileForm" style="display:grid;gap:10px">
-                  <label style="display:block;background:#f3f4f6;border:1px solid #d1d5db;border-radius:10px;padding:8px 10px">
-                    <span style="display:block;color:#374151;font-size:1rem;margin-bottom:2px">Display name</span>
-                    <input id="name" placeholder="Display name" required style="width:100%;font-size:2rem;padding:4px 2px;border:none;background:transparent;color:#111827;outline:none" />
-                  </label>
-                  <label style="display:block;background:#f3f4f6;border:1px solid #d1d5db;border-radius:10px;padding:8px 10px">
-                    <span style="display:block;color:#374151;font-size:1rem;margin-bottom:2px">Username</span>
-                    <input id="username" placeholder="username" required style="width:100%;font-size:2rem;padding:4px 2px;border:none;background:transparent;color:#111827;outline:none" />
-                  </label>
-                  <p style="margin:2px 4px 0;color:#4b5563;font-size:.98rem;text-align:center">
-                    Your profile helps people recognize you. Your name and username are also used in the Sora app.
-                  </p>
-                  <div style="display:flex;justify-content:flex-end;gap:10px;align-items:center;margin-top:4px">
-                    <button id="cancelEditBtn" type="button" style="border:1px solid #d1d5db;background:#f3f4f6;color:#111827;padding:9px 18px;border-radius:999px;font-weight:500;cursor:pointer">Cancel</button>
-                    <button type="submit" style="border:none;background:#111827;color:#fff;padding:10px 18px;border-radius:999px;font-weight:700;cursor:pointer">Save</button>
-                  </div>
-                </form>
-                <div id="out" style="margin-top:10px;color:#166534;text-align:right;padding-right:8px"></div>
-              </section>
-              <div id="settingsAvatarEditorModal" style="display:none;position:fixed;inset:0;background:rgba(2,6,23,.5);align-items:center;justify-content:center;padding:14px">
-                <div style="background:#f8fafc;border-radius:12px;padding:14px;width:min(96vw,420px)">
-                  <h3 style="margin:0 0 8px;color:#0f172a">Adjust profile picture</h3>
-                  <div style="display:flex;justify-content:center;margin-bottom:10px">
-                    <div style="width:170px;height:170px;border-radius:999px;overflow:hidden;background:#e2e8f0;position:relative;border:1px solid #cbd5e1">
-                      <img id="settingsAvatarEditorImage" alt="Adjust profile image" style="position:absolute;left:50%;top:50%;width:100%;height:100%;object-fit:cover;transform:translate(-50%,-50%);transform-origin:center center" />
-                    </div>
-                  </div>
-                  <label style="display:block;font-size:.9rem;color:#166534;font-weight:700">Zoom</label>
-                  <input id="settingsAvatarZoom" type="range" min="1" max="4" step="0.01" value="1.35" style="width:100%" />
-                  <label style="display:block;font-size:.9rem;color:#166534;font-weight:700;margin-top:8px">Horizontal</label>
-                  <input id="settingsAvatarOffsetX" type="range" min="-120" max="120" step="1" value="0" style="width:100%" />
-                  <label style="display:block;font-size:.9rem;color:#166534;font-weight:700;margin-top:8px">Vertical</label>
-                  <input id="settingsAvatarOffsetY" type="range" min="-120" max="120" step="1" value="0" style="width:100%" />
-                  <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px">
-                    <button id="settingsCancelAvatarEditBtn" type="button" style="border:none;background:#e2e8f0;color:#0f172a;padding:8px 12px;border-radius:8px;cursor:pointer">Cancel</button>
-                    <button id="settingsSaveAvatarEditBtn" type="button" style="border:none;background:#16a34a;color:#f0fdf4;padding:8px 12px;border-radius:8px;cursor:pointer;font-weight:700">Use picture</button>
-                  </div>
-                </div>
-              </div>
-              <script>
-                const TAB_SESSION_KEY = 'moneybot_tab_session_id';
-                let currentProfileImageUrl = null;
-                let originalProfile = null;
-                let rawSelectedAvatarUrl = null;
-                function getTabSessionId(){ return sessionStorage.getItem(TAB_SESSION_KEY) || localStorage.getItem(TAB_SESSION_KEY) || ''; }
-                async function apiFetch(url, options = {}){
-                  const headers = Object.assign({'Content-Type':'application/json', 'X-Tab-Session-Id': getTabSessionId()}, options.headers || {});
-                  const res = await fetch(url, Object.assign({}, options, { headers }));
-                  if(res.status === 401){ location.href = '/login'; throw new Error('authentication required'); }
-                  return res;
-                }
-                function initials(name){
-                  return String(name || '').trim().split(/\\s+/).filter(Boolean).slice(0,2).map((part)=>part[0]).join('').toUpperCase() || 'U';
-                }
-                function renderAvatar(profileImageUrl, name){
-                  const img = document.getElementById('avatarImage');
-                  const initialsNode = document.getElementById('avatarInitials');
-                  const value = initials(name);
-                  initialsNode.textContent = value;
-                  if(profileImageUrl){
-                    img.src = profileImageUrl;
-                    img.style.display = 'block';
-                    initialsNode.style.display = 'none';
-                  } else {
-                    img.style.display = 'none';
-                    initialsNode.style.display = 'flex';
-                  }
-                }
-                function readFileAsDataUrl(file){
-                  return new Promise((resolve, reject) => {
-                    if(!file){ resolve(null); return; }
-                    const reader = new FileReader();
-                    reader.onload = () => resolve(reader.result);
-                    reader.onerror = () => reject(new Error('Unable to read selected file.'));
-                    reader.readAsDataURL(file);
-                  });
-                }
-                function applyAvatarEditorTransform(){
-                  const zoom = document.getElementById('settingsAvatarZoom').value;
-                  const x = document.getElementById('settingsAvatarOffsetX').value;
-                  const y = document.getElementById('settingsAvatarOffsetY').value;
-                  document.getElementById('settingsAvatarEditorImage').style.transform = `translate(calc(-50% + ${x}px), calc(-50% + ${y}px)) scale(${zoom})`;
-                }
-                function openAvatarEditor(dataUrl){
-                  rawSelectedAvatarUrl = dataUrl;
-                  document.getElementById('settingsAvatarEditorImage').src = dataUrl;
-                  document.getElementById('settingsAvatarZoom').value = '1.35';
-                  document.getElementById('settingsAvatarOffsetX').value = '0';
-                  document.getElementById('settingsAvatarOffsetY').value = '0';
-                  applyAvatarEditorTransform();
-                  document.getElementById('settingsAvatarEditorModal').style.display = 'flex';
-                }
-                function closeAvatarEditor(){
-                  document.getElementById('settingsAvatarEditorModal').style.display = 'none';
-                }
-                function buildCroppedAvatarDataUrl(){
-                  const canvas = document.createElement('canvas');
-                  canvas.width = 240;
-                  canvas.height = 240;
-                  const ctx = canvas.getContext('2d');
-                  const img = document.getElementById('settingsAvatarEditorImage');
-                  const zoom = Number(document.getElementById('settingsAvatarZoom').value || 1);
-                  const offsetX = Number(document.getElementById('settingsAvatarOffsetX').value || 0);
-                  const offsetY = Number(document.getElementById('settingsAvatarOffsetY').value || 0);
-                  const width = Number(img.naturalWidth || canvas.width);
-                  const height = Number(img.naturalHeight || canvas.height);
-                  const fitScale = Math.max(canvas.width / width, canvas.height / height);
-                  const drawWidth = width * fitScale * zoom;
-                  const drawHeight = height * fitScale * zoom;
-                  const x = (canvas.width - drawWidth) / 2 + (offsetX * (canvas.width / 170));
-                  const y = (canvas.height - drawHeight) / 2 + (offsetY * (canvas.height / 170));
-                  ctx.save();
-                  ctx.beginPath();
-                  ctx.arc(canvas.width / 2, canvas.height / 2, canvas.width / 2, 0, Math.PI * 2);
-                  ctx.clip();
-                  ctx.drawImage(img, x, y, drawWidth, drawHeight);
-                  ctx.restore();
-                  return canvas.toDataURL('image/png');
-                }
-                async function loadProfile(){
-                  const res = await apiFetch('/api/me');
-                  const payload = await res.json();
-                  const user = payload.user || {};
-                  document.getElementById('name').value = user.name || '';
-                  document.getElementById('username').value = user.username || '';
-                  originalProfile = { name: user.name || '', username: user.username || '', profile_image_url: user.profile_image_url || null };
-                  currentProfileImageUrl = user.profile_image_url || null;
-                  renderAvatar(currentProfileImageUrl, user.name);
-                }
-                document.getElementById('avatarEditBtn').addEventListener('click', () => document.getElementById('profileImage').click());
-                document.getElementById('profileImage').addEventListener('change', async () => {
-                  const chosenFile = document.getElementById('profileImage').files[0];
-                  if(!chosenFile){ return; }
-                  const uploadedDataUrl = await readFileAsDataUrl(chosenFile);
-                  openAvatarEditor(uploadedDataUrl);
-                });
-                ['settingsAvatarZoom', 'settingsAvatarOffsetX', 'settingsAvatarOffsetY'].forEach((id) => {
-                  document.getElementById(id).addEventListener('input', applyAvatarEditorTransform);
-                });
-                document.getElementById('settingsCancelAvatarEditBtn').addEventListener('click', closeAvatarEditor);
-                document.getElementById('settingsSaveAvatarEditBtn').addEventListener('click', () => {
-                  currentProfileImageUrl = buildCroppedAvatarDataUrl() || rawSelectedAvatarUrl;
-                  renderAvatar(currentProfileImageUrl, document.getElementById('name').value);
-                  closeAvatarEditor();
-                });
-                document.getElementById('cancelEditBtn').addEventListener('click', () => {
-                  if(!originalProfile){ return; }
-                  document.getElementById('name').value = originalProfile.name;
-                  document.getElementById('username').value = originalProfile.username;
-                  currentProfileImageUrl = originalProfile.profile_image_url;
-                  document.getElementById('profileImage').value = '';
-                  renderAvatar(currentProfileImageUrl, originalProfile.name);
-                  document.getElementById('out').textContent = '';
-                });
-                document.getElementById('profileForm').addEventListener('submit', async (event) => {
-                  event.preventDefault();
-                  const outEl = document.getElementById('out');
-              const trustedDeviceEl = document.getElementById('trustedDevice');
-                  outEl.textContent = 'Saving...';
-                  const res = await apiFetch('/api/me/profile', {
-                    method:'PUT',
-                    body: JSON.stringify({
-                      name: document.getElementById('name').value,
-                      username: document.getElementById('username').value,
-                      profile_image_url: currentProfileImageUrl
-                    }),
-                  });
-                  const payload = await res.json();
-                  if(!res.ok){ outEl.textContent = payload.error || 'Unable to update profile.'; return; }
-                  const user = payload.user || {};
-                  currentProfileImageUrl = user.profile_image_url || null;
-                  originalProfile = { name: user.name || '', username: user.username || '', profile_image_url: user.profile_image_url || null };
-                  renderAvatar(currentProfileImageUrl, user.name);
-                  outEl.textContent = 'Saved.';
-                });
-                loadProfile();
-              </script>
-            </body></html>
-            """
-        )
+        return render_template("settings.html")
 
     @app.get("/portfolio")
     @app.get("/portfolio/")
@@ -1489,12 +1330,13 @@ def create_app() -> Flask:
                 <button onclick="logout()" style="border:none;background:#166534;color:#f0fdf4;padding:12px 18px;border-radius:999px;font-size:1.08rem;font-weight:700;cursor:pointer">Logout</button>
               </p>
               <form id="addForm">
-                <input id="symbol" placeholder="AAPL" required />
+                <input id="symbol" placeholder="AAPL" required autocapitalize="characters" style="text-transform:uppercase" />
                 <input id="buy_price" type="number" step="0.01" placeholder="buy price"/>
                 <input id="shares" type="number" step="0.0001" placeholder="shares"/>
                 <button type="submit" style="border:none;background:#16a34a;color:#f0fdf4;padding:9px 14px;border-radius:8px;font-weight:700;cursor:pointer">Add</button>
               </form>
               <div id="out" style="margin:10px 0;color:#166534"></div>
+              <div id="portfolioLiveStatus" role="status" style="margin:0 0 12px;padding:9px 12px;border-radius:10px;background:#ecfccb;border:1px solid #bef264;color:#3f6212;font-size:13px;font-weight:700">Live prices: connecting…</div>
               <div id="loadingState" style="display:none;align-items:center;justify-content:center;gap:10px;position:fixed;top:16px;right:16px;background:rgba(236,252,203,.95);border:1px solid #bef264;border-radius:999px;padding:10px 14px;z-index:40;color:#14532d;font-weight:700;font-size:.95rem;pointer-events:none">
                 <span style="width:34px;height:34px;border:4px solid #86efac;border-top-color:#16a34a;border-radius:999px;display:inline-block;animation:spin .8s linear infinite"></span>
                 Loading latest portfolio stock data...
@@ -1503,8 +1345,8 @@ def create_app() -> Flask:
               <div id="lifetimePanel" style="display:none;background:#ecfccb;border:1px solid #d9f99d;border-radius:10px;padding:12px;margin-bottom:12px">
                 <div style="font-weight:700;margin-bottom:8px">Lifetime Realized Gains/Losses: <span id="lifetimeTotal">$0.00</span></div>
                 <div style="overflow-x:auto"><table style="width:100%;background:#f0fdf4;border-collapse:collapse;min-width:640px">
-                  <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Sold At</th><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Sold Price</th><th style="border:1px solid #e5e7eb;padding:8px">Shares Sold</th><th style="border:1px solid #e5e7eb;padding:8px">Realized</th></tr></thead>
-                  <tbody id="soldRows"><tr><td colspan="6" style="padding:8px;color:#3f6212">No sold trades yet.</td></tr></tbody>
+                  <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Sold At</th><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Sold Price</th><th style="border:1px solid #e5e7eb;padding:8px">Shares Sold</th><th style="border:1px solid #e5e7eb;padding:8px">Realized</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
+                  <tbody id="soldRows"><tr><td colspan="7" style="padding:8px;color:#3f6212">No sold trades yet.</td></tr></tbody>
                 </table></div>
               </div>
               <div style="overflow-x:auto"><table style="width:100%;background:#f0fdf4;border-collapse:collapse;min-width:980px">
@@ -1570,6 +1412,15 @@ def create_app() -> Flask:
                 return response;
               }
 
+              function normalizeTickerInputValue(inputEl){
+                if(!inputEl) return '';
+                const normalized = String(inputEl.value || '').toUpperCase();
+                if(inputEl.value !== normalized){
+                  inputEl.value = normalized;
+                }
+                return normalized.trim();
+              }
+
               const rowsEl = document.getElementById('rows');
               const soldRowsEl = document.getElementById('soldRows');
               const lifetimePanelEl = document.getElementById('lifetimePanel');
@@ -1581,8 +1432,11 @@ def create_app() -> Flask:
               const symbolEl = document.getElementById('symbol');
               const buyPriceEl = document.getElementById('buy_price');
               const sharesEl = document.getElementById('shares');
+              symbolEl.addEventListener('input', (event) => normalizeTickerInputValue(event.target));
               let currentPortfolioItems = [];
               let currentAdviceContext = null;
+              let portfolioEventSource = null;
+              let portfolioReconnectTimer = null;
               document.getElementById('addForm').addEventListener('submit', addItem);
 
               async function logout(){ await apiFetch('/api/auth/logout',{method:'POST'}); sessionStorage.removeItem(TAB_SESSION_KEY); localStorage.removeItem(TAB_SESSION_KEY); location.href='/'; }
@@ -1612,6 +1466,60 @@ def create_app() -> Flask:
               function formatMoney(v){
                 return (typeof v === 'number' && isFinite(v)) ? ('$' + v.toLocaleString(undefined,{maximumFractionDigits:2})) : 'n/a';
               }
+              function livePriceCell(item){
+                const price = formatMoney(item.current_price);
+                const live = item.live_market || {};
+                const state = live.is_stale ? 'Stale' : (live.is_degraded ? 'REST fallback' : 'Live');
+                const color = live.is_stale ? '#b45309' : (live.is_degraded ? '#4d7c0f' : '#15803d');
+                const asOf = live.event_timestamp ? new Date(live.event_timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : 'unknown';
+                return `<div id="live-price-${escapeHtml(item.symbol)}"><strong>${price}</strong><div style="font-size:11px;color:${color};margin-top:3px">${state} · ${escapeHtml(live.market_session || 'session n/a')} · ${escapeHtml(asOf)}</div></div>`;
+              }
+              function setPortfolioLiveStatus(text, mode){
+                const el = document.getElementById('portfolioLiveStatus');
+                if(!el) return;
+                el.textContent = text;
+                el.style.background = mode === 'live' ? '#dcfce7' : (mode === 'stale' ? '#fef3c7' : '#ecfccb');
+                el.style.borderColor = mode === 'live' ? '#86efac' : (mode === 'stale' ? '#f59e0b' : '#bef264');
+              }
+              function applyPortfolioLiveQuotes(quotes){
+                let changed = false;
+                (quotes || []).forEach((quote) => {
+                  const item = currentPortfolioItems.find((row) => String(row.symbol).toUpperCase() === String(quote.symbol).toUpperCase());
+                  if(!item || typeof quote.price !== 'number') return;
+                  item.current_price = quote.price;
+                  const shares = typeof item.shares === 'number' ? item.shares : 1;
+                  if(typeof item.entry_price === 'number' && item.entry_price > 0){
+                    item.performance_amount = (quote.price - item.entry_price) * shares;
+                    item.performance_percent = ((quote.price - item.entry_price) / item.entry_price) * 100;
+                  }
+                  item.live_market = quote;
+                  changed = true;
+                });
+                if(changed) renderRows(currentPortfolioItems);
+                const stale = (quotes || []).some((quote) => quote.is_stale || quote.is_degraded);
+                setPortfolioLiveStatus(stale ? 'Live connection is degraded; showing the last known value or REST fallback.' : 'Live prices connected.', stale ? 'stale' : 'live');
+              }
+              function startPortfolioLive(){
+                const symbols = currentPortfolioItems.map((item) => String(item.symbol || '').toUpperCase()).filter(Boolean);
+                if(portfolioEventSource){ portfolioEventSource.close(); portfolioEventSource = null; }
+                if(portfolioReconnectTimer){ clearTimeout(portfolioReconnectTimer); portfolioReconnectTimer = null; }
+                if(!symbols.length){ setPortfolioLiveStatus('Live prices will connect after you add a position.', 'idle'); return; }
+                setPortfolioLiveStatus('Live prices: connecting…', 'idle');
+                portfolioEventSource = new EventSource('/api/live-market-stream?scope=portfolio&symbols=' + encodeURIComponent(symbols.join(',')));
+                portfolioEventSource.addEventListener('quotes', (event) => {
+                  try { applyPortfolioLiveQuotes((JSON.parse(event.data) || {}).quotes || []); } catch(_err) { setPortfolioLiveStatus('Live update could not be read; REST refresh remains available.', 'stale'); }
+                });
+                portfolioEventSource.addEventListener('heartbeat', () => setPortfolioLiveStatus('Live prices connected.', 'live'));
+                portfolioEventSource.addEventListener('recommendation_refresh', () => {
+                  setPortfolioLiveStatus('Market boundary changed. Refreshing recommendation without generating a new AI narrative…', 'idle');
+                  if(!portfolioReconnectTimer) portfolioReconnectTimer = setTimeout(() => { portfolioReconnectTimer = null; load(); }, 1200);
+                });
+                portfolioEventSource.onerror = () => {
+                  setPortfolioLiveStatus('Live connection interrupted. Keeping last known values and using REST refresh while reconnecting…', 'stale');
+                };
+              }
+              window.addEventListener('beforeunload', () => { if(portfolioEventSource) portfolioEventSource.close(); });
+
               function adviceBadge(value){
                 const advice = String(value || 'HOLD').toUpperCase();
                 const color = advice === 'BUY' ? '#166534' : (advice === 'SELL' ? '#4d7c0f' : '#3f3f46');
@@ -1631,6 +1539,8 @@ def create_app() -> Flask:
                 const advice = String(item.advice || 'HOLD').toUpperCase();
                 const reason = item.advice_reason || 'Rule-based recommendation from technical momentum and sentiment checks.';
                 const aiPortfolio = (item && typeof item.ai_portfolio === 'object' && item.ai_portfolio) ? item.ai_portfolio : {};
+                const suitability = (item && typeof item.suitability === 'object' && item.suitability) ? item.suitability : {};
+                const profileRules = Array.isArray(suitability.applied_rules) ? suitability.applied_rules : [];
                 const mode = String(aiPortfolio.mode || 'rule_based').replaceAll('_', ' ');
                 const riskNotes = Array.isArray(aiPortfolio.risk_notes) ? aiPortfolio.risk_notes : [];
                 const nextChecks = Array.isArray(aiPortfolio.next_checks) ? aiPortfolio.next_checks : [];
@@ -1642,6 +1552,9 @@ def create_app() -> Flask:
                   <strong style="display:block;color:#bbf7d0;margin-bottom:6px">${escapeHtml(symbol)} · ${escapeHtml(mode)}</strong>
                   <ul style="margin:0;padding-left:18px;display:grid;gap:4px;color:#dcfce7">
                     <li>${escapeHtml(reason)}</li>
+                    ${item.base_advice && item.base_advice !== item.advice ? `<li><strong>Base market action:</strong> ${escapeHtml(item.base_advice)} → <strong>Profile-aware action:</strong> ${escapeHtml(item.advice)}</li>` : ''}
+                    ${profileRules.map((rule) => `<li><strong>Profile rule:</strong> ${escapeHtml(rule.message || rule.code)}</li>`).join('')}
+                    ${profileRules.length ? '<li><a href="/settings" style="color:#bbf7d0;font-weight:800">Review investor profile settings</a></li>' : ''}
                     <li><strong>Risk:</strong> ${escapeHtml(topRisk)}</li>
                     <li><strong>Next:</strong> ${escapeHtml(topCheck)}</li>
                   </ul>`;
@@ -1683,13 +1596,53 @@ def create_app() -> Flask:
                 const sign = up ? '+' : '';
                 return `<div style="color:${color};font-weight:700">${sign}${formatMoney(amount)}</div>`;
               }
-              function renderTrend(divId, series){
+              function trendCandleBars(series, bars){
+                const rawBars = Array.isArray(bars) ? bars : [];
+                const normalizedBars = rawBars.map((bar) => ({
+                  open: Number(bar.open ?? bar.o),
+                  high: Number(bar.high ?? bar.h),
+                  low: Number(bar.low ?? bar.l),
+                  close: Number(bar.close ?? bar.c),
+                })).filter((bar) => [bar.open, bar.high, bar.low, bar.close].every(Number.isFinite));
+                if(normalizedBars.length >= 2) return normalizedBars;
+                const closes = (Array.isArray(series) ? series : []).map(Number).filter(Number.isFinite);
+                return closes.map((close, index) => {
+                  const open = index > 0 ? closes[index - 1] : close;
+                  const high = Math.max(open, close);
+                  const low = Math.min(open, close);
+                  return {open, high, low, close};
+                });
+              }
+              function renderTrend(divId, series, currentPrice, bars){
                 if(!window.Plotly) return;
-                if(!Array.isArray(series) || series.length < 2){
-                  const el = document.getElementById(divId); if(el) el.innerHTML='<span style="color:#94a3b8">No trend data</span>'; return;
+                const el = document.getElementById(divId);
+                const candleBars = trendCandleBars(series, bars);
+                if(!candleBars.length){
+                  if(el) el.innerHTML='<span style="color:#94a3b8;font-size:12px">No trend data</span>'; return;
                 }
-                const up = series[series.length-1] >= series[0];
-                Plotly.newPlot(divId,[{y:series,mode:'lines',type:'scatter',line:{color:up?'#16a34a':'#dc2626',width:2},hoverinfo:'skip'}],{margin:{l:2,r:2,t:2,b:2},height:30,width:100,showlegend:false,xaxis:{visible:false,fixedrange:true},yaxis:{visible:false,fixedrange:true},paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)'},{displayModeBar:false,responsive:true,staticPlot:true});
+                const indicatorPrice = Number.isFinite(Number(currentPrice)) ? Number(currentPrice) : candleBars[candleBars.length - 1].close;
+                const trace = {
+                  x: candleBars.map((_, index) => index + 1),
+                  open: candleBars.map((bar) => bar.open),
+                  high: candleBars.map((bar) => bar.high),
+                  low: candleBars.map((bar) => bar.low),
+                  close: candleBars.map((bar) => bar.close),
+                  type:'candlestick',
+                  increasing:{line:{color:'#22c55e',width:1},fillcolor:'#22c55e'},
+                  decreasing:{line:{color:'#ef4444',width:1},fillcolor:'#ef4444'},
+                  hoverinfo:'skip',
+                };
+                Plotly.newPlot(divId,[trace],{
+                  margin:{l:4,r:4,t:4,b:4},
+                  height:44,
+                  width:160,
+                  showlegend:false,
+                  xaxis:{visible:false,fixedrange:true,rangeslider:{visible:false}},
+                  yaxis:{visible:false,fixedrange:true},
+                  shapes:[{type:'line',xref:'paper',x0:0,x1:1,yref:'y',y0:indicatorPrice,y1:indicatorPrice,line:{color:'#f8fafc',width:1,dash:'dot'}}],
+                  paper_bgcolor:'#000',
+                  plot_bgcolor:'#000'
+                },{displayModeBar:false,responsive:true,staticPlot:true});
               }
 
 
@@ -1763,13 +1716,21 @@ def create_app() -> Flask:
                 loadingEl.style.display = 'none';
               }
 
+              function selectPortfolioRows(data){
+                const enriched = Array.isArray(data && data.enriched_items) ? data.enriched_items : [];
+                const base = Array.isArray(data && data.items) ? data.items : [];
+                return enriched.length ? enriched : base;
+              }
+
               function renderRows(items){
-                if(!items || !items.length){
+                const safeItems = Array.isArray(items) ? items : [];
+                if(!safeItems.length){
                   rowsEl.innerHTML = '<tr><td colspan="10" style="padding:8px;color:#3f6212">No watchlist entries yet.</td></tr>';
                   currentPortfolioItems = [];
                   return;
                 }
-                currentPortfolioItems = items;
+                currentPortfolioItems = safeItems;
+                items = safeItems;
                 const totalValue = items.reduce((sum, item) => {
                   const price = typeof item.current_price === 'number' ? item.current_price : 0;
                   const shares = typeof item.shares === 'number' ? item.shares : 1;
@@ -1778,33 +1739,42 @@ def create_app() -> Flask:
                 const totalTodayChange = items.reduce((sum, item) => sum + (typeof item.today_change_amount === 'number' ? item.today_change_amount : 0), 0);
                 const totalPerformance = items.reduce((sum, item) => sum + (typeof item.performance_amount === 'number' ? item.performance_amount : 0), 0);
 
-                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.current_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div id="trend-${idx}" style="width:100px;height:30px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="editRow(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Edit</button></div></td></tr>`).join('')
+                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${livePriceCell(i)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:6px;background:#000;min-width:172px"><div id="trend-${idx}" style="width:160px;height:44px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="editRow(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Edit</button></div></td></tr>`).join('')
                 + `<tr style="background:#f7fee7;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px;color:#3f3f46;font-size:12px">Click advice badges to see why.</td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
-                items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || []));
+                items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || [], item.current_price, item.history30_bars || []));
               }
 
               async function load(){
                 setLoading(true);
                 try {
                   const res = await apiFetch('/api/user-watchlist');
-                  const data = await res.json();
+                  let data = {};
+                  try {
+                    data = await res.json();
+                  } catch (jsonErr) {
+                    data = {};
+                  }
                   if(!res.ok){
                     if (res.status === 401) { location.href='/login'; return; }
                     rowsEl.innerHTML = '<tr><td colspan="10" style="padding:8px;color:#4d7c0f">Unable to load watchlist right now.</td></tr>';
                     outEl.textContent = data.error || 'Please try again in a moment.';
                     return;
                   }
-                  renderRows(data.enriched_items || data.items || []);
+                  renderRows(selectPortfolioRows(data));
+                  startPortfolioLive();
                   if (lifetimePanelEl.style.display !== 'none') {
                     await loadSoldTrades();
                   }
+                } catch (err) {
+                  rowsEl.innerHTML = '<tr><td colspan="10" style="padding:8px;color:#4d7c0f">Unable to load portfolio rows right now. Please refresh.</td></tr>';
+                  outEl.textContent = 'Portfolio data did not load completely. Please refresh in a moment.';
                 } finally {
                   setLoading(false);
                 }
               }
               async function addItem(event){
                 if (event) event.preventDefault();
-                const payload = { symbol:(symbolEl.value || '').trim().toUpperCase(), buy_price:buyPriceEl.value||null, shares:sharesEl.value||null };
+                const payload = { symbol:normalizeTickerInputValue(symbolEl), buy_price:buyPriceEl.value||null, shares:sharesEl.value||null };
                 const res = await apiFetch('/api/user-watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
                 const data = await res.json();
                 if (res.ok) {
@@ -1834,10 +1804,53 @@ def create_app() -> Flask:
                 lifetimeTotalEl.textContent = formatMoney(totalRealized || 0);
                 lifetimeTotalEl.style.color = amountColor(totalRealized);
                 if(!items || !items.length){
-                  soldRowsEl.innerHTML = '<tr><td colspan="6" style="padding:8px;color:#3f6212">No sold trades yet.</td></tr>';
+                  soldRowsEl.innerHTML = '<tr><td colspan="7" style="padding:8px;color:#3f6212">No sold trades yet.</td></tr>';
                   return;
                 }
-                soldRowsEl.innerHTML = items.map((item)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px">${formatDate(item.sold_at)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(item.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(item.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(item.sold_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(item.shares_sold)}</td><td style="border:1px solid #e5e7eb;padding:8px;color:${amountColor(item.realized_amount)}">${formatMoney(item.realized_amount)}</td></tr>`).join('');
+                soldRowsEl.innerHTML = items.map((item)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px">${formatDate(item.sold_at)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(item.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(item.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(item.sold_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(item.shares_sold)}</td><td style="border:1px solid #e5e7eb;padding:8px;color:${amountColor(item.realized_amount)}">${formatMoney(item.realized_amount)}</td><td style="border:1px solid #e5e7eb;padding:8px"><button onclick="editSoldTrade(${item.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:700;cursor:pointer">Edit</button></td></tr>`).join('');
+              }
+
+              async function editSoldTrade(id){
+                const res = await apiFetch('/api/sold-trades');
+                const soldData = await res.json();
+                if(!res.ok){
+                  outEl.textContent = soldData.error || 'Unable to load sold trade.';
+                  return;
+                }
+                const item = (soldData.items || []).find((entry)=> entry.id === id);
+                if(!item){
+                  outEl.textContent = 'Unable to find sold trade.';
+                  return;
+                }
+                const soldPriceRaw = prompt(`Correct sold price for ${item.symbol}:`, item.sold_price ?? '');
+                if(soldPriceRaw === null) return;
+                const soldPrice = Number(soldPriceRaw);
+                if(!Number.isFinite(soldPrice) || soldPrice <= 0){
+                  outEl.textContent = 'Sold price must be a positive number.';
+                  return;
+                }
+                const sharesRaw = prompt(`Correct shares sold for ${item.symbol}:`, item.shares_sold ?? '');
+                if(sharesRaw === null) return;
+                const sharesSold = Number(sharesRaw);
+                if(!Number.isFinite(sharesSold) || sharesSold <= 0){
+                  outEl.textContent = 'Shares sold must be a positive number.';
+                  return;
+                }
+                const updateRes = await apiFetch('/api/sold-trades/' + id, {
+                  method:'PATCH',
+                  headers:{'Content-Type':'application/json'},
+                  body:JSON.stringify({ sold_price:soldPrice, shares_sold:sharesSold })
+                });
+                const updateData = await updateRes.json();
+                if(!updateRes.ok){
+                  outEl.textContent = updateData.error || 'Unable to update sold trade.';
+                  return;
+                }
+                const realized = updateData.sold_trade && typeof updateData.sold_trade.realized_amount === 'number' ? updateData.sold_trade.realized_amount : 0;
+                const adjustmentNote = updateData.portfolio_adjustment_note ? ` ${updateData.portfolio_adjustment_note}` : '';
+                outEl.textContent = `Sold trade updated (${formatMoney(realized)} realized).${adjustmentNote}`;
+                await load();
+                await loadSoldTrades();
               }
 
               async function loadSoldTrades(){
