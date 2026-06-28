@@ -66,3 +66,7 @@ def day1_baseline_model_path() -> Path:
 
 def bad_symbol_cache_path() -> Path:
     return resolve_runtime_dir() / "track_b" / "bad_symbols.json"
+
+
+def historical_validation_report_path() -> Path:
+    return resolve_runtime_dir() / "historical_validation_report.json"

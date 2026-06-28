@@ -2877,7 +2877,7 @@ def _historical_validation_status() -> dict[str, Any]:
     raw_path = str(
         current_app.config.get("HISTORICAL_VALIDATION_REPORT_PATH")
         or current_app.config.get("DETERMINISTIC_HISTORICAL_VALIDATION_REPORT_PATH")
-        or ""
+        or historical_validation_report_path()
     ).strip()
     if not raw_path:
         return {

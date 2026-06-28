@@ -1495,22 +1495,20 @@ def test_export_decision_log_returns_ndjson_with_token(tmp_path):
     assert payload['symbol'] == 'TSLA'
 
 
-def test_model_health_includes_safe_historical_validation_when_unconfigured():
+def test_model_health_includes_safe_historical_validation_when_default_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
     client = _client()
 
     res = client.get("/api/model-health")
 
     assert res.status_code == 200
     data = res.get_json()["data"]
-    assert data["historical_validation"] == {
-        "available": False,
-        "configured": False,
-        "path": None,
-        "exists": False,
-        "mtime_utc": None,
-        "summary": None,
-        "error": None,
-    }
+    assert data["historical_validation"]["available"] is False
+    assert data["historical_validation"]["configured"] is True
+    assert data["historical_validation"]["path"] == str(tmp_path / "historical_validation_report.json")
+    assert data["historical_validation"]["exists"] is False
+    assert data["historical_validation"]["summary"] is None
+    assert data["historical_validation"]["error"] is None
 
 
 def test_model_health_loads_historical_validation_summary(tmp_path):
