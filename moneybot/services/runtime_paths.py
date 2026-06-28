@@ -62,3 +62,7 @@ def day1_training_snapshot_path() -> Path:
 
 def day1_baseline_model_path() -> Path:
     return resolve_runtime_dir() / "day1_baseline_model.json"
+
+
+def bad_symbol_cache_path() -> Path:
+    return resolve_runtime_dir() / "track_b" / "bad_symbols.json"
