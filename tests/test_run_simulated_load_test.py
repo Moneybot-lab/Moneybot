@@ -79,7 +79,7 @@ def test_database_probe_requests_are_unique_per_user():
         "/api/auth/login",
         "/api/user-watchlist",
         "/api/user-watchlist",
-        "/api/portfolio-summary",
+        "/api/portfolio-summary?skip_market_data=1",
     ]
     assert first[0][3] == {201, 409}
     assert first[1][3] == {200}
@@ -134,7 +134,7 @@ def test_database_flow_uses_database_timeout_and_ramp_up(monkeypatch):
     assert report["database_flow_enabled"] is True
     assert len(calls) == 6
     assert calls[0][:3] == ("POST", "https://moneybot.test/api/auth/signup", 30)
-    assert calls[4][:3] == ("GET", "https://moneybot.test/api/portfolio-summary", 30)
+    assert calls[4][:3] == ("GET", "https://moneybot.test/api/portfolio-summary?skip_market_data=1", 30)
     assert calls[5][:3] == ("GET", "https://moneybot.test/api/model-health", 3)
     assert len(sleeps) == 1
     assert 0 <= sleeps[0] <= 5

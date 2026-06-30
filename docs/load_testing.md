@@ -22,7 +22,7 @@ This exercises:
 
 - **Response time**: captured in the JSON report as `latency_ms.min`, `latency_ms.avg`, `latency_ms.p95`, and `latency_ms.max`.
 - **Errors and throttling**: captured as `failures`, `failure_rate`, `throttled`, `throttle_rate`, per-endpoint failures, per-endpoint `status_counts`, and `sample_failures`.
-- **Database**: each virtual user signs up, logs in, writes a watchlist row, reads the watchlist, and reads the portfolio summary when `--include-database-flow` is set.
+- **Database**: each virtual user signs up, logs in, writes a watchlist row, reads the watchlist, and reads the portfolio summary when `--include-database-flow` is set. The load-test portfolio summary request uses `skip_market_data=1` so this flow measures authenticated database reads without extra quote/signal enrichment calls.
 - **Render CPU and RAM**: inspect the same test window in the Render service Metrics page. Render exposes CPU and memory usage in the dashboard's Application Metrics section; use the report's `test_window_utc` and `duration_seconds` to line up the graph window.
 - **Render database activity**: inspect the Render Postgres Metrics page for active connections, disk, and database activity over the same window.
 

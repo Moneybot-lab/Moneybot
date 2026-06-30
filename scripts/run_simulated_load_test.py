@@ -106,7 +106,7 @@ def _database_probe_requests(user_id: int, run_id: str) -> list[tuple[str, str, 
             False,
         ),
         ("GET", "/api/user-watchlist", None, {200}, False),
-        ("GET", "/api/portfolio-summary", None, {200}, False),
+        ("GET", "/api/portfolio-summary?skip_market_data=1", None, {200}, False),
     ]
 
 

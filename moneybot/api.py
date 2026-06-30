@@ -1930,7 +1930,8 @@ def portfolio_summary():
         .all()
     )
 
-    svc = current_app.extensions.get("market_data_service")
+    skip_market_data = str(request.args.get("skip_market_data") or "").strip().lower() in {"1", "true", "yes", "on"}
+    svc = None if skip_market_data else current_app.extensions.get("market_data_service")
     total_value = 0.0
     score_values: list[float] = []
     sector_totals: Dict[str, float] = defaultdict(float)
