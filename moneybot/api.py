@@ -364,8 +364,8 @@ def _request_context_setup():
 
 
 _RATE: dict[Tuple[str, str], deque] = defaultdict(deque)
-WINDOW_SECONDS = 60
-MAX_REQUESTS_PER_WINDOW = 120
+DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60
+DEFAULT_RATE_LIMIT_MAX_REQUESTS = 120
 
 
 @api_bp.before_request
@@ -375,9 +375,11 @@ def _basic_rate_limit():
     key = (ip, request.endpoint or "")
     now = time.time()
     dq = _RATE[key]
-    while dq and now - dq[0] > WINDOW_SECONDS:
+    window_seconds = max(1, int(current_app.config.get("API_RATE_LIMIT_WINDOW_SECONDS") or DEFAULT_RATE_LIMIT_WINDOW_SECONDS))
+    max_requests = max(1, int(current_app.config.get("API_RATE_LIMIT_MAX_REQUESTS") or DEFAULT_RATE_LIMIT_MAX_REQUESTS))
+    while dq and now - dq[0] > window_seconds:
         dq.popleft()
-    if len(dq) >= MAX_REQUESTS_PER_WINDOW:
+    if len(dq) >= max_requests:
         return jsonify({"error": "rate limit exceeded", "request_id": g.request_id}), 429
     dq.append(now)
 
@@ -1928,7 +1930,8 @@ def portfolio_summary():
         .all()
     )
 
-    svc = current_app.extensions.get("market_data_service")
+    skip_market_data = str(request.args.get("skip_market_data") or "").strip().lower() in {"1", "true", "yes", "on"}
+    svc = None if skip_market_data else current_app.extensions.get("market_data_service")
     total_value = 0.0
     score_values: list[float] = []
     sector_totals: Dict[str, float] = defaultdict(float)

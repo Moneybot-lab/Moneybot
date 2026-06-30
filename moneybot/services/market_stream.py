@@ -43,6 +43,12 @@ def _event_time(value: Any) -> datetime | None:
     return MassiveRestClient.normalize_timestamp(value)
 
 
+def _bounded_reconnect_delay(*, attempt: int, min_seconds: float, max_seconds: float, jitter: float) -> float:
+    capped_attempt = max(0, min(int(attempt), 30))
+    base_delay = min(max_seconds, min_seconds * (2**capped_attempt))
+    return base_delay * jitter
+
+
 @dataclass(frozen=True)
 class StreamEvent:
     event_type: str
@@ -726,9 +732,13 @@ class MassiveWebSocketWorker:
                 self.state.mark_symbols_stale(plan.symbols, reason="stream_disconnected", ttl_seconds=self.config.stale_ttl_seconds)
                 await self._recover_symbols(plan.symbols, reason="stream_reconnect")
                 self.state.set_health(self.health_payload(plan), ttl_seconds=self.config.health_ttl_seconds)
-                delay = min(self.config.reconnect_max_seconds, self.config.reconnect_min_seconds * (2**attempt))
-                delay *= self.rng.uniform(.8, 1.2)
-                attempt += 1
+                delay = _bounded_reconnect_delay(
+                    attempt=attempt,
+                    min_seconds=self.config.reconnect_min_seconds,
+                    max_seconds=self.config.reconnect_max_seconds,
+                    jitter=self.rng.uniform(.8, 1.2),
+                )
+                attempt = min(attempt + 1, 30)
                 await self.sleep(delay)
 
     def stop(self) -> None:
