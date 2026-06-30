@@ -146,6 +146,7 @@ def summarize(
     rows = list(results)
     latencies = [row.elapsed_ms for row in rows]
     failures = [row for row in rows if not row.ok]
+    throttled = [row for row in rows if row.status_code == 429]
     by_endpoint: dict[str, dict[str, float | int | dict[str, int]]] = {}
     for row in rows:
         stats = by_endpoint.setdefault(
@@ -175,6 +176,8 @@ def summarize(
         "requests_per_second": round(len(rows) / duration_seconds, 2) if duration_seconds else 0.0,
         "failures": len(failures),
         "failure_rate": round(len(failures) / len(rows), 4) if rows else 1.0,
+        "throttled": len(throttled),
+        "throttle_rate": round(len(throttled) / len(rows), 4) if rows else 0.0,
         "latency_ms": {
             "min": round(min(latencies), 2) if latencies else None,
             "avg": round(statistics.fmean(latencies), 2) if latencies else None,
@@ -264,6 +267,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--endpoint", action="append", dest="endpoints", help="Endpoint path to include; repeat to override defaults.")
     parser.add_argument("--output", default=os.environ.get("MONEYBOT_LOAD_TEST_OUTPUT", "data/load_test_200_vu_report.json"))
     parser.add_argument("--max-failure-rate", type=float, default=float(os.environ.get("MONEYBOT_LOAD_TEST_MAX_FAILURE_RATE", "0.05")))
+    parser.add_argument("--max-throttle-rate", type=float, default=float(os.environ.get("MONEYBOT_LOAD_TEST_MAX_THROTTLE_RATE", "0.05")), help="Exit non-zero when HTTP 429 responses exceed this rate.")
     parser.add_argument("--include-database-flow", action="store_true", default=os.environ.get("MONEYBOT_LOAD_TEST_INCLUDE_DATABASE_FLOW", "false").lower() == "true", help="Have each virtual user create/login/read/write portfolio data to exercise the database.")
     parser.add_argument("--run-id", default=os.environ.get("MONEYBOT_LOAD_TEST_RUN_ID", ""), help="Unique suffix for database test users; defaults to a random value.")
     return parser.parse_args()
@@ -287,7 +291,11 @@ def main() -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2, sort_keys=True))
-    return 0 if report["failure_rate"] <= args.max_failure_rate else 1
+    if report["failure_rate"] > args.max_failure_rate:
+        return 1
+    if report["throttle_rate"] > args.max_throttle_rate:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

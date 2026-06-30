@@ -81,6 +81,18 @@ def test_database_engine_options_are_env_overridable_and_skip_sqlite(monkeypatch
     }
 
 
+def test_create_app_reads_api_rate_limit_settings(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("API_RATE_LIMIT_WINDOW_SECONDS", "30")
+    monkeypatch.setenv("API_RATE_LIMIT_MAX_REQUESTS", "500")
+
+    app = create_app()
+
+    assert app.config["API_RATE_LIMIT_WINDOW_SECONDS"] == 30
+    assert app.config["API_RATE_LIMIT_MAX_REQUESTS"] == 500
+
+
 def test_create_app_reads_ai_timeout_and_cooldown(monkeypatch):
     monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")

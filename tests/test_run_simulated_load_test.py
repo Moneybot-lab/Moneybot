@@ -7,17 +7,20 @@ def test_summarize_reports_200_virtual_users():
     results = [
         load_test.RequestResult(endpoint="/api/model-health", status_code=200, elapsed_ms=10.0, ok=True),
         load_test.RequestResult(endpoint="/api/quote?symbol=AAPL", status_code=503, elapsed_ms=30.0, ok=False, error="HTTP 503"),
+        load_test.RequestResult(endpoint="/api/quote?symbol=AAPL", status_code=429, elapsed_ms=5.0, ok=True),
     ]
 
     report = load_test.summarize(results, users=200, duration_seconds=60, base_url="https://example.test")
 
     assert report["schema_version"] == "moneybot.load_test.v1"
     assert report["virtual_users"] == 200
-    assert report["requests"] == 2
+    assert report["requests"] == 3
     assert report["failures"] == 1
-    assert report["failure_rate"] == 0.5
+    assert report["failure_rate"] == 0.3333
+    assert report["throttled"] == 1
+    assert report["throttle_rate"] == 0.3333
     assert report["by_endpoint"]["/api/model-health"]["requests"] == 1
-    assert report["by_endpoint"]["/api/quote?symbol=AAPL"]["status_counts"] == {"503": 1}
+    assert report["by_endpoint"]["/api/quote?symbol=AAPL"]["status_counts"] == {"503": 1, "429": 1}
 
 
 def test_run_load_test_uses_configured_endpoint(monkeypatch):
