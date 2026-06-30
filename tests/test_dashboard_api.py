@@ -74,6 +74,9 @@ class StubMarketService:
     def get_hot_momentum_buys(self):
         return [{"symbol": "NVDA", "price": 900.33, "score": 9.4, "rationale": "Strong breakout"}]
 
+    def get_breakout_radar(self):
+        return [{"symbol": "ASTC", "price": 5.43, "score": 9.8, "decision_source": "scanner:small_cap_gainers", "rationale": "Live breakout scanner candidate."}]
+
     def get_wells_picks(self):
         return [{"investor": "Warren Buffett", "stocks": [{"ticker": "AAPL", "price": 190.0, "performance": 1.2}]}]
 
@@ -143,14 +146,17 @@ def test_tab_data_endpoints_return_items():
 
     stable = client.get("/api/stable-watchlist")
     momentum = client.get("/api/hot-momentum-buys")
+    breakout = client.get("/api/breakout-radar")
     wells = client.get("/api/wells-picks")
 
     assert stable.status_code == 200
     assert momentum.status_code == 200
+    assert breakout.status_code == 200
     assert wells.status_code == 200
 
     assert stable.get_json()["items"][0]["symbol"] == "MSFT"
     assert momentum.get_json()["items"][0]["symbol"] == "NVDA"
+    assert isinstance(breakout.get_json()["items"], list)
     assert wells.get_json()["items"][0]["investor"] == "Warren Buffett"
     assert wells.get_json()["items"][0]["stocks"][0]["ticker"] == "AAPL"
 
