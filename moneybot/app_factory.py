@@ -247,6 +247,21 @@ def _resolve_database_url() -> str:
     return database_url
 
 
+
+
+def _database_engine_options(database_url: str) -> dict:
+    """Return production-safe SQLAlchemy pool settings for network databases."""
+    if not database_url.startswith("postgresql"):
+        return {}
+    return {
+        "pool_size": _parse_int_env("SQLALCHEMY_POOL_SIZE", 10),
+        "max_overflow": _parse_int_env("SQLALCHEMY_MAX_OVERFLOW", 20),
+        "pool_timeout": _parse_int_env("SQLALCHEMY_POOL_TIMEOUT", 10),
+        "pool_recycle": _parse_int_env("SQLALCHEMY_POOL_RECYCLE", 300),
+        "pool_pre_ping": os.environ.get("SQLALCHEMY_POOL_PRE_PING", "true").strip().lower()
+        in {"1", "true", "yes", "on"},
+    }
+
 def _waitlist_email_configured(app: Flask) -> bool:
     smtp_host = (app.config.get("SMTP_HOST") or "").strip()
     from_email = (app.config.get("PASSWORD_RESET_FROM_EMAIL") or app.config.get("SMTP_USER") or "").strip()
@@ -364,6 +379,7 @@ def create_app() -> Flask:
         PERMANENT_SESSION_LIFETIME=timedelta(days=30),
         SESSION_REFRESH_EACH_REQUEST=True,
         SQLALCHEMY_DATABASE_URI=database_url,
+        SQLALCHEMY_ENGINE_OPTIONS=_database_engine_options(database_url),
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
         DATA_PROVIDER=os.environ.get("DATA_PROVIDER", "yfinance"),
         PUBLIC_BASE_URL=os.environ.get("PUBLIC_BASE_URL", ""),
