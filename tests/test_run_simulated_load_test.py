@@ -27,7 +27,8 @@ def test_run_load_test_uses_configured_endpoint(monkeypatch):
     calls = []
 
     class FakeResponse:
-        status_code = 200
+        def __init__(self, status_code=200):
+            self.status_code = status_code
 
     class FakeSession:
         def __enter__(self):
@@ -38,7 +39,9 @@ def test_run_load_test_uses_configured_endpoint(monkeypatch):
 
         def request(self, method, url, timeout, json=None):
             calls.append((method, url, timeout, json))
-            return FakeResponse()
+            if url.endswith("/api/auth/signup") or url.endswith("/api/user-watchlist") and method == "POST":
+                return FakeResponse(201)
+            return FakeResponse(200)
 
     monotonic_values = iter([0.0, 0.5, 1.5])
 
@@ -76,6 +79,9 @@ def test_database_probe_requests_are_unique_per_user():
         "/api/user-watchlist",
         "/api/portfolio-summary",
     ]
+    assert first[0][3] == {201, 409}
+    assert first[1][3] == {200}
+    assert first[0][4] is True
 
 
 def test_database_flow_uses_database_timeout_and_ramp_up(monkeypatch):
@@ -83,7 +89,8 @@ def test_database_flow_uses_database_timeout_and_ramp_up(monkeypatch):
     sleeps = []
 
     class FakeResponse:
-        status_code = 200
+        def __init__(self, status_code=200):
+            self.status_code = status_code
 
     class FakeSession:
         def __enter__(self):
@@ -94,7 +101,9 @@ def test_database_flow_uses_database_timeout_and_ramp_up(monkeypatch):
 
         def request(self, method, url, timeout, json=None):
             calls.append((method, url, timeout, json))
-            return FakeResponse()
+            if url.endswith("/api/auth/signup") or (url.endswith("/api/user-watchlist") and method == "POST"):
+                return FakeResponse(201)
+            return FakeResponse(200)
 
     monotonic_values = iter([0.0, 0.5, 1.5])
 
@@ -125,3 +134,45 @@ def test_database_flow_uses_database_timeout_and_ramp_up(monkeypatch):
     assert calls[5][:3] == ("GET", "https://moneybot.test/api/model-health", 3)
     assert len(sleeps) == 1
     assert 0 <= sleeps[0] <= 5
+
+
+def test_database_flow_stops_after_auth_setup_failure(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def request(self, method, url, timeout, json=None):
+            calls.append((method, url, timeout, json))
+            return FakeResponse(500)
+
+    monotonic_values = iter([0.0, 1.5])
+
+    def fake_monotonic():
+        return next(monotonic_values)
+
+    monkeypatch.setattr(load_test.requests, "Session", FakeSession)
+    monkeypatch.setattr(load_test.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(load_test.time, "sleep", lambda _: None)
+
+    report = load_test.run_load_test(
+        base_url="https://moneybot.test",
+        users=1,
+        duration_seconds=1,
+        endpoints=("/api/model-health",),
+        database_timeout=30,
+        include_database_flow=True,
+        run_id="dbtest",
+    )
+
+    assert report["requests"] == 1
+    assert report["failures"] == 1
+    assert calls == [("POST", "https://moneybot.test/api/auth/signup", 30, calls[0][3])]

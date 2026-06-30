@@ -49,6 +49,7 @@ def _request_once(
     *,
     method: str = "GET",
     json_payload: dict | None = None,
+    expected_statuses: set[int] | None = None,
 ) -> RequestResult:
     url = f"{base_url.rstrip('/')}{endpoint}"
     started = time.perf_counter()
@@ -56,20 +57,21 @@ def _request_once(
     try:
         response = session.request(method, url, timeout=timeout, json=json_payload)
         elapsed_ms = (time.perf_counter() - started) * 1000
+        ok = response.status_code in expected_statuses if expected_statuses is not None else response.status_code < 500
         return RequestResult(
             endpoint=endpoint,
             status_code=response.status_code,
             elapsed_ms=elapsed_ms,
-            ok=response.status_code < 500,
+            ok=ok,
             method=method,
-            error=None if response.status_code < 500 else f"HTTP {response.status_code}",
+            error=None if ok else f"HTTP {response.status_code}",
         )
     except requests.RequestException as exc:
         elapsed_ms = (time.perf_counter() - started) * 1000
         return RequestResult(endpoint=endpoint, status_code=None, elapsed_ms=elapsed_ms, ok=False, method=method, error=str(exc))
 
 
-def _database_probe_requests(user_id: int, run_id: str) -> list[tuple[str, str, dict | None]]:
+def _database_probe_requests(user_id: int, run_id: str) -> list[tuple[str, str, dict | None, set[int], bool]]:
     suffix = f"{run_id}-{user_id}".replace("_", "-").lower()
     email = f"loadtest-{suffix}@example.invalid"
     username = f"loadtest_{run_id}_{user_id}"[:80].lower().replace("-", "_")
@@ -85,11 +87,19 @@ def _database_probe_requests(user_id: int, run_id: str) -> list[tuple[str, str, 
                 "password": password,
                 "password_confirmation": password,
             },
+            {201, 409},
+            True,
         ),
-        ("POST", "/api/auth/login", {"email": email, "password": password, "trusted_device": True}),
-        ("POST", "/api/user-watchlist", {"symbol": "AAPL", "company": "Apple", "buy_price": "100", "shares": "1"}),
-        ("GET", "/api/user-watchlist", None),
-        ("GET", "/api/portfolio-summary", None),
+        ("POST", "/api/auth/login", {"email": email, "password": password, "trusted_device": True}, {200}, True),
+        (
+            "POST",
+            "/api/user-watchlist",
+            {"symbol": "AAPL", "company": "Apple", "buy_price": "100", "shares": "1"},
+            {201, 409},
+            False,
+        ),
+        ("GET", "/api/user-watchlist", None, {200}, False),
+        ("GET", "/api/portfolio-summary", None, {200}, False),
     ]
 
 
@@ -113,17 +123,19 @@ def _virtual_user(
         time.sleep(rng.uniform(0, ramp_up_seconds))
     with requests.Session() as session:
         if include_database_flow:
-            for method, endpoint, payload in _database_probe_requests(user_id, run_id):
-                results.append(
-                    _request_once(
-                        base_url,
-                        endpoint,
-                        database_timeout,
-                        session,
-                        method=method,
-                        json_payload=payload,
-                    )
+            for method, endpoint, payload, expected_statuses, stop_on_failure in _database_probe_requests(user_id, run_id):
+                result = _request_once(
+                    base_url,
+                    endpoint,
+                    database_timeout,
+                    session,
+                    method=method,
+                    json_payload=payload,
+                    expected_statuses=expected_statuses,
                 )
+                results.append(result)
+                if stop_on_failure and not result.ok:
+                    break
 
         while time.monotonic() < stop_at:
             endpoint = rng.choice(endpoints)
