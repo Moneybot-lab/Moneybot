@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from moneybot.app_factory import _resolve_database_url, create_app
+from moneybot.app_factory import _database_engine_options, _resolve_database_url, create_app
 
 
 def test_resolve_database_url_uses_postgres_internal_alias(monkeypatch):
@@ -44,6 +44,53 @@ def test_resolve_database_url_rejects_hosted_postgres_without_driver(monkeypatch
 
     with pytest.raises(RuntimeError, match="no PostgreSQL driver is installed"):
         _resolve_database_url()
+
+
+def test_database_engine_options_configure_postgres_pool(monkeypatch):
+    monkeypatch.delenv("SQLALCHEMY_POOL_SIZE", raising=False)
+    monkeypatch.delenv("SQLALCHEMY_MAX_OVERFLOW", raising=False)
+    monkeypatch.delenv("SQLALCHEMY_POOL_TIMEOUT", raising=False)
+    monkeypatch.delenv("SQLALCHEMY_POOL_RECYCLE", raising=False)
+    monkeypatch.delenv("SQLALCHEMY_POOL_PRE_PING", raising=False)
+
+    options = _database_engine_options("postgresql+psycopg://user:pw@db:5432/moneybot")
+
+    assert options == {
+        "pool_size": 10,
+        "max_overflow": 20,
+        "pool_timeout": 10,
+        "pool_recycle": 300,
+        "pool_pre_ping": True,
+    }
+
+
+def test_database_engine_options_are_env_overridable_and_skip_sqlite(monkeypatch):
+    monkeypatch.setenv("SQLALCHEMY_POOL_SIZE", "4")
+    monkeypatch.setenv("SQLALCHEMY_MAX_OVERFLOW", "8")
+    monkeypatch.setenv("SQLALCHEMY_POOL_TIMEOUT", "12")
+    monkeypatch.setenv("SQLALCHEMY_POOL_RECYCLE", "600")
+    monkeypatch.setenv("SQLALCHEMY_POOL_PRE_PING", "false")
+
+    assert _database_engine_options("sqlite:///:memory:") == {}
+    assert _database_engine_options("postgresql://user:pw@db:5432/moneybot") == {
+        "pool_size": 4,
+        "max_overflow": 8,
+        "pool_timeout": 12,
+        "pool_recycle": 600,
+        "pool_pre_ping": False,
+    }
+
+
+def test_create_app_reads_api_rate_limit_settings(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("API_RATE_LIMIT_WINDOW_SECONDS", "30")
+    monkeypatch.setenv("API_RATE_LIMIT_MAX_REQUESTS", "500")
+
+    app = create_app()
+
+    assert app.config["API_RATE_LIMIT_WINDOW_SECONDS"] == 30
+    assert app.config["API_RATE_LIMIT_MAX_REQUESTS"] == 500
 
 
 def test_create_app_reads_ai_timeout_and_cooldown(monkeypatch):
