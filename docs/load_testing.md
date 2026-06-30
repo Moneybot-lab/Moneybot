@@ -12,18 +12,22 @@ python scripts/run_simulated_load_test.py \
   --users 200 \
   --duration-seconds 60 \
   --include-database-flow \
+  --database-timeout-seconds 30 \
+  --ramp-up-seconds 15 \
   --output data/render_load_test_200_vu_report.json
 ```
 
 This exercises:
 
 - **Response time**: captured in the JSON report as `latency_ms.min`, `latency_ms.avg`, `latency_ms.p95`, and `latency_ms.max`.
-- **Errors**: captured as `failures`, `failure_rate`, per-endpoint failures, and `sample_failures`.
+- **Errors**: captured as `failures`, `failure_rate`, per-endpoint failures, per-endpoint `status_counts`, and `sample_failures`.
 - **Database**: each virtual user signs up, logs in, writes a watchlist row, reads the watchlist, and reads the portfolio summary when `--include-database-flow` is set.
 - **Render CPU and RAM**: inspect the same test window in the Render service Metrics page. Render exposes CPU and memory usage in the dashboard's Application Metrics section; use the report's `test_window_utc` and `duration_seconds` to line up the graph window.
 - **Render database activity**: inspect the Render Postgres Metrics page for active connections, disk, and database activity over the same window.
 
 > Warning: `--include-database-flow` creates test users and watchlist rows in the target database. Run it against staging first, or use a unique `--run-id` so records are easy to identify and clean up.
+
+If database endpoints time out while public read-only endpoints stay fast, rerun with `--database-timeout-seconds 30` (or higher) and `--ramp-up-seconds 15` so database setup requests are not all fired at exactly the same instant. The public API timeout remains controlled separately by `--timeout-seconds`.
 
 ## Run the local first simulated load test
 
@@ -58,7 +62,9 @@ Override the request mix by passing one or more `--endpoint` flags.
 - `MONEYBOT_LOAD_TEST_USERS`
 - `MONEYBOT_LOAD_TEST_DURATION_SECONDS`
 - `MONEYBOT_LOAD_TEST_TIMEOUT_SECONDS`
+- `MONEYBOT_LOAD_TEST_DATABASE_TIMEOUT_SECONDS`
 - `MONEYBOT_LOAD_TEST_THINK_TIME_SECONDS`
+- `MONEYBOT_LOAD_TEST_RAMP_UP_SECONDS`
 - `MONEYBOT_LOAD_TEST_OUTPUT`
 - `MONEYBOT_LOAD_TEST_MAX_FAILURE_RATE`
 - `MONEYBOT_LOAD_TEST_INCLUDE_DATABASE_FLOW`

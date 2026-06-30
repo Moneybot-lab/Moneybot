@@ -16,8 +16,8 @@ import random
 import statistics
 import time
 from dataclasses import asdict, dataclass
-from uuid import uuid4
 from datetime import datetime, timezone
+from uuid import uuid4
 from pathlib import Path
 from typing import Iterable
 
@@ -100,17 +100,30 @@ def _virtual_user(
     endpoints: tuple[str, ...],
     duration_seconds: float,
     timeout: float,
+    database_timeout: float,
     think_time_seconds: float,
     stop_at: float,
     include_database_flow: bool,
     run_id: str,
+    ramp_up_seconds: float,
 ) -> list[RequestResult]:
     rng = random.Random(user_id)
     results: list[RequestResult] = []
+    if ramp_up_seconds > 0:
+        time.sleep(rng.uniform(0, ramp_up_seconds))
     with requests.Session() as session:
         if include_database_flow:
             for method, endpoint, payload in _database_probe_requests(user_id, run_id):
-                results.append(_request_once(base_url, endpoint, timeout, session, method=method, json_payload=payload))
+                results.append(
+                    _request_once(
+                        base_url,
+                        endpoint,
+                        database_timeout,
+                        session,
+                        method=method,
+                        json_payload=payload,
+                    )
+                )
 
         while time.monotonic() < stop_at:
             endpoint = rng.choice(endpoints)
@@ -133,12 +146,19 @@ def summarize(
     rows = list(results)
     latencies = [row.elapsed_ms for row in rows]
     failures = [row for row in rows if not row.ok]
-    by_endpoint: dict[str, dict[str, float | int]] = {}
+    by_endpoint: dict[str, dict[str, float | int | dict[str, int]]] = {}
     for row in rows:
-        stats = by_endpoint.setdefault(row.endpoint, {"requests": 0, "failures": 0, "avg_ms": 0.0})
+        stats = by_endpoint.setdefault(
+            row.endpoint,
+            {"requests": 0, "failures": 0, "avg_ms": 0.0, "status_counts": {}},
+        )
         stats["requests"] += 1
         stats["failures"] += 0 if row.ok else 1
         stats["avg_ms"] += row.elapsed_ms
+        status_key = str(row.status_code) if row.status_code is not None else "timeout_or_connection_error"
+        status_counts = stats["status_counts"]
+        if isinstance(status_counts, dict):
+            status_counts[status_key] = int(status_counts.get(status_key, 0)) + 1
     for stats in by_endpoint.values():
         count = int(stats["requests"])
         stats["avg_ms"] = round(float(stats["avg_ms"]) / count, 2) if count else 0.0
@@ -177,9 +197,11 @@ def run_load_test(
     duration_seconds: float,
     endpoints: tuple[str, ...] = DEFAULT_ENDPOINTS,
     timeout: float = 10.0,
+    database_timeout: float = 30.0,
     think_time_seconds: float = 0.25,
     include_database_flow: bool = False,
     run_id: str | None = None,
+    ramp_up_seconds: float = 0.0,
 ) -> dict:
     if users < 1:
         raise ValueError("users must be at least 1")
@@ -187,6 +209,12 @@ def run_load_test(
         raise ValueError("duration_seconds must be greater than 0")
     if not endpoints:
         raise ValueError("at least one endpoint is required")
+    if timeout <= 0:
+        raise ValueError("timeout must be greater than 0")
+    if database_timeout <= 0:
+        raise ValueError("database_timeout must be greater than 0")
+    if ramp_up_seconds < 0:
+        raise ValueError("ramp_up_seconds must be greater than or equal to 0")
 
     started_at_utc = datetime.now(timezone.utc).isoformat()
     stop_at = time.monotonic() + duration_seconds
@@ -201,10 +229,12 @@ def run_load_test(
                 endpoints=endpoints,
                 duration_seconds=duration_seconds,
                 timeout=timeout,
+                database_timeout=database_timeout,
                 think_time_seconds=think_time_seconds,
                 stop_at=stop_at,
                 include_database_flow=include_database_flow,
                 run_id=run_id,
+                ramp_up_seconds=ramp_up_seconds,
             )
             for user_id in range(users)
         ]
@@ -228,7 +258,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--users", type=int, default=int(os.environ.get("MONEYBOT_LOAD_TEST_USERS", "200")))
     parser.add_argument("--duration-seconds", type=float, default=float(os.environ.get("MONEYBOT_LOAD_TEST_DURATION_SECONDS", "60")))
     parser.add_argument("--timeout-seconds", type=float, default=float(os.environ.get("MONEYBOT_LOAD_TEST_TIMEOUT_SECONDS", "10")))
+    parser.add_argument("--database-timeout-seconds", type=float, default=float(os.environ.get("MONEYBOT_LOAD_TEST_DATABASE_TIMEOUT_SECONDS", "30")), help="Timeout for signup/login/watchlist database-flow requests.")
     parser.add_argument("--think-time-seconds", type=float, default=float(os.environ.get("MONEYBOT_LOAD_TEST_THINK_TIME_SECONDS", "0.25")))
+    parser.add_argument("--ramp-up-seconds", type=float, default=float(os.environ.get("MONEYBOT_LOAD_TEST_RAMP_UP_SECONDS", "0")), help="Randomly stagger virtual-user startup over this many seconds.")
     parser.add_argument("--endpoint", action="append", dest="endpoints", help="Endpoint path to include; repeat to override defaults.")
     parser.add_argument("--output", default=os.environ.get("MONEYBOT_LOAD_TEST_OUTPUT", "data/load_test_200_vu_report.json"))
     parser.add_argument("--max-failure-rate", type=float, default=float(os.environ.get("MONEYBOT_LOAD_TEST_MAX_FAILURE_RATE", "0.05")))
@@ -245,9 +277,11 @@ def main() -> int:
         duration_seconds=args.duration_seconds,
         endpoints=tuple(args.endpoints or DEFAULT_ENDPOINTS),
         timeout=args.timeout_seconds,
+        database_timeout=args.database_timeout_seconds,
         think_time_seconds=args.think_time_seconds,
         include_database_flow=args.include_database_flow,
         run_id=args.run_id or None,
+        ramp_up_seconds=args.ramp_up_seconds,
     )
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
