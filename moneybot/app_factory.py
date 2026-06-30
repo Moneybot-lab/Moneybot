@@ -396,6 +396,7 @@ def create_app() -> Flask:
         TRACK_B_PROMOTION_TOKEN=os.environ.get("TRACK_B_PROMOTION_TOKEN", ""),
         API_RATE_LIMIT_WINDOW_SECONDS=_parse_int_env("API_RATE_LIMIT_WINDOW_SECONDS", 60),
         API_RATE_LIMIT_MAX_REQUESTS=_parse_int_env("API_RATE_LIMIT_MAX_REQUESTS", 120),
+        LOAD_TEST_RATE_LIMIT_TOKEN=os.environ.get("LOAD_TEST_RATE_LIMIT_TOKEN", ""),
         AI_ENABLED=(os.environ.get("AI_ENABLED", "false").lower() == "true"),
         AI_PROVIDER=os.environ.get("AI_PROVIDER", "openai"),
         AI_MODEL=os.environ.get("AI_MODEL", "gpt-5-mini"),

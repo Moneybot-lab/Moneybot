@@ -39,8 +39,8 @@ def test_run_load_test_uses_configured_endpoint(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def request(self, method, url, timeout, json=None):
-            calls.append((method, url, timeout, json))
+        def request(self, method, url, timeout, json=None, headers=None):
+            calls.append((method, url, timeout, json, headers))
             if url.endswith("/api/auth/signup") or url.endswith("/api/user-watchlist") and method == "POST":
                 return FakeResponse(201)
             return FakeResponse(200)
@@ -64,7 +64,7 @@ def test_run_load_test_uses_configured_endpoint(monkeypatch):
     )
 
     assert report["requests"] == 1
-    assert calls == [("GET", "https://moneybot.test/api/model-health", 3, None)]
+    assert calls == [("GET", "https://moneybot.test/api/model-health", 3, None, None)]
 
 
 def test_database_probe_requests_are_unique_per_user():
@@ -78,7 +78,7 @@ def test_database_probe_requests_are_unique_per_user():
         "/api/auth/signup",
         "/api/auth/login",
         "/api/user-watchlist",
-        "/api/user-watchlist",
+        "/api/user-watchlist?skip_market_data=1",
         "/api/portfolio-summary?skip_market_data=1",
     ]
     assert first[0][3] == {201, 409}
@@ -103,8 +103,8 @@ def test_database_flow_uses_database_timeout_and_ramp_up(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def request(self, method, url, timeout, json=None):
-            calls.append((method, url, timeout, json))
+        def request(self, method, url, timeout, json=None, headers=None):
+            calls.append((method, url, timeout, json, headers))
             if url.endswith("/api/auth/signup") or (url.endswith("/api/user-watchlist") and method == "POST"):
                 return FakeResponse(201)
             return FakeResponse(200)
@@ -134,6 +134,7 @@ def test_database_flow_uses_database_timeout_and_ramp_up(monkeypatch):
     assert report["database_flow_enabled"] is True
     assert len(calls) == 6
     assert calls[0][:3] == ("POST", "https://moneybot.test/api/auth/signup", 30)
+    assert calls[3][:3] == ("GET", "https://moneybot.test/api/user-watchlist?skip_market_data=1", 30)
     assert calls[4][:3] == ("GET", "https://moneybot.test/api/portfolio-summary?skip_market_data=1", 30)
     assert calls[5][:3] == ("GET", "https://moneybot.test/api/model-health", 3)
     assert len(sleeps) == 1
@@ -156,8 +157,8 @@ def test_database_flow_stops_after_auth_setup_failure(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def request(self, method, url, timeout, json=None):
-            calls.append((method, url, timeout, json))
+        def request(self, method, url, timeout, json=None, headers=None):
+            calls.append((method, url, timeout, json, headers))
             return FakeResponse(500)
 
     monotonic_values = iter([0.0, 1.5])
@@ -183,4 +184,44 @@ def test_database_flow_stops_after_auth_setup_failure(monkeypatch):
     assert report["failures"] == 1
     assert report["sample_failures"][0]["request_id"] == "req-failed"
     assert report["sample_failures"][0]["response_excerpt"] == "server error"
-    assert calls == [("POST", "https://moneybot.test/api/auth/signup", 30, calls[0][3])]
+    assert calls == [("POST", "https://moneybot.test/api/auth/signup", 30, calls[0][3], None)]
+
+
+def test_rate_limit_token_is_sent_as_header(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+        headers = {}
+
+    class FakeSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def request(self, method, url, timeout, json=None, headers=None):
+            calls.append(headers)
+            return FakeResponse()
+
+    monotonic_values = iter([0.0, 0.5, 1.5])
+
+    def fake_monotonic():
+        return next(monotonic_values)
+
+    monkeypatch.setattr(load_test.requests, "Session", FakeSession)
+    monkeypatch.setattr(load_test.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(load_test.time, "sleep", lambda _: None)
+
+    load_test.run_load_test(
+        base_url="https://moneybot.test",
+        users=1,
+        duration_seconds=1,
+        endpoints=("/api/model-health",),
+        think_time_seconds=0,
+        rate_limit_token="secret-load-test",
+    )
+
+    assert calls == [{"X-Load-Test-Token": "secret-load-test"}]

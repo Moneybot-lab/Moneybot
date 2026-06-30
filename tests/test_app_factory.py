@@ -86,11 +86,13 @@ def test_create_app_reads_api_rate_limit_settings(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
     monkeypatch.setenv("API_RATE_LIMIT_WINDOW_SECONDS", "30")
     monkeypatch.setenv("API_RATE_LIMIT_MAX_REQUESTS", "500")
+    monkeypatch.setenv("LOAD_TEST_RATE_LIMIT_TOKEN", "test-token")
 
     app = create_app()
 
     assert app.config["API_RATE_LIMIT_WINDOW_SECONDS"] == 30
     assert app.config["API_RATE_LIMIT_MAX_REQUESTS"] == 500
+    assert app.config["LOAD_TEST_RATE_LIMIT_TOKEN"] == "test-token"
 
 
 def test_create_app_reads_ai_timeout_and_cooldown(monkeypatch):

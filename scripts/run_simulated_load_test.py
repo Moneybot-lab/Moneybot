@@ -52,12 +52,13 @@ def _request_once(
     method: str = "GET",
     json_payload: dict | None = None,
     expected_statuses: set[int] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> RequestResult:
     url = f"{base_url.rstrip('/')}{endpoint}"
     started = time.perf_counter()
     method = method.upper()
     try:
-        response = session.request(method, url, timeout=timeout, json=json_payload)
+        response = session.request(method, url, timeout=timeout, json=json_payload, headers=headers)
         elapsed_ms = (time.perf_counter() - started) * 1000
         ok = response.status_code in expected_statuses if expected_statuses is not None else response.status_code < 500
         response_excerpt = None
@@ -105,7 +106,7 @@ def _database_probe_requests(user_id: int, run_id: str) -> list[tuple[str, str, 
             {201, 409},
             False,
         ),
-        ("GET", "/api/user-watchlist", None, {200}, False),
+        ("GET", "/api/user-watchlist?skip_market_data=1", None, {200}, False),
         ("GET", "/api/portfolio-summary?skip_market_data=1", None, {200}, False),
     ]
 
@@ -123,6 +124,7 @@ def _virtual_user(
     include_database_flow: bool,
     run_id: str,
     ramp_up_seconds: float,
+    headers: dict[str, str] | None,
 ) -> list[RequestResult]:
     rng = random.Random(user_id)
     results: list[RequestResult] = []
@@ -139,6 +141,7 @@ def _virtual_user(
                     method=method,
                     json_payload=payload,
                     expected_statuses=expected_statuses,
+                    headers=headers,
                 )
                 results.append(result)
                 if stop_on_failure and not result.ok:
@@ -146,7 +149,7 @@ def _virtual_user(
 
         while time.monotonic() < stop_at:
             endpoint = rng.choice(endpoints)
-            results.append(_request_once(base_url, endpoint, timeout, session))
+            results.append(_request_once(base_url, endpoint, timeout, session, headers=headers))
             if think_time_seconds > 0:
                 time.sleep(rng.uniform(0, think_time_seconds))
     return results
@@ -224,6 +227,7 @@ def run_load_test(
     include_database_flow: bool = False,
     run_id: str | None = None,
     ramp_up_seconds: float = 0.0,
+    rate_limit_token: str = "",
 ) -> dict:
     if users < 1:
         raise ValueError("users must be at least 1")
@@ -242,6 +246,7 @@ def run_load_test(
     stop_at = time.monotonic() + duration_seconds
     run_id = (run_id or uuid4().hex[:10]).lower()
     all_results: list[RequestResult] = []
+    headers = {"X-Load-Test-Token": rate_limit_token} if rate_limit_token else None
     with concurrent.futures.ThreadPoolExecutor(max_workers=users, thread_name_prefix="moneybot-vu") as executor:
         futures = [
             executor.submit(
@@ -257,6 +262,7 @@ def run_load_test(
                 include_database_flow=include_database_flow,
                 run_id=run_id,
                 ramp_up_seconds=ramp_up_seconds,
+                headers=headers,
             )
             for user_id in range(users)
         ]
@@ -287,6 +293,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default=os.environ.get("MONEYBOT_LOAD_TEST_OUTPUT", "data/load_test_200_vu_report.json"))
     parser.add_argument("--max-failure-rate", type=float, default=float(os.environ.get("MONEYBOT_LOAD_TEST_MAX_FAILURE_RATE", "0.05")))
     parser.add_argument("--max-throttle-rate", type=float, default=float(os.environ.get("MONEYBOT_LOAD_TEST_MAX_THROTTLE_RATE", "0.05")), help="Exit non-zero when HTTP 429 responses exceed this rate.")
+    parser.add_argument("--rate-limit-token", default=os.environ.get("MONEYBOT_LOAD_TEST_RATE_LIMIT_TOKEN", ""), help="Optional token sent as X-Load-Test-Token to bypass rate limiting when the server is configured with LOAD_TEST_RATE_LIMIT_TOKEN.")
     parser.add_argument("--include-database-flow", action="store_true", default=os.environ.get("MONEYBOT_LOAD_TEST_INCLUDE_DATABASE_FLOW", "false").lower() == "true", help="Have each virtual user create/login/read/write portfolio data to exercise the database.")
     parser.add_argument("--run-id", default=os.environ.get("MONEYBOT_LOAD_TEST_RUN_ID", ""), help="Unique suffix for database test users; defaults to a random value.")
     return parser.parse_args()
@@ -305,6 +312,7 @@ def main() -> int:
         include_database_flow=args.include_database_flow,
         run_id=args.run_id or None,
         ramp_up_seconds=args.ramp_up_seconds,
+        rate_limit_token=args.rate_limit_token,
     )
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
