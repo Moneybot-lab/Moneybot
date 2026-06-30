@@ -27,8 +27,10 @@ def test_run_load_test_uses_configured_endpoint(monkeypatch):
     calls = []
 
     class FakeResponse:
-        def __init__(self, status_code=200):
+        def __init__(self, status_code=200, text=""):
             self.status_code = status_code
+            self.text = text
+            self.headers = {"X-Request-ID": "req-test"}
 
     class FakeSession:
         def __enter__(self):
@@ -89,8 +91,10 @@ def test_database_flow_uses_database_timeout_and_ramp_up(monkeypatch):
     sleeps = []
 
     class FakeResponse:
-        def __init__(self, status_code=200):
+        def __init__(self, status_code=200, text=""):
             self.status_code = status_code
+            self.text = text
+            self.headers = {"X-Request-ID": "req-test"}
 
     class FakeSession:
         def __enter__(self):
@@ -140,8 +144,10 @@ def test_database_flow_stops_after_auth_setup_failure(monkeypatch):
     calls = []
 
     class FakeResponse:
-        def __init__(self, status_code):
+        def __init__(self, status_code, text="server error"):
             self.status_code = status_code
+            self.text = text
+            self.headers = {"X-Request-ID": "req-failed"}
 
     class FakeSession:
         def __enter__(self):
@@ -175,4 +181,6 @@ def test_database_flow_stops_after_auth_setup_failure(monkeypatch):
 
     assert report["requests"] == 1
     assert report["failures"] == 1
+    assert report["sample_failures"][0]["request_id"] == "req-failed"
+    assert report["sample_failures"][0]["response_excerpt"] == "server error"
     assert calls == [("POST", "https://moneybot.test/api/auth/signup", 30, calls[0][3])]

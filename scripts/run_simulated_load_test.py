@@ -39,6 +39,8 @@ class RequestResult:
     ok: bool
     method: str = "GET"
     error: str | None = None
+    request_id: str | None = None
+    response_excerpt: str | None = None
 
 
 def _request_once(
@@ -58,6 +60,9 @@ def _request_once(
         response = session.request(method, url, timeout=timeout, json=json_payload)
         elapsed_ms = (time.perf_counter() - started) * 1000
         ok = response.status_code in expected_statuses if expected_statuses is not None else response.status_code < 500
+        response_excerpt = None
+        if not ok:
+            response_excerpt = response.text[:500] if response.text else None
         return RequestResult(
             endpoint=endpoint,
             status_code=response.status_code,
@@ -65,6 +70,8 @@ def _request_once(
             ok=ok,
             method=method,
             error=None if ok else f"HTTP {response.status_code}",
+            request_id=response.headers.get("X-Request-ID"),
+            response_excerpt=response_excerpt,
         )
     except requests.RequestException as exc:
         elapsed_ms = (time.perf_counter() - started) * 1000
