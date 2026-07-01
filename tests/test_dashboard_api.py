@@ -1619,3 +1619,46 @@ def test_promote_track_b_candidate_uploads_and_runs_promotion(monkeypatch, tmp_p
         "--production-model",
         str(tmp_path / "day1_baseline_model.json"),
     ]
+
+
+def test_user_watchlist_can_skip_market_data_enrichment(monkeypatch):
+    client = _client()
+    client.post("/api/auth/signup", json=_signup_payload("watchlistskip@example.com"))
+    client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": "100", "shares": "2"})
+
+    svc = client.application.extensions["market_data_service"]
+
+    def fail_if_called(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("market data service should not be called when skip_market_data=1")
+
+    monkeypatch.setattr(svc, "get_quote", fail_if_called)
+    monkeypatch.setattr(svc, "get_signal", fail_if_called)
+
+    response = client.get("/api/user-watchlist?skip_market_data=1")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert len(payload["items"]) == 1
+    assert payload["enriched_items"] == []
+
+
+def test_portfolio_summary_can_skip_market_data_enrichment(monkeypatch):
+    client = _client()
+    client.post("/api/auth/signup", json=_signup_payload("summaryskip@example.com"))
+    client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": "100", "shares": "2"})
+
+    svc = client.application.extensions["market_data_service"]
+
+    def fail_if_called(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("market data service should not be called when skip_market_data=1")
+
+    monkeypatch.setattr(svc, "get_quote", fail_if_called)
+    monkeypatch.setattr(svc, "get_signal", fail_if_called)
+    monkeypatch.setattr(svc, "get_sector", fail_if_called, raising=False)
+
+    response = client.get("/api/portfolio-summary?skip_market_data=1")
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["total_value"] == 200.0
+    assert payload["positions"] == 1
