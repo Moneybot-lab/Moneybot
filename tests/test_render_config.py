@@ -9,4 +9,5 @@ def test_render_web_service_uses_gunicorn_not_flask_dev_server():
     assert "gunicorn app:app" in config
     assert "--workers ${WEB_CONCURRENCY:-2}" in config
     assert "--threads ${WEB_THREADS:-4}" in config
+    assert "--bind 0.0.0.0:$PORT" in config
     assert "python app.py" not in config
