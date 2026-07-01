@@ -364,20 +364,26 @@ def _request_context_setup():
 
 
 _RATE: dict[Tuple[str, str], deque] = defaultdict(deque)
-WINDOW_SECONDS = 60
-MAX_REQUESTS_PER_WINDOW = 120
+DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60
+DEFAULT_RATE_LIMIT_MAX_REQUESTS = 120
 
 
 @api_bp.before_request
 def _basic_rate_limit():
+    load_test_token = str(current_app.config.get("LOAD_TEST_RATE_LIMIT_TOKEN") or "").strip()
+    if load_test_token and request.headers.get("X-Load-Test-Token") == load_test_token:
+        return None
+
     ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(","
     )[0].strip()
     key = (ip, request.endpoint or "")
     now = time.time()
     dq = _RATE[key]
-    while dq and now - dq[0] > WINDOW_SECONDS:
+    window_seconds = max(1, int(current_app.config.get("API_RATE_LIMIT_WINDOW_SECONDS") or DEFAULT_RATE_LIMIT_WINDOW_SECONDS))
+    max_requests = max(1, int(current_app.config.get("API_RATE_LIMIT_MAX_REQUESTS") or DEFAULT_RATE_LIMIT_MAX_REQUESTS))
+    while dq and now - dq[0] > window_seconds:
         dq.popleft()
-    if len(dq) >= MAX_REQUESTS_PER_WINDOW:
+    if len(dq) >= max_requests:
         return jsonify({"error": "rate limit exceeded", "request_id": g.request_id}), 429
     dq.append(now)
 
@@ -1351,6 +1357,10 @@ def user_watchlist():
         .all()
     )
     base_items = [_watchlist_item_payload(i) for i in items]
+    skip_market_data = str(request.args.get("skip_market_data") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if skip_market_data:
+        return jsonify({"items": base_items, "enriched_items": [], "request_id": g.request_id})
+
     _register_stream_demand(f"portfolio:{session['user_id']}", {str(item.get("symbol") or "") for item in base_items})
 
     svc = current_app.extensions.get("market_data_service")
@@ -1928,7 +1938,8 @@ def portfolio_summary():
         .all()
     )
 
-    svc = current_app.extensions.get("market_data_service")
+    skip_market_data = str(request.args.get("skip_market_data") or "").strip().lower() in {"1", "true", "yes", "on"}
+    svc = None if skip_market_data else current_app.extensions.get("market_data_service")
     total_value = 0.0
     score_values: list[float] = []
     sector_totals: Dict[str, float] = defaultdict(float)
