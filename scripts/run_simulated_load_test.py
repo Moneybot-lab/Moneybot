@@ -32,6 +32,10 @@ DEFAULT_ENDPOINTS = (
 )
 
 
+def _p95(latencies: list[float]) -> float | None:
+    return round(statistics.quantiles(latencies, n=100)[94], 2) if len(latencies) >= 100 else None
+
+
 @dataclass(frozen=True)
 class RequestResult:
     endpoint: str
@@ -170,7 +174,8 @@ def summarize(
     latencies = [row.elapsed_ms for row in rows]
     failures = [row for row in rows if not row.ok]
     throttled = [row for row in rows if row.status_code == 429]
-    by_endpoint: dict[str, dict[str, float | int | dict[str, int]]] = {}
+    latencies_by_endpoint: dict[str, list[float]] = {}
+    by_endpoint: dict[str, dict[str, float | int | dict[str, int] | None]] = {}
     for row in rows:
         stats = by_endpoint.setdefault(
             row.endpoint,
@@ -179,13 +184,15 @@ def summarize(
         stats["requests"] += 1
         stats["failures"] += 0 if row.ok else 1
         stats["avg_ms"] += row.elapsed_ms
+        latencies_by_endpoint.setdefault(row.endpoint, []).append(row.elapsed_ms)
         status_key = str(row.status_code) if row.status_code is not None else "timeout_or_connection_error"
         status_counts = stats["status_counts"]
         if isinstance(status_counts, dict):
             status_counts[status_key] = int(status_counts.get(status_key, 0)) + 1
-    for stats in by_endpoint.values():
+    for endpoint, stats in by_endpoint.items():
         count = int(stats["requests"])
         stats["avg_ms"] = round(float(stats["avg_ms"]) / count, 2) if count else 0.0
+        stats["p95_ms"] = _p95(latencies_by_endpoint.get(endpoint, []))
 
     return {
         "schema_version": "moneybot.load_test.v1",
@@ -204,7 +211,7 @@ def summarize(
         "latency_ms": {
             "min": round(min(latencies), 2) if latencies else None,
             "avg": round(statistics.fmean(latencies), 2) if latencies else None,
-            "p95": round(statistics.quantiles(latencies, n=100)[94], 2) if len(latencies) >= 100 else None,
+            "p95": _p95(latencies),
             "max": round(max(latencies), 2) if latencies else None,
         },
         "by_endpoint": by_endpoint,
@@ -294,6 +301,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", default=os.environ.get("MONEYBOT_LOAD_TEST_OUTPUT", "data/load_test_200_vu_report.json"))
     parser.add_argument("--max-failure-rate", type=float, default=float(os.environ.get("MONEYBOT_LOAD_TEST_MAX_FAILURE_RATE", "0.05")))
     parser.add_argument("--max-throttle-rate", type=float, default=float(os.environ.get("MONEYBOT_LOAD_TEST_MAX_THROTTLE_RATE", "0.05")), help="Exit non-zero when HTTP 429 responses exceed this rate.")
+    parser.add_argument("--max-p95-ms", type=float, default=float(os.environ.get("MONEYBOT_LOAD_TEST_MAX_P95_MS", "0")), help="Optional global p95 latency threshold in milliseconds; 0 disables this gate.")
     parser.add_argument("--rate-limit-token", default=os.environ.get("MONEYBOT_LOAD_TEST_RATE_LIMIT_TOKEN", ""), help="Optional token sent as X-Load-Test-Token to bypass rate limiting when the server is configured with LOAD_TEST_RATE_LIMIT_TOKEN.")
     parser.add_argument("--include-database-flow", action="store_true", default=os.environ.get("MONEYBOT_LOAD_TEST_INCLUDE_DATABASE_FLOW", "false").lower() == "true", help="Have each virtual user create/login/read/write portfolio data to exercise the database.")
     parser.add_argument("--run-id", default=os.environ.get("MONEYBOT_LOAD_TEST_RUN_ID", ""), help="Unique suffix for database test users; defaults to a random value.")
@@ -325,6 +333,9 @@ def main() -> int:
     if report["failure_rate"] > args.max_failure_rate:
         return 1
     if report["throttle_rate"] > args.max_throttle_rate:
+        return 1
+    p95_ms = report.get("latency_ms", {}).get("p95")
+    if args.max_p95_ms > 0 and isinstance(p95_ms, (int, float)) and p95_ms > args.max_p95_ms:
         return 1
     return 0
 

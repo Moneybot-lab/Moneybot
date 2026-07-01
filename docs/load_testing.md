@@ -15,13 +15,14 @@ python scripts/run_simulated_load_test.py \
   --database-timeout-seconds 30 \
   --ramp-up-seconds 15 \
   --max-throttle-rate 0.05 \
+  --max-p95-ms 5000 \
   --rate-limit-token "$MONEYBOT_LOAD_TEST_RATE_LIMIT_TOKEN" \
   --output data/render_load_test_200_vu_report.json
 ```
 
 This exercises:
 
-- **Response time**: captured in the JSON report as `latency_ms.min`, `latency_ms.avg`, `latency_ms.p95`, and `latency_ms.max`.
+- **Response time**: captured in the JSON report as `latency_ms.min`, `latency_ms.avg`, `latency_ms.p95`, `latency_ms.max`, and per-endpoint `p95_ms`.
 - **Errors and throttling**: captured as `failures`, `failure_rate`, `throttled`, `throttle_rate`, per-endpoint failures, per-endpoint `status_counts`, and `sample_failures`.
 - **Database**: each virtual user signs up, logs in, writes a watchlist row, reads the watchlist, and reads the portfolio summary when `--include-database-flow` is set. The load-test watchlist and portfolio summary reads use `skip_market_data=1` so this flow measures authenticated database reads without extra quote/signal enrichment calls.
 - **Render CPU and RAM**: inspect the same test window in the Render service Metrics page. Render exposes CPU and memory usage in the dashboard's Application Metrics section; use the report's `test_window_utc` and `duration_seconds` to line up the graph window.
@@ -72,6 +73,7 @@ Override the request mix by passing one or more `--endpoint` flags.
 - `MONEYBOT_LOAD_TEST_OUTPUT`
 - `MONEYBOT_LOAD_TEST_MAX_FAILURE_RATE`
 - `MONEYBOT_LOAD_TEST_MAX_THROTTLE_RATE`
+- `MONEYBOT_LOAD_TEST_MAX_P95_MS`
 - `MONEYBOT_LOAD_TEST_RATE_LIMIT_TOKEN`
 - `MONEYBOT_LOAD_TEST_INCLUDE_DATABASE_FLOW`
 - `MONEYBOT_LOAD_TEST_RUN_ID`

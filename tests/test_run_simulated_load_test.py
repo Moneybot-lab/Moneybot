@@ -20,6 +20,7 @@ def test_summarize_reports_200_virtual_users():
     assert report["throttled"] == 1
     assert report["throttle_rate"] == 0.3333
     assert report["by_endpoint"]["/api/model-health"]["requests"] == 1
+    assert "p95_ms" in report["by_endpoint"]["/api/model-health"]
     assert report["by_endpoint"]["/api/quote?symbol=AAPL"]["status_counts"] == {"503": 1, "429": 1}
 
 
@@ -236,3 +237,26 @@ def test_parse_args_rejects_empty_rate_limit_token(monkeypatch):
         assert exc.code == 2
     else:  # pragma: no cover
         raise AssertionError("parse_args should reject an explicitly empty rate-limit token")
+
+
+def test_main_fails_when_p95_exceeds_threshold(monkeypatch, tmp_path):
+    report = {
+        "failure_rate": 0.0,
+        "throttle_rate": 0.0,
+        "latency_ms": {"p95": 6000.0},
+    }
+
+    monkeypatch.setattr(load_test, "run_load_test", lambda **kwargs: report)
+    monkeypatch.setattr(
+        load_test.sys,
+        "argv",
+        [
+            "run_simulated_load_test.py",
+            "--max-p95-ms",
+            "5000",
+            "--output",
+            str(tmp_path / "report.json"),
+        ],
+    )
+
+    assert load_test.main() == 1
