@@ -89,7 +89,9 @@ def test_get_quote_falls_back_to_yfinance_without_finnhub_key(monkeypatch):
     quote = svc.get_quote("MSFT")
 
     assert quote["quote_source"] == "yfinance"
-    assert quote["live_data_available"] is True
+    assert quote["live_data_available"] is False
+    assert quote["is_stale"] is True
+    assert "freshness_unknown" in quote["quality_flags"]
     assert quote["price"] == 250.0
     assert quote["diagnostics"]["finnhub_attempted"] is False
     assert quote["diagnostics"]["finnhub_error"] == "missing_api_key"
@@ -234,6 +236,47 @@ def test_get_quote_uses_massive_primary_when_configured(monkeypatch):
     assert captured["params"]["apiKey"] == "massive-key"
 
 
+def test_get_quote_uses_massive_minute_trade_when_day_close_zero(monkeypatch):
+    svc = MarketDataService()
+
+    monkeypatch.setenv("MASSIVE_API_KEY", "massive-key")
+    monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
+    monkeypatch.delenv("FINNHUB_TOKEN", raising=False)
+    monkeypatch.delenv("X_FINNHUB_TOKEN", raising=False)
+
+    class DummyResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            now_ns = int(datetime.now().timestamp() * 1_000_000_000)
+            return {
+                "ticker": {
+                    "ticker": "MRLN",
+                    "todaysChangePerc": 29.6685,
+                    "day": {"o": 0, "h": 0, "l": 0, "c": 0, "v": 0, "vw": 0},
+                    "lastQuote": {"P": 9.32, "p": 9.31, "t": now_ns},
+                    "lastTrade": {"p": 9.3102, "t": now_ns},
+                    "min": {"c": 9.3307, "vw": 9.3552, "t": now_ns // 1_000_000},
+                    "prevDay": {"c": 7.18},
+                },
+                "status": "OK",
+            }
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        return DummyResponse()
+
+    monkeypatch.setattr("moneybot.services.market_data.requests.get", fake_get)
+
+    quote = svc.get_quote("MRLN")
+
+    assert quote["quote_source"] == "massive"
+    assert quote["price"] == 9.3102
+    assert quote["live_data_available"] is True
+    assert round(quote["change_percent"], 2) == 29.67
+    assert quote["diagnostics"]["massive_price_source"] == "last_trade"
+
+
 def test_get_quote_falls_back_to_finnhub_when_massive_unavailable(monkeypatch):
     svc = MarketDataService()
 
@@ -360,17 +403,15 @@ def test_get_company_snapshot_skips_placeholder_news(monkeypatch):
         ]
 
     monkeypatch.setattr("moneybot.services.market_data.yf.Ticker", lambda _symbol: DummyTicker())
+    monkeypatch.setattr(svc, "_google_news_headlines", lambda *_args, **_kwargs: [])
 
     snapshot = svc.get_company_snapshot("LCID")
 
     assert snapshot["company_name"] == "Lucid Group, Inc."
-    assert snapshot["latest_news"] == [
-        {
-            "title": "Valid headline",
-            "publisher": "Reuters",
-            "link": "https://example.com/b",
-        }
-    ]
+    assert len(snapshot["latest_news"]) == 1
+    assert snapshot["latest_news"][0]["title"] == "Valid headline"
+    assert snapshot["latest_news"][0]["publisher"] == "Reuters"
+    assert snapshot["latest_news"][0]["link"] == "https://example.com/b"
 
 
 def test_get_quote_uses_twelve_data_when_massive_and_finnhub_unavailable(monkeypatch):
@@ -771,6 +812,7 @@ def test_get_hot_momentum_buys_does_not_let_hold_model_empty_rule_candidates(mon
     out = svc.get_hot_momentum_buys()
 
     assert len(out) == 20
+    assert {item["decision_source"] for item in out} <= {"deterministic_model", "rule_based"}
     assert out[0]["decision_source"] == "rule_based"
     assert out[0]["score"] >= 8.0
     assert out[0]["model_version"] == "alpha-atlas-v1"
@@ -804,13 +846,13 @@ def test_dynamic_hot_momentum_candidates_reads_yahoo_screeners(monkeypatch):
     ]
 
 
-def test_get_hot_momentum_buys_includes_dynamic_early_breakout_scanner_names(monkeypatch):
+def test_get_breakout_radar_includes_dynamic_early_breakout_scanner_names(monkeypatch):
     svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
 
     monkeypatch.setattr(
         svc,
         "_dynamic_hot_momentum_candidates",
-        lambda: [
+        lambda *args, **kwargs: [
             {
                 "symbol": "ASTC",
                 "price": 3.2,
@@ -831,15 +873,15 @@ def test_get_hot_momentum_buys_includes_dynamic_early_breakout_scanner_names(mon
         lambda symbol: {"symbol": symbol, "action": "HOLD" if symbol == "ASTC" else "BUY", "score": 8.0, "technical": {}, "volume_ratio": 12.0 if symbol == "ASTC" else 1.0, "reasons": [f"{symbol} signal"]},
     )
 
-    out = svc.get_hot_momentum_buys()
+    out = svc.get_breakout_radar()
     astc = next(item for item in out if item["symbol"] == "ASTC")
 
-    assert astc["decision_source"] in {"explosive_watchlist", "scanner:small_cap_gainers"}
+    assert astc["decision_source"] == "scanner:small_cap_gainers"
     assert astc["score"] >= 9.0
     assert "Early momentum alert" in astc["rationale"]
 
 
-def test_get_hot_momentum_buys_returns_empty_without_trustworthy_scores(monkeypatch):
+def test_get_hot_momentum_buys_uses_curated_seed_when_live_score_is_missing(monkeypatch):
     svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
     _disable_hot_momentum_scanner(monkeypatch, svc)
 
@@ -856,7 +898,9 @@ def test_get_hot_momentum_buys_returns_empty_without_trustworthy_scores(monkeypa
 
     out = svc.get_hot_momentum_buys()
 
-    assert out == []
+    assert len(out) == 20
+    assert all(item["score_basis"] == "watchlist_seed" for item in out)
+    assert all(any("curated watchlist seed" in component for component in item["score_components"]) for item in out)
 
 
 def test_get_hot_momentum_buys_exposes_live_signal_score_basis(monkeypatch):
@@ -911,6 +955,7 @@ def test_get_hot_momentum_buys_does_not_let_hold_model_empty_rule_candidates(mon
     out = svc.get_hot_momentum_buys()
 
     assert len(out) == 20
+    assert {item["decision_source"] for item in out} <= {"deterministic_model", "rule_based"}
     assert out[0]["decision_source"] == "rule_based"
     assert out[0]["score"] >= 8.0
     assert out[0]["model_version"] == "alpha-atlas-v1"
@@ -944,13 +989,13 @@ def test_dynamic_hot_momentum_candidates_reads_yahoo_screeners(monkeypatch):
     ]
 
 
-def test_get_hot_momentum_buys_includes_dynamic_early_breakout_scanner_names(monkeypatch):
+def test_get_breakout_radar_includes_dynamic_early_breakout_scanner_names(monkeypatch):
     svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
 
     monkeypatch.setattr(
         svc,
         "_dynamic_hot_momentum_candidates",
-        lambda: [
+        lambda *args, **kwargs: [
             {
                 "symbol": "ASTC",
                 "price": 3.2,
@@ -971,7 +1016,7 @@ def test_get_hot_momentum_buys_includes_dynamic_early_breakout_scanner_names(mon
         lambda symbol: {"symbol": symbol, "action": "HOLD" if symbol == "ASTC" else "BUY", "score": 8.0, "technical": {}, "volume_ratio": 12.0 if symbol == "ASTC" else 1.0, "reasons": [f"{symbol} signal"]},
     )
 
-    out = svc.get_hot_momentum_buys()
+    out = svc.get_breakout_radar()
     astc = next(item for item in out if item["symbol"] == "ASTC")
 
     assert astc["decision_source"] == "scanner:small_cap_gainers"
@@ -1029,3 +1074,223 @@ def test_get_hot_momentum_buys_enforces_score_floor_when_market_not_down(monkeyp
 
     out = svc.get_hot_momentum_buys()
     assert all(float(item["score"]) >= 5.0 for item in out)
+
+
+def test_get_signal_can_skip_company_snapshot(monkeypatch):
+    from trade_signal import SignalResult
+
+    svc = MarketDataService()
+    snapshot_calls = {"count": 0}
+
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda symbol: {"symbol": symbol, "price": 10.0, "change_percent": 1.0, "live_data_available": True},
+    )
+    monkeypatch.setattr(
+        "moneybot.services.market_data.analyze_ticker",
+        lambda symbol: SignalResult(
+            ticker=symbol,
+            price=10.0,
+            rsi=45.0,
+            macd_hist=0.1,
+            volume_today=1000,
+            volume_ratio=1.2,
+            score=7.1,
+            verdict="BUY",
+            reasons=["Momentum improved."],
+        ),
+    )
+
+    def fake_snapshot(symbol):
+        snapshot_calls["count"] += 1
+        return {"latest_news": [{"title": "Good news", "publisher": "Reuters"}]}
+
+    monkeypatch.setattr(svc, "get_company_snapshot", fake_snapshot)
+
+    signal = svc.get_signal("AAPL", include_company_snapshot=False)
+
+    assert signal["symbol"] == "AAPL"
+    assert signal["score"] == 7.1
+    assert signal["sentiment"]["headlines"] == []
+    assert snapshot_calls["count"] == 0
+
+
+def test_get_price_history_prefers_split_adjusted_massive_bars(monkeypatch):
+    svc = MarketDataService()
+    monkeypatch.setenv("MASSIVE_API_KEY", "massive-key")
+
+    class Response:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return {
+                "status": "OK",
+                "request_id": "history-1",
+                "adjusted": True,
+                "results": [
+                    {"o": 100, "h": 102, "l": 99, "c": 101, "v": 1000, "t": 1780704000000},
+                    {"o": 101, "h": 104, "l": 100, "c": 103, "v": 1200, "t": 1780790400000},
+                ],
+            }
+
+    monkeypatch.setattr("moneybot.services.market_data.requests.get", lambda *args, **kwargs: Response())
+
+    data = svc.get_price_history_data("AAPL", days=2)
+
+    assert data["closes"] == [101.0, 103.0]
+    assert data["source"] == "massive"
+    assert data["adjusted_for_splits"] is True
+    assert data["dividend_adjusted"] is False
+    assert data["mixed_sources"] is False
+    assert svc.get_provider_health()["massive"]["calls"]["aggregates_day"] == 1
+
+
+def test_massive_close_series_drives_normalized_technical_indicators():
+    increasing = [100.0 + index for index in range(40)]
+
+    rsi, macd_histogram = MarketDataService._technical_indicators_from_closes(increasing)
+
+    assert rsi == 100.0
+    assert isinstance(macd_histogram, float)
+    assert macd_histogram > 0
+
+
+def test_market_data_service_does_not_label_stale_massive_daily_close_live(monkeypatch):
+    svc = MarketDataService()
+    monkeypatch.setenv("MASSIVE_API_KEY", "massive-key")
+
+    class Response:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return {"status": "OK", "ticker": {"day": {"c": 150.0}, "prevDay": {"c": 149.0}}}
+
+    monkeypatch.setattr("moneybot.services.market_data.requests.get", lambda *args, **kwargs: Response())
+
+    quote = svc.get_quote("AAPL")
+
+    assert quote["quote_source"] == "massive"
+    assert quote["price"] == 150.0
+    assert quote["is_stale"] is True
+    assert quote["live_data_available"] is False
+    assert "daily_close_not_realtime" in quote["quality_flags"]
+
+
+def test_stable_watchlist_keeps_company_transparency_when_quote_signal_is_unavailable(monkeypatch):
+    svc = MarketDataService()
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda symbol: {"symbol": symbol, "price": None, "change_percent": None, "live_data_available": False, "quote_source": "none"},
+    )
+    monkeypatch.setattr(
+        svc,
+        "get_signal",
+        lambda symbol: {
+            "symbol": symbol,
+            "action": "HOLD",
+            "score": None,
+            "quote_data_available": False,
+            "reasons": ["Signal skipped because quote data was unavailable."],
+        },
+    )
+
+    stable = svc.get_stable_watchlist()
+
+    assert len(stable) == 5
+    assert all("Signal skipped" not in item["transparency"] for item in stable)
+    assert stable[0]["transparency"] == "Strong balance sheet and recurring revenue."
+    assert stable[0]["live_data_available"] is False
+
+
+def test_hot_momentum_keeps_ranked_seed_fallback_when_live_data_is_unavailable(monkeypatch):
+    svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
+    _disable_hot_momentum_scanner(monkeypatch, svc)
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda symbol: {"symbol": symbol, "price": None, "change_percent": None, "live_data_available": False, "quote_source": "none"},
+    )
+    monkeypatch.setattr(
+        svc,
+        "get_signal",
+        lambda symbol: {
+            "symbol": symbol,
+            "action": "HOLD",
+            "score": None,
+            "quote_data_available": False,
+            "volume_ratio": None,
+            "reasons": ["Signal skipped because quote data was unavailable."],
+        },
+    )
+
+    momentum = svc.get_hot_momentum_buys()
+
+    assert len(momentum) == 20
+    assert all(item["score_basis"] == "watchlist_seed" for item in momentum)
+    assert all(item["live_data_available"] is False for item in momentum)
+    assert all("Signal skipped" not in item["rationale"] for item in momentum)
+    assert all(any("curated watchlist seed" in part for part in item["score_components"]) for item in momentum)
+
+
+def test_get_quote_single_flights_concurrent_cache_misses(monkeypatch):
+    import concurrent.futures
+    import threading
+    import time
+
+    svc = MarketDataService()
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def fake_fetch(cache_key):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        time.sleep(0.05)
+        payload = {
+            "symbol": cache_key,
+            "price": 123.0,
+            "change_percent": 1.0,
+            "live_data_available": True,
+            "quote_source": "test",
+        }
+        svc.quote_cache.set(cache_key, payload)
+        return payload
+
+    monkeypatch.setattr(svc, "_fetch_quote_uncached", fake_fetch)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _: svc.get_quote("AAPL"), range(8)))
+
+    assert calls == 1
+    assert {result["price"] for result in results} == {123.0}
+
+
+def test_get_signal_single_flights_concurrent_cache_misses(monkeypatch):
+    import concurrent.futures
+    import threading
+    import time
+
+    svc = MarketDataService()
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def fake_fetch(symbol_key, cache_key, *, include_company_snapshot=True):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        time.sleep(0.05)
+        payload = {"symbol": symbol_key, "action": "HOLD", "quote_data_available": True}
+        svc.signal_cache.set(cache_key, payload)
+        return payload
+
+    monkeypatch.setattr(svc, "_fetch_signal_uncached", fake_fetch)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _: svc.get_signal("MSFT"), range(8)))
+
+    assert calls == 1
+    assert {result["action"] for result in results} == {"HOLD"}
