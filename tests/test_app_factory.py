@@ -95,6 +95,17 @@ def test_create_app_reads_api_rate_limit_settings(monkeypatch):
     assert app.config["LOAD_TEST_RATE_LIMIT_TOKEN"] == "test-token"
 
 
+def test_create_app_accepts_moneybot_prefixed_load_test_token(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.delenv("LOAD_TEST_RATE_LIMIT_TOKEN", raising=False)
+    monkeypatch.setenv("MONEYBOT_LOAD_TEST_RATE_LIMIT_TOKEN", "prefixed-token")
+
+    app = create_app()
+
+    assert app.config["LOAD_TEST_RATE_LIMIT_TOKEN"] == "prefixed-token"
+
+
 def test_create_app_reads_ai_timeout_and_cooldown(monkeypatch):
     monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")

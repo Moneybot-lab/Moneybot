@@ -31,7 +31,7 @@ This exercises:
 
 If database endpoints time out while public read-only endpoints stay fast, rerun with `--database-timeout-seconds 30` (or higher) and `--ramp-up-seconds 15` so database setup requests are not all fired at exactly the same instant. The public API timeout remains controlled separately by `--timeout-seconds`.
 
-If the report shows many HTTP `429` responses, the application rate limiter is protecting the service and masking true infrastructure capacity. For launch-readiness tests, either reduce generated request volume, temporarily raise `API_RATE_LIMIT_MAX_REQUESTS`, or configure `LOAD_TEST_RATE_LIMIT_TOKEN` on the target environment and pass the matching `--rate-limit-token` value from your local shell. Before running, verify `echo "$MONEYBOT_LOAD_TEST_RATE_LIMIT_TOKEN"` prints a non-empty value; the script rejects an explicitly empty `--rate-limit-token` argument.
+If the report shows many HTTP `429` responses, the application rate limiter is protecting the service and masking true infrastructure capacity. For launch-readiness tests, either reduce generated request volume, temporarily raise `API_RATE_LIMIT_MAX_REQUESTS`, or configure `LOAD_TEST_RATE_LIMIT_TOKEN` (or `MONEYBOT_LOAD_TEST_RATE_LIMIT_TOKEN`) on the target environment and pass the matching `--rate-limit-token` value from your local shell. Before running, verify `echo "$MONEYBOT_LOAD_TEST_RATE_LIMIT_TOKEN"` prints a non-empty value; the script rejects an explicitly empty `--rate-limit-token` argument.
 
 ## Run the local first simulated load test
 
@@ -82,6 +82,7 @@ For controlled load-test environments, the API limiter can be tuned with:
 
 - `API_RATE_LIMIT_WINDOW_SECONDS` (default: `60`)
 - `API_RATE_LIMIT_MAX_REQUESTS` (default: `120`)
-- `LOAD_TEST_RATE_LIMIT_TOKEN` (optional secret that allows requests with a matching `X-Load-Test-Token` header to bypass the limiter)
+- `LOAD_TEST_RATE_LIMIT_TOKEN` (preferred server-side secret that allows requests with a matching `X-Load-Test-Token` header to bypass the limiter)
+- `MONEYBOT_LOAD_TEST_RATE_LIMIT_TOKEN` (also accepted by the server for consistency with the local load-test runner)
 
-Keep `LOAD_TEST_RATE_LIMIT_TOKEN` secret, only enable it for planned tests, and rotate or remove it after testing. Do not raise limits globally without checking abuse-protection needs for the public site.
+Keep the load-test token secret, only enable it for planned tests, and rotate or remove it after testing. Do not raise limits globally without checking abuse-protection needs for the public site.
