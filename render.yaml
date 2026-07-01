@@ -15,7 +15,7 @@ services:
       else
         echo "No migrations directory found; skipping database migration step."
       fi
-      python app.py
+      gunicorn app:app --bind 0.0.0.0:${PORT:-5000} --workers ${WEB_CONCURRENCY:-2} --threads ${WEB_THREADS:-4} --timeout ${WEB_TIMEOUT:-120}
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.11
