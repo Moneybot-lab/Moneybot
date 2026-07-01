@@ -318,6 +318,43 @@ class MarketDataService:
             {"symbol": "PFE", "price": 28.77, "score": 7.2, "rationale": "Defensive rotation candidate near support."},
         ]
 
+    def get_breakout_radar(self) -> list[Dict[str, Any]]:
+        candidates = self._dynamic_hot_momentum_candidates(screeners=("small_cap_gainers", "day_gainers"))
+        enriched: list[Dict[str, Any]] = []
+        for item in candidates:
+            quote = self.get_quote(item["symbol"])
+            signal = self.get_signal(item["symbol"])
+            merged = dict(item)
+            if isinstance(quote.get("price"), (int, float)):
+                merged["price"] = round(float(quote["price"]), 2)
+            base_score, score_basis, base_components = self._hot_momentum_base_score(item, signal)
+            score, score_components = self._hot_momentum_score_components(
+                base_score=base_score,
+                score_basis=score_basis,
+                base_components=base_components,
+                quote=quote,
+                signal=signal,
+            )
+            if score is not None:
+                merged["score"] = score
+            merged["score_basis"] = score_basis
+            merged["score_components"] = score_components
+            merged["rationale"] = self._early_momentum_reason(
+                self._reason_from_signal(signal, str(item.get("rationale") or "Live breakout scanner candidate.")),
+                quote,
+                signal,
+            )
+            merged["change_percent"] = quote.get("change_percent", item.get("change_percent"))
+            merged["quote_source"] = quote.get("quote_source")
+            merged["live_data_available"] = bool(quote.get("live_data_available"))
+            merged["decision_source"] = str(item.get("candidate_source") or "scanner")
+            enriched.append(merged)
+        return sorted(
+            enriched,
+            key=lambda x: (float(x.get("score") or 0.0), self._change_percent_sort_value(x.get("change_percent"))),
+            reverse=True,
+        )[:20]
+
     def get_wells_picks(self) -> list[Dict[str, Any]]:
         return [
             {"investor": "Warren Buffett", "stocks": [{"ticker": "AAPL", "price": 191.2, "performance": 1.42}, {"ticker": "AXP", "price": 227.1, "performance": 0.81}, {"ticker": "KO", "price": 60.2, "performance": 0.33}, {"ticker": "OXY", "price": 62.6, "performance": -0.48}, {"ticker": "BAC", "price": 37.4, "performance": 0.57}]},
@@ -675,6 +712,43 @@ class MarketDataService:
             {"symbol": "PFE", "price": 28.77, "score": 7.2, "rationale": "Defensive rotation candidate near support."},
         ]
 
+    def get_breakout_radar(self) -> list[Dict[str, Any]]:
+        candidates = self._dynamic_hot_momentum_candidates(screeners=("small_cap_gainers", "day_gainers"))
+        enriched: list[Dict[str, Any]] = []
+        for item in candidates:
+            quote = self.get_quote(item["symbol"])
+            signal = self.get_signal(item["symbol"])
+            merged = dict(item)
+            if isinstance(quote.get("price"), (int, float)):
+                merged["price"] = round(float(quote["price"]), 2)
+            base_score, score_basis, base_components = self._hot_momentum_base_score(item, signal)
+            score, score_components = self._hot_momentum_score_components(
+                base_score=base_score,
+                score_basis=score_basis,
+                base_components=base_components,
+                quote=quote,
+                signal=signal,
+            )
+            if score is not None:
+                merged["score"] = score
+            merged["score_basis"] = score_basis
+            merged["score_components"] = score_components
+            merged["rationale"] = self._early_momentum_reason(
+                self._reason_from_signal(signal, str(item.get("rationale") or "Live breakout scanner candidate.")),
+                quote,
+                signal,
+            )
+            merged["change_percent"] = quote.get("change_percent", item.get("change_percent"))
+            merged["quote_source"] = quote.get("quote_source")
+            merged["live_data_available"] = bool(quote.get("live_data_available"))
+            merged["decision_source"] = str(item.get("candidate_source") or "scanner")
+            enriched.append(merged)
+        return sorted(
+            enriched,
+            key=lambda x: (float(x.get("score") or 0.0), self._change_percent_sort_value(x.get("change_percent"))),
+            reverse=True,
+        )[:20]
+
     def get_wells_picks(self) -> list[Dict[str, Any]]:
         return [
             {"investor": "Warren Buffett", "stocks": [{"ticker": "AAPL", "price": 191.2, "performance": 1.42}, {"ticker": "AXP", "price": 227.1, "performance": 0.81}, {"ticker": "KO", "price": 60.2, "performance": 0.33}, {"ticker": "OXY", "price": 62.6, "performance": -0.48}, {"ticker": "BAC", "price": 37.4, "performance": 0.57}]},
@@ -813,10 +887,13 @@ class MarketDataService:
             return None
         return None
 
-    def _dynamic_hot_momentum_candidates(self, limit: int = 30) -> list[Dict[str, Any]]:
+    def _dynamic_hot_momentum_candidates(
+        self,
+        limit: int = 30,
+        screeners: tuple[str, ...] = ("small_cap_gainers", "day_gainers", "most_actives"),
+    ) -> list[Dict[str, Any]]:
         candidates: list[Dict[str, Any]] = []
         seen: set[str] = set()
-        screeners = ("small_cap_gainers", "day_gainers", "most_actives")
         for screener in screeners:
             try:
                 result = yf.screen(screener, size=max(1, int(limit))) or {}
@@ -1053,18 +1130,6 @@ class MarketDataService:
             {"symbol": "ASTC", "price": 3.0, "score": 8.8, "rationale": "Nano-cap space/security-tech breakout watch with squeeze potential.", "candidate_source": "explosive_watchlist"},
         ]
 
-        candidate_by_symbol = {str(item.get("symbol") or "").upper(): item for item in candidates}
-        for scanner_item in self._dynamic_hot_momentum_candidates():
-            scanner_symbol = str(scanner_item.get("symbol") or "").upper()
-            if not scanner_symbol:
-                continue
-            existing = candidate_by_symbol.get(scanner_symbol)
-            if existing is not None:
-                existing.update(scanner_item)
-            else:
-                candidates.append(scanner_item)
-                candidate_by_symbol[scanner_symbol] = scanner_item
-
         enriched: list[Dict[str, Any]] = []
         for item in candidates:
             quote = self.get_quote(item["symbol"])
@@ -1135,10 +1200,10 @@ class MarketDataService:
                     merged["rationale"] = self._clean_deterministic_rationale(str(deterministic_decision.get("rationale") or rule_rationale))
                     merged["decision_source"] = str(deterministic_decision.get("decision_source") or "deterministic_model")
                 else:
-                    merged["score_components"] = score_components + [f"model recommendation was {str(deterministic_decision.get('recommendation') or 'unknown')} so rule/scanner score was kept"]
-                    merged["decision_source"] = str(item.get("candidate_source") or "rule_based")
+                    merged["score_components"] = score_components + [f"model recommendation was {str(deterministic_decision.get('recommendation') or 'unknown')} so rule score was kept"]
+                    merged["decision_source"] = "rule_based"
             else:
-                merged["decision_source"] = str(item.get("candidate_source") or "rule_based")
+                merged["decision_source"] = "rule_based"
 
             numeric_score = self._num_or_none(merged.get("score"))
             explosive_move = bool(
@@ -1151,7 +1216,7 @@ class MarketDataService:
             merged["qualified"] = bool(
                 numeric_score is not None
                 and numeric_score >= 7.0
-                and (self._is_buy_like(signal) or explosive_move or fallback_seed or str(item.get("candidate_source") or "").startswith("scanner:"))
+                and (self._is_buy_like(signal) or explosive_move or fallback_seed)
             )
 
             enriched.append(merged)
@@ -1181,6 +1246,43 @@ class MarketDataService:
         for item in selected:
             item.pop("qualified", None)
         return selected
+
+    def get_breakout_radar(self) -> list[Dict[str, Any]]:
+        candidates = self._dynamic_hot_momentum_candidates(screeners=("small_cap_gainers", "day_gainers"))
+        enriched: list[Dict[str, Any]] = []
+        for item in candidates:
+            quote = self.get_quote(item["symbol"])
+            signal = self.get_signal(item["symbol"])
+            merged = dict(item)
+            if isinstance(quote.get("price"), (int, float)):
+                merged["price"] = round(float(quote["price"]), 2)
+            base_score, score_basis, base_components = self._hot_momentum_base_score(item, signal)
+            score, score_components = self._hot_momentum_score_components(
+                base_score=base_score,
+                score_basis=score_basis,
+                base_components=base_components,
+                quote=quote,
+                signal=signal,
+            )
+            if score is not None:
+                merged["score"] = score
+            merged["score_basis"] = score_basis
+            merged["score_components"] = score_components
+            merged["rationale"] = self._early_momentum_reason(
+                self._reason_from_signal(signal, str(item.get("rationale") or "Live breakout scanner candidate.")),
+                quote,
+                signal,
+            )
+            merged["change_percent"] = quote.get("change_percent", item.get("change_percent"))
+            merged["quote_source"] = quote.get("quote_source")
+            merged["live_data_available"] = bool(quote.get("live_data_available"))
+            merged["decision_source"] = str(item.get("candidate_source") or "scanner")
+            enriched.append(merged)
+        return sorted(
+            enriched,
+            key=lambda x: (float(x.get("score") or 0.0), self._change_percent_sort_value(x.get("change_percent"))),
+            reverse=True,
+        )[:20]
 
     def get_wells_picks(self) -> list[Dict[str, Any]]:
         investors = [
