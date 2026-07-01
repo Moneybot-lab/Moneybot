@@ -9,6 +9,7 @@ import pytest
 
 from moneybot.services.market_data_providers import NormalizedQuote, ProviderResult
 from moneybot.services.market_stream import (
+    _bounded_reconnect_delay,
     InMemoryMarketStreamState,
     MassiveStreamParser,
     MassiveWebSocketWorker,
@@ -326,3 +327,12 @@ def test_worker_health_exposes_connection_diagnostics_without_credentials():
     assert health["connection_state"] == "starting"
     assert health["last_error"] is None
     assert "secret" not in str(health)
+
+
+def test_reconnect_backoff_caps_attempt_before_float_overflow():
+    delay = _bounded_reconnect_delay(attempt=2048, min_seconds=1, max_seconds=30, jitter=1.0)
+
+    assert delay == 30
+
+    jittered = _bounded_reconnect_delay(attempt=2048, min_seconds=1, max_seconds=30, jitter=1.2)
+    assert jittered == 36
