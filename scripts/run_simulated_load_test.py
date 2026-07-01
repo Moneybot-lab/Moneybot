@@ -14,6 +14,7 @@ import json
 import os
 import random
 import statistics
+import sys
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -296,7 +297,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rate-limit-token", default=os.environ.get("MONEYBOT_LOAD_TEST_RATE_LIMIT_TOKEN", ""), help="Optional token sent as X-Load-Test-Token to bypass rate limiting when the server is configured with LOAD_TEST_RATE_LIMIT_TOKEN.")
     parser.add_argument("--include-database-flow", action="store_true", default=os.environ.get("MONEYBOT_LOAD_TEST_INCLUDE_DATABASE_FLOW", "false").lower() == "true", help="Have each virtual user create/login/read/write portfolio data to exercise the database.")
     parser.add_argument("--run-id", default=os.environ.get("MONEYBOT_LOAD_TEST_RUN_ID", ""), help="Unique suffix for database test users; defaults to a random value.")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if "--rate-limit-token" in sys.argv and not str(args.rate_limit_token or "").strip():
+        parser.error("--rate-limit-token was provided but empty; export MONEYBOT_LOAD_TEST_RATE_LIMIT_TOKEN or omit the flag")
+    return args
 
 
 def main() -> int:

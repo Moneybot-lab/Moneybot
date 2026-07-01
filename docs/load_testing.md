@@ -31,7 +31,7 @@ This exercises:
 
 If database endpoints time out while public read-only endpoints stay fast, rerun with `--database-timeout-seconds 30` (or higher) and `--ramp-up-seconds 15` so database setup requests are not all fired at exactly the same instant. The public API timeout remains controlled separately by `--timeout-seconds`.
 
-If the report shows many HTTP `429` responses, the application rate limiter is protecting the service and masking true infrastructure capacity. For launch-readiness tests, either reduce generated request volume, temporarily raise `API_RATE_LIMIT_MAX_REQUESTS`, or configure `LOAD_TEST_RATE_LIMIT_TOKEN` on the target environment and pass the matching `--rate-limit-token` value from your local shell.
+If the report shows many HTTP `429` responses, the application rate limiter is protecting the service and masking true infrastructure capacity. For launch-readiness tests, either reduce generated request volume, temporarily raise `API_RATE_LIMIT_MAX_REQUESTS`, or configure `LOAD_TEST_RATE_LIMIT_TOKEN` on the target environment and pass the matching `--rate-limit-token` value from your local shell. Before running, verify `echo "$MONEYBOT_LOAD_TEST_RATE_LIMIT_TOKEN"` prints a non-empty value; the script rejects an explicitly empty `--rate-limit-token` argument.
 
 ## Run the local first simulated load test
 

@@ -225,3 +225,14 @@ def test_rate_limit_token_is_sent_as_header(monkeypatch):
     )
 
     assert calls == [{"X-Load-Test-Token": "secret-load-test"}]
+
+
+def test_parse_args_rejects_empty_rate_limit_token(monkeypatch):
+    monkeypatch.setattr(load_test.sys, "argv", ["run_simulated_load_test.py", "--rate-limit-token", ""])
+
+    try:
+        load_test.parse_args()
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:  # pragma: no cover
+        raise AssertionError("parse_args should reject an explicitly empty rate-limit token")
