@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 from dataclasses import dataclass
@@ -73,6 +74,17 @@ class MarketDataService:
         self.history_cache = TTLCache(ttl_seconds=300)
         self._history_diagnostics_by_symbol: dict[str, dict[str, Any]] = {}
         self._fallback_counts: dict[str, int] = {}
+        self._cache_lock_guard = threading.Lock()
+        self._quote_locks: dict[str, threading.Lock] = {}
+        self._signal_locks: dict[str, threading.Lock] = {}
+
+    def _lock_for_key(self, lock_map: dict[str, threading.Lock], key: str) -> threading.Lock:
+        with self._cache_lock_guard:
+            lock = lock_map.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                lock_map[key] = lock
+            return lock
 
     def _build_fallback_company_summary(self, symbol: str, info: dict[str, Any]) -> str:
         company_name = str(info.get("longName") or info.get("shortName") or symbol).strip()
@@ -1416,7 +1428,13 @@ class MarketDataService:
         cached = self.quote_cache.get(cache_key)
         if cached:
             return cached
+        with self._lock_for_key(self._quote_locks, cache_key):
+            cached = self.quote_cache.get(cache_key)
+            if cached:
+                return cached
+            return self._fetch_quote_uncached(cache_key)
 
+    def _fetch_quote_uncached(self, cache_key: str) -> Dict[str, Any]:
         def _yfinance_quote() -> Dict[str, Any]:
             last_error = "unknown"
             for _ in range(self.retries + 1):
@@ -1646,7 +1664,13 @@ class MarketDataService:
         cached = self.signal_cache.get(cache_key)
         if cached:
             return cached
+        with self._lock_for_key(self._signal_locks, cache_key):
+            cached = self.signal_cache.get(cache_key)
+            if cached:
+                return cached
+            return self._fetch_signal_uncached(symbol_key, cache_key, include_company_snapshot=include_company_snapshot)
 
+    def _fetch_signal_uncached(self, symbol_key: str, cache_key: str, *, include_company_snapshot: bool = True) -> Dict[str, Any]:
         quote = self.get_quote(symbol_key)
         if not quote.get("live_data_available"):
             payload = {
