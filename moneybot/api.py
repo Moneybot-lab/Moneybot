@@ -2764,6 +2764,12 @@ def hot_momentum_buys():
     return jsonify({"items": items, "request_id": g.request_id})
 
 
+@api_bp.get("/breakout-radar")
+def breakout_radar():
+    svc = current_app.extensions["market_data_service"]
+    return jsonify({"items": svc.get_breakout_radar(), "request_id": g.request_id})
+
+
 
 @api_bp.post("/promote-track-b-candidate")
 def promote_track_b_candidate():
