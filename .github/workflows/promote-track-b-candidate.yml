@@ -1,0 +1,94 @@
+name: Promote Track B Candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      track_b_run_id:
+        description: "Run ID from the successful Track B Offline Challenger workflow"
+        required: true
+        type: string
+      force:
+        description: "Force promotion even when candidate_win is false (normally leave false)"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  promote-track-b:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Download Track B artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: track-b-offline-output
+          path: track-b-artifact
+          run-id: ${{ inputs.track_b_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate Track B promotion artifacts
+        run: |
+          set -euo pipefail
+          test -s track-b-artifact/data/track_b/model_comparison_track_b.json
+          test -s track-b-artifact/data/track_b/candidate_model_track_b.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("track-b-artifact/data/track_b/model_comparison_track_b.json").read_text())
+          print(json.dumps({
+              "candidate_win": report.get("candidate_win"),
+              "reasons": report.get("reasons"),
+              "candidate_metrics": report.get("candidate_metrics"),
+              "production_metrics": report.get("production_metrics"),
+          }, indent=2, sort_keys=True))
+          if not report.get("candidate_win"):
+              raise SystemExit("Track B report does not have candidate_win=true; re-run with force only if explicitly approved.")
+          PY
+        if: ${{ !inputs.force }}
+
+      - name: Validate Track B promotion artifacts for forced run
+        run: |
+          set -euo pipefail
+          test -s track-b-artifact/data/track_b/model_comparison_track_b.json
+          test -s track-b-artifact/data/track_b/candidate_model_track_b.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("track-b-artifact/data/track_b/model_comparison_track_b.json").read_text())
+          print(json.dumps({
+              "candidate_win": report.get("candidate_win"),
+              "reasons": report.get("reasons"),
+              "candidate_metrics": report.get("candidate_metrics"),
+              "production_metrics": report.get("production_metrics"),
+              "forced": True,
+          }, indent=2, sort_keys=True))
+          PY
+        if: ${{ inputs.force }}
+
+      - name: Promote candidate on Render
+        env:
+          MONEYBOT_BASE_URL: ${{ secrets.MONEYBOT_BASE_URL }}
+          TRACK_B_PROMOTION_TOKEN: ${{ secrets.TRACK_B_PROMOTION_TOKEN }}
+          FORCE_PROMOTION: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          test -n "$MONEYBOT_BASE_URL" || (echo "Missing secret: MONEYBOT_BASE_URL" && exit 1)
+          test -n "$TRACK_B_PROMOTION_TOKEN" || (echo "Missing secret: TRACK_B_PROMOTION_TOKEN" && exit 1)
+          force_form="false"
+          if [ "$FORCE_PROMOTION" = "true" ]; then
+            force_form="true"
+          fi
+          curl -fsS --retry 3 --retry-delay 3 --retry-all-errors \
+            -X POST "$MONEYBOT_BASE_URL/api/promote-track-b-candidate" \
+            -H "X-Track-B-Promotion-Token: $TRACK_B_PROMOTION_TOKEN" \
+            -F "comparison_report=@track-b-artifact/data/track_b/model_comparison_track_b.json;type=application/json" \
+            -F "candidate_model=@track-b-artifact/data/track_b/candidate_model_track_b.json;type=application/json" \
+            -F "force=$force_form"
