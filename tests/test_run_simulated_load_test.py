@@ -260,3 +260,56 @@ def test_main_fails_when_p95_exceeds_threshold(monkeypatch, tmp_path):
     )
 
     assert load_test.main() == 1
+
+
+def test_database_setup_first_keeps_auth_setup_out_of_measured_report(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, status_code=200, text=""):
+            self.status_code = status_code
+            self.text = text
+            self.headers = {"X-Request-ID": "req-test"}
+
+    class FakeSession:
+        def request(self, method, url, timeout, json=None, headers=None):
+            calls.append((method, url, timeout, json, headers))
+            if url.endswith("/api/auth/signup") or (url.endswith("/api/user-watchlist") and method == "POST"):
+                return FakeResponse(201)
+            return FakeResponse(200)
+
+        def close(self):
+            pass
+
+    monotonic_values = iter([0.0, 0.5, 1.5])
+
+    def fake_monotonic():
+        return next(monotonic_values)
+
+    monkeypatch.setattr(load_test.requests, "Session", FakeSession)
+    monkeypatch.setattr(load_test.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(load_test.time, "sleep", lambda _: None)
+
+    report = load_test.run_load_test(
+        base_url="https://moneybot.test",
+        users=1,
+        duration_seconds=1,
+        endpoints=("/api/model-health",),
+        timeout=3,
+        database_timeout=30,
+        think_time_seconds=0,
+        include_database_flow=True,
+        run_id="dbtest",
+        database_setup_mode="setup-first",
+    )
+
+    assert report["database_setup"]["mode"] == "setup-first"
+    assert report["database_setup"]["requests"] == 5
+    assert report["database_setup"]["failures"] == 0
+    assert report["database_setup"]["failure_rate"] == 0.0
+    assert report["database_setup"]["avg_ms"] is not None
+    assert report["requests"] == 1
+    assert "/api/auth/signup" not in report["by_endpoint"]
+    assert "/api/auth/login" not in report["by_endpoint"]
+    assert calls[:5][0][:3] == ("POST", "https://moneybot.test/api/auth/signup", 30)
+    assert calls[5][:3] == ("GET", "https://moneybot.test/api/user-watchlist?skip_market_data=1", 3)

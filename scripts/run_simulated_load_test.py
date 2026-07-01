@@ -31,6 +31,13 @@ DEFAULT_ENDPOINTS = (
     "/api/quick-ask?symbol=NVDA",
 )
 
+DATABASE_STEADY_STATE_ENDPOINTS = (
+    "/api/user-watchlist?skip_market_data=1",
+    "/api/portfolio-summary?skip_market_data=1",
+)
+
+DATABASE_SETUP_MODES = {"inline", "setup-first"}
+
 
 def _p95(latencies: list[float]) -> float | None:
     return round(statistics.quantiles(latencies, n=100)[94], 2) if len(latencies) >= 100 else None
@@ -116,6 +123,58 @@ def _database_probe_requests(user_id: int, run_id: str) -> list[tuple[str, str, 
     ]
 
 
+def _run_database_probe(
+    user_id: int,
+    *,
+    base_url: str,
+    database_timeout: float,
+    run_id: str,
+    headers: dict[str, str] | None,
+    session: requests.Session,
+) -> list[RequestResult]:
+    results: list[RequestResult] = []
+    for method, endpoint, payload, expected_statuses, stop_on_failure in _database_probe_requests(user_id, run_id):
+        result = _request_once(
+            base_url,
+            endpoint,
+            database_timeout,
+            session,
+            method=method,
+            json_payload=payload,
+            expected_statuses=expected_statuses,
+            headers=headers,
+        )
+        results.append(result)
+        if stop_on_failure and not result.ok:
+            break
+    return results
+
+
+def _prepare_database_user(
+    user_id: int,
+    *,
+    base_url: str,
+    database_timeout: float,
+    run_id: str,
+    headers: dict[str, str] | None,
+) -> tuple[int, requests.Session | None, list[RequestResult]]:
+    session = requests.Session()
+    results = _run_database_probe(
+        user_id,
+        base_url=base_url,
+        database_timeout=database_timeout,
+        run_id=run_id,
+        headers=headers,
+        session=session,
+    )
+    if any(not result.ok for result in results):
+        close = getattr(session, "close", None)
+        if callable(close):
+            close()
+        return user_id, None, results
+    return user_id, session, results
+
+
 def _virtual_user(
     user_id: int,
     *,
@@ -130,33 +189,37 @@ def _virtual_user(
     run_id: str,
     ramp_up_seconds: float,
     headers: dict[str, str] | None,
+    prepared_session: requests.Session | None = None,
 ) -> list[RequestResult]:
     rng = random.Random(user_id)
     results: list[RequestResult] = []
     if ramp_up_seconds > 0:
         time.sleep(rng.uniform(0, ramp_up_seconds))
-    with requests.Session() as session:
+    owns_session = prepared_session is None
+    session = prepared_session or requests.Session()
+    try:
         if include_database_flow:
-            for method, endpoint, payload, expected_statuses, stop_on_failure in _database_probe_requests(user_id, run_id):
-                result = _request_once(
-                    base_url,
-                    endpoint,
-                    database_timeout,
-                    session,
-                    method=method,
-                    json_payload=payload,
-                    expected_statuses=expected_statuses,
+            results.extend(
+                _run_database_probe(
+                    user_id,
+                    base_url=base_url,
+                    database_timeout=database_timeout,
+                    run_id=run_id,
                     headers=headers,
-                )
-                results.append(result)
-                if stop_on_failure and not result.ok:
-                    break
+                    session=session,
+                ),
+            )
 
         while time.monotonic() < stop_at:
             endpoint = rng.choice(endpoints)
             results.append(_request_once(base_url, endpoint, timeout, session, headers=headers))
             if think_time_seconds > 0:
                 time.sleep(rng.uniform(0, think_time_seconds))
+    finally:
+        if owns_session:
+            close = getattr(session, "close", None)
+            if callable(close):
+                close()
     return results
 
 
@@ -236,6 +299,8 @@ def run_load_test(
     run_id: str | None = None,
     ramp_up_seconds: float = 0.0,
     rate_limit_token: str = "",
+    database_setup_mode: str = "inline",
+    database_setup_concurrency: int = 20,
 ) -> dict:
     if users < 1:
         raise ValueError("users must be at least 1")
@@ -249,35 +314,73 @@ def run_load_test(
         raise ValueError("database_timeout must be greater than 0")
     if ramp_up_seconds < 0:
         raise ValueError("ramp_up_seconds must be greater than or equal to 0")
+    if database_setup_mode not in DATABASE_SETUP_MODES:
+        raise ValueError(f"database_setup_mode must be one of: {sorted(DATABASE_SETUP_MODES)}")
+    if database_setup_concurrency < 1:
+        raise ValueError("database_setup_concurrency must be at least 1")
+
+    run_id = (run_id or uuid4().hex[:10]).lower()
+    all_results: list[RequestResult] = []
+    setup_results: list[RequestResult] = []
+    prepared_sessions: dict[int, requests.Session] = {}
+    headers = {"X-Load-Test-Token": rate_limit_token} if rate_limit_token else None
+    measured_endpoints = endpoints
+    measured_include_database_flow = include_database_flow
+    if include_database_flow and database_setup_mode == "setup-first":
+        measured_include_database_flow = False
+        measured_endpoints = tuple(dict.fromkeys((*endpoints, *DATABASE_STEADY_STATE_ENDPOINTS)))
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=min(users, database_setup_concurrency),
+            thread_name_prefix="moneybot-db-setup",
+        ) as setup_executor:
+            setup_futures = [
+                setup_executor.submit(
+                    _prepare_database_user,
+                    user_id,
+                    base_url=base_url,
+                    database_timeout=database_timeout,
+                    run_id=run_id,
+                    headers=headers,
+                )
+                for user_id in range(users)
+            ]
+            for future in concurrent.futures.as_completed(setup_futures):
+                user_id, session, user_setup_results = future.result()
+                setup_results.extend(user_setup_results)
+                if session is not None:
+                    prepared_sessions[user_id] = session
 
     started_at_utc = datetime.now(timezone.utc).isoformat()
     stop_at = time.monotonic() + duration_seconds
-    run_id = (run_id or uuid4().hex[:10]).lower()
-    all_results: list[RequestResult] = []
-    headers = {"X-Load-Test-Token": rate_limit_token} if rate_limit_token else None
     with concurrent.futures.ThreadPoolExecutor(max_workers=users, thread_name_prefix="moneybot-vu") as executor:
         futures = [
             executor.submit(
                 _virtual_user,
                 user_id,
                 base_url=base_url,
-                endpoints=endpoints,
+                endpoints=measured_endpoints,
                 duration_seconds=duration_seconds,
                 timeout=timeout,
                 database_timeout=database_timeout,
                 think_time_seconds=think_time_seconds,
                 stop_at=stop_at,
-                include_database_flow=include_database_flow,
+                include_database_flow=measured_include_database_flow,
                 run_id=run_id,
                 ramp_up_seconds=ramp_up_seconds,
                 headers=headers,
+                prepared_session=prepared_sessions.get(user_id),
             )
             for user_id in range(users)
         ]
         for future in concurrent.futures.as_completed(futures):
             all_results.extend(future.result())
     ended_at_utc = datetime.now(timezone.utc).isoformat()
-    return summarize(
+    for session in prepared_sessions.values():
+        close = getattr(session, "close", None)
+        if callable(close):
+            close()
+
+    report = summarize(
         all_results,
         users=users,
         duration_seconds=duration_seconds,
@@ -286,6 +389,15 @@ def run_load_test(
         ended_at_utc=ended_at_utc,
         include_database_flow=include_database_flow,
     )
+    setup_failures = [row for row in setup_results if not row.ok]
+    report["database_setup"] = {
+        "mode": database_setup_mode if include_database_flow else "disabled",
+        "requests": len(setup_results),
+        "failures": len(setup_failures),
+        "failure_rate": round(len(setup_failures) / len(setup_results), 4) if setup_results else 0.0,
+        "avg_ms": round(statistics.fmean([row.elapsed_ms for row in setup_results]), 2) if setup_results else None,
+    }
+    return report
 
 
 def parse_args() -> argparse.Namespace:
@@ -304,6 +416,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-p95-ms", type=float, default=float(os.environ.get("MONEYBOT_LOAD_TEST_MAX_P95_MS", "0")), help="Optional global p95 latency threshold in milliseconds; 0 disables this gate.")
     parser.add_argument("--rate-limit-token", default=os.environ.get("MONEYBOT_LOAD_TEST_RATE_LIMIT_TOKEN", ""), help="Optional token sent as X-Load-Test-Token to bypass rate limiting when the server is configured with LOAD_TEST_RATE_LIMIT_TOKEN.")
     parser.add_argument("--include-database-flow", action="store_true", default=os.environ.get("MONEYBOT_LOAD_TEST_INCLUDE_DATABASE_FLOW", "false").lower() == "true", help="Have each virtual user create/login/read/write portfolio data to exercise the database.")
+    parser.add_argument("--database-setup-mode", choices=sorted(DATABASE_SETUP_MODES), default=os.environ.get("MONEYBOT_LOAD_TEST_DATABASE_SETUP_MODE", "inline"), help="Use inline to include signup/login setup in the measured window, or setup-first to authenticate users before measuring steady-state traffic.")
+    parser.add_argument("--database-setup-concurrency", type=int, default=int(os.environ.get("MONEYBOT_LOAD_TEST_DATABASE_SETUP_CONCURRENCY", "20")), help="Maximum concurrent users during setup-first database preparation.")
     parser.add_argument("--run-id", default=os.environ.get("MONEYBOT_LOAD_TEST_RUN_ID", ""), help="Unique suffix for database test users; defaults to a random value.")
     args = parser.parse_args()
     if "--rate-limit-token" in sys.argv and not str(args.rate_limit_token or "").strip():
@@ -325,11 +439,15 @@ def main() -> int:
         run_id=args.run_id or None,
         ramp_up_seconds=args.ramp_up_seconds,
         rate_limit_token=args.rate_limit_token,
+        database_setup_mode=args.database_setup_mode,
+        database_setup_concurrency=args.database_setup_concurrency,
     )
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2, sort_keys=True))
+    if report.get("database_setup", {}).get("failures", 0) > 0:
+        return 1
     if report["failure_rate"] > args.max_failure_rate:
         return 1
     if report["throttle_rate"] > args.max_throttle_rate:
