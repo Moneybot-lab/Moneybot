@@ -97,7 +97,7 @@ Configure the web service with the following commands:
 Notes:
 - `db upgrade` applies committed Alembic migrations when a `migrations/` folder exists.
 - If `migrations/` is missing, startup now skips migrations instead of failing the deploy.
-- The start command runs `python app.py` as the long-running process.
+- The start command runs Gunicorn (`gunicorn app:app`) as the long-running web process, with `WEB_CONCURRENCY`, `WEB_THREADS`, and `WEB_TIMEOUT` available for Render tuning.
 
 ## 4) First-time migration bootstrap (local/dev)
 If your repo does **not** already contain a `migrations/` folder, initialize it once locally:

@@ -361,10 +361,39 @@ def test_day11_compare_detects_profit_aware_win_and_loss():
     )
 
     assert win is True
-    assert "candidate improves accuracy and brier with acceptable return/downside, big-loss avoidance, and big-gain capture" in win_reasons
+    assert "candidate improves profit utility and accuracy with acceptable brier, return/downside, big-loss avoidance, and minimum big-gain capture" in win_reasons
     assert worse_return_loss is False
     assert "candidate avg_return is lower and downside_risk is higher than production" in loss_reasons
     assert lower_downside_win is True
+
+
+def test_day11_compare_allows_lower_accuracy_when_utility_improves():
+    candidate = {
+        "accuracy": 0.7844,
+        "avg_return": 0.1044,
+        "big_gain_capture_rate": 0.1452,
+        "big_loss_prediction_rate": 0.0,
+        "brier_score": 0.084,
+        "downside_risk": 0.0,
+        "rows": 538,
+    }
+    production = {
+        "accuracy": 0.9038,
+        "avg_return": 0.0457,
+        "big_gain_capture_rate": 0.8226,
+        "big_loss_prediction_rate": 0.0472,
+        "brier_score": 0.2454,
+        "downside_risk": 0.075,
+        "rows": 572,
+    }
+
+    win, reasons = day11._decide(candidate, production, min_rows=200)
+
+    assert day11._utility_score(candidate) == 0.1189
+    assert day11._utility_score(production) == 0.0058
+    assert win is True
+    assert "candidate accuracy is below production, but accuracy is informational when profit utility improves" in reasons
+    assert "candidate improves profit utility with acceptable brier, return/downside, big-loss avoidance, and minimum big-gain capture" in reasons
 
 
 def test_day11_compare_blocks_worse_tail_bucket_behavior():
@@ -373,16 +402,22 @@ def test_day11_compare_blocks_worse_tail_bucket_behavior():
         {"accuracy": 0.57, "brier_score": 0.20, "avg_return": 0.01, "downside_risk": 0.03, "big_loss_prediction_rate": 0.20, "big_gain_capture_rate": 0.60, "rows": 250},
         min_rows=200,
     )
-    worse_big_gain, big_gain_reasons = day11._decide(
+    lower_but_acceptable_big_gain, _ = day11._decide(
         {"accuracy": 0.62, "brier_score": 0.17, "avg_return": 0.02, "downside_risk": 0.02, "big_loss_prediction_rate": 0.10, "big_gain_capture_rate": 0.40, "rows": 250},
+        {"accuracy": 0.57, "brier_score": 0.20, "avg_return": 0.01, "downside_risk": 0.03, "big_loss_prediction_rate": 0.20, "big_gain_capture_rate": 0.60, "rows": 250},
+        min_rows=200,
+    )
+    below_min_big_gain, big_gain_reasons = day11._decide(
+        {"accuracy": 0.62, "brier_score": 0.17, "avg_return": 0.02, "downside_risk": 0.02, "big_loss_prediction_rate": 0.10, "big_gain_capture_rate": 0.05, "rows": 250},
         {"accuracy": 0.57, "brier_score": 0.20, "avg_return": 0.01, "downside_risk": 0.03, "big_loss_prediction_rate": 0.20, "big_gain_capture_rate": 0.60, "rows": 250},
         min_rows=200,
     )
 
     assert worse_big_loss is False
     assert "candidate signals too many big-loss rows versus production" in big_loss_reasons
-    assert worse_big_gain is False
-    assert "candidate captures fewer big-gain rows than production" in big_gain_reasons
+    assert lower_but_acceptable_big_gain is True
+    assert below_min_big_gain is False
+    assert "candidate big-gain capture is below minimum (0.05 < 0.1)" in big_gain_reasons
 
 
 def test_day11_compare_handles_missing_model_file_gracefully(tmp_path):
