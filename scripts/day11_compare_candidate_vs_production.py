@@ -18,6 +18,11 @@ from moneybot.services.deterministic_model import load_artifact, predict_proba
 
 RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
 TARGET_GAIN_BUCKETS = {"gain", "big_gain"}
+MIN_BIG_GAIN_CAPTURE_RATE = 0.10
+UTILITY_BIG_GAIN_WEIGHT = 0.10
+UTILITY_DOWNSIDE_WEIGHT = 1.0
+UTILITY_BIG_LOSS_WEIGHT = 1.0
+MIN_UTILITY_IMPROVEMENT = 0.0
 
 
 def _load_jsonl(path: str) -> pd.DataFrame:
@@ -205,7 +210,11 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
     c_big_loss_rate = _numeric_metric(candidate, "big_loss_prediction_rate")
     p_big_loss_rate = _numeric_metric(production, "big_loss_prediction_rate")
     c_big_gain_rate = _numeric_metric(candidate, "big_gain_capture_rate")
-    p_big_gain_rate = _numeric_metric(production, "big_gain_capture_rate")
+    c_utility = _utility_score(candidate)
+    p_utility = _utility_score(production)
+    if c_utility is None or p_utility is None:
+        reasons.append("insufficient comparable utility metrics")
+        return False, reasons
 
     accuracy_ok = c_acc > p_acc
     brier_ok = c_brier < p_brier
