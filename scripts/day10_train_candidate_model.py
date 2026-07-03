@@ -62,8 +62,10 @@ def _ensure_return_bucket_labels(df: pd.DataFrame) -> pd.DataFrame:
     if "return_bin_5d" not in out.columns:
         returns = pd.to_numeric(out.get("return_5d"), errors="coerce")
         out["return_bin_5d"] = [_return_bin(value) if pd.notna(value) else None for value in returns]
-    bins = out["return_bin_5d"].fillna("").astype(str)
-    out["label_gain_5d"] = bins.isin(TARGET_GAIN_BUCKETS).astype(float)
+    bins = out["return_bin_5d"]
+    valid_bins = bins.notna() & bins.astype(str).str.len().gt(0)
+    out["label_gain_5d"] = np.nan
+    out.loc[valid_bins, "label_gain_5d"] = bins[valid_bins].astype(str).isin(TARGET_GAIN_BUCKETS).astype(float)
     return out
 
 
