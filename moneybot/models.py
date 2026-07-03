@@ -119,6 +119,7 @@ class NotificationTriggerPreference(db.Model):
     portfolio_sell_advice_change = db.Column(db.Boolean, nullable=False, default=True)
     portfolio_buy_advice_change = db.Column(db.Boolean, nullable=False, default=True)
     hot_momentum_score_crosses_8 = db.Column(db.Boolean, nullable=False, default=True)
+    fresh_breakouts = db.Column(db.Boolean, nullable=False, default=True)
     whale_top_investor_added = db.Column(db.Boolean, nullable=False, default=True)
     whales_top_stock_list_changes = db.Column(db.Boolean, nullable=False, default=True)
     clearview_hold_off_to_buy = db.Column(db.Boolean, nullable=False, default=True)
