@@ -36,3 +36,18 @@ python scripts/train_challenger_suite.py \
 ```
 
 The challenger suite trains many offline competitors in one run: a logistic-regression grid across thresholds and regularization values, the strongest single-feature decision stumps, and simple majority/always-up/always-down baselines. It writes one model artifact per challenger and `challenger_suite_manifest.json` with model-type counts, metrics, ranking, selected features, fill values, and `live_routing: false`.
+
+## 4. Backtest, gate, and shadow-log before promotion
+
+```bash
+python scripts/backtest_challenger_suite.py \
+  --suite-manifest data/challenger_suite/challenger_suite_manifest.json \
+  --feature-store data/flat_feature_store/test.jsonl \
+  --output data/challenger_suite/backtest_report.json \
+  --transaction-cost-bps 5 \
+  --slippage-bps 5
+```
+
+The backtest report chronologically scores every challenger with transaction costs, slippage, max drawdown, probability calibration, drift checks, and buy-and-hold/cash/equal-weight benchmark comparisons. Promotion gates are objective and recorded per model; user-facing routing remains disabled in the report.
+
+Gate-cleared challengers should be logged in shadow mode beside production decisions using `moneybot.services.challenger_shadow.log_challenger_shadow_decisions`. Shadow records use a `*_challenger_shadow` endpoint, set `shadow_only: true`, and keep `routing_allowed: false` until a separate human promotion step approves routing after continued drift monitoring.
