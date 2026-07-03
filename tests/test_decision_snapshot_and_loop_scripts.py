@@ -208,6 +208,24 @@ def test_day10_uses_return_buckets_for_gain_target():
     assert labeled["label_gain_5d"].tolist() == [0.0, 0.0, 0.0, 1.0, 1.0]
 
 
+def test_day10_keeps_missing_5d_bucket_as_unlabeled_gain_target():
+    import pandas as pd
+
+    df = pd.DataFrame(
+        [
+            {"return_1d": 0.03, "return_5d": None, "return_bin_5d": None},
+            {"return_1d": -0.02, "return_5d": None, "return_bin_5d": ""},
+            {"return_1d": 0.01, "return_5d": -0.01, "return_bin_5d": "loss"},
+            {"return_1d": 0.02, "return_5d": 0.02, "return_bin_5d": "gain"},
+        ]
+    )
+
+    labeled = day10._ensure_return_bucket_labels(df)
+
+    assert labeled["label_gain_5d"].isna().tolist() == [True, True, False, False]
+    assert labeled["label_gain_5d"].dropna().tolist() == [0.0, 1.0]
+
+
 def test_day11_return_bins_drive_gain_evaluation():
     import pandas as pd
 
