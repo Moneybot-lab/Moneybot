@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from moneybot.app_factory import _resolve_database_url, create_app
+from moneybot.app_factory import _database_engine_options, _resolve_database_url, create_app
 
 
 def test_resolve_database_url_uses_postgres_internal_alias(monkeypatch):
@@ -44,6 +44,66 @@ def test_resolve_database_url_rejects_hosted_postgres_without_driver(monkeypatch
 
     with pytest.raises(RuntimeError, match="no PostgreSQL driver is installed"):
         _resolve_database_url()
+
+
+def test_database_engine_options_configure_postgres_pool(monkeypatch):
+    monkeypatch.delenv("SQLALCHEMY_POOL_SIZE", raising=False)
+    monkeypatch.delenv("SQLALCHEMY_MAX_OVERFLOW", raising=False)
+    monkeypatch.delenv("SQLALCHEMY_POOL_TIMEOUT", raising=False)
+    monkeypatch.delenv("SQLALCHEMY_POOL_RECYCLE", raising=False)
+    monkeypatch.delenv("SQLALCHEMY_POOL_PRE_PING", raising=False)
+
+    options = _database_engine_options("postgresql+psycopg://user:pw@db:5432/moneybot")
+
+    assert options == {
+        "pool_size": 10,
+        "max_overflow": 20,
+        "pool_timeout": 10,
+        "pool_recycle": 300,
+        "pool_pre_ping": True,
+    }
+
+
+def test_database_engine_options_are_env_overridable_and_skip_sqlite(monkeypatch):
+    monkeypatch.setenv("SQLALCHEMY_POOL_SIZE", "4")
+    monkeypatch.setenv("SQLALCHEMY_MAX_OVERFLOW", "8")
+    monkeypatch.setenv("SQLALCHEMY_POOL_TIMEOUT", "12")
+    monkeypatch.setenv("SQLALCHEMY_POOL_RECYCLE", "600")
+    monkeypatch.setenv("SQLALCHEMY_POOL_PRE_PING", "false")
+
+    assert _database_engine_options("sqlite:///:memory:") == {}
+    assert _database_engine_options("postgresql://user:pw@db:5432/moneybot") == {
+        "pool_size": 4,
+        "max_overflow": 8,
+        "pool_timeout": 12,
+        "pool_recycle": 600,
+        "pool_pre_ping": False,
+    }
+
+
+def test_create_app_reads_api_rate_limit_settings(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("API_RATE_LIMIT_WINDOW_SECONDS", "30")
+    monkeypatch.setenv("API_RATE_LIMIT_MAX_REQUESTS", "500")
+    monkeypatch.setenv("LOAD_TEST_RATE_LIMIT_TOKEN", "test-token")
+
+    app = create_app()
+
+    assert app.config["API_RATE_LIMIT_WINDOW_SECONDS"] == 30
+    assert app.config["API_RATE_LIMIT_MAX_REQUESTS"] == 500
+    assert app.config["LOAD_TEST_RATE_LIMIT_TOKEN"] == "test-token"
+
+
+def test_create_app_accepts_moneybot_prefixed_load_test_token(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.delenv("LOAD_TEST_RATE_LIMIT_TOKEN", raising=False)
+    monkeypatch.setenv("MONEYBOT_LOAD_TEST_RATE_LIMIT_TOKEN", "prefixed-token")
+
+    app = create_app()
+
+    assert app.config["LOAD_TEST_RATE_LIMIT_TOKEN"] == "prefixed-token"
 
 
 def test_create_app_reads_ai_timeout_and_cooldown(monkeypatch):
@@ -317,3 +377,61 @@ def test_create_app_auto_applies_recalibration_plan(tmp_path, monkeypatch):
     assert advisor.calibration_enabled is True
     assert advisor.calibration_slope == 0.646989
     assert advisor.calibration_intercept == 0.666503
+
+
+def test_portfolio_page_uses_base_items_when_enrichment_is_empty(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+
+    app = create_app()
+    client = app.test_client()
+
+    res = client.get("/portfolio")
+
+    assert res.status_code == 200
+    body = res.get_data(as_text=True)
+    assert "function selectPortfolioRows(data)" in body
+    assert "return enriched.length ? enriched : base;" in body
+    assert "Portfolio data did not load completely. Please refresh in a moment." in body
+
+
+def test_create_app_reads_personalization_rollout_settings(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("INVESTOR_PROFILE_ENABLED", "true")
+    monkeypatch.setenv("SUITABILITY_POLICY_ENABLED", "true")
+    monkeypatch.setenv("SUITABILITY_POLICY_MODE", "shadow")
+    monkeypatch.setenv("SUITABILITY_ROLLOUT_PERCENTAGE", "25")
+    monkeypatch.setenv("SUITABILITY_ROLLOUT_ALLOWLIST", "3,8")
+
+    app = create_app()
+    runtime = app.extensions["personalization_runtime"]
+
+    assert app.config["INVESTOR_PROFILE_ENABLED"] is True
+    assert app.config["SUITABILITY_POLICY_MODE"] == "shadow"
+    assert runtime.mode == "shadow"
+    assert runtime.rollout_percentage == 25
+    assert runtime.allowlist == {3, 8}
+
+
+def test_create_app_reads_market_stream_shadow_configuration(monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MASSIVE_STREAM_ENABLED", "true")
+    monkeypatch.setenv("MASSIVE_STREAM_SHADOW_MODE", "true")
+    monkeypatch.setenv("MASSIVE_STREAM_SYMBOL_CAP", "125")
+    monkeypatch.setenv("MASSIVE_STREAM_QUOTE_CAP", "40")
+    monkeypatch.setenv("MASSIVE_STREAM_TRADE_CAP", "10")
+    monkeypatch.setenv("MASSIVE_STREAM_SERVER_SYMBOLS", "SPY,QQQ,IWM,*")
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
+    app = create_app()
+    config = app.config["MASSIVE_STREAM_CONFIG"]
+
+    assert config.enabled is True
+    assert config.shadow_mode is True
+    assert config.symbol_cap == 125
+    assert config.quote_cap == 40
+    assert config.trade_cap == 10
+    assert config.server_symbols == ("SPY", "QQQ", "IWM")
+    assert app.extensions["market_stream_state"].get_health() == {}

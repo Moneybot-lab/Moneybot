@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 from dataclasses import dataclass
 from urllib.parse import quote_plus
 from xml.etree import ElementTree as ET
@@ -15,6 +16,7 @@ import yfinance as yf
 
 from trade_signal import analyze_ticker
 from .deterministic_advisor import DeterministicQuickAdvisor
+from .market_data_providers import MassiveRestClient, NormalizedQuote, ProviderError, normalized_fallback_quote
 
 
 @dataclass
@@ -58,6 +60,7 @@ class MarketDataService:
         self.sector_cache = TTLCache(ttl_seconds=3600)
         self.company_snapshot_cache = TTLCache(ttl_seconds=600)
         self._company_snapshot_backoff_until_by_symbol: dict[str, float] = {}
+        self._company_snapshot_global_backoff_until = 0.0
         self._market_timezone = ZoneInfo("America/New_York")
         self._daily_lists_last_refreshed_at: datetime | None = None
         self._daily_lists_cache: dict[str, list[Dict[str, Any]]] = {}
@@ -66,6 +69,22 @@ class MarketDataService:
         self._finnhub_forbidden_symbols: dict[str, float] = {}
         self._finnhub_forbidden_ttl_seconds = int(os.environ.get("FINNHUB_FORBIDDEN_SYMBOL_TTL_SECONDS", "21600"))
         self._twelve_data_backoff_until = 0.0
+        self._massive_client_instance: MassiveRestClient | None = None
+        self._massive_client_key: str | None = None
+        self.history_cache = TTLCache(ttl_seconds=300)
+        self._history_diagnostics_by_symbol: dict[str, dict[str, Any]] = {}
+        self._fallback_counts: dict[str, int] = {}
+        self._cache_lock_guard = threading.Lock()
+        self._quote_locks: dict[str, threading.Lock] = {}
+        self._signal_locks: dict[str, threading.Lock] = {}
+
+    def _lock_for_key(self, lock_map: dict[str, threading.Lock], key: str) -> threading.Lock:
+        with self._cache_lock_guard:
+            lock = lock_map.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                lock_map[key] = lock
+            return lock
 
     def _build_fallback_company_summary(self, symbol: str, info: dict[str, Any]) -> str:
         company_name = str(info.get("longName") or info.get("shortName") or symbol).strip()
@@ -311,6 +330,121 @@ class MarketDataService:
             {"symbol": "PFE", "price": 28.77, "score": 7.2, "rationale": "Defensive rotation candidate near support."},
         ]
 
+
+    @staticmethod
+    def _series_values(frame: Any, column: str) -> list[float]:
+        try:
+            raw_values = frame[column]
+        except Exception:  # noqa: BLE001
+            return []
+        if hasattr(raw_values, "tolist"):
+            raw_values = raw_values.tolist()
+        values: list[float] = []
+        for value in raw_values:
+            try:
+                values.append(float(value))
+            except (TypeError, ValueError):
+                continue
+        return values
+
+    def _intraday_breakout_snapshot(self, symbol: str) -> Dict[str, Any]:
+        symbol_key = str(symbol or "").strip().upper()
+        if not symbol_key:
+            return {"status": "unavailable", "reason": "missing symbol"}
+
+        cache_key = f"intraday-breakout:{symbol_key}"
+        cached = self.history_cache.get(cache_key)
+        if cached:
+            return cached
+
+        try:
+            hist = yf.Ticker(symbol_key).history(period="1d", interval="5m")
+            if hist is None or getattr(hist, "empty", False):
+                raise ValueError("empty intraday history")
+            closes = self._series_values(hist, "Close")
+            highs = self._series_values(hist, "High") or closes
+            lows = self._series_values(hist, "Low") or closes
+            opens = self._series_values(hist, "Open") or closes
+            if len(closes) < 2 or not opens:
+                raise ValueError("insufficient intraday bars")
+
+            day_open = opens[0]
+            latest = closes[-1]
+            day_high = max(highs)
+            day_low = min(lows)
+            intraday_change = ((latest - day_open) / day_open) * 100.0 if day_open > 0 else 0.0
+            pullback_from_high = ((day_high - latest) / day_high) * 100.0 if day_high > 0 else 0.0
+            bounce_from_low = ((latest - day_low) / day_low) * 100.0 if day_low > 0 else 0.0
+            higher_than_recent = latest >= max(closes[-min(6, len(closes)):]) * 0.995
+            qualifies = bool(
+                intraday_change >= 3.0
+                and pullback_from_high <= 3.0
+                and (higher_than_recent or bounce_from_low >= 5.0)
+            )
+            payload = {
+                "status": "ok",
+                "qualifies": qualifies,
+                "intraday_change_percent": round(intraday_change, 2),
+                "pullback_from_high_percent": round(pullback_from_high, 2),
+                "day_open": round(day_open, 4),
+                "day_high": round(day_high, 4),
+                "latest": round(latest, 4),
+            }
+        except Exception as exc:  # noqa: BLE001
+            logging.info("Intraday breakout validation unavailable for %s: %s", symbol_key, exc)
+            payload = {"status": "unavailable", "qualifies": None, "reason": str(exc)}
+
+        self.history_cache.set(cache_key, payload)
+        return payload
+
+    def get_breakout_radar(self) -> list[Dict[str, Any]]:
+        candidates = self._dynamic_hot_momentum_candidates(screeners=("small_cap_gainers", "day_gainers"))
+        enriched: list[Dict[str, Any]] = []
+        for item in candidates:
+            quote = self.get_quote(item["symbol"])
+            signal = self.get_signal(item["symbol"])
+            merged = dict(item)
+            if isinstance(quote.get("price"), (int, float)):
+                merged["price"] = round(float(quote["price"]), 2)
+            base_score, score_basis, base_components = self._hot_momentum_base_score(item, signal)
+            score, score_components = self._hot_momentum_score_components(
+                base_score=base_score,
+                score_basis=score_basis,
+                base_components=base_components,
+                quote=quote,
+                signal=signal,
+            )
+            if score is not None:
+                merged["score"] = score
+            merged["score_basis"] = score_basis
+            merged["score_components"] = score_components
+            merged["rationale"] = self._early_momentum_reason(
+                self._reason_from_signal(signal, str(item.get("rationale") or "Live breakout scanner candidate.")),
+                quote,
+                signal,
+            )
+            merged["change_percent"] = quote.get("change_percent", item.get("change_percent"))
+            merged["quote_source"] = quote.get("quote_source")
+            merged["live_data_available"] = bool(quote.get("live_data_available"))
+            merged["decision_source"] = str(item.get("candidate_source") or "scanner")
+            intraday_breakout = self._intraday_breakout_snapshot(item["symbol"])
+            merged["intraday_breakout"] = intraday_breakout
+            if intraday_breakout.get("qualifies") is False:
+                continue
+            if intraday_breakout.get("status") == "ok":
+                merged["rationale"] = (
+                    f"Confirmed intraday breakout: price is up "
+                    f"{intraday_breakout.get('intraday_change_percent')}% from today's open and "
+                    f"within {intraday_breakout.get('pullback_from_high_percent')}% of today's high. "
+                    f"{merged['rationale']}"
+                )
+            enriched.append(merged)
+        return sorted(
+            enriched,
+            key=lambda x: (float(x.get("score") or 0.0), self._change_percent_sort_value(x.get("change_percent"))),
+            reverse=True,
+        )[:20]
+
     def get_wells_picks(self) -> list[Dict[str, Any]]:
         return [
             {"investor": "Warren Buffett", "stocks": [{"ticker": "AAPL", "price": 191.2, "performance": 1.42}, {"ticker": "AXP", "price": 227.1, "performance": 0.81}, {"ticker": "KO", "price": 60.2, "performance": 0.33}, {"ticker": "OXY", "price": 62.6, "performance": -0.48}, {"ticker": "BAC", "price": 37.4, "performance": 0.57}]},
@@ -330,7 +464,10 @@ class MarketDataService:
         latest_news: list[Dict[str, Any]] = []
 
         now = time.time()
-        backoff_until = float(self._company_snapshot_backoff_until_by_symbol.get(ticker_symbol, 0.0))
+        backoff_until = max(
+            float(self._company_snapshot_backoff_until_by_symbol.get(ticker_symbol, 0.0)),
+            float(self._company_snapshot_global_backoff_until),
+        )
         if now < backoff_until:
             fallback_news = self._google_news_headlines(
                 symbol=ticker_symbol,
@@ -419,6 +556,7 @@ class MarketDataService:
         except Exception as exc:  # noqa: BLE001
             if "Too Many Requests" in str(exc):
                 self._company_snapshot_backoff_until_by_symbol[ticker_symbol] = now + 300.0
+                self._company_snapshot_global_backoff_until = now + 300.0
             company_name = default_name
             summary = default_summary
             try:
@@ -457,17 +595,123 @@ class MarketDataService:
             self.company_snapshot_cache.set(cache_key, payload)
             return payload
 
-    def get_price_history(self, symbol: str, days: int = 30) -> list[float]:
+    def get_price_history_data(self, symbol: str, days: int = 30) -> Dict[str, Any]:
+        symbol_key = symbol.upper()
+        requested_days = max(1, int(days))
+        cache_key = f"history:{symbol_key}:{requested_days}:adjusted"
+        cached = self.history_cache.get(cache_key)
+        if cached:
+            return cached
+
+        client = self._massive_client()
+        if client is not None:
+            end_date = datetime.now(timezone.utc).date()
+            start_date = end_date - timedelta(days=max(requested_days * 2, requested_days + 10))
+            try:
+                result = client.get_aggregates(
+                    symbol_key,
+                    multiplier=1,
+                    timespan="day",
+                    start=start_date,
+                    end=end_date,
+                    adjusted=True,
+                    limit=min(50000, max(100, requested_days * 3)),
+                )
+                bars = result.data[-requested_days:]
+                if bars:
+                    payload = {
+                        "symbol": symbol_key,
+                        "closes": [round(float(bar.close), 4) for bar in bars],
+                        "bars": [bar.payload() for bar in bars],
+                        "source": "massive",
+                        "source_mode": "rest",
+                        "schema_version": "market-data.v1",
+                        "adjusted_for_splits": True,
+                        "dividend_adjusted": False,
+                        "request_id": result.request_id,
+                        "mixed_sources": False,
+                        "quality_flags": [],
+                    }
+                    self.history_cache.set(cache_key, payload)
+                    self._history_diagnostics_by_symbol[symbol_key] = {key: value for key, value in payload.items() if key not in {"closes", "bars"}}
+                    return payload
+            except ProviderError as exc:
+                logging.warning("Massive adjusted history fetch failed for %s: %s", symbol_key, exc)
+                massive_error = exc.code
+            else:
+                massive_error = "empty_response"
+        else:
+            massive_error = "missing_api_key"
+
         try:
-            ticker = yf.Ticker(symbol.upper())
-            hist = ticker.history(period="3mo", interval="1d")
+            ticker = yf.Ticker(symbol_key)
+            try:
+                hist = ticker.history(period="3mo", interval="1d", auto_adjust=True)
+            except TypeError:
+                hist = ticker.history(period="3mo", interval="1d")
             if hist is None or hist.empty:
-                return []
-            closes = [round(float(v), 2) for v in hist["Close"].tail(max(days, 1))]
-            return closes
+                raise ValueError("empty yfinance history")
+            closes = [round(float(value), 4) for value in hist["Close"].tail(requested_days)]
+            payload = {
+                "symbol": symbol_key,
+                "closes": closes,
+                "bars": [],
+                "source": "yfinance",
+                "source_mode": "fallback",
+                "schema_version": "market-data.v1",
+                "adjusted_for_splits": True,
+                "dividend_adjusted": True,
+                "request_id": None,
+                "mixed_sources": True,
+                "quality_flags": ["fallback_provider", "massive_history_unavailable"],
+                "massive_error": massive_error,
+            }
         except Exception as exc:  # noqa: BLE001
-            logging.warning("History fetch failed for %s: %s", symbol, exc)
-            return []
+            logging.warning("History fetch failed for %s: %s", symbol_key, exc)
+            payload = {
+                "symbol": symbol_key, "closes": [], "bars": [], "source": "none", "source_mode": "fallback",
+                "schema_version": "market-data.v1", "adjusted_for_splits": None, "dividend_adjusted": None,
+                "request_id": None, "mixed_sources": True,
+                "quality_flags": ["history_unavailable"], "massive_error": massive_error, "fallback_error": str(exc),
+            }
+        self.history_cache.set(cache_key, payload)
+        self._history_diagnostics_by_symbol[symbol_key] = {key: value for key, value in payload.items() if key not in {"closes", "bars"}}
+        return payload
+
+    def get_price_history(self, symbol: str, days: int = 30) -> list[float]:
+        return list(self.get_price_history_data(symbol, days=days).get("closes") or [])
+
+    def get_massive_aggregates(self, symbol: str, *, multiplier: int, timespan: str, start: date | datetime | str, end: date | datetime | str, adjusted: bool = True) -> Dict[str, Any]:
+        client = self._massive_client()
+        if client is None:
+            raise ProviderError("Massive API key is not configured")
+        result = client.get_aggregates(symbol, multiplier=multiplier, timespan=timespan, start=start, end=end, adjusted=adjusted)
+        return {
+            "symbol": symbol.upper(), "bars": [bar.payload() for bar in result.data], "source": "massive", "source_mode": "rest",
+            "schema_version": "market-data.v1", "request_id": result.request_id, **dict(result.diagnostics),
+        }
+
+    def get_corporate_actions(self, symbol: str) -> Dict[str, Any]:
+        client = self._massive_client()
+        if client is None:
+            raise ProviderError("Massive API key is not configured")
+        splits = client.splits(symbol)
+        dividends = client.dividends(symbol)
+        return {
+            "symbol": symbol.upper(), "splits": list((splits.data or {}).get("results") or []),
+            "dividends": list((dividends.data or {}).get("results") or []), "source": "massive",
+            "schema_version": "market-data.v1", "adjustment_order": ["splits", "dividends"],
+        }
+
+    def get_provider_health(self) -> Dict[str, Any]:
+        client = self._massive_client()
+        return {
+            "normalized_schema_version": "market-data.v1",
+            "massive_configured": client is not None,
+            "massive": client.metrics.snapshot() if client is not None else {},
+            "fallback_counts": dict(self._fallback_counts),
+            "history_by_symbol": dict(self._history_diagnostics_by_symbol),
+        }
 
     def get_sector(self, symbol: str) -> str:
         cache_key = f"sector:{symbol.upper()}"
@@ -557,6 +801,54 @@ class MarketDataService:
             {"symbol": "F", "price": 12.55, "score": 7.4, "rationale": "Low-priced cyclical with renewed momentum interest."},
             {"symbol": "PFE", "price": 28.77, "score": 7.2, "rationale": "Defensive rotation candidate near support."},
         ]
+
+    def get_breakout_radar(self) -> list[Dict[str, Any]]:
+        candidates = self._dynamic_hot_momentum_candidates(screeners=("small_cap_gainers", "day_gainers"))
+        enriched: list[Dict[str, Any]] = []
+        for item in candidates:
+            quote = self.get_quote(item["symbol"])
+            signal = self.get_signal(item["symbol"])
+            merged = dict(item)
+            if isinstance(quote.get("price"), (int, float)):
+                merged["price"] = round(float(quote["price"]), 2)
+            base_score, score_basis, base_components = self._hot_momentum_base_score(item, signal)
+            score, score_components = self._hot_momentum_score_components(
+                base_score=base_score,
+                score_basis=score_basis,
+                base_components=base_components,
+                quote=quote,
+                signal=signal,
+            )
+            if score is not None:
+                merged["score"] = score
+            merged["score_basis"] = score_basis
+            merged["score_components"] = score_components
+            merged["rationale"] = self._early_momentum_reason(
+                self._reason_from_signal(signal, str(item.get("rationale") or "Live breakout scanner candidate.")),
+                quote,
+                signal,
+            )
+            merged["change_percent"] = quote.get("change_percent", item.get("change_percent"))
+            merged["quote_source"] = quote.get("quote_source")
+            merged["live_data_available"] = bool(quote.get("live_data_available"))
+            merged["decision_source"] = str(item.get("candidate_source") or "scanner")
+            intraday_breakout = self._intraday_breakout_snapshot(item["symbol"])
+            merged["intraday_breakout"] = intraday_breakout
+            if intraday_breakout.get("qualifies") is False:
+                continue
+            if intraday_breakout.get("status") == "ok":
+                merged["rationale"] = (
+                    f"Confirmed intraday breakout: price is up "
+                    f"{intraday_breakout.get('intraday_change_percent')}% from today's open and "
+                    f"within {intraday_breakout.get('pullback_from_high_percent')}% of today's high. "
+                    f"{merged['rationale']}"
+                )
+            enriched.append(merged)
+        return sorted(
+            enriched,
+            key=lambda x: (float(x.get("score") or 0.0), self._change_percent_sort_value(x.get("change_percent"))),
+            reverse=True,
+        )[:20]
 
     def get_wells_picks(self) -> list[Dict[str, Any]]:
         return [
@@ -666,9 +958,14 @@ class MarketDataService:
     def _reason_from_signal(self, signal: Dict[str, Any], fallback: str) -> str:
         reasons = signal.get("reasons") or signal.get("rationale") or []
         if isinstance(reasons, list) and reasons:
-            return str(reasons[0])
-        if isinstance(reasons, str) and reasons.strip():
-            return reasons.strip()
+            reason = str(reasons[0]).strip()
+        elif isinstance(reasons, str) and reasons.strip():
+            reason = reasons.strip()
+        else:
+            reason = ""
+        lowered = reason.lower()
+        if reason and not lowered.startswith("signal skipped because") and lowered != "signal unavailable; using safe fallback.":
+            return reason
         return fallback
 
     def _is_buy_like(self, signal: Dict[str, Any]) -> bool:
@@ -691,10 +988,13 @@ class MarketDataService:
             return None
         return None
 
-    def _dynamic_hot_momentum_candidates(self, limit: int = 30) -> list[Dict[str, Any]]:
+    def _dynamic_hot_momentum_candidates(
+        self,
+        limit: int = 30,
+        screeners: tuple[str, ...] = ("small_cap_gainers", "day_gainers", "most_actives"),
+    ) -> list[Dict[str, Any]]:
         candidates: list[Dict[str, Any]] = []
         seen: set[str] = set()
-        screeners = ("small_cap_gainers", "day_gainers", "most_actives")
         for screener in screeners:
             try:
                 result = yf.screen(screener, size=max(1, int(limit))) or {}
@@ -779,8 +1079,11 @@ class MarketDataService:
         if candidate_source.startswith("scanner:") and candidate_score is not None:
             score = round(float(candidate_score), 2)
             return score, "live_scanner", [f"{candidate_source} score from live screener move {score:.2f}"]
+        if candidate_score is not None:
+            score = round(min(7.75, max(7.0, float(candidate_score) - 1.8)), 2)
+            return score, "watchlist_seed", [f"curated watchlist seed normalized to {score:.2f} until live signal recovers"]
 
-        return None, "unscored", ["No trustworthy live signal/model/scanner score is available; item will not be shown."]
+        return None, "unscored", ["No trustworthy live signal/model/scanner/watchlist seed score is available; item will not be shown."]
 
     def _hot_momentum_score_components(
         self,
@@ -928,18 +1231,6 @@ class MarketDataService:
             {"symbol": "ASTC", "price": 3.0, "score": 8.8, "rationale": "Nano-cap space/security-tech breakout watch with squeeze potential.", "candidate_source": "explosive_watchlist"},
         ]
 
-        candidate_by_symbol = {str(item.get("symbol") or "").upper(): item for item in candidates}
-        for scanner_item in self._dynamic_hot_momentum_candidates():
-            scanner_symbol = str(scanner_item.get("symbol") or "").upper()
-            if not scanner_symbol:
-                continue
-            existing = candidate_by_symbol.get(scanner_symbol)
-            if existing is not None:
-                existing.update(scanner_item)
-            else:
-                candidates.append(scanner_item)
-                candidate_by_symbol[scanner_symbol] = scanner_item
-
         enriched: list[Dict[str, Any]] = []
         for item in candidates:
             quote = self.get_quote(item["symbol"])
@@ -993,16 +1284,27 @@ class MarketDataService:
                 merged["probability_up"] = deterministic_decision.get("probability_up")
                 merged["confidence"] = deterministic_decision.get("confidence")
                 if model_is_buy:
-                    merged["score"] = model_score if rule_score is None else max(rule_score, model_score)
-                    merged["score_basis"] = "deterministic_model" if rule_score is None or model_score >= rule_score else score_basis
-                    merged["score_components"] = score_components + [f"model probability score {model_score:.2f} considered alongside rule score"]
+                    model_candidate_score = model_score
+                    if bool(getattr(self.deterministic_quick_advisor, "rollout_dry_run", False)):
+                        adjusted_model_score, _ = self._hot_momentum_score_components(
+                            base_score=model_score,
+                            score_basis="deterministic_model",
+                            base_components=[],
+                            quote=quote,
+                            signal=signal,
+                        )
+                        if adjusted_model_score is not None:
+                            model_candidate_score = adjusted_model_score
+                    merged["score"] = model_candidate_score if rule_score is None else max(rule_score, model_candidate_score)
+                    merged["score_basis"] = "deterministic_model" if rule_score is None or model_candidate_score >= rule_score else score_basis
+                    merged["score_components"] = score_components + [f"model probability score {model_candidate_score:.2f} considered alongside rule score"]
                     merged["rationale"] = self._clean_deterministic_rationale(str(deterministic_decision.get("rationale") or rule_rationale))
                     merged["decision_source"] = str(deterministic_decision.get("decision_source") or "deterministic_model")
                 else:
-                    merged["score_components"] = score_components + [f"model recommendation was {str(deterministic_decision.get('recommendation') or 'unknown')} so rule/scanner score was kept"]
-                    merged["decision_source"] = str(item.get("candidate_source") or "rule_based")
+                    merged["score_components"] = score_components + [f"model recommendation was {str(deterministic_decision.get('recommendation') or 'unknown')} so rule score was kept"]
+                    merged["decision_source"] = "rule_based"
             else:
-                merged["decision_source"] = str(item.get("candidate_source") or "rule_based")
+                merged["decision_source"] = "rule_based"
 
             numeric_score = self._num_or_none(merged.get("score"))
             explosive_move = bool(
@@ -1011,11 +1313,11 @@ class MarketDataService:
                 and numeric_score is not None
                 and numeric_score >= 7.0
             )
+            fallback_seed = str(merged.get("score_basis") or "") == "watchlist_seed"
             merged["qualified"] = bool(
-                merged["live_data_available"]
-                and numeric_score is not None
+                numeric_score is not None
                 and numeric_score >= 7.0
-                and (self._is_buy_like(signal) or explosive_move or str(item.get("candidate_source") or "").startswith("scanner:"))
+                and (self._is_buy_like(signal) or explosive_move or fallback_seed)
             )
 
             enriched.append(merged)
@@ -1045,6 +1347,54 @@ class MarketDataService:
         for item in selected:
             item.pop("qualified", None)
         return selected
+
+    def get_breakout_radar(self) -> list[Dict[str, Any]]:
+        candidates = self._dynamic_hot_momentum_candidates(screeners=("small_cap_gainers", "day_gainers"))
+        enriched: list[Dict[str, Any]] = []
+        for item in candidates:
+            quote = self.get_quote(item["symbol"])
+            signal = self.get_signal(item["symbol"])
+            merged = dict(item)
+            if isinstance(quote.get("price"), (int, float)):
+                merged["price"] = round(float(quote["price"]), 2)
+            base_score, score_basis, base_components = self._hot_momentum_base_score(item, signal)
+            score, score_components = self._hot_momentum_score_components(
+                base_score=base_score,
+                score_basis=score_basis,
+                base_components=base_components,
+                quote=quote,
+                signal=signal,
+            )
+            if score is not None:
+                merged["score"] = score
+            merged["score_basis"] = score_basis
+            merged["score_components"] = score_components
+            merged["rationale"] = self._early_momentum_reason(
+                self._reason_from_signal(signal, str(item.get("rationale") or "Live breakout scanner candidate.")),
+                quote,
+                signal,
+            )
+            merged["change_percent"] = quote.get("change_percent", item.get("change_percent"))
+            merged["quote_source"] = quote.get("quote_source")
+            merged["live_data_available"] = bool(quote.get("live_data_available"))
+            merged["decision_source"] = str(item.get("candidate_source") or "scanner")
+            intraday_breakout = self._intraday_breakout_snapshot(item["symbol"])
+            merged["intraday_breakout"] = intraday_breakout
+            if intraday_breakout.get("qualifies") is False:
+                continue
+            if intraday_breakout.get("status") == "ok":
+                merged["rationale"] = (
+                    f"Confirmed intraday breakout: price is up "
+                    f"{intraday_breakout.get('intraday_change_percent')}% from today's open and "
+                    f"within {intraday_breakout.get('pullback_from_high_percent')}% of today's high. "
+                    f"{merged['rationale']}"
+                )
+            enriched.append(merged)
+        return sorted(
+            enriched,
+            key=lambda x: (float(x.get("score") or 0.0), self._change_percent_sort_value(x.get("change_percent"))),
+            reverse=True,
+        )[:20]
 
     def get_wells_picks(self) -> list[Dict[str, Any]]:
         investors = [
@@ -1085,14 +1435,13 @@ class MarketDataService:
         return out
 
     def _fallback_quote(self, symbol: str, error: str) -> Dict[str, Any]:
-        return {
-            "symbol": symbol,
-            "price": "DATA_MISSING",
-            "change_percent": "DATA_MISSING",
-            "live_data_available": False,
-            "quote_source": "yfinance",
-            "diagnostics": {"provider": "yfinance", "error": error},
-        }
+        payload = self._normalized_fallback_payload(
+            symbol=symbol, price=None, change_percent=None, source="yfinance",
+            diagnostics={"error": error},
+        )
+        payload["diagnostics"]["error"] = error
+        payload["quality_flags"] = list(dict.fromkeys([*payload.get("quality_flags", []), "data_missing"]))
+        return payload
 
     def _get_massive_key(self) -> tuple[str | None, str | None]:
         key_env_names = ("MASSIVE_API_KEY", "POLYGON_API_KEY")
@@ -1118,12 +1467,74 @@ class MarketDataService:
                 return raw.strip(), env_name
         return None, None
 
+
+    def _massive_client(self) -> MassiveRestClient | None:
+        api_key, key_source = self._get_massive_key()
+        if not api_key:
+            return None
+        if self._massive_client_instance is None or self._massive_client_key != api_key:
+            self._massive_client_instance = MassiveRestClient(
+                api_key=api_key,
+                key_source=key_source or "MASSIVE_API_KEY",
+                timeout_seconds=float(os.environ.get("MASSIVE_TIMEOUT_SECONDS", self.timeout_s)),
+                retries=int(os.environ.get("MASSIVE_RETRIES", self.retries)),
+                retry_backoff_seconds=float(os.environ.get("MASSIVE_RETRY_BACKOFF_SECONDS", "0.2")),
+                quote_cache_seconds=float(os.environ.get("MASSIVE_QUOTE_CACHE_SECONDS", "2")),
+                negative_cache_seconds=float(os.environ.get("MASSIVE_NEGATIVE_CACHE_SECONDS", "30")),
+                regular_stale_seconds=float(os.environ.get("MASSIVE_REGULAR_STALE_SECONDS", "15")),
+                extended_stale_seconds=float(os.environ.get("MASSIVE_EXTENDED_STALE_SECONDS", "60")),
+                closed_stale_seconds=float(os.environ.get("MASSIVE_CLOSED_STALE_SECONDS", "86400")),
+                http_get=lambda *args, **kwargs: requests.get(*args, **kwargs),
+            )
+            self._massive_client_key = api_key
+        return self._massive_client_instance
+
+    @staticmethod
+    def _compatible_quote_payload(quote: NormalizedQuote, *, key_source: str | None = None, diagnostics: dict[str, Any] | None = None) -> Dict[str, Any]:
+        payload = quote.payload()
+        payload.update({
+            "price": float(quote.price) if quote.price is not None else "DATA_MISSING",
+            "change_percent": float(quote.change_percent) if quote.change_percent is not None else "DATA_MISSING",
+            "live_data_available": quote.price is not None and not quote.is_stale,
+            "quote_source": quote.source,
+            "diagnostics": {
+                "provider": quote.source,
+                "source_mode": quote.source_mode,
+                "schema_version": quote.schema_version,
+                "error": None,
+                "massive_key_source": key_source,
+                "massive_price_source": quote.price_source,
+                **(diagnostics or {}),
+            },
+        })
+        return payload
+
+    def _normalized_fallback_payload(self, *, symbol: str, price: Any, change_percent: Any, source: str, event_timestamp: datetime | None = None, diagnostics: dict[str, Any] | None = None) -> Dict[str, Any]:
+        normalized = normalized_fallback_quote(symbol=symbol, price=price, change_percent=change_percent, source=source, event_timestamp=event_timestamp)
+        numeric_price = normalized.get("price")
+        numeric_change = normalized.get("change_percent")
+        normalized.update({
+            "price": numeric_price if numeric_price is not None else "DATA_MISSING",
+            "change_percent": numeric_change if numeric_change is not None else "DATA_MISSING",
+            "live_data_available": numeric_price is not None and not normalized["is_stale"],
+            "quote_source": source,
+            "diagnostics": {"provider": source, "source_mode": "fallback", "schema_version": normalized["schema_version"], "error": None, **(diagnostics or {})},
+        })
+        self._fallback_counts[source] = self._fallback_counts.get(source, 0) + 1
+        return normalized
+
     def get_quote(self, symbol: str) -> Dict[str, Any]:
         cache_key = symbol.upper()
         cached = self.quote_cache.get(cache_key)
         if cached:
             return cached
+        with self._lock_for_key(self._quote_locks, cache_key):
+            cached = self.quote_cache.get(cache_key)
+            if cached:
+                return cached
+            return self._fetch_quote_uncached(cache_key)
 
+    def _fetch_quote_uncached(self, cache_key: str) -> Dict[str, Any]:
         def _yfinance_quote() -> Dict[str, Any]:
             last_error = "unknown"
             for _ in range(self.retries + 1):
@@ -1146,14 +1557,13 @@ class MarketDataService:
                             if prev not in (None, 0):
                                 change = ((price - prev) / prev) * 100
 
-                    return {
-                        "symbol": cache_key,
-                        "price": float(price) if price is not None else "DATA_MISSING",
-                        "change_percent": float(change) if change is not None else "DATA_MISSING",
-                        "live_data_available": price is not None and change is not None,
-                        "quote_source": "yfinance",
-                        "diagnostics": {"provider": "yfinance", "error": None},
-                    }
+                    event_timestamp = None
+                    market_time = info.get("regularMarketTime")
+                    if isinstance(market_time, (int, float)):
+                        event_timestamp = datetime.fromtimestamp(float(market_time), tz=timezone.utc)
+                    return self._normalized_fallback_payload(
+                        symbol=cache_key, price=price, change_percent=change, source="yfinance", event_timestamp=event_timestamp,
+                    )
                 except Exception as exc:  # noqa: BLE001
                     last_error = str(exc)
                     logging.warning("Quote fetch failed for %s: %s", cache_key, exc)
@@ -1165,48 +1575,24 @@ class MarketDataService:
 
         massive_key, massive_key_source = self._get_massive_key()
         massive_error: str | None = None
-        if massive_key:
+        massive_client = self._massive_client()
+        if massive_client is not None:
             try:
-                resp = requests.get(
-                    f"https://api.massive.com/v2/snapshot/locale/us/markets/stocks/tickers/{cache_key}",
-                    params={"apiKey": massive_key},
-                    timeout=self.timeout_s,
+                result = massive_client.get_quote(cache_key)
+                payload = self._compatible_quote_payload(
+                    result.data,
+                    key_source=massive_key_source,
+                    diagnostics={"request_id": result.request_id, "latency_ms": round(result.latency_ms, 2), "cache_status": result.cache_status},
                 )
-                resp.raise_for_status()
-                data = resp.json() or {}
-                ticker_data = data.get("ticker") or {}
-                day = ticker_data.get("day") or {}
-                prev_day = ticker_data.get("prevDay") or {}
-
-                price = day.get("c")
-                prev_close = prev_day.get("c")
-                change_percent = None
-                if price not in (None, 0) and prev_close not in (None, 0):
-                    change_percent = ((float(price) - float(prev_close)) / float(prev_close)) * 100
-
-                if price not in (None, 0) and change_percent is not None:
-                    payload = {
-                        "symbol": cache_key,
-                        "price": float(price),
-                        "change_percent": float(change_percent),
-                        "live_data_available": True,
-                        "quote_source": "massive",
-                        "diagnostics": {"provider": "massive", "error": None, "massive_key_source": massive_key_source},
-                    }
-                    self.quote_cache.set(cache_key, payload)
-                    return payload
-
-                massive_error = f"incomplete_response:{data}"
-                logging.warning("Massive returned incomplete quote for %s: %s", cache_key, data)
-            except Exception as exc:  # noqa: BLE001
-                massive_error = str(exc)
-                logging.warning("Massive quote fetch failed for %s: %s", cache_key, exc)
+                self.quote_cache.set(cache_key, payload)
+                return payload
+            except ProviderError as exc:
+                massive_error = exc.code
+                logging.warning("Massive normalized quote fetch failed for %s: %s", cache_key, exc)
         else:
             massive_error = "missing_api_key"
             if not self._logged_missing_massive_key:
-                logging.info(
-                    "Massive key missing; quote requests will use Finnhub/yfinance fallback until MASSIVE_API_KEY is set."
-                )
+                logging.info("Massive key missing; using explicit fallback providers until MASSIVE_API_KEY is set.")
                 self._logged_missing_massive_key = True
 
         finnhub_key, finnhub_key_source = self._get_finnhub_key()
@@ -1237,14 +1623,13 @@ class MarketDataService:
                             change_percent = ((float(price) - float(prev_close)) / float(prev_close)) * 100
 
                         if change_percent is not None:
-                            payload = {
-                                "symbol": cache_key,
-                                "price": float(price),
-                                "change_percent": float(change_percent),
-                                "live_data_available": True,
-                                "quote_source": "finnhub",
-                                "diagnostics": {"provider": "finnhub", "error": None, "finnhub_key_source": finnhub_key_source},
-                            }
+                            event_timestamp = None
+                            if isinstance(data.get("t"), (int, float)):
+                                event_timestamp = datetime.fromtimestamp(float(data["t"]), tz=timezone.utc)
+                            payload = self._normalized_fallback_payload(
+                                symbol=cache_key, price=price, change_percent=change_percent, source="finnhub",
+                                event_timestamp=event_timestamp, diagnostics={"finnhub_key_source": finnhub_key_source},
+                            )
                             self.quote_cache.set(cache_key, payload)
                             return payload
 
@@ -1297,18 +1682,17 @@ class MarketDataService:
                             change_percent = ((price - prev_close) / prev_close) * 100
 
                     if price is not None and change_percent is not None:
-                        payload = {
-                            "symbol": cache_key,
-                            "price": float(price),
-                            "change_percent": float(change_percent),
-                            "live_data_available": True,
-                            "quote_source": "twelve_data",
-                            "diagnostics": {
-                                "provider": "twelve_data",
-                                "error": None,
-                                "twelve_data_key_source": twelve_data_key_source,
-                            },
-                        }
+                        event_timestamp = None
+                        timestamp_raw = data.get("timestamp")
+                        if timestamp_raw not in (None, ""):
+                            try:
+                                event_timestamp = datetime.fromtimestamp(float(timestamp_raw), tz=timezone.utc)
+                            except (TypeError, ValueError, OSError, OverflowError):
+                                event_timestamp = None
+                        payload = self._normalized_fallback_payload(
+                            symbol=cache_key, price=price, change_percent=change_percent, source="twelve_data",
+                            event_timestamp=event_timestamp, diagnostics={"twelve_data_key_source": twelve_data_key_source},
+                        )
                         self.quote_cache.set(cache_key, payload)
                         return payload
 
@@ -1341,16 +1725,56 @@ class MarketDataService:
         self.quote_cache.set(cache_key, fallback)
         return fallback
 
-    def get_signal(self, symbol: str) -> Dict[str, Any]:
-        cache_key = symbol.upper()
+    @staticmethod
+    def _technical_indicators_from_closes(closes: list[float]) -> tuple[float | None, float | None]:
+        values = [float(value) for value in closes if isinstance(value, (int, float))]
+        if len(values) < 15:
+            return None, None
+
+        gains: list[float] = []
+        losses: list[float] = []
+        for previous, current in zip(values[-15:-1], values[-14:]):
+            delta = current - previous
+            gains.append(max(0.0, delta))
+            losses.append(max(0.0, -delta))
+        average_gain = sum(gains) / len(gains)
+        average_loss = sum(losses) / len(losses)
+        if average_loss == 0:
+            rsi = 100.0 if average_gain > 0 else 50.0
+        else:
+            relative_strength = average_gain / average_loss
+            rsi = 100.0 - (100.0 / (1.0 + relative_strength))
+
+        def ema(series: list[float], period: int) -> list[float]:
+            alpha = 2.0 / (period + 1.0)
+            output = [series[0]]
+            for value in series[1:]:
+                output.append(alpha * value + (1.0 - alpha) * output[-1])
+            return output
+
+        ema12 = ema(values, 12)
+        ema26 = ema(values, 26)
+        macd = [fast - slow for fast, slow in zip(ema12, ema26)]
+        signal = ema(macd, 9)
+        return round(rsi, 4), round(macd[-1] - signal[-1], 6)
+
+    def get_signal(self, symbol: str, include_company_snapshot: bool = True) -> Dict[str, Any]:
+        symbol_key = symbol.upper()
+        cache_key = f"{symbol_key}:company" if include_company_snapshot else f"{symbol_key}:lite"
         cached = self.signal_cache.get(cache_key)
         if cached:
             return cached
+        with self._lock_for_key(self._signal_locks, cache_key):
+            cached = self.signal_cache.get(cache_key)
+            if cached:
+                return cached
+            return self._fetch_signal_uncached(symbol_key, cache_key, include_company_snapshot=include_company_snapshot)
 
-        quote = self.get_quote(cache_key)
+    def _fetch_signal_uncached(self, symbol_key: str, cache_key: str, *, include_company_snapshot: bool = True) -> Dict[str, Any]:
+        quote = self.get_quote(symbol_key)
         if not quote.get("live_data_available"):
             payload = {
-                "symbol": cache_key,
+                "symbol": symbol_key,
                 "action": "HOLD",
                 "verdict": "HOLD",
                 "hybrid_score": None,
@@ -1371,20 +1795,34 @@ class MarketDataService:
             return payload
 
         try:
-            result = analyze_ticker(cache_key)
-            company_snapshot = self.get_company_snapshot(cache_key)
-            ranked_news = company_snapshot.get("latest_news") if isinstance(company_snapshot.get("latest_news"), list) else []
+            result = analyze_ticker(symbol_key)
+            if include_company_snapshot:
+                company_snapshot = self.get_company_snapshot(symbol_key)
+                ranked_news = company_snapshot.get("latest_news") if isinstance(company_snapshot.get("latest_news"), list) else []
+            else:
+                ranked_news = []
             sentiment_payload = self._sentiment_from_news(ranked_news)
+            technical_rsi = result.rsi
+            technical_macd = result.macd_hist
+            technical_source = "yfinance"
+            if self._massive_client() is not None:
+                technical_history = self.get_price_history_data(symbol_key, days=90)
+                if technical_history.get("source") == "massive":
+                    massive_rsi, massive_macd = self._technical_indicators_from_closes(technical_history.get("closes") or [])
+                    if massive_rsi is not None and massive_macd is not None:
+                        technical_rsi = massive_rsi
+                        technical_macd = massive_macd
+                        technical_source = "massive_adjusted_aggregates"
             verdict = "STRONG BUY" if (result.score is not None and result.score >= 9) else result.verdict.upper()
             payload = {
-                "symbol": cache_key,
+                "symbol": symbol_key,
                 "action": verdict,
                 "verdict": verdict,
                 "hybrid_score": result.score,
                 "score": result.score,
-                "technical": {"rsi": result.rsi, "macd_histogram": result.macd_hist},
-                "rsi": result.rsi,
-                "macd_hist": result.macd_hist,
+                "technical": {"rsi": technical_rsi, "macd_histogram": technical_macd, "source": technical_source},
+                "rsi": technical_rsi,
+                "macd_hist": technical_macd,
                 "volume_today": result.volume_today,
                 "volume_ratio": result.volume_ratio,
                 "sentiment": sentiment_payload,
@@ -1392,12 +1830,12 @@ class MarketDataService:
                 "reasons": result.reasons,
                 "quote": quote,
                 "quote_data_available": bool(quote.get("live_data_available")),
-                "diagnostics": {"provider": "yfinance", "error": None},
+                "diagnostics": {"provider": "mixed" if technical_source.startswith("massive") else "yfinance", "technical_source": technical_source, "error": None},
             }
         except Exception as exc:  # noqa: BLE001
-            logging.warning("Signal fetch failed for %s: %s", cache_key, exc)
+            logging.warning("Signal fetch failed for %s: %s", symbol_key, exc)
             payload = {
-                "symbol": cache_key,
+                "symbol": symbol_key,
                 "action": "HOLD",
                 "verdict": "HOLD",
                 "hybrid_score": None,
