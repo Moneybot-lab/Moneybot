@@ -51,3 +51,18 @@ python scripts/backtest_challenger_suite.py \
 The backtest report chronologically scores every challenger with transaction costs, slippage, max drawdown, probability calibration, drift checks, and buy-and-hold/cash/equal-weight benchmark comparisons. Promotion gates are objective and recorded per model; user-facing routing remains disabled in the report.
 
 Gate-cleared challengers should be logged in shadow mode beside production decisions using `moneybot.services.challenger_shadow.log_challenger_shadow_decisions`. Shadow records use a `*_challenger_shadow` endpoint, set `shadow_only: true`, and keep `routing_allowed: false` until a separate human promotion step approves routing after continued drift monitoring.
+
+## 5. Recommended automation: GitHub Actions + manual Render promotion
+
+The recommended production setup is the scheduled `Track B Offline Challenger` GitHub Actions workflow. Configure these GitHub repository or environment secrets before enabling it:
+
+- `MONEYBOT_BASE_URL`
+- `DAILY_OPS_TOKEN`
+- `MASSIVE_FLATFILES_ACCESS_KEY_ID`
+- `MASSIVE_FLATFILES_SECRET_ACCESS_KEY`
+- `MASSIVE_FLATFILES_ENDPOINT`
+- `MASSIVE_FLATFILES_BUCKET`
+
+The workflow ingests Massive flat files, exports decision logs, builds leakage-safe rows, materializes the feature store, trains the challenger suite, backtests/gates every challenger, prepares manual Render promotion artifacts, and uploads derived artifacts plus ingest manifests. Raw vendor files are intentionally not uploaded as GitHub artifacts.
+
+Promotion remains manual through the `Promote Track B Candidate` workflow. That workflow downloads the offline artifacts, rejects non-winning or non-gated reports by default, and only calls Render's promotion endpoint after manual dispatch.
