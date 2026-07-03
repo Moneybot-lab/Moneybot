@@ -15,14 +15,16 @@ def test_build_track_b_commands_uses_offline_artifacts_only():
 
     assert commands[0][:2] == ["python3", "/tmp/Moneybot/scripts/day8_build_decision_training_dataset.py"]
     assert commands[0][-2:] == ["--limit", "50000"]
-    assert commands[1][:2] == ["python3", "/tmp/Moneybot/scripts/day10_train_candidate_model.py"]
-    assert commands[2][:2] == ["python3", "/tmp/Moneybot/scripts/day11_compare_candidate_vs_production.py"]
+    assert commands[1][:2] == ["python3", "/tmp/Moneybot/scripts/day15_materialize_flat_feature_store.py"]
+    assert commands[2][:2] == ["python3", "/tmp/Moneybot/scripts/day10_train_candidate_model.py"]
+    assert commands[3][:2] == ["python3", "/tmp/Moneybot/scripts/day11_compare_candidate_vs_production.py"]
 
     flat = " ".join(" ".join(cmd) for cmd in commands)
     assert "day14_promote_candidate.py" not in flat
     assert "data/day1_baseline_model.json" in flat
     assert "candidate_model_track_b.json" in flat
     assert "model_comparison_track_b.json" in flat
+    assert "flat_feature_store" in flat
 
 
 def test_build_track_b_commands_can_skip_dataset_limit():

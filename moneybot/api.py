@@ -544,6 +544,7 @@ def _notification_trigger_payload(item: NotificationTriggerPreference) -> Dict[s
         "portfolio_sell_advice_change": bool(item.portfolio_sell_advice_change),
         "portfolio_buy_advice_change": bool(item.portfolio_buy_advice_change),
         "hot_momentum_score_crosses_8": bool(item.hot_momentum_score_crosses_8),
+        "fresh_breakouts": bool(getattr(item, "fresh_breakouts", True)),
         "whale_top_investor_added": bool(item.whale_top_investor_added),
         "clearview_hold_off_to_buy": bool(item.clearview_hold_off_to_buy),
         "push_notifications_enabled": bool(item.push_notifications_enabled),
@@ -578,6 +579,10 @@ def _ensure_clearview_trigger_column() -> None:
         statements.append(
             "ALTER TABLE notification_trigger_preferences ADD COLUMN clearview_hold_off_to_buy BOOLEAN NOT NULL DEFAULT TRUE"
         )
+    if "fresh_breakouts" not in columns:
+        statements.append(
+            "ALTER TABLE notification_trigger_preferences ADD COLUMN fresh_breakouts BOOLEAN NOT NULL DEFAULT TRUE"
+        )
     if "push_notifications_enabled" not in columns:
         statements.append(
             "ALTER TABLE notification_trigger_preferences ADD COLUMN push_notifications_enabled BOOLEAN NOT NULL DEFAULT FALSE"
@@ -602,16 +607,17 @@ def _notification_trigger_state_path() -> str:
 def _load_notification_trigger_state() -> dict[str, Any]:
     path = Path(_notification_trigger_state_path())
     if not path.exists():
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "breakout_symbols": [], "wells_snapshot": {}, "clearview_advice": {}}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "breakout_symbols": [], "wells_snapshot": {}, "clearview_advice": {}}
     if not isinstance(payload, dict):
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "breakout_symbols": [], "wells_snapshot": {}, "clearview_advice": {}}
     return {
         "portfolio_advice": payload.get("portfolio_advice") if isinstance(payload.get("portfolio_advice"), dict) else {},
         "momentum_scores": payload.get("momentum_scores") if isinstance(payload.get("momentum_scores"), dict) else {},
+        "breakout_symbols": payload.get("breakout_symbols") if isinstance(payload.get("breakout_symbols"), list) else [],
         "wells_snapshot": payload.get("wells_snapshot") if isinstance(payload.get("wells_snapshot"), dict) else {},
         "clearview_advice": payload.get("clearview_advice") if isinstance(payload.get("clearview_advice"), dict) else {},
     }
@@ -1214,6 +1220,7 @@ def update_notification_triggers():
         "portfolio_sell_advice_change",
         "portfolio_buy_advice_change",
         "hot_momentum_score_crosses_8",
+        "fresh_breakouts",
         "whale_top_investor_added",
         "clearview_hold_off_to_buy",
         "push_notifications_enabled",
@@ -2375,6 +2382,7 @@ def run_notification_triggers():
         except (TypeError, ValueError):
             continue
     clearview_state: dict[str, str] = {str(k): str(v).upper() for k, v in (state.get("clearview_advice") or {}).items() if str(k)}
+    previous_breakouts: set[str] = {str(symbol).strip().upper() for symbol in (state.get("breakout_symbols") or []) if str(symbol).strip()}
 
     wells_prev = {
         str(k): [str(t).upper() for t in v if str(t).strip()]
@@ -2561,6 +2569,41 @@ def run_notification_triggers():
                     symbol=symbol,
                 )
 
+    breakout_items = []
+    if hasattr(svc, "get_breakout_radar"):
+        try:
+            breakout_items = svc.get_breakout_radar() or []
+        except Exception:  # noqa: BLE001
+            breakout_items = []
+    current_breakouts: set[str] = set()
+    fresh_breakout_rows: list[dict[str, Any]] = []
+    for row in breakout_items:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        current_breakouts.add(symbol)
+        if symbol not in previous_breakouts:
+            fresh_breakout_rows.append(row)
+    for row in fresh_breakout_rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        score = row.get("score")
+        score_text = f" Score: {float(score):.2f}." if isinstance(score, (int, float)) else ""
+        for user in users:
+            prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
+            if not prefs.push_notifications_enabled:
+                continue
+            if not getattr(prefs, "fresh_breakouts", True):
+                continue
+            queue_user_event(
+                user.id,
+                title=f"{symbol}: Fresh breakout",
+                body=f"{symbol} just appeared on Breakout Radar.{score_text}",
+                kind="fresh_breakout",
+                symbol=symbol,
+            )
+
     wells_items = []
     try:
         wells_items = svc.get_wells_picks() or []
@@ -2649,6 +2692,7 @@ def run_notification_triggers():
         {
             "portfolio_advice": portfolio_state,
             "momentum_scores": momentum_scores,
+            "breakout_symbols": sorted(current_breakouts),
             "wells_snapshot": wells_now,
             "clearview_advice": clearview_state,
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),

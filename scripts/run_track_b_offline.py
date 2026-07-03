@@ -27,6 +27,7 @@ def build_track_b_commands(
     dataset_path = output_dir / "decision_training_snapshot_track_b.jsonl"
     candidate_model_path = output_dir / "candidate_model_track_b.json"
     comparison_report_path = output_dir / "model_comparison_track_b.json"
+    flat_store_dir = output_dir / "flat_feature_store"
     build_dataset_command = [
         python_executable,
         str(scripts_dir / "day8_build_decision_training_dataset.py"),
@@ -40,6 +41,7 @@ def build_track_b_commands(
 
     return [
         build_dataset_command,
+        [python_executable, str(scripts_dir / "day15_materialize_flat_feature_store.py"), "--input", str(dataset_path), "--output-dir", str(flat_store_dir), "--train-ratio", str(train_ratio)],
         [python_executable, str(scripts_dir / "day10_train_candidate_model.py"), "--input", str(dataset_path), "--output-model", str(candidate_model_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
         [python_executable, str(scripts_dir / "day11_compare_candidate_vs_production.py"), "--input", str(dataset_path), "--candidate-model", str(candidate_model_path), "--production-model", "data/day1_baseline_model.json", "--output", str(comparison_report_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
     ]

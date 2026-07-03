@@ -188,17 +188,6 @@ def _utility_score(metrics: dict[str, Any]) -> float | None:
     )
 
 
-def _numeric_metric(metrics: dict[str, Any], key: str) -> float | None:
-    value = metrics.get(key)
-    if value is None:
-        return None
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    return numeric if np.isfinite(numeric) else None
-
-
 def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: int = 200) -> tuple[bool, list[str]]:
     reasons: list[str] = []
     rows = int(candidate.get("rows") or 0)
@@ -254,7 +243,6 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
 
     reasons.append("candidate did not satisfy profit-aware promotion thresholds")
     return False, reasons
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare candidate model against production model on same holdout.")
