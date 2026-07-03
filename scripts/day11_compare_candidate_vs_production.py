@@ -154,7 +154,9 @@ def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
         "bucket_metrics": _bucket_metrics(usable, preds, probs),
         "rows": int(len(usable)),
     }
-    return _metrics_with_utility(metrics)
+    utility = _utility_score(metrics)
+    metrics["utility_score"] = round(utility, 4) if utility is not None else None
+    return metrics
 
 
 def _numeric_metric(metrics: dict[str, Any], key: str) -> float | None:
@@ -171,16 +173,19 @@ def _numeric_metric(metrics: dict[str, Any], key: str) -> float | None:
 def _utility_score(metrics: dict[str, Any]) -> float | None:
     avg_return = _numeric_metric(metrics, "avg_return")
     downside = _numeric_metric(metrics, "downside_risk")
-    big_gain_capture = _numeric_metric(metrics, "big_gain_capture_rate")
     big_loss_rate = _numeric_metric(metrics, "big_loss_prediction_rate")
-    if None in {avg_return, downside, big_gain_capture, big_loss_rate}:
+    big_gain_rate = _numeric_metric(metrics, "big_gain_capture_rate")
+    if avg_return is None or downside is None:
         return None
-    return round(float(avg_return) - float(downside) + (0.1 * float(big_gain_capture)) - float(big_loss_rate), 4)
-
-
-def _metrics_with_utility(metrics: dict[str, Any]) -> dict[str, Any]:
-    utility = _utility_score(metrics)
-    return {**metrics, "utility_score": utility} if utility is not None else metrics
+    downside = downside or 0.0
+    big_loss_rate = big_loss_rate or 0.0
+    big_gain_rate = big_gain_rate or 0.0
+    return (
+        avg_return
+        - (UTILITY_DOWNSIDE_WEIGHT * downside)
+        - (UTILITY_BIG_LOSS_WEIGHT * big_loss_rate)
+        + (UTILITY_BIG_GAIN_WEIGHT * big_gain_rate)
+    )
 
 
 def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: int = 200) -> tuple[bool, list[str]]:
@@ -190,9 +195,6 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
         reasons.append(f"candidate rows below minimum ({rows} < {min_rows})")
         return False, reasons
 
-    candidate = _metrics_with_utility(candidate)
-    production = _metrics_with_utility(production)
-
     c_acc = _numeric_metric(candidate, "accuracy")
     p_acc = _numeric_metric(production, "accuracy")
     c_brier = _numeric_metric(candidate, "brier_score")
@@ -201,10 +203,8 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
     p_return = _numeric_metric(production, "avg_return")
     c_downside = _numeric_metric(candidate, "downside_risk")
     p_downside = _numeric_metric(production, "downside_risk")
-    c_utility = _numeric_metric(candidate, "utility_score")
-    p_utility = _numeric_metric(production, "utility_score")
-    if None in {c_acc, p_acc, c_brier, p_brier, c_return, p_return, c_downside, p_downside, c_utility, p_utility}:
-        reasons.append("insufficient comparable accuracy, brier, return, downside, or utility metrics")
+    if None in {c_acc, p_acc, c_brier, p_brier, c_return, p_return, c_downside, p_downside}:
+        reasons.append("insufficient comparable accuracy, brier, return, or downside metrics")
         return False, reasons
 
     c_big_loss_rate = _numeric_metric(candidate, "big_loss_prediction_rate")
@@ -220,29 +220,25 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
     brier_ok = c_brier < p_brier
     return_ok = c_return >= p_return
     downside_ok = c_downside <= p_downside
-    utility_ok = c_utility > p_utility
     big_loss_ok = True if c_big_loss_rate is None or p_big_loss_rate is None else c_big_loss_rate <= p_big_loss_rate
-    min_big_gain_capture = 0.10
-    big_gain_ok = True if c_big_gain_rate is None else c_big_gain_rate >= min_big_gain_capture
+    big_gain_floor_ok = (c_big_gain_rate or 0.0) >= MIN_BIG_GAIN_CAPTURE_RATE
+    utility_ok = c_utility > (p_utility + MIN_UTILITY_IMPROVEMENT)
 
     if not accuracy_ok:
         reasons.append("candidate accuracy is below production, but accuracy is informational when profit utility improves")
     if not brier_ok:
         reasons.append("candidate brier score does not improve production")
-    if not utility_ok:
-        reasons.append("candidate profit utility does not improve production")
     if not (return_ok or downside_ok):
         reasons.append("candidate avg_return is lower and downside_risk is higher than production")
     if not big_loss_ok:
         reasons.append("candidate signals too many big-loss rows versus production")
-    if not big_gain_ok:
-        reasons.append(f"candidate big-gain capture is below minimum ({c_big_gain_rate} < {min_big_gain_capture})")
+    if not big_gain_floor_ok:
+        reasons.append(f"candidate big-gain capture is below minimum ({c_big_gain_rate or 0.0:.4f} < {MIN_BIG_GAIN_CAPTURE_RATE:.4f})")
+    if not utility_ok:
+        reasons.append("candidate profit utility does not exceed production")
 
-    if utility_ok and brier_ok and (return_ok or downside_ok) and big_loss_ok and big_gain_ok:
-        if accuracy_ok:
-            reasons.append("candidate improves profit utility and accuracy with acceptable brier, return/downside, big-loss avoidance, and minimum big-gain capture")
-        else:
-            reasons.append("candidate improves profit utility with acceptable brier, return/downside, big-loss avoidance, and minimum big-gain capture")
+    if brier_ok and (return_ok or downside_ok) and big_loss_ok and big_gain_floor_ok and utility_ok:
+        reasons.append("candidate improves profit utility with acceptable brier, return/downside, big-loss avoidance, and minimum big-gain capture")
         return True, reasons
 
     reasons.append("candidate did not satisfy profit-aware promotion thresholds")
