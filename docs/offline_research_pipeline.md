@@ -35,4 +35,4 @@ python scripts/train_challenger_suite.py \
   --min-rows 200
 ```
 
-The challenger suite trains multiple logistic variants with different thresholds and regularization settings. It writes one model artifact per challenger and `challenger_suite_manifest.json` with metrics, ranking, selected features, fill values, and `live_routing: false`.
+The challenger suite trains many offline competitors in one run: a logistic-regression grid across thresholds and regularization values, the strongest single-feature decision stumps, and simple majority/always-up/always-down baselines. It writes one model artifact per challenger and `challenger_suite_manifest.json` with model-type counts, metrics, ranking, selected features, fill values, and `live_routing: false`.

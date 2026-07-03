@@ -20,10 +20,13 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
 
     manifest = train_challenger_suite(input_path, tmp_path / "models", min_rows=10)
 
-    assert manifest["schema_version"] == "moneybot-challenger-suite.v1"
+    assert manifest["schema_version"] == "moneybot-challenger-suite.v2"
     assert manifest["live_routing"] is False
-    assert len(manifest["challengers"]) == 3
-    assert len(manifest["ranked_model_versions"]) == 3
+    assert manifest["challenger_count"] >= 20
+    assert manifest["model_type_counts"]["logistic_regression"] == 12
+    assert manifest["model_type_counts"]["decision_stump"] >= 3
+    assert manifest["model_type_counts"]["baseline_classifier"] == 3
+    assert len(manifest["ranked_model_versions"]) == manifest["challenger_count"]
     for challenger in manifest["challengers"]:
         assert (tmp_path / "models" / f"{challenger['model_version']}.json").exists()
         assert challenger["metrics"]["rows"] > 0
