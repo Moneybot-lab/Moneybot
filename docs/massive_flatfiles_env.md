@@ -1,6 +1,6 @@
 # Massive Flat Files Environment Variables
 
-MoneyBot should use environment variables for Massive flat-file access. Do **not** commit the Access Key ID or Secret Access Key to the repository, logs, docs, or test fixtures.
+MoneyBot uses environment variables for Massive flat-file access. Do **not** commit the Access Key ID or Secret Access Key to the repository, logs, docs, manifests, or test fixtures.
 
 ## Required variables
 
@@ -32,11 +32,25 @@ export MASSIVE_FLATFILES_ENDPOINT="https://files.massive.com"
 export MASSIVE_FLATFILES_BUCKET="flatfiles"
 ```
 
-Then use an S3-compatible client with the custom endpoint, for example:
+## Raw historical ingest
+
+Use the ingest helper to copy Massive flat files into immutable dated folders under `data/raw/massive_flatfiles`:
 
 ```bash
-aws s3 sync s3://flatfiles/us_stocks_sip/day_aggs_v1 data/massive_flatfiles/us_stocks_sip/day_aggs_v1 \
-  --endpoint-url https://files.massive.com
+python scripts/ingest_massive_flatfiles.py \
+  --prefix us_stocks_sip/day_aggs_v1 \
+  --dataset-date 2026-07-03
 ```
+
+The helper:
+
+- reads Massive credentials only from `MASSIVE_FLATFILES_*` environment variables;
+- maps credentials into `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` only for the child `aws s3 sync` process;
+- never writes secret values into commands or manifests;
+- writes to `data/raw/massive_flatfiles/<YYYY-MM-DD>/<safe-prefix>/`;
+- refuses to run if the destination folder already contains files, preserving raw vendor data as immutable historical snapshots;
+- writes `_INGEST_MANIFEST.json` beside the raw files for lineage and auditability.
+
+For a non-network safety check, add `--dry-run`; this creates the dated manifest without running `aws s3 sync`.
 
 Keep downloaded vendor files out of git. Use the flat feature store materializer for derived offline datasets and manifests.
