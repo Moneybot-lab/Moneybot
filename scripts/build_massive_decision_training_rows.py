@@ -36,10 +36,15 @@ def _market_date(raw: Any) -> str | None:
     text = str(raw)
     if text.isdigit():
         value = int(text)
-        if value > 10_000_000_000_000:
-            value //= 1_000_000
-        elif value > 10_000_000_000:
-            value //= 1_000
+        # Massive flat files can encode window_start in nanoseconds,
+        # microseconds, milliseconds, or seconds depending on export.
+        # Normalize by magnitude before converting to a Python timestamp.
+        if value > 100_000_000_000_000_000:
+            value = value / 1_000_000_000
+        elif value > 100_000_000_000_000:
+            value = value / 1_000_000
+        elif value > 100_000_000_000:
+            value = value / 1_000
         return datetime.fromtimestamp(value, tz=timezone.utc).date().isoformat()
     return text[:10]
 

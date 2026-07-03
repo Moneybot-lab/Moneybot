@@ -48,3 +48,18 @@ def test_write_rows_creates_reproducible_join_manifest(tmp_path):
     assert manifest["schema_version"] == "massive-decision-training-rows.v1"
     assert saved["leakage_safe"] is True
     assert saved["join_policy"] == "last_market_row_on_or_before_decision_date; labels strictly after that row"
+
+
+def test_load_market_history_normalizes_massive_nanosecond_window_start(tmp_path):
+    raw = tmp_path / "raw" / "2026-07-03" / "us_stocks_sip" / "day_aggs_v1"
+    raw.mkdir(parents=True)
+    # 2026-01-06T00:00:00Z in nanoseconds, matching Massive-style window_start values.
+    (raw / "aapl.csv").write_text(
+        "ticker,window_start,open,high,low,close,volume\n"
+        "AAPL,1767657600000000000,10,11,9,10.5,1000\n",
+        encoding="utf-8",
+    )
+
+    market = load_market_history(tmp_path / "raw")
+
+    assert market["AAPL"][0]["date"] == "2026-01-06"
