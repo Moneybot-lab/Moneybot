@@ -51,11 +51,13 @@ jobs:
       - name: Validate Track B promotion artifacts
         run: |
           set -euo pipefail
+          test -s track-b-artifact/track_b/model_comparison_track_b.json
+          test -s track-b-artifact/track_b/candidate_model_track_b.json
           python3 - <<'PY'
           import json
           import os
           from pathlib import Path
-          report = json.loads(Path(os.environ["COMPARISON_REPORT_PATH"]).read_text())
+          report = json.loads(Path("track-b-artifact/track_b/model_comparison_track_b.json").read_text())
           print(json.dumps({
               "candidate_win": report.get("candidate_win"),
               "reasons": report.get("reasons"),
@@ -73,11 +75,13 @@ jobs:
       - name: Validate Track B promotion artifacts for forced run
         run: |
           set -euo pipefail
+          test -s track-b-artifact/track_b/model_comparison_track_b.json
+          test -s track-b-artifact/track_b/candidate_model_track_b.json
           python3 - <<'PY'
           import json
           import os
           from pathlib import Path
-          report = json.loads(Path(os.environ["COMPARISON_REPORT_PATH"]).read_text())
+          report = json.loads(Path("track-b-artifact/track_b/model_comparison_track_b.json").read_text())
           print(json.dumps({
               "candidate_win": report.get("candidate_win"),
               "reasons": report.get("reasons"),
@@ -104,6 +108,6 @@ jobs:
           curl -fsS --retry 3 --retry-delay 3 --retry-all-errors \
             -X POST "$MONEYBOT_BASE_URL/api/promote-track-b-candidate" \
             -H "X-Track-B-Promotion-Token: $TRACK_B_PROMOTION_TOKEN" \
-            -F "comparison_report=@$COMPARISON_REPORT_PATH;type=application/json" \
-            -F "candidate_model=@$CANDIDATE_MODEL_PATH;type=application/json" \
+            -F "comparison_report=@track-b-artifact/track_b/model_comparison_track_b.json;type=application/json" \
+            -F "candidate_model=@track-b-artifact/track_b/candidate_model_track_b.json;type=application/json" \
             -F "force=$force_form"

@@ -2905,12 +2905,33 @@ def promote_track_b_candidate():
         ), 500
 
     promoted = completed.returncode == 0 and "promoted candidate" in (completed.stdout or "")
-    status = 200 if completed.returncode == 0 else 500
+    advisor_reload_success = None
+    advisor_reload_error = None
+    if completed.returncode == 0:
+        deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
+        if deterministic_svc is not None:
+            try:
+                if hasattr(deterministic_svc, "reload_artifact"):
+                    advisor_reload_success = bool(deterministic_svc.reload_artifact())
+                elif hasattr(deterministic_svc, "_load_artifact"):
+                    deterministic_svc._load_artifact()
+                    advisor_reload_success = getattr(deterministic_svc, "artifact", None) is not None
+                else:
+                    advisor_reload_success = False
+                    advisor_reload_error = "deterministic advisor does not support artifact reload"
+            except Exception as exc:  # noqa: BLE001
+                logging.exception("promote-track-b-candidate promoted but failed to reload deterministic advisor.")
+                advisor_reload_success = False
+                advisor_reload_error = str(exc)
+
+    status = 200 if completed.returncode == 0 and advisor_reload_success is not False else 500
     return jsonify(
         {
             "data": {
-                "success": completed.returncode == 0,
+                "success": completed.returncode == 0 and advisor_reload_success is not False,
                 "promoted": promoted,
+                "advisor_reloaded": advisor_reload_success,
+                "advisor_reload_error": advisor_reload_error,
                 "candidate_win": candidate_win,
                 "reasons": comparison_report.get("reasons") or [],
                 "command": command,
