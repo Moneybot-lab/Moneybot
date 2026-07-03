@@ -330,6 +330,73 @@ class MarketDataService:
             {"symbol": "PFE", "price": 28.77, "score": 7.2, "rationale": "Defensive rotation candidate near support."},
         ]
 
+
+    @staticmethod
+    def _series_values(frame: Any, column: str) -> list[float]:
+        try:
+            raw_values = frame[column]
+        except Exception:  # noqa: BLE001
+            return []
+        if hasattr(raw_values, "tolist"):
+            raw_values = raw_values.tolist()
+        values: list[float] = []
+        for value in raw_values:
+            try:
+                values.append(float(value))
+            except (TypeError, ValueError):
+                continue
+        return values
+
+    def _intraday_breakout_snapshot(self, symbol: str) -> Dict[str, Any]:
+        symbol_key = str(symbol or "").strip().upper()
+        if not symbol_key:
+            return {"status": "unavailable", "reason": "missing symbol"}
+
+        cache_key = f"intraday-breakout:{symbol_key}"
+        cached = self.history_cache.get(cache_key)
+        if cached:
+            return cached
+
+        try:
+            hist = yf.Ticker(symbol_key).history(period="1d", interval="5m")
+            if hist is None or getattr(hist, "empty", False):
+                raise ValueError("empty intraday history")
+            closes = self._series_values(hist, "Close")
+            highs = self._series_values(hist, "High") or closes
+            lows = self._series_values(hist, "Low") or closes
+            opens = self._series_values(hist, "Open") or closes
+            if len(closes) < 2 or not opens:
+                raise ValueError("insufficient intraday bars")
+
+            day_open = opens[0]
+            latest = closes[-1]
+            day_high = max(highs)
+            day_low = min(lows)
+            intraday_change = ((latest - day_open) / day_open) * 100.0 if day_open > 0 else 0.0
+            pullback_from_high = ((day_high - latest) / day_high) * 100.0 if day_high > 0 else 0.0
+            bounce_from_low = ((latest - day_low) / day_low) * 100.0 if day_low > 0 else 0.0
+            higher_than_recent = latest >= max(closes[-min(6, len(closes)):]) * 0.995
+            qualifies = bool(
+                intraday_change >= 3.0
+                and pullback_from_high <= 3.0
+                and (higher_than_recent or bounce_from_low >= 5.0)
+            )
+            payload = {
+                "status": "ok",
+                "qualifies": qualifies,
+                "intraday_change_percent": round(intraday_change, 2),
+                "pullback_from_high_percent": round(pullback_from_high, 2),
+                "day_open": round(day_open, 4),
+                "day_high": round(day_high, 4),
+                "latest": round(latest, 4),
+            }
+        except Exception as exc:  # noqa: BLE001
+            logging.info("Intraday breakout validation unavailable for %s: %s", symbol_key, exc)
+            payload = {"status": "unavailable", "qualifies": None, "reason": str(exc)}
+
+        self.history_cache.set(cache_key, payload)
+        return payload
+
     def get_breakout_radar(self) -> list[Dict[str, Any]]:
         candidates = self._dynamic_hot_momentum_candidates(screeners=("small_cap_gainers", "day_gainers"))
         enriched: list[Dict[str, Any]] = []
@@ -360,6 +427,17 @@ class MarketDataService:
             merged["quote_source"] = quote.get("quote_source")
             merged["live_data_available"] = bool(quote.get("live_data_available"))
             merged["decision_source"] = str(item.get("candidate_source") or "scanner")
+            intraday_breakout = self._intraday_breakout_snapshot(item["symbol"])
+            merged["intraday_breakout"] = intraday_breakout
+            if intraday_breakout.get("qualifies") is False:
+                continue
+            if intraday_breakout.get("status") == "ok":
+                merged["rationale"] = (
+                    f"Confirmed intraday breakout: price is up "
+                    f"{intraday_breakout.get('intraday_change_percent')}% from today's open and "
+                    f"within {intraday_breakout.get('pullback_from_high_percent')}% of today's high. "
+                    f"{merged['rationale']}"
+                )
             enriched.append(merged)
         return sorted(
             enriched,
@@ -754,6 +832,17 @@ class MarketDataService:
             merged["quote_source"] = quote.get("quote_source")
             merged["live_data_available"] = bool(quote.get("live_data_available"))
             merged["decision_source"] = str(item.get("candidate_source") or "scanner")
+            intraday_breakout = self._intraday_breakout_snapshot(item["symbol"])
+            merged["intraday_breakout"] = intraday_breakout
+            if intraday_breakout.get("qualifies") is False:
+                continue
+            if intraday_breakout.get("status") == "ok":
+                merged["rationale"] = (
+                    f"Confirmed intraday breakout: price is up "
+                    f"{intraday_breakout.get('intraday_change_percent')}% from today's open and "
+                    f"within {intraday_breakout.get('pullback_from_high_percent')}% of today's high. "
+                    f"{merged['rationale']}"
+                )
             enriched.append(merged)
         return sorted(
             enriched,
@@ -1289,6 +1378,17 @@ class MarketDataService:
             merged["quote_source"] = quote.get("quote_source")
             merged["live_data_available"] = bool(quote.get("live_data_available"))
             merged["decision_source"] = str(item.get("candidate_source") or "scanner")
+            intraday_breakout = self._intraday_breakout_snapshot(item["symbol"])
+            merged["intraday_breakout"] = intraday_breakout
+            if intraday_breakout.get("qualifies") is False:
+                continue
+            if intraday_breakout.get("status") == "ok":
+                merged["rationale"] = (
+                    f"Confirmed intraday breakout: price is up "
+                    f"{intraday_breakout.get('intraday_change_percent')}% from today's open and "
+                    f"within {intraday_breakout.get('pullback_from_high_percent')}% of today's high. "
+                    f"{merged['rationale']}"
+                )
             enriched.append(merged)
         return sorted(
             enriched,
