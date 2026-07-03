@@ -3,18 +3,38 @@ name: Track B Offline Challenger
 on:
   schedule:
     - cron: "15 6 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      massive_prefix:
+        description: "Massive flat-files prefix to ingest"
+        required: true
+        default: "us_stocks_sip/day_aggs_v1"
+        type: string
+      dataset_date:
+        description: "Immutable ingest date folder (YYYY-MM-DD); leave blank for current UTC date"
+        required: false
+        default: ""
+        type: string
+      min_rows:
+        description: "Minimum rows required for challenger training/backtest gates"
+        required: true
+        default: "200"
+        type: string
 
 permissions:
   contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  PYTHONPATH: ${{ github.workspace }}
+  MASSIVE_FLATFILES_PREFIX: ${{ inputs.massive_prefix || 'us_stocks_sip/day_aggs_v1' }}
+  MASSIVE_INGEST_DATE: ${{ inputs.dataset_date || '' }}
+  TRACK_B_MIN_ROWS: ${{ inputs.min_rows || '200' }}
 
 jobs:
   run-track-b:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
 
     steps:
       - name: Checkout repo
@@ -28,10 +48,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt awscli
+          aws --version
 
-      - name: Track B dry-run
-        run: python3 scripts/run_track_b_offline.py --dry-run
+      - name: Validate Massive flat-file secrets
+        env:
+          MASSIVE_FLATFILES_ACCESS_KEY_ID: ${{ secrets.MASSIVE_FLATFILES_ACCESS_KEY_ID }}
+          MASSIVE_FLATFILES_SECRET_ACCESS_KEY: ${{ secrets.MASSIVE_FLATFILES_SECRET_ACCESS_KEY }}
+          MASSIVE_FLATFILES_ENDPOINT: ${{ secrets.MASSIVE_FLATFILES_ENDPOINT }}
+          MASSIVE_FLATFILES_BUCKET: ${{ secrets.MASSIVE_FLATFILES_BUCKET }}
+        run: python3 scripts/check_massive_flatfiles_env.py --prefix "$MASSIVE_FLATFILES_PREFIX"
 
       - name: Fetch real decision log export
         env:
@@ -50,15 +76,59 @@ jobs:
 
           test -s data/decision_events.jsonl || (echo "Exported decision log is empty" && exit 1)
           wc -l data/decision_events.jsonl
-          tail -n 2 data/decision_events.jsonl
 
-      - name: Run Track B offline pipeline
+      - name: Ingest Massive flat files into immutable dated folder
+        env:
+          MASSIVE_FLATFILES_ACCESS_KEY_ID: ${{ secrets.MASSIVE_FLATFILES_ACCESS_KEY_ID }}
+          MASSIVE_FLATFILES_SECRET_ACCESS_KEY: ${{ secrets.MASSIVE_FLATFILES_SECRET_ACCESS_KEY }}
+          MASSIVE_FLATFILES_ENDPOINT: ${{ secrets.MASSIVE_FLATFILES_ENDPOINT }}
+          MASSIVE_FLATFILES_BUCKET: ${{ secrets.MASSIVE_FLATFILES_BUCKET }}
         run: |
-          python3 scripts/run_track_b_offline.py \
-            --input-log data/decision_events.jsonl \
-            --output-dir data/track_b \
-            --min-rows 200 \
-            --dataset-limit 50000
+          set -euo pipefail
+          args=(--prefix "$MASSIVE_FLATFILES_PREFIX" --destination-root data/raw/massive_flatfiles)
+          if [ -n "$MASSIVE_INGEST_DATE" ]; then
+            args+=(--dataset-date "$MASSIVE_INGEST_DATE")
+          fi
+          python3 scripts/ingest_massive_flatfiles.py "${args[@]}"
+
+      - name: Build leakage-safe Massive decision training rows
+        run: |
+          python3 scripts/build_massive_decision_training_rows.py \
+            --raw-root data/raw/massive_flatfiles \
+            --decision-log data/decision_events.jsonl \
+            --output data/track_b/decision_training_snapshot_massive.jsonl \
+            --limit 50000 \
+            --horizon-days 5
+
+      - name: Materialize reproducible flat feature store
+        run: |
+          python3 scripts/day15_materialize_flat_feature_store.py \
+            --input data/track_b/decision_training_snapshot_massive.jsonl \
+            --output-dir data/track_b/flat_feature_store \
+            --train-ratio 0.8
+
+      - name: Train offline challenger suite
+        run: |
+          python3 scripts/train_challenger_suite.py \
+            --input data/track_b/flat_feature_store/train.jsonl \
+            --output-dir data/track_b/challenger_suite \
+            --min-rows "$TRACK_B_MIN_ROWS"
+
+      - name: Backtest and gate challenger suite
+        run: |
+          python3 scripts/backtest_challenger_suite.py \
+            --suite-manifest data/track_b/challenger_suite/challenger_suite_manifest.json \
+            --feature-store data/track_b/flat_feature_store/test.jsonl \
+            --output data/track_b/challenger_suite/backtest_report.json \
+            --min-rows "$TRACK_B_MIN_ROWS" \
+            --transaction-cost-bps 5 \
+            --slippage-bps 5
+
+      - name: Prepare manual Render promotion artifacts
+        run: |
+          python3 scripts/prepare_challenger_promotion.py \
+            --backtest-report data/track_b/challenger_suite/backtest_report.json \
+            --output-dir data/track_b
 
       - name: Upload Track B artifacts
         if: always()
@@ -68,4 +138,5 @@ jobs:
           path: |
             data/track_b/**
             data/decision_events.jsonl
+            data/raw/**/_INGEST_MANIFEST.json
           if-no-files-found: warn
