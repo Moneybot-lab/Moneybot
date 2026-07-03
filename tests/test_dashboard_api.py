@@ -1594,6 +1594,17 @@ def test_promote_track_b_candidate_uploads_and_runs_promotion(monkeypatch, tmp_p
     client.application.config["TRACK_B_PROMOTION_TOKEN"] = "promote-token"
     client.application.config["DETERMINISTIC_MODEL_PATH"] = str(tmp_path / "day1_baseline_model.json")
 
+    class ReloadableAdvisor:
+        def __init__(self):
+            self.reload_count = 0
+
+        def reload_artifact(self):
+            self.reload_count += 1
+            return True
+
+    advisor = ReloadableAdvisor()
+    client.application.extensions["deterministic_quick_advisor"] = advisor
+
     report = {"candidate_win": True, "reasons": ["candidate accuracy exceeds production by at least 0.02"]}
     candidate = {"version": "candidate-promoted-v1"}
     res = client.post(
@@ -1610,6 +1621,9 @@ def test_promote_track_b_candidate_uploads_and_runs_promotion(monkeypatch, tmp_p
     payload = res.get_json()["data"]
     assert payload["success"] is True
     assert payload["promoted"] is True
+    assert payload["advisor_reloaded"] is True
+    assert payload["advisor_reload_error"] is None
+    assert advisor.reload_count == 1
     assert payload["candidate_win"] is True
     assert payload["comparison_report_path"] == str(tmp_path / "track_b" / "model_comparison_track_b.json")
     assert payload["candidate_model_path"] == str(tmp_path / "track_b" / "candidate_model_track_b.json")
