@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       track_b_run_id:
-        description: "Run ID from the successful Track B Offline Challenger workflow"
+        description: "Run ID from the successful gated Massive Track B Offline Challenger workflow"
         required: true
         type: string
       force:
@@ -39,8 +39,8 @@ jobs:
           set -euo pipefail
           echo "Downloaded artifact files:"
           find track-b-artifact -maxdepth 6 -type f | sort
-          comparison_path="$(find track-b-artifact -type f -name model_comparison_track_b.json | head -n 1)"
-          candidate_path="$(find track-b-artifact -type f -name candidate_model_track_b.json | head -n 1)"
+          comparison_path="$(find track-b-artifact -type f -path "*/data/track_b/model_comparison_track_b.json" -o -name model_comparison_track_b.json | head -n 1)"
+          candidate_path="$(find track-b-artifact -type f -path "*/data/track_b/candidate_model_track_b.json" -o -name candidate_model_track_b.json | head -n 1)"
           test -n "$comparison_path" || (echo "Missing model_comparison_track_b.json in downloaded artifact" && exit 1)
           test -n "$candidate_path" || (echo "Missing candidate_model_track_b.json in downloaded artifact" && exit 1)
           test -s "$comparison_path"
@@ -63,7 +63,10 @@ jobs:
               "production_metrics": report.get("production_metrics"),
           }, indent=2, sort_keys=True))
           if not report.get("candidate_win"):
-              raise SystemExit("Track B report does not have candidate_win=true; re-run with force only if explicitly approved.")
+              raise SystemExit("No gated challenger is ready for Render promotion; do not force unless explicitly approved after reviewing backtest_report.json.")
+          gates = report.get("promotion_gates") or {}
+          if gates and not gates.get("promotion_ready", False):
+              raise SystemExit("Selected challenger does not have promotion_ready=true in promotion_gates.")
           PY
         if: ${{ !inputs.force }}
 
