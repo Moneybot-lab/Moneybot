@@ -5,7 +5,7 @@ import argparse
 import csv
 import gzip
 import json
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Any, Iterable
@@ -103,9 +103,9 @@ def _event_day(ts: int) -> str:
 
 
 def _feature_cutoff_day(ts: int) -> str:
-    event_at_market = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(MARKET_TIMEZONE)
+    event_at_market = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(MARKET_TZ)
     event_date = event_at_market.date()
-    if event_at_market.time() >= MARKET_CLOSE_TIME:
+    if event_at_market.time() >= MARKET_CLOSE:
         return event_date.isoformat()
     return (event_date - timedelta(days=1)).isoformat()
 
@@ -124,16 +124,8 @@ def _row_before(rows: list[dict[str, Any]], day: str, *, inclusive: bool) -> int
     return idx
 
 
-def _event_at_or_after_market_close(ts: int) -> bool:
-    event_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-    local_dt = event_dt.astimezone(MARKET_TZ)
-    close_dt = datetime.combine(local_dt.date(), MARKET_CLOSE, tzinfo=MARKET_TZ)
-    return local_dt >= close_dt
-
-
 def _feature_row_index(rows: list[dict[str, Any]], ts: int) -> int | None:
-    event_day = _event_day(ts)
-    return _row_before(rows, event_day, inclusive=_event_at_or_after_market_close(ts))
+    return _row_before_or_on(rows, _feature_cutoff_day(ts))
 
 
 def _pct(newer: float, older: float | None) -> float | None:
