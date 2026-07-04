@@ -27,6 +27,7 @@ def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):
     assert summary["rows_joined"] == 1
     row = rows[0]
     assert row["market_asof_date"] == "2026-01-06"
+    assert row["label_start_date"] == "2026-01-06"
     assert row["label_asof_date"] == "2026-01-09"
     assert row["feature_close"] == 15.0
     assert row["feature_return_1d_lagged"] == round(15 / 14 - 1, 6)
@@ -51,10 +52,11 @@ def test_intraday_decision_excludes_same_day_bar_before_market_close(tmp_path):
     row = rows[0]
     assert row["event_date"] == "2026-01-07"
     assert row["market_asof_date"] == "2026-01-06"
-    assert row["label_asof_date"] == "2026-01-08"
+    assert row["label_start_date"] == "2026-01-07"
+    assert row["label_asof_date"] == "2026-01-09"
     assert row["feature_close"] == 15.0
     assert row["feature_return_1d_lagged"] == round(15 / 14 - 1, 6)
-    assert row["return_2d"] == round(18 / 15 - 1, 6)
+    assert row["return_2d"] == round(21 / 99 - 1, 6)
 
 
 def test_write_rows_creates_reproducible_join_manifest(tmp_path):
@@ -73,4 +75,4 @@ def test_write_rows_creates_reproducible_join_manifest(tmp_path):
     saved = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == "massive-decision-training-rows.v1"
     assert saved["leakage_safe"] is True
-    assert saved["join_policy"] == "last_completed_market_close_before_decision_timestamp_or_same_day_after_16:00_America/New_York; labels strictly after that row"
+    assert saved["join_policy"] == "features use last completed market close before decision timestamp or same day after 16:00 America/New_York; labels anchor to the decision date and advance by horizon sessions"

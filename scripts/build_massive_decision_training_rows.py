@@ -100,6 +100,10 @@ def _event_day(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
 
 
+def _decision_market_day(ts: int) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(MARKET_TIMEZONE).date().isoformat()
+
+
 def _feature_cutoff_day(ts: int) -> str:
     event_at_market = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(MARKET_TIMEZONE)
     event_date = event_at_market.date()
@@ -135,13 +139,18 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             summary["missing_symbol_history"] += 1
             continue
         event_day = _event_day(ts)
+        decision_market_day = _decision_market_day(ts)
         feature_cutoff_day = _feature_cutoff_day(ts)
         history = market[symbol]
         idx = _row_before_or_on(history, feature_cutoff_day)
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
-        label_idx = idx + max(1, horizon_days)
+        label_anchor_idx = _row_before_or_on(history, decision_market_day)
+        if label_anchor_idx is None:
+            summary["insufficient_forward_window"] += 1
+            continue
+        label_idx = label_anchor_idx + max(1, horizon_days)
         if label_idx >= len(history):
             summary["insufficient_forward_window"] += 1
             continue
@@ -149,15 +158,18 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         asof = history[idx]
         prev1 = history[idx - 1]
         prev5 = history[idx - 5]
+        label_anchor = history[label_anchor_idx]
         future = history[label_idx]
         close = float(asof["close"])
-        return_fwd = _pct(float(future["close"]), close)
+        label_close = float(label_anchor["close"])
+        return_fwd = _pct(float(future["close"]), label_close)
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
         row = {
             "ts": ts,
             "event_date": event_day,
             "market_asof_date": asof["date"],
+            "label_start_date": label_anchor["date"],
             "label_asof_date": future["date"],
             "symbol": symbol,
             "endpoint": str(event.get("endpoint") or "unknown"),
@@ -171,7 +183,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_volume": asof.get("volume"),
             f"return_{horizon_days}d": return_fwd,
             f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
-            "leakage_guard": "features_use_previous_completed_market_close_unless_decision_after_market_close_labels_after_feature_row",
+            "leakage_guard": "features_use_previous_completed_market_close_unless_decision_after_market_close_labels_anchor_to_decision_date",
         }
         rows.append(row)
         summary["rows_joined"] += 1
@@ -191,7 +203,7 @@ def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], 
         "output_path": str(path),
         "horizon_days": horizon_days,
         "leakage_safe": True,
-        "join_policy": "last_completed_market_close_before_decision_timestamp_or_same_day_after_16:00_America/New_York; labels strictly after that row",
+        "join_policy": "features use last completed market close before decision timestamp or same day after 16:00 America/New_York; labels anchor to the decision date and advance by horizon sessions",
         **summary,
     }
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
