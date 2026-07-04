@@ -9,13 +9,14 @@ from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Any, Iterable
+from zoneinfo import ZoneInfo
 
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import normalize_action, normalize_unix_ts
 
 SCHEMA_VERSION = "massive-decision-training-rows.v1"
-MARKET_TZ = ZoneInfo("America/New_York")
-MARKET_CLOSE = time(16, 0)
+MARKET_TIMEZONE = ZoneInfo("America/New_York")
+REGULAR_MARKET_CLOSE = time(16, 0)
 
 
 def _iter_text(path: Path):
@@ -39,13 +40,16 @@ def _market_date(raw: Any) -> str | None:
     text = str(raw).strip()
     if text.isdigit():
         value = int(text)
-        if value > 10_000_000_000_000_000:
+        if value >= 100_000_000_000_000_000:
             value //= 1_000_000_000
         elif value > 10_000_000_000_000:
             value //= 1_000_000
         elif value > 10_000_000_000:
             value //= 1_000
-        return datetime.fromtimestamp(value, tz=timezone.utc).date().isoformat()
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc).date().isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
     return text[:10]
 
 
@@ -114,12 +118,13 @@ def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
     return _row_before(rows, day, inclusive=True)
 
 
-def _row_before(rows: list[dict[str, Any]], day: str, *, inclusive: bool) -> int | None:
+def _row_asof_decision_time(rows: list[dict[str, Any]], day: str, *, include_event_day: bool) -> int | None:
     idx = None
     for pos, row in enumerate(rows):
-        if row["date"] < day or (inclusive and row["date"] == day):
+        row_day = row["date"]
+        if row_day < day or (include_event_day and row_day == day):
             idx = pos
-        else:
+        elif row_day >= day:
             break
     return idx
 
@@ -147,7 +152,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         event_day = _event_day(ts)
         feature_cutoff_day = _feature_cutoff_day(ts)
         history = market[symbol]
-        idx = _feature_row_index(history, ts)
+        idx = _row_asof_decision_time(history, event_day, include_event_day=_event_after_regular_market_close(ts))
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
@@ -181,7 +186,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_volume": asof.get("volume"),
             f"return_{horizon_days}d": return_fwd,
             f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
-            "leakage_guard": "features_asof_prior_completed_market_close_labels_after_decision_date",
+            "leakage_guard": "features_asof_prior_completed_market_close_unless_decision_after_close_labels_after_feature_row",
         }
         rows.append(row)
         summary["rows_joined"] += 1
@@ -201,7 +206,7 @@ def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], 
         "output_path": str(path),
         "horizon_days": horizon_days,
         "leakage_safe": True,
-        "join_policy": "last_completed_market_row_before_decision_time; same-day EOD row allowed only at/after market close; labels strictly after feature row",
+        "join_policy": "last_completed_market_row_before_decision_time; same-day row only after regular market close; labels strictly after feature row",
         **summary,
     }
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
