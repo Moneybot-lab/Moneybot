@@ -433,7 +433,7 @@ class WorkerConfig:
     demand_ttl_seconds: int = 90
     reconcile_seconds: float = 2.0
     publish_coalesce_ms: int = 250
-    heartbeat_timeout_seconds: float = 45.0
+    heartbeat_timeout_seconds: float = 0.0
     reconnect_min_seconds: float = 1.0
     reconnect_max_seconds: float = 30.0
     max_queue: int = 64
@@ -481,6 +481,9 @@ class MassiveWebSocketWorker:
         self._last_error: str | None = None
         self._stop = False
 
+    def _record_websocket_frame(self) -> None:
+        self._last_message_at = self.clock()
+
     async def _send_action(self, websocket: Any, action: str, channels: list[str], *, check_ack: bool = False) -> None:
         if not channels:
             return
@@ -493,6 +496,7 @@ class MassiveWebSocketWorker:
             if remaining <= 0:
                 raise RuntimeError(f"Massive WebSocket {action} acknowledgement timed out")
             raw = await asyncio.wait_for(websocket.recv(), timeout=remaining)
+            self._record_websocket_frame()
             responses = self.parser.parse_message(raw, received_at=self.clock())
             statuses = [item for item in responses if isinstance(item, dict) and item.get("event_type") == "status"]
             if any(item.get("status") == "success" for item in statuses):
@@ -510,6 +514,7 @@ class MassiveWebSocketWorker:
             if remaining <= 0:
                 raise RuntimeError(f"Massive WebSocket authentication timed out: {observed}")
             raw = await asyncio.wait_for(websocket.recv(), timeout=remaining)
+            self._record_websocket_frame()
             responses = self.parser.parse_message(raw, received_at=self.clock())
             statuses = [item for item in responses if isinstance(item, dict)]
             observed.extend(statuses)
@@ -679,14 +684,16 @@ class MassiveWebSocketWorker:
         next_reconcile = time.monotonic() + self.config.reconcile_seconds
         next_shadow_compare = time.monotonic() + self.config.shadow_compare_seconds
         while not self._stop:
-            timeout = min(self.config.heartbeat_timeout_seconds, max(.1, next_reconcile - time.monotonic()))
+            reconcile_wait = max(.1, next_reconcile - time.monotonic())
+            heartbeat_timeout = self.config.heartbeat_timeout_seconds
+            timeout = min(heartbeat_timeout, reconcile_wait) if heartbeat_timeout > 0 else reconcile_wait
             try:
                 raw = await asyncio.wait_for(websocket.recv(), timeout=timeout)
             except asyncio.TimeoutError:
-                if self._last_message_at and (self.clock() - self._last_message_at).total_seconds() >= self.config.heartbeat_timeout_seconds:
+                if heartbeat_timeout > 0 and self._last_message_at and (self.clock() - self._last_message_at).total_seconds() >= heartbeat_timeout:
                     raise RuntimeError("Massive WebSocket heartbeat timeout")
             else:
-                self._last_message_at = self.clock()
+                self._record_websocket_frame()
                 await self.process_raw_message(raw)
 
             if time.monotonic() >= next_reconcile:
@@ -763,7 +770,7 @@ def worker_config_from_env(env: Mapping[str, str]) -> WorkerConfig:
         demand_ttl_seconds=int(env.get("MASSIVE_STREAM_DEMAND_TTL_SECONDS", "90")),
         reconcile_seconds=float(env.get("MASSIVE_STREAM_RECONCILE_SECONDS", "2")),
         publish_coalesce_ms=int(env.get("MASSIVE_STREAM_PUBLISH_COALESCE_MS", "250")),
-        heartbeat_timeout_seconds=float(env.get("MASSIVE_STREAM_HEARTBEAT_TIMEOUT_SECONDS", "45")),
+        heartbeat_timeout_seconds=float(env.get("MASSIVE_STREAM_HEARTBEAT_TIMEOUT_SECONDS", "0")),
         reconnect_min_seconds=float(env.get("MASSIVE_STREAM_RECONNECT_MIN_SECONDS", "1")),
         reconnect_max_seconds=float(env.get("MASSIVE_STREAM_RECONNECT_MAX_SECONDS", "30")),
         max_queue=int(env.get("MASSIVE_STREAM_MAX_QUEUE", "64")),
