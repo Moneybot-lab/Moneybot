@@ -5,7 +5,7 @@ import argparse
 import csv
 import gzip
 import json
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -13,6 +13,7 @@ from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import normalize_action, normalize_unix_ts
 
 SCHEMA_VERSION = "massive-decision-training-rows.v1"
+MARKET_DAILY_BAR_CUTOFF_UTC = time(21, 0)
 
 
 def _iter_text(path: Path):
@@ -33,10 +34,12 @@ def _coerce_float(value: Any) -> float | None:
 def _market_date(raw: Any) -> str | None:
     if raw in {None, ""}:
         return None
-    text = str(raw)
+    text = str(raw).strip()
     if text.isdigit():
         value = int(text)
-        if value > 10_000_000_000_000:
+        if value > 10_000_000_000_000_000:
+            value //= 1_000_000_000
+        elif value > 10_000_000_000_000:
             value //= 1_000_000
         elif value > 10_000_000_000:
             value //= 1_000
@@ -107,6 +110,16 @@ def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
     return idx
 
 
+def _row_asof_decision(rows: list[dict[str, Any]], ts: int) -> int | None:
+    decision_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    idx = _row_before_or_on(rows, decision_dt.date().isoformat())
+    if idx is None:
+        return None
+    if rows[idx]["date"] == decision_dt.date().isoformat() and decision_dt.time() < MARKET_DAILY_BAR_CUTOFF_UTC:
+        idx -= 1
+    return idx if idx >= 0 else None
+
+
 def _pct(newer: float, older: float | None) -> float | None:
     if older in {None, 0}:
         return None
@@ -125,7 +138,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             continue
         event_day = _event_day(ts)
         history = market[symbol]
-        idx = _row_before_or_on(history, event_day)
+        idx = _row_asof_decision(history, ts)
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
@@ -179,7 +192,8 @@ def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], 
         "output_path": str(path),
         "horizon_days": horizon_days,
         "leakage_safe": True,
-        "join_policy": "last_market_row_on_or_before_decision_date; labels strictly after that row",
+        "join_policy": "last_completed_market_row_before_decision_cutoff; labels strictly after that row",
+        "market_daily_bar_cutoff_utc": MARKET_DAILY_BAR_CUTOFF_UTC.isoformat(),
         **summary,
     }
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")

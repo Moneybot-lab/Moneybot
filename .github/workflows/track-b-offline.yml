@@ -26,6 +26,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  PYTHONPATH: ${{ github.workspace }}
   MASSIVE_FLATFILES_PREFIX: ${{ inputs.massive_prefix || 'us_stocks_sip/day_aggs_v1' }}
   MASSIVE_INGEST_DATE: ${{ inputs.dataset_date || '' }}
   TRACK_B_MIN_ROWS: ${{ inputs.min_rows || '200' }}
