@@ -50,9 +50,28 @@ def test_build_training_rows_excludes_same_day_daily_bar_before_market_close(tmp
     assert summary["rows_joined"] == 1
     row = rows[0]
     assert row["market_asof_date"] == "2026-01-06"
-    assert row["label_asof_date"] == "2026-01-09"
+    assert row["label_asof_date"] == "2026-01-10"
     assert row["feature_close"] == 15.0
-    assert row["return_3d"] == round(21 / 15 - 1, 6)
+    assert row["return_3d"] == round(20 / 15 - 1, 6)
+
+
+def test_intraday_labels_anchor_to_decision_date_not_shifted_feature_row(tmp_path):
+    raw = tmp_path / "raw" / "2026-07-03" / "us_stocks_sip" / "day_aggs_v1"
+    raw.mkdir(parents=True)
+    csv_rows = ["ticker,date,open,high,low,close,volume"]
+    for idx, close in enumerate([10, 11, 12, 13, 14, 15, 99, 18, 21, 20, 22], start=1):
+        csv_rows.append(f"AAPL,2026-01-{idx:02d},{close},{close},{close},{close},{1000 + idx}")
+    (raw / "aapl.csv").write_text("\n".join(csv_rows) + "\n", encoding="utf-8")
+    market = load_market_history(tmp_path / "raw")
+    events = [{"ts": _ts_at("2026-01-07", 15), "symbol": "AAPL", "payload": {"recommendation": "BUY"}}]
+
+    rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=1)
+
+    assert summary["rows_joined"] == 1
+    row = rows[0]
+    assert row["market_asof_date"] == "2026-01-06"
+    assert row["label_asof_date"] == "2026-01-08"
+    assert row["return_1d"] == round(18 / 15 - 1, 6)
 
 
 def test_write_rows_creates_reproducible_join_manifest(tmp_path):
@@ -71,7 +90,7 @@ def test_write_rows_creates_reproducible_join_manifest(tmp_path):
     saved = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == "massive-decision-training-rows.v1"
     assert saved["leakage_safe"] is True
-    assert saved["join_policy"] == "last_completed_market_row_before_decision_timestamp; same-date daily bars only after regular market close; labels strictly after that row"
+    assert saved["join_policy"] == "features use last completed market row before decision timestamp; same-date daily bars only after regular market close; labels anchor to the decision date row before applying the horizon"
 
 
 def test_load_market_history_normalizes_massive_nanosecond_window_start(tmp_path):
