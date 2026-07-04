@@ -5,17 +5,17 @@ import argparse
 import csv
 import gzip
 import json
-from datetime import datetime, time, timedelta, timezone
-from zoneinfo import ZoneInfo
+from datetime import datetime, time, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from typing import Any, Iterable
 
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import normalize_action, normalize_unix_ts
 
 SCHEMA_VERSION = "massive-decision-training-rows.v1"
-MARKET_TIMEZONE = ZoneInfo("America/New_York")
-MARKET_CLOSE_TIME = time(16, 0)
+MARKET_TZ = ZoneInfo("America/New_York")
+MARKET_CLOSE = time(16, 0)
 
 
 def _iter_text(path: Path):
@@ -36,18 +36,15 @@ def _coerce_float(value: Any) -> float | None:
 def _market_date(raw: Any) -> str | None:
     if raw in {None, ""}:
         return None
-    text = str(raw)
+    text = str(raw).strip()
     if text.isdigit():
         value = int(text)
-        # Massive flat files can encode window_start in nanoseconds,
-        # microseconds, milliseconds, or seconds depending on export.
-        # Normalize by magnitude before converting to a Python timestamp.
-        if value > 100_000_000_000_000_000:
-            value = value / 1_000_000_000
-        elif value > 100_000_000_000_000:
-            value = value / 1_000_000
-        elif value > 100_000_000_000:
-            value = value / 1_000
+        if value > 10_000_000_000_000_000:
+            value //= 1_000_000_000
+        elif value > 10_000_000_000_000:
+            value //= 1_000_000
+        elif value > 10_000_000_000:
+            value //= 1_000
         return datetime.fromtimestamp(value, tz=timezone.utc).date().isoformat()
     return text[:10]
 
@@ -114,13 +111,29 @@ def _feature_cutoff_day(ts: int) -> str:
 
 
 def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
+    return _row_before(rows, day, inclusive=True)
+
+
+def _row_before(rows: list[dict[str, Any]], day: str, *, inclusive: bool) -> int | None:
     idx = None
     for pos, row in enumerate(rows):
-        if row["date"] <= day:
+        if row["date"] < day or (inclusive and row["date"] == day):
             idx = pos
         else:
             break
     return idx
+
+
+def _event_at_or_after_market_close(ts: int) -> bool:
+    event_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    local_dt = event_dt.astimezone(MARKET_TZ)
+    close_dt = datetime.combine(local_dt.date(), MARKET_CLOSE, tzinfo=MARKET_TZ)
+    return local_dt >= close_dt
+
+
+def _feature_row_index(rows: list[dict[str, Any]], ts: int) -> int | None:
+    event_day = _event_day(ts)
+    return _row_before(rows, event_day, inclusive=_event_at_or_after_market_close(ts))
 
 
 def _pct(newer: float, older: float | None) -> float | None:
@@ -142,7 +155,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         event_day = _event_day(ts)
         feature_cutoff_day = _feature_cutoff_day(ts)
         history = market[symbol]
-        idx = _row_before_or_on(history, feature_cutoff_day)
+        idx = _feature_row_index(history, ts)
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
@@ -176,7 +189,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_volume": asof.get("volume"),
             f"return_{horizon_days}d": return_fwd,
             f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
-            "leakage_guard": "features_use_previous_completed_market_close_unless_decision_after_market_close_labels_after_feature_row",
+            "leakage_guard": "features_asof_prior_completed_market_close_labels_after_decision_date",
         }
         rows.append(row)
         summary["rows_joined"] += 1
@@ -196,7 +209,7 @@ def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], 
         "output_path": str(path),
         "horizon_days": horizon_days,
         "leakage_safe": True,
-        "join_policy": "last_completed_market_close_before_decision_timestamp_or_same_day_after_16:00_America/New_York; labels strictly after that row",
+        "join_policy": "last_completed_market_row_before_decision_time; same-day EOD row allowed only at/after market close; labels strictly after feature row",
         **summary,
     }
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
