@@ -10,6 +10,8 @@ import numpy as np
 
 from .deterministic_model import BaselineModelArtifact, default_baseline_artifact, load_artifact, predict_proba
 
+LIVE_SUPPLIED_FEATURE_COLUMNS = frozenset({"return_1d", "return_5d", "rsi_14", "macd_hist", "vol_ratio_20d"})
+
 
 class DeterministicQuickAdvisor:
     """Serve quick-ask predictions from the Day-1 deterministic model artifact."""
