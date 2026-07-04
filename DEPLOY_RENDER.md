@@ -50,7 +50,7 @@ Set these env vars on the web service:
 - `MASSIVE_STREAM_DEMAND_TTL_SECONDS` = browser/endpoint demand TTL (default `90`)
 - `MASSIVE_STREAM_RECONCILE_SECONDS` = desired/actual subscription reconciliation interval (default `2`)
 - `MASSIVE_STREAM_PUBLISH_COALESCE_MS` = Redis Pub/Sub coalescing interval (default `250`)
-- `MASSIVE_STREAM_HEARTBEAT_TIMEOUT_SECONDS` = no-message reconnect threshold (default `45`)
+- `MASSIVE_STREAM_HEARTBEAT_TIMEOUT_SECONDS` = optional no-message reconnect threshold in seconds (default `0`, disabled)
 - `MASSIVE_STREAM_RECONNECT_MIN_SECONDS` / `MASSIVE_STREAM_RECONNECT_MAX_SECONDS` = jittered exponential reconnect bounds
 - `MASSIVE_STREAM_MAX_QUEUE` = WebSocket receive high-water bound (default `64`)
 - `MASSIVE_STREAM_ACK_TIMEOUT_SECONDS` = authentication/subscription acknowledgement timeout (default `10`)
