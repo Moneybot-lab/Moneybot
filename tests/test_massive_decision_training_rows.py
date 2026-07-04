@@ -5,7 +5,9 @@ from scripts.build_massive_decision_training_rows import build_training_rows_fro
 
 
 def _ts(day: str, hour: int = 0) -> int:
-    return int(datetime.fromisoformat(day).replace(hour=hour, tzinfo=timezone.utc).timestamp())
+    if "T" in day:
+        return int(datetime.fromisoformat(day).timestamp())
+    return int(datetime.fromisoformat(f"{day}T{hour:02d}:00:00").replace(tzinfo=timezone.utc).timestamp())
 
 
 def test_build_training_rows_uses_only_completed_asof_features_and_future_label(tmp_path):
@@ -23,6 +25,7 @@ def test_build_training_rows_uses_only_completed_asof_features_and_future_label(
     assert summary["rows_joined"] == 1
     row = rows[0]
     assert row["market_asof_date"] == "2026-01-06"
+    assert row["label_baseline_date"] == "2026-01-06"
     assert row["label_asof_date"] == "2026-01-09"
     assert row["feature_close"] == 15.0
     assert row["feature_return_1d_lagged"] == round(15 / 14 - 1, 6)
@@ -74,9 +77,11 @@ def test_build_training_rows_rejects_same_day_eod_bar_for_intraday_decision(tmp_
     row = rows[0]
     assert row["event_date"] == "2026-01-07"
     assert row["market_asof_date"] == "2026-01-06"
+    assert row["label_baseline_date"] == "2026-01-07"
     assert row["feature_close"] == 15.0
     assert row["feature_volume"] == 1006.0
-    assert row["label_asof_date"] == "2026-01-09"
+    assert row["label_asof_date"] == "2026-01-10"
+    assert row["return_3d"] == round(20 / 30 - 1, 6)
 
 
 def test_build_training_rows_excludes_same_day_bar_before_cutoff(tmp_path):
@@ -94,8 +99,10 @@ def test_build_training_rows_excludes_same_day_bar_before_cutoff(tmp_path):
     assert summary["rows_joined"] == 1
     row = rows[0]
     assert row["market_asof_date"] == "2026-01-06"
+    assert row["label_baseline_date"] == "2026-01-07"
     assert row["feature_close"] == 15.0
-    assert row["label_asof_date"] == "2026-01-09"
+    assert row["label_asof_date"] == "2026-01-10"
+    assert row["return_3d"] == round(20 / 100 - 1, 6)
 
 
 def test_load_market_history_normalizes_massive_nanosecond_window_start(tmp_path):
@@ -160,4 +167,4 @@ def test_write_rows_creates_reproducible_join_manifest(tmp_path):
     saved = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == "massive-decision-training-rows.v1"
     assert saved["leakage_safe"] is True
-    assert saved["join_policy"] == "last_completed_market_row_before_decision_time; same-day row only after regular market close; labels strictly after feature row"
+    assert saved["join_policy"] == "last_completed_market_row_before_decision_cutoff; label baseline is first completed market row at or after decision; labels strictly after baseline"
