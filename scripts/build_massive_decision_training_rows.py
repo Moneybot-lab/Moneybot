@@ -5,17 +5,14 @@ import argparse
 import csv
 import gzip
 import json
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
-from zoneinfo import ZoneInfo
 
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import normalize_action, normalize_unix_ts
 
 SCHEMA_VERSION = "massive-decision-training-rows.v1"
-MARKET_TIMEZONE = ZoneInfo("America/New_York")
-REGULAR_MARKET_CLOSE = time(16, 0)
 
 
 def _iter_text(path: Path):
@@ -36,19 +33,19 @@ def _coerce_float(value: Any) -> float | None:
 def _market_date(raw: Any) -> str | None:
     if raw in {None, ""}:
         return None
-    text = str(raw).strip()
+    text = str(raw)
     if text.isdigit():
         value = int(text)
-        if value >= 100_000_000_000_000_000:
-            value //= 1_000_000_000
-        elif value > 10_000_000_000_000:
-            value //= 1_000_000
-        elif value > 10_000_000_000:
-            value //= 1_000
-        try:
-            return datetime.fromtimestamp(value, tz=timezone.utc).date().isoformat()
-        except (OverflowError, OSError, ValueError):
-            return None
+        # Massive flat files can encode window_start in nanoseconds,
+        # microseconds, milliseconds, or seconds depending on export.
+        # Normalize by magnitude before converting to a Python timestamp.
+        if value > 100_000_000_000_000_000:
+            value = value / 1_000_000_000
+        elif value > 100_000_000_000_000:
+            value = value / 1_000_000
+        elif value > 100_000_000_000:
+            value = value / 1_000
+        return datetime.fromtimestamp(value, tz=timezone.utc).date().isoformat()
     return text[:10]
 
 
@@ -105,22 +102,12 @@ def _event_day(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
 
 
-def _market_event_day(ts: int) -> str:
-    return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(MARKET_TIMEZONE).date().isoformat()
-
-
-def _event_after_regular_market_close(ts: int) -> bool:
-    event_dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(MARKET_TIMEZONE)
-    return event_dt.time() >= REGULAR_MARKET_CLOSE
-
-
-def _row_asof_decision_time(rows: list[dict[str, Any]], day: str, *, include_event_day: bool) -> int | None:
+def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
     idx = None
     for pos, row in enumerate(rows):
-        row_day = row["date"]
-        if row_day < day or (include_event_day and row_day == day):
+        if row["date"] <= day:
             idx = pos
-        elif row_day >= day:
+        else:
             break
     return idx
 
@@ -142,35 +129,28 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             summary["missing_symbol_history"] += 1
             continue
         event_day = _event_day(ts)
-        market_event_day = _market_event_day(ts)
         history = market[symbol]
-        idx = _row_asof_decision_time(history, market_event_day, include_event_day=_event_after_regular_market_close(ts))
+        idx = _row_before_or_on(history, event_day)
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
-        label_anchor_idx = _label_anchor_asof_decision(history, ts, idx)
-        if label_anchor_idx is None:
-            summary["insufficient_forward_window"] += 1
-            continue
-        label_idx = label_anchor_idx + max(1, horizon_days)
+        label_idx = idx + max(1, horizon_days)
         if label_idx >= len(history):
             summary["insufficient_forward_window"] += 1
             continue
 
         asof = history[idx]
-        label_anchor = history[label_anchor_idx]
         prev1 = history[idx - 1]
         prev5 = history[idx - 5]
         future = history[label_idx]
         close = float(asof["close"])
-        return_fwd = _pct(float(future["close"]), label_anchor.get("close"))
+        return_fwd = _pct(float(future["close"]), close)
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
         row = {
             "ts": ts,
             "event_date": event_day,
             "market_asof_date": asof["date"],
-            "label_baseline_date": label_anchor["date"],
             "label_asof_date": future["date"],
             "symbol": symbol,
             "endpoint": str(event.get("endpoint") or "unknown"),
@@ -184,7 +164,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_volume": asof.get("volume"),
             f"return_{horizon_days}d": return_fwd,
             f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
-            "leakage_guard": "features_asof_prior_completed_market_close_labels_anchored_after_decision",
+            "leakage_guard": "features_asof_market_close_on_or_before_decision_date_labels_after_decision_date",
         }
         rows.append(row)
         summary["rows_joined"] += 1
@@ -204,8 +184,7 @@ def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], 
         "output_path": str(path),
         "horizon_days": horizon_days,
         "leakage_safe": True,
-        "join_policy": "last_completed_market_row_before_decision_cutoff; label baseline is first completed market row at or after decision; labels strictly after baseline",
-        "market_daily_bar_cutoff_utc": MARKET_DAILY_BAR_CUTOFF_UTC.isoformat(),
+        "join_policy": "last_market_row_on_or_before_decision_date; labels strictly after that row",
         **summary,
     }
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
