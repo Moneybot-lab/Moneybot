@@ -9,6 +9,13 @@ from pathlib import Path
 from typing import Any
 
 PROMOTION_SCHEMA_VERSION = "moneybot-challenger-promotion.v1"
+LIVE_SERVABLE_FEATURE_COLUMNS = {
+    "return_1d",
+    "return_5d",
+    "rsi_14",
+    "macd_hist",
+    "vol_ratio_20d",
+}
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -40,6 +47,15 @@ def _eligible_challengers(report: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _artifact_feature_columns(path: Path) -> list[str]:
+    payload = _load_json(path)
+    return [str(item) for item in payload.get("feature_columns") or []]
+
+
+def _live_feature_incompatibilities(feature_columns: list[str]) -> list[str]:
+    return sorted({feature for feature in feature_columns if feature not in LIVE_SERVABLE_FEATURE_COLUMNS})
+
+
 def prepare_challenger_promotion(*, backtest_report_path: Path, output_dir: Path) -> dict[str, Any]:
     report = _load_json(backtest_report_path)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -47,25 +63,42 @@ def prepare_challenger_promotion(*, backtest_report_path: Path, output_dir: Path
     candidate_path = output_dir / "candidate_model_track_b.json"
     eligible = _eligible_challengers(report)
 
-    if not eligible:
+    selected: dict[str, Any] | None = None
+    selected_source_model: Path | None = None
+    rejected: list[str] = []
+    for challenger in eligible:
+        source_model = Path(str(challenger["model_path"]))
+        if not source_model.exists():
+            raise FileNotFoundError(f"Selected challenger artifact not found: {source_model}")
+        feature_columns = _artifact_feature_columns(source_model)
+        incompatible = _live_feature_incompatibilities(feature_columns)
+        if incompatible:
+            rejected.append(
+                f"{challenger.get('model_version')} uses non-live-servable features: {', '.join(incompatible)}"
+            )
+            continue
+        selected = challenger
+        selected_source_model = source_model
+        break
+
+    if selected is None:
+        reasons = ["no logistic challenger cleared objective backtest, calibration, drawdown, benchmark, and drift gates"]
+        if eligible:
+            reasons = ["no gate-cleared logistic challenger had a live-servable feature set", *rejected]
         comparison = {
             "schema_version": PROMOTION_SCHEMA_VERSION,
             "candidate_win": False,
-            "reasons": ["no logistic challenger cleared objective backtest, calibration, drawdown, benchmark, and drift gates"],
+            "reasons": reasons,
             "backtest_report_path": str(backtest_report_path),
             "prepared_at_utc": datetime.now(timezone.utc).isoformat(),
         }
         candidate_path.write_text(json.dumps({"version": "no-promotable-challenger", "promotion_ready": False}, indent=2, sort_keys=True), encoding="utf-8")
     else:
-        selected = eligible[0]
-        source_model = Path(str(selected["model_path"]))
-        if not source_model.exists():
-            raise FileNotFoundError(f"Selected challenger artifact not found: {source_model}")
-        shutil.copy2(source_model, candidate_path)
+        shutil.copy2(selected_source_model, candidate_path)
         comparison = {
             "schema_version": PROMOTION_SCHEMA_VERSION,
             "candidate_win": True,
-            "reasons": ["challenger cleared objective chronological backtest gates", "manual Render promotion still required"],
+            "reasons": ["challenger cleared objective chronological backtest gates", "challenger feature set is live-servable", "manual Render promotion still required"],
             "selected_model_version": selected.get("model_version"),
             "selected_model_type": selected.get("model_type"),
             "candidate_metrics": selected.get("backtest_metrics"),
