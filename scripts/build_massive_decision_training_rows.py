@@ -130,18 +130,22 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             continue
         event_day = _event_day(ts)
         history = market[symbol]
-        idx = _row_before_or_on(history, event_day)
-        if idx is None or idx < 5:
+        feature_idx = _row_completed_for_decision(history, ts)
+        label_anchor_idx = _row_before_or_on(history, event_day)
+        if feature_idx is None or feature_idx < 5:
             summary["insufficient_history"] += 1
             continue
-        label_idx = idx + max(1, horizon_days)
+        if label_anchor_idx is None:
+            summary["insufficient_forward_window"] += 1
+            continue
+        label_idx = label_anchor_idx + max(1, horizon_days)
         if label_idx >= len(history):
             summary["insufficient_forward_window"] += 1
             continue
 
-        asof = history[idx]
-        prev1 = history[idx - 1]
-        prev5 = history[idx - 5]
+        asof = history[feature_idx]
+        prev1 = history[feature_idx - 1]
+        prev5 = history[feature_idx - 5]
         future = history[label_idx]
         close = float(asof["close"])
         return_fwd = _pct(float(future["close"]), close)
@@ -164,7 +168,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_volume": asof.get("volume"),
             f"return_{horizon_days}d": return_fwd,
             f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
-            "leakage_guard": "features_asof_market_close_on_or_before_decision_date_labels_after_decision_date",
+            "leakage_guard": "features_asof_previous_completed_market_close_unless_decision_after_close_labels_anchored_to_decision_date",
         }
         rows.append(row)
         summary["rows_joined"] += 1
@@ -184,7 +188,7 @@ def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], 
         "output_path": str(path),
         "horizon_days": horizon_days,
         "leakage_safe": True,
-        "join_policy": "last_market_row_on_or_before_decision_date; labels strictly after that row",
+        "join_policy": "features use last completed market row before decision timestamp; same-date daily bars only after regular market close; labels anchor to the decision date row before applying the horizon",
         **summary,
     }
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
