@@ -5,16 +5,18 @@ import argparse
 import csv
 import gzip
 import json
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Any, Iterable
+from zoneinfo import ZoneInfo
 
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import normalize_action, normalize_unix_ts
 
 SCHEMA_VERSION = "massive-decision-training-rows.v1"
-MARKET_DAILY_BAR_CUTOFF_UTC = time(21, 0)
+MARKET_TIMEZONE = ZoneInfo("America/New_York")
+REGULAR_MARKET_CLOSE = time(16, 0)
 
 
 def _iter_text(path: Path):
@@ -38,13 +40,16 @@ def _market_date(raw: Any) -> str | None:
     text = str(raw).strip()
     if text.isdigit():
         value = int(text)
-        if value > 10_000_000_000_000_000:
+        if value >= 100_000_000_000_000_000:
             value //= 1_000_000_000
         elif value > 10_000_000_000_000:
             value //= 1_000_000
         elif value > 10_000_000_000:
             value //= 1_000
-        return datetime.fromtimestamp(value, tz=timezone.utc).date().isoformat()
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc).date().isoformat()
+        except (OverflowError, OSError, ValueError):
+            return None
     return text[:10]
 
 
@@ -105,24 +110,19 @@ def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
     return _row_before(rows, day, inclusive=True)
 
 
-def _row_before(rows: list[dict[str, Any]], day: str, *, inclusive: bool) -> int | None:
+def _row_asof_decision_time(rows: list[dict[str, Any]], day: str, *, include_event_day: bool) -> int | None:
     idx = None
     for pos, row in enumerate(rows):
-        if row["date"] < day or (inclusive and row["date"] == day):
+        row_day = row["date"]
+        if row_day < day or (include_event_day and row_day == day):
             idx = pos
-        else:
+        elif row_day >= day:
             break
     return idx
 
 
-def _row_asof_decision(rows: list[dict[str, Any]], ts: int) -> int | None:
-    decision_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-    idx = _row_before_or_on(rows, decision_dt.date().isoformat())
-    if idx is None:
-        return None
-    if rows[idx]["date"] == decision_dt.date().isoformat() and decision_dt.time() < MARKET_DAILY_BAR_CUTOFF_UTC:
-        idx -= 1
-    return idx if idx >= 0 else None
+def _feature_row_index(rows: list[dict[str, Any]], ts: int) -> int | None:
+    return _row_before_or_on(rows, _feature_cutoff_day(ts))
 
 
 def _label_anchor_asof_decision(rows: list[dict[str, Any]], ts: int, feature_idx: int) -> int | None:
@@ -155,7 +155,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             continue
         event_day = _event_day(ts)
         history = market[symbol]
-        idx = _row_asof_decision(history, ts)
+        idx = _row_asof_decision_time(history, event_day, include_event_day=_event_after_regular_market_close(ts))
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
