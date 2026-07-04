@@ -5,7 +5,8 @@ import argparse
 import csv
 import gzip
 import json
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -13,6 +14,8 @@ from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import normalize_action, normalize_unix_ts
 
 SCHEMA_VERSION = "massive-decision-training-rows.v1"
+MARKET_TIMEZONE = ZoneInfo("America/New_York")
+MARKET_CLOSE_TIME = time(16, 0)
 
 
 def _iter_text(path: Path):
@@ -97,6 +100,14 @@ def _event_day(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
 
 
+def _feature_cutoff_day(ts: int) -> str:
+    event_at_market = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(MARKET_TIMEZONE)
+    event_date = event_at_market.date()
+    if event_at_market.time() >= MARKET_CLOSE_TIME:
+        return event_date.isoformat()
+    return (event_date - timedelta(days=1)).isoformat()
+
+
 def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
     idx = None
     for pos, row in enumerate(rows):
@@ -124,8 +135,9 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             summary["missing_symbol_history"] += 1
             continue
         event_day = _event_day(ts)
+        feature_cutoff_day = _feature_cutoff_day(ts)
         history = market[symbol]
-        idx = _row_before_or_on(history, event_day)
+        idx = _row_before_or_on(history, feature_cutoff_day)
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
@@ -159,7 +171,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_volume": asof.get("volume"),
             f"return_{horizon_days}d": return_fwd,
             f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
-            "leakage_guard": "features_asof_market_close_on_or_before_decision_date_labels_after_decision_date",
+            "leakage_guard": "features_use_previous_completed_market_close_unless_decision_after_market_close_labels_after_feature_row",
         }
         rows.append(row)
         summary["rows_joined"] += 1
@@ -179,7 +191,7 @@ def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], 
         "output_path": str(path),
         "horizon_days": horizon_days,
         "leakage_safe": True,
-        "join_policy": "last_market_row_on_or_before_decision_date; labels strictly after that row",
+        "join_policy": "last_completed_market_close_before_decision_timestamp_or_same_day_after_16:00_America/New_York; labels strictly after that row",
         **summary,
     }
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
