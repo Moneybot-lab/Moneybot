@@ -5,7 +5,8 @@ import argparse
 import csv
 import gzip
 import json
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -13,6 +14,8 @@ from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import normalize_action, normalize_unix_ts
 
 SCHEMA_VERSION = "massive-decision-training-rows.v1"
+MARKET_TIMEZONE = ZoneInfo("America/New_York")
+MARKET_CLOSE_TIME = time(16, 0)
 
 
 def _iter_text(path: Path):
@@ -50,8 +53,18 @@ def _market_date(raw: Any) -> str | None:
 
 
 def _normalize_market_row(row: dict[str, Any]) -> dict[str, Any] | None:
-    symbol = str(row.get("ticker") or row.get("symbol") or row.get("T") or "").strip().upper()
-    day = _market_date(row.get("date") or row.get("day") or row.get("window_start") or row.get("timestamp") or row.get("t"))
+    symbol = (
+        str(row.get("ticker") or row.get("symbol") or row.get("T") or "")
+        .strip()
+        .upper()
+    )
+    day = _market_date(
+        row.get("date")
+        or row.get("day")
+        or row.get("window_start")
+        or row.get("timestamp")
+        or row.get("t")
+    )
     close = _coerce_float(row.get("close") or row.get("c") or row.get("Close"))
     if not symbol or not day or close is None:
         return None
@@ -91,15 +104,50 @@ def load_market_history(raw_root: Path) -> dict[str, list[dict[str, Any]]]:
     for path in sorted(raw_root.rglob("*")):
         if not path.is_file() or path.name.startswith("_"):
             continue
-        if not (path.name.endswith(".csv") or path.name.endswith(".csv.gz") or path.name.endswith(".jsonl") or path.name.endswith(".jsonl.gz")):
+        if not (
+            path.name.endswith(".csv")
+            or path.name.endswith(".csv.gz")
+            or path.name.endswith(".jsonl")
+            or path.name.endswith(".jsonl.gz")
+        ):
             continue
         for row in _read_market_file(path):
             by_symbol.setdefault(row["symbol"], {})[row["date"]] = row
-    return {symbol: [rows[day] for day in sorted(rows)] for symbol, rows in by_symbol.items()}
+    return {
+        symbol: [rows[day] for day in sorted(rows)]
+        for symbol, rows in by_symbol.items()
+    }
 
 
 def _event_day(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
+
+
+def _feature_cutoff_day(ts: int) -> str:
+    """Return the local market date that bounds knowable daily bars."""
+    return (
+        datetime.fromtimestamp(ts, tz=timezone.utc)
+        .astimezone(MARKET_TIMEZONE)
+        .date()
+        .isoformat()
+    )
+
+
+def _is_after_market_close(ts: int) -> bool:
+    return (
+        datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(MARKET_TIMEZONE).time()
+        >= MARKET_CLOSE_TIME
+    )
+
+
+def _row_before(rows: list[dict[str, Any]], day: str) -> int | None:
+    idx = None
+    for pos, row in enumerate(rows):
+        if row["date"] < day:
+            idx = pos
+        else:
+            break
+    return idx
 
 
 def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
@@ -118,9 +166,20 @@ def _pct(newer: float, older: float | None) -> float | None:
     return round((newer / float(older)) - 1.0, 6)
 
 
-def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: dict[str, list[dict[str, Any]]], *, horizon_days: int = 5) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def build_training_rows_from_raw_market(
+    events: list[dict[str, Any]],
+    market: dict[str, list[dict[str, Any]]],
+    *,
+    horizon_days: int = 5,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     rows: list[dict[str, Any]] = []
-    summary = {"events_scanned": 0, "rows_joined": 0, "missing_symbol_history": 0, "insufficient_history": 0, "insufficient_forward_window": 0}
+    summary = {
+        "events_scanned": 0,
+        "rows_joined": 0,
+        "missing_symbol_history": 0,
+        "insufficient_history": 0,
+        "insufficient_forward_window": 0,
+    }
     for event in events:
         summary["events_scanned"] += 1
         symbol = str(event.get("symbol") or "").strip().upper()
@@ -129,8 +188,13 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             summary["missing_symbol_history"] += 1
             continue
         event_day = _event_day(ts)
+        feature_cutoff_day = _feature_cutoff_day(ts)
         history = market[symbol]
-        idx = _row_before_or_on(history, event_day)
+        idx = (
+            _row_before_or_on(history, feature_cutoff_day)
+            if _is_after_market_close(ts)
+            else _row_before(history, feature_cutoff_day)
+        )
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
@@ -146,32 +210,49 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         close = float(asof["close"])
         return_fwd = _pct(float(future["close"]), close)
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
+        snapshot = (
+            event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
+        )
         row = {
             "ts": ts,
             "event_date": event_day,
             "market_asof_date": asof["date"],
+            "feature_cutoff_date": feature_cutoff_day,
             "label_asof_date": future["date"],
             "symbol": symbol,
             "endpoint": str(event.get("endpoint") or "unknown"),
             "decision_source": str(event.get("decision_source") or "unknown"),
             "recommendation": normalize_action(event),
-            "probability_up": snapshot.get("probability_up", payload.get("probability_up")),
-            "model_version": snapshot.get("model_version", payload.get("model_version")),
+            "probability_up": snapshot.get(
+                "probability_up", payload.get("probability_up")
+            ),
+            "model_version": snapshot.get(
+                "model_version", payload.get("model_version")
+            ),
             "feature_close": close,
             "feature_return_1d_lagged": _pct(close, prev1.get("close")),
             "feature_return_5d_lagged": _pct(close, prev5.get("close")),
             "feature_volume": asof.get("volume"),
             f"return_{horizon_days}d": return_fwd,
-            f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
-            "leakage_guard": "features_asof_market_close_on_or_before_decision_date_labels_after_decision_date",
+            f"label_up_{horizon_days}d": int(
+                return_fwd is not None and return_fwd > 0.0
+            ),
+            "leakage_guard": "features_asof_previous_completed_market_close_labels_after_feature_asof",
         }
         rows.append(row)
         summary["rows_joined"] += 1
     return rows, summary
 
 
-def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], *, raw_root: Path, decision_log: Path, horizon_days: int) -> dict[str, Any]:
+def write_rows(
+    path: Path,
+    rows: list[dict[str, Any]],
+    summary: dict[str, int],
+    *,
+    raw_root: Path,
+    decision_log: Path,
+    horizon_days: int,
+) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fh:
         for row in rows:
@@ -184,16 +265,20 @@ def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], 
         "output_path": str(path),
         "horizon_days": horizon_days,
         "leakage_safe": True,
-        "join_policy": "last_market_row_on_or_before_decision_date; labels strictly after that row",
+        "join_policy": "last_completed_daily_market_row_before intraday/pre-close decisions; same-day row only after market close; labels strictly after feature row",
         **summary,
     }
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+    )
     return manifest
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Join immutable Massive raw market files with MoneyBot decision logs into leakage-safe training rows.")
+    parser = argparse.ArgumentParser(
+        description="Join immutable Massive raw market files with MoneyBot decision logs into leakage-safe training rows."
+    )
     parser.add_argument("--raw-root", default="data/raw/massive_flatfiles")
     parser.add_argument("--decision-log", default="data/decision_events.jsonl")
     parser.add_argument("--output", default="data/decision_training_snapshot.jsonl")
@@ -204,8 +289,17 @@ def main() -> None:
     events = read_decision_events(decision_log, limit=max(1, args.limit))
     raw_root = Path(args.raw_root)
     market = load_market_history(raw_root)
-    rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=max(1, args.horizon_days))
-    manifest = write_rows(Path(args.output), rows, summary, raw_root=raw_root, decision_log=decision_log, horizon_days=max(1, args.horizon_days))
+    rows, summary = build_training_rows_from_raw_market(
+        events, market, horizon_days=max(1, args.horizon_days)
+    )
+    manifest = write_rows(
+        Path(args.output),
+        rows,
+        summary,
+        raw_root=raw_root,
+        decision_log=decision_log,
+        horizon_days=max(1, args.horizon_days),
+    )
     print(json.dumps(manifest, indent=2, sort_keys=True))
 
 
