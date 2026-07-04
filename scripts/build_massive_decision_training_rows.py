@@ -69,7 +69,7 @@ def _normalize_market_row(row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def _read_market_file(path: Path) -> Iterable[dict[str, Any]]:
+def _read_market_file(path: Path, *, symbols: set[str] | None = None) -> Iterable[dict[str, Any]]:
     with _iter_text(path) as fh:
         if path.name.endswith(".jsonl") or path.name.endswith(".jsonl.gz"):
             for line in fh:
@@ -79,26 +79,31 @@ def _read_market_file(path: Path) -> Iterable[dict[str, Any]]:
                     continue
                 if isinstance(raw, dict):
                     row = _normalize_market_row(raw)
-                    if row:
+                    if row and (symbols is None or row["symbol"] in symbols):
                         yield row
         else:
             reader = csv.DictReader(fh)
             for raw in reader:
                 row = _normalize_market_row(dict(raw))
-                if row:
+                if row and (symbols is None or row["symbol"] in symbols):
                     yield row
 
 
-def load_market_history(raw_root: Path) -> dict[str, list[dict[str, Any]]]:
+def load_market_history(raw_root: Path, *, symbols: set[str] | None = None) -> dict[str, list[dict[str, Any]]]:
+    wanted = {str(symbol).strip().upper() for symbol in (symbols or set()) if str(symbol).strip()} or None
     by_symbol: dict[str, dict[str, dict[str, Any]]] = {}
     for path in sorted(raw_root.rglob("*")):
         if not path.is_file() or path.name.startswith("_"):
             continue
         if not (path.name.endswith(".csv") or path.name.endswith(".csv.gz") or path.name.endswith(".jsonl") or path.name.endswith(".jsonl.gz")):
             continue
-        for row in _read_market_file(path):
+        for row in _read_market_file(path, symbols=wanted):
             by_symbol.setdefault(row["symbol"], {})[row["date"]] = row
     return {symbol: [rows[day] for day in sorted(rows)] for symbol, rows in by_symbol.items()}
+
+
+def _event_symbols(events: list[dict[str, Any]]) -> set[str]:
+    return {str(event.get("symbol") or "").strip().upper() for event in events if str(event.get("symbol") or "").strip()}
 
 
 def _event_day(ts: int) -> str:
@@ -227,7 +232,9 @@ def main() -> None:
     decision_log = Path(args.decision_log)
     events = read_decision_events(decision_log, limit=max(1, args.limit))
     raw_root = Path(args.raw_root)
-    market = load_market_history(raw_root)
+    symbols = _event_symbols(events)
+    print(json.dumps({"event_count": len(events), "symbol_count": len(symbols), "loading_market_history": str(raw_root)}, sort_keys=True))
+    market = load_market_history(raw_root, symbols=symbols)
     rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=max(1, args.horizon_days))
     manifest = write_rows(Path(args.output), rows, summary, raw_root=raw_root, decision_log=decision_log, horizon_days=max(1, args.horizon_days))
     print(json.dumps(manifest, indent=2, sort_keys=True))

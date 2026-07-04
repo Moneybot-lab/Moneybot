@@ -87,3 +87,29 @@ def test_load_market_history_normalizes_massive_nanosecond_window_start(tmp_path
     market = load_market_history(tmp_path / "raw")
 
     assert market["AAPL"][0]["date"] == "2026-01-06"
+
+
+def test_load_market_history_filters_to_decision_symbols(tmp_path):
+    raw = tmp_path / "raw" / "2026-07-03" / "us_stocks_sip" / "day_aggs_v1"
+    raw.mkdir(parents=True)
+    (raw / "aapl.csv").write_text(
+        "ticker,date,open,high,low,close,volume\n"
+        "AAPL,2026-01-06,10,11,9,10.5,1000\n",
+        encoding="utf-8",
+    )
+    (raw / "msft.csv").write_text(
+        "ticker,date,open,high,low,close,volume\n"
+        "MSFT,2026-01-06,20,21,19,20.5,2000\n",
+        encoding="utf-8",
+    )
+    (raw / "mixed.csv").write_text(
+        "ticker,date,open,high,low,close,volume\n"
+        "AAPL,2026-01-07,11,12,10,11.5,1100\n"
+        "MSFT,2026-01-07,21,22,20,21.5,2100\n",
+        encoding="utf-8",
+    )
+
+    market = load_market_history(tmp_path / "raw", symbols={"AAPL"})
+
+    assert set(market) == {"AAPL"}
+    assert [row["date"] for row in market["AAPL"]] == ["2026-01-06", "2026-01-07"]
