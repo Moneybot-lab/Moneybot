@@ -102,10 +102,18 @@ def _event_day(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
 
 
-def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
+def _row_before(rows: list[dict[str, Any]], day: str) -> int | None:
+    """Return the latest daily bar known to be complete before ``day``.
+
+    Massive daily aggregate rows contain the full-session close/volume for their
+    market date. Decision events only carry a timestamp, while these normalized
+    rows only carry a date, so a same-date daily bar cannot be proven complete
+    at the decision timestamp. Use the prior available market date to avoid
+    leaking same-day close/volume into features.
+    """
     idx = None
     for pos, row in enumerate(rows):
-        if row["date"] <= day:
+        if row["date"] < day:
             idx = pos
         else:
             break
@@ -130,7 +138,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             continue
         event_day = _event_day(ts)
         history = market[symbol]
-        idx = _row_before_or_on(history, event_day)
+        idx = _row_before(history, event_day)
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
@@ -164,7 +172,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_volume": asof.get("volume"),
             f"return_{horizon_days}d": return_fwd,
             f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
-            "leakage_guard": "features_asof_market_close_on_or_before_decision_date_labels_after_decision_date",
+            "leakage_guard": "features_asof_last_completed_market_close_before_decision_date_labels_after_decision_date",
         }
         rows.append(row)
         summary["rows_joined"] += 1
@@ -184,7 +192,7 @@ def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], 
         "output_path": str(path),
         "horizon_days": horizon_days,
         "leakage_safe": True,
-        "join_policy": "last_market_row_on_or_before_decision_date; labels strictly after that row",
+        "join_policy": "last_completed_market_row_before_decision_date; labels strictly after that row",
         **summary,
     }
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
