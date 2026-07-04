@@ -71,6 +71,27 @@ def test_build_training_rows_excludes_same_day_bar_before_cutoff(tmp_path):
     assert row["label_asof_date"] == "2026-01-09"
 
 
+def test_build_training_rows_uses_market_local_day_for_after_close_decision_when_utc_date_advanced():
+    market = {
+        "AAPL": [
+            {"date": f"2026-01-{idx:02d}", "close": float(close), "volume": 1000 + idx}
+            for idx, close in enumerate([10, 11, 12, 13, 14, 15, 100, 18, 21, 20, 22], start=1)
+        ]
+    }
+    # 2026-01-07 01:00 UTC is 2026-01-06 20:00 in New York: after close,
+    # but the 2026-01-07 daily bar is not yet completed in the market timezone.
+    events = [{"ts": _ts("2026-01-07T01:00:00+00:00"), "symbol": "AAPL", "payload": {"recommendation": "BUY"}}]
+
+    rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=3)
+
+    assert summary["rows_joined"] == 1
+    row = rows[0]
+    assert row["event_date"] == "2026-01-07"
+    assert row["market_asof_date"] == "2026-01-06"
+    assert row["feature_close"] == 15.0
+    assert row["label_asof_date"] == "2026-01-09"
+
+
 def test_load_market_history_normalizes_massive_nanosecond_window_start(tmp_path):
     raw = tmp_path / "raw" / "2026-07-03" / "us_stocks_sip" / "day_aggs_v1"
     raw.mkdir(parents=True)
