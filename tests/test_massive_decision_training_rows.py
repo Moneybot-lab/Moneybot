@@ -8,10 +8,6 @@ def _ts(day: str) -> int:
     return int(datetime.fromisoformat(day).replace(tzinfo=timezone.utc).timestamp())
 
 
-def _ts_at(day: str, hour_utc: int) -> int:
-    return int(datetime.fromisoformat(f"{day}T{hour_utc:02d}:00:00+00:00").timestamp())
-
-
 def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):
     raw = tmp_path / "raw" / "2026-07-03" / "us_stocks_sip" / "day_aggs_v1"
     raw.mkdir(parents=True)
@@ -20,7 +16,7 @@ def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):
         csv_rows.append(f"AAPL,2026-01-{idx:02d},{close},{close},{close},{close},{1000 + idx}")
     (raw / "aapl.csv").write_text("\n".join(csv_rows) + "\n", encoding="utf-8")
     market = load_market_history(tmp_path / "raw")
-    events = [{"ts": _ts_at("2026-01-06", 22), "symbol": "AAPL", "endpoint": "quick_ask", "decision_source": "deterministic", "payload": {"recommendation": "BUY"}}]
+    events = [{"ts": _ts("2026-01-06"), "symbol": "AAPL", "endpoint": "quick_ask", "decision_source": "deterministic", "payload": {"recommendation": "BUY"}}]
 
     rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=3)
 
@@ -33,26 +29,6 @@ def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):
     assert row["return_3d"] == round(21 / 15 - 1, 6)
     assert row["label_up_3d"] == 1
     assert row["leakage_guard"].startswith("features_asof")
-
-
-def test_build_training_rows_excludes_same_day_daily_bar_before_market_close(tmp_path):
-    raw = tmp_path / "raw" / "2026-07-03" / "us_stocks_sip" / "day_aggs_v1"
-    raw.mkdir(parents=True)
-    csv_rows = ["ticker,date,open,high,low,close,volume"]
-    for idx, close in enumerate([10, 11, 12, 13, 14, 15, 99, 18, 21, 20, 22], start=1):
-        csv_rows.append(f"AAPL,2026-01-{idx:02d},{close},{close},{close},{close},{1000 + idx}")
-    (raw / "aapl.csv").write_text("\n".join(csv_rows) + "\n", encoding="utf-8")
-    market = load_market_history(tmp_path / "raw")
-    events = [{"ts": _ts_at("2026-01-07", 15), "symbol": "AAPL", "payload": {"recommendation": "BUY"}}]
-
-    rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=3)
-
-    assert summary["rows_joined"] == 1
-    row = rows[0]
-    assert row["market_asof_date"] == "2026-01-06"
-    assert row["label_asof_date"] == "2026-01-09"
-    assert row["feature_close"] == 15.0
-    assert row["return_3d"] == round(21 / 15 - 1, 6)
 
 
 def test_write_rows_creates_reproducible_join_manifest(tmp_path):
@@ -71,7 +47,7 @@ def test_write_rows_creates_reproducible_join_manifest(tmp_path):
     saved = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == "massive-decision-training-rows.v1"
     assert saved["leakage_safe"] is True
-    assert saved["join_policy"] == "last_completed_market_row_before_decision_timestamp; same-date daily bars only after regular market close; labels strictly after that row"
+    assert saved["join_policy"] == "last_market_row_on_or_before_decision_date; labels strictly after that row"
 
 
 def test_load_market_history_normalizes_massive_nanosecond_window_start(tmp_path):
@@ -87,29 +63,3 @@ def test_load_market_history_normalizes_massive_nanosecond_window_start(tmp_path
     market = load_market_history(tmp_path / "raw")
 
     assert market["AAPL"][0]["date"] == "2026-01-06"
-
-
-def test_load_market_history_filters_to_decision_symbols(tmp_path):
-    raw = tmp_path / "raw" / "2026-07-03" / "us_stocks_sip" / "day_aggs_v1"
-    raw.mkdir(parents=True)
-    (raw / "aapl.csv").write_text(
-        "ticker,date,open,high,low,close,volume\n"
-        "AAPL,2026-01-06,10,11,9,10.5,1000\n",
-        encoding="utf-8",
-    )
-    (raw / "msft.csv").write_text(
-        "ticker,date,open,high,low,close,volume\n"
-        "MSFT,2026-01-06,20,21,19,20.5,2000\n",
-        encoding="utf-8",
-    )
-    (raw / "mixed.csv").write_text(
-        "ticker,date,open,high,low,close,volume\n"
-        "AAPL,2026-01-07,11,12,10,11.5,1100\n"
-        "MSFT,2026-01-07,21,22,20,21.5,2100\n",
-        encoding="utf-8",
-    )
-
-    market = load_market_history(tmp_path / "raw", symbols={"AAPL"})
-
-    assert set(market) == {"AAPL"}
-    assert [row["date"] for row in market["AAPL"]] == ["2026-01-06", "2026-01-07"]

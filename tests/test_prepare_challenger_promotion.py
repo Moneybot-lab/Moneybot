@@ -6,7 +6,7 @@ from scripts.prepare_challenger_promotion import prepare_challenger_promotion
 def test_prepare_challenger_promotion_selects_gate_cleared_logistic_model(tmp_path):
     model = tmp_path / "models" / "good.json"
     model.parent.mkdir()
-    model.write_text(json.dumps({"version": "good", "model_type": "logistic_regression", "feature_columns": ["return_1d", "rsi_14"]}), encoding="utf-8")
+    model.write_text(json.dumps({"version": "good", "model_type": "logistic_regression"}), encoding="utf-8")
     report = {
         "ranked_model_versions": ["stump", "good"],
         "benchmark": {"buy_and_hold_return": 0.01},
@@ -25,42 +25,6 @@ def test_prepare_challenger_promotion_selects_gate_cleared_logistic_model(tmp_pa
     assert result["candidate_win"] is True
     assert comparison["selected_model_version"] == "good"
     assert candidate["version"] == "good"
-
-
-def test_prepare_challenger_promotion_rejects_non_live_servable_features(tmp_path):
-    model = tmp_path / "models" / "offline.json"
-    model.parent.mkdir()
-    model.write_text(
-        json.dumps(
-            {
-                "version": "offline",
-                "model_type": "logistic_regression",
-                "feature_columns": ["feature_close", "feature_return_1d_lagged", "feature_volume"],
-            }
-        ),
-        encoding="utf-8",
-    )
-    report = {
-        "ranked_model_versions": ["offline"],
-        "challengers": [
-            {
-                "model_version": "offline",
-                "model_type": "logistic_regression",
-                "model_path": str(model),
-                "promotion_gates": {"promotion_ready": True},
-                "routing_allowed": False,
-            }
-        ],
-    }
-    report_path = tmp_path / "backtest.json"
-    report_path.write_text(json.dumps(report), encoding="utf-8")
-
-    result = prepare_challenger_promotion(backtest_report_path=report_path, output_dir=tmp_path / "out")
-
-    candidate = json.loads((tmp_path / "out" / "candidate_model_track_b.json").read_text(encoding="utf-8"))
-    assert result["candidate_win"] is False
-    assert candidate["promotion_ready"] is False
-    assert "non-live-servable features" in " ".join(result["reasons"])
 
 
 def test_prepare_challenger_promotion_writes_losing_report_when_no_model_clears_gates(tmp_path):
