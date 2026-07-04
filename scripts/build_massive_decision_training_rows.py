@@ -5,17 +5,14 @@ import argparse
 import csv
 import gzip
 import json
-from datetime import datetime, time, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
-from zoneinfo import ZoneInfo
 
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import normalize_action, normalize_unix_ts
 
 SCHEMA_VERSION = "massive-decision-training-rows.v1"
-MARKET_TIMEZONE = ZoneInfo("America/New_York")
-REGULAR_MARKET_CLOSE = time(16, 0)
 
 
 def _iter_text(path: Path):
@@ -105,11 +102,6 @@ def _event_day(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
 
 
-def _market_close_ts(day: str) -> int:
-    close_dt = datetime.combine(datetime.fromisoformat(day).date(), REGULAR_MARKET_CLOSE, tzinfo=MARKET_TIMEZONE)
-    return int(close_dt.astimezone(timezone.utc).timestamp())
-
-
 def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
     idx = None
     for pos, row in enumerate(rows):
@@ -118,22 +110,6 @@ def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
         else:
             break
     return idx
-
-
-def _row_completed_for_decision(rows: list[dict[str, Any]], ts: int) -> int | None:
-    """Return the latest daily bar completed before the decision timestamp.
-
-    Massive daily aggregate rows contain the final close/volume for a market
-    date. For intraday decisions, the same-date aggregate is not known yet, so
-    it must be excluded until the regular market close for that date has passed.
-    """
-    day = _event_day(ts)
-    idx = _row_before_or_on(rows, day)
-    if idx is None:
-        return None
-    if rows[idx]["date"] == day and ts < _market_close_ts(day):
-        idx -= 1
-    return idx if idx >= 0 else None
 
 
 def _pct(newer: float, older: float | None) -> float | None:

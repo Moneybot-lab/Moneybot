@@ -8,10 +8,6 @@ def _ts(day: str) -> int:
     return int(datetime.fromisoformat(day).replace(tzinfo=timezone.utc).timestamp())
 
 
-def _ts_at(day: str, hour_utc: int) -> int:
-    return int(datetime.fromisoformat(f"{day}T{hour_utc:02d}:00:00+00:00").timestamp())
-
-
 def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):
     raw = tmp_path / "raw" / "2026-07-03" / "us_stocks_sip" / "day_aggs_v1"
     raw.mkdir(parents=True)
@@ -20,7 +16,7 @@ def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):
         csv_rows.append(f"AAPL,2026-01-{idx:02d},{close},{close},{close},{close},{1000 + idx}")
     (raw / "aapl.csv").write_text("\n".join(csv_rows) + "\n", encoding="utf-8")
     market = load_market_history(tmp_path / "raw")
-    events = [{"ts": _ts_at("2026-01-06", 22), "symbol": "AAPL", "endpoint": "quick_ask", "decision_source": "deterministic", "payload": {"recommendation": "BUY"}}]
+    events = [{"ts": _ts("2026-01-06"), "symbol": "AAPL", "endpoint": "quick_ask", "decision_source": "deterministic", "payload": {"recommendation": "BUY"}}]
 
     rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=3)
 

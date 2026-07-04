@@ -148,10 +148,18 @@ jobs:
             --limit 50000 \
             --horizon-days 5
 
+      - name: Clean and quality-gate training rows
+        run: |
+          python3 scripts/clean_training_snapshot.py \
+            --input data/track_b/decision_training_snapshot_massive.jsonl \
+            --output-dir data/track_b/training_quality \
+            --max-market-lag-days 3 \
+            --train-ratio 0.8
+
       - name: Materialize reproducible flat feature store
         run: |
           python3 scripts/day15_materialize_flat_feature_store.py \
-            --input data/track_b/decision_training_snapshot_massive.jsonl \
+            --input data/track_b/training_quality/cleaned_all.jsonl \
             --output-dir data/track_b/flat_feature_store \
             --train-ratio 0.8
 

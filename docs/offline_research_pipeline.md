@@ -16,15 +16,19 @@ python scripts/build_massive_decision_training_rows.py \
 
 The join uses the last market row on or before the decision date for features and a strictly later market row for labels. The script writes `data/decision_training_snapshot.jsonl.manifest.json` with the raw root, decision log, join policy, row counts, and `leakage_safe: true`.
 
-## 2. Materialize a flat feature-store snapshot
+## 2. Clean rows and materialize a flat feature-store snapshot
 
 ```bash
-python scripts/day15_materialize_flat_feature_store.py \
+python scripts/clean_training_snapshot.py \
   --input data/decision_training_snapshot.jsonl \
+  --output-dir data/training_quality
+
+python scripts/day15_materialize_flat_feature_store.py \
+  --input data/training_quality/cleaned_all.jsonl \
   --output-dir data/flat_feature_store
 ```
 
-The feature-store manifest records the source input hash, chronological split policy, every emitted file, and SHA-256 hashes for outputs so downstream model artifacts can be tied back to one immutable snapshot.
+The cleaning guard drops exact duplicates, rows missing `label_up_5d`, rows missing required model features, and rows with stale `market_asof_date`; it also saves cleaned train/test JSONL files, probability-only evaluation rows, and `model_quality_report.json`. The feature-store manifest records the source input hash, chronological split policy, every emitted file, and SHA-256 hashes for outputs so downstream model artifacts can be tied back to one immutable snapshot.
 
 ## 3. Train many offline challengers
 
@@ -75,4 +79,4 @@ Run this test after changing the offline workflow or model-training scripts:
 python -m pytest tests/test_offline_pipeline_smoke.py -q
 ```
 
-The smoke test creates synthetic raw Massive-style market files and decision logs, then runs the join, feature-store materialization, challenger training, backtest/gating, and promotion-prep commands end to end without network access or real credentials.
+The smoke test creates synthetic raw Massive-style market files and decision logs, then runs the join, cleanup/quality guard, feature-store materialization, challenger training, backtest/gating, and promotion-prep commands end to end without network access or real credentials.

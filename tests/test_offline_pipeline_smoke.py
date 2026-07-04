@@ -55,6 +55,7 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     decision_log.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
 
     training_rows = tmp_path / "track_b" / "decision_training_snapshot_massive.jsonl"
+    quality_dir = tmp_path / "track_b" / "training_quality"
     flat_dir = tmp_path / "track_b" / "flat_feature_store"
     suite_dir = tmp_path / "track_b" / "challenger_suite"
     backtest_report = suite_dir / "backtest_report.json"
@@ -77,7 +78,8 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
         ],
         cwd=repo,
     )
-    _run([sys.executable, "scripts/day15_materialize_flat_feature_store.py", "--input", str(training_rows), "--output-dir", str(flat_dir), "--train-ratio", "0.8"], cwd=repo)
+    _run([sys.executable, "scripts/clean_training_snapshot.py", "--input", str(training_rows), "--output-dir", str(quality_dir), "--max-market-lag-days", "3", "--train-ratio", "0.8"], cwd=repo)
+    _run([sys.executable, "scripts/day15_materialize_flat_feature_store.py", "--input", str(quality_dir / "cleaned_all.jsonl"), "--output-dir", str(flat_dir), "--train-ratio", "0.8"], cwd=repo)
     _run([sys.executable, "scripts/train_challenger_suite.py", "--input", str(flat_dir / "train.jsonl"), "--output-dir", str(suite_dir), "--min-rows", "20"], cwd=repo)
     _run(
         [
@@ -101,6 +103,7 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     _run([sys.executable, "scripts/prepare_challenger_promotion.py", "--backtest-report", str(backtest_report), "--output-dir", str(promotion_dir)], cwd=repo)
 
     training_manifest = json.loads(training_rows.with_suffix(training_rows.suffix + ".manifest.json").read_text(encoding="utf-8"))
+    quality_report = json.loads((quality_dir / "model_quality_report.json").read_text(encoding="utf-8"))
     feature_manifest = json.loads((flat_dir / "manifest.json").read_text(encoding="utf-8"))
     suite_manifest = json.loads((suite_dir / "challenger_suite_manifest.json").read_text(encoding="utf-8"))
     backtest = json.loads(backtest_report.read_text(encoding="utf-8"))
@@ -108,6 +111,10 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
 
     assert training_manifest["leakage_safe"] is True
     assert training_manifest["rows_joined"] >= 100
+    assert quality_report["training_ready"] is True
+    assert quality_report["evaluation_ready"] is True
+    assert (quality_dir / "cleaned_train.jsonl").exists()
+    assert (quality_dir / "cleaned_test.jsonl").exists()
     assert feature_manifest["reproducibility"]["output_file_hashes"] is True
     assert suite_manifest["challenger_count"] >= 20
     assert len(backtest["challengers"]) == suite_manifest["challenger_count"]
