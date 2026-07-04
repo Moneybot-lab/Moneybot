@@ -69,13 +69,48 @@ jobs:
           test -n "$DAILY_OPS_TOKEN" || (echo "Missing secret: DAILY_OPS_TOKEN" && exit 1)
           mkdir -p data data/track_b
 
-          curl -fsS --retry 3 --retry-delay 3 --retry-all-errors \
-            "$MONEYBOT_BASE_URL/api/export-decision-log?limit=50000" \
-            -H "X-Daily-Ops-Token: $DAILY_OPS_TOKEN" \
-            -o data/decision_events.jsonl
+          CURL_OPTS=(
+            --fail
+            --show-error
+            --silent
+            --retry 3
+            --retry-delay 3
+            --retry-all-errors
+            --connect-timeout 15
+            --max-time 90
+            --location
+            --output data/decision_events.jsonl
+            --dump-header data/_response_headers.txt
+            -H "X-Daily-Ops-Token: $DAILY_OPS_TOKEN"
+          )
+
+          URL="$MONEYBOT_BASE_URL/api/export-decision-log?limit=50000"
+          echo "Fetching decision log from: $URL"
+          if ! curl "${CURL_OPTS[@]}" "$URL"; then
+            echo "curl failed. Response headers:"
+            sed -n '1,200p' data/_response_headers.txt || true
+            if [ -s data/decision_events.jsonl ]; then
+              echo "Partial response (first 50 lines):"
+              head -n 50 data/decision_events.jsonl || true
+            fi
+            echo "Decision log fetch failed. Exiting."
+            exit 1
+          fi
+
+          HTTP_STATUS=$(awk 'NR==1{print $2}' data/_response_headers.txt || echo "")
+          if [[ "$HTTP_STATUS" =~ ^[0-9]+$ ]] && [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "Non-200 HTTP status: $HTTP_STATUS"
+            sed -n '1,200p' data/_response_headers.txt || true
+            echo "Fetched file size:"
+            ls -lh data/decision_events.jsonl || true
+            exit 1
+          fi
 
           test -s data/decision_events.jsonl || (echo "Exported decision log is empty" && exit 1)
+          echo "Decision log lines:"
           wc -l data/decision_events.jsonl
+          echo "Response headers (first 100 lines):"
+          sed -n '1,100p' data/_response_headers.txt || true
 
       - name: Ingest Massive flat files into immutable dated folder
         env:
@@ -138,5 +173,6 @@ jobs:
           path: |
             data/track_b/**
             data/decision_events.jsonl
+            data/_response_headers.txt
             data/raw/**/_INGEST_MANIFEST.json
           if-no-files-found: warn

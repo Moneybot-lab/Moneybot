@@ -7,6 +7,7 @@ import gzip
 import json
 from datetime import datetime, time, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
@@ -36,7 +37,7 @@ def _coerce_float(value: Any) -> float | None:
 def _market_date(raw: Any) -> str | None:
     if raw in {None, ""}:
         return None
-    text = str(raw)
+    text = str(raw).strip()
     if text.isdigit():
         value = int(text)
         if value >= 100_000_000_000_000_000:
@@ -121,6 +122,16 @@ def _row_asof_decision_time(rows: list[dict[str, Any]], day: str, *, include_eve
     return idx
 
 
+def _row_asof_decision(rows: list[dict[str, Any]], ts: int) -> int | None:
+    decision_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    idx = _row_before_or_on(rows, decision_dt.date().isoformat())
+    if idx is None:
+        return None
+    if rows[idx]["date"] == decision_dt.date().isoformat() and decision_dt.time() < MARKET_DAILY_BAR_CUTOFF_UTC:
+        idx -= 1
+    return idx if idx >= 0 else None
+
+
 def _pct(newer: float, older: float | None) -> float | None:
     if older in {None, 0}:
         return None
@@ -138,6 +149,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             summary["missing_symbol_history"] += 1
             continue
         event_day = _event_day(ts)
+        feature_cutoff_day = _feature_cutoff_day(ts)
         history = market[symbol]
         idx = _row_asof_decision_time(history, event_day, include_event_day=_event_after_regular_market_close(ts))
         if idx is None or idx < 5:
