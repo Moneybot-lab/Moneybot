@@ -102,6 +102,14 @@ def _event_day(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
 
 
+def _feature_cutoff_day(ts: int) -> str:
+    event_at_market = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(MARKET_TIMEZONE)
+    event_date = event_at_market.date()
+    if event_at_market.time() >= MARKET_CLOSE_TIME:
+        return event_date.isoformat()
+    return (event_date - timedelta(days=1)).isoformat()
+
+
 def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
     return _row_before(rows, day, inclusive=True)
 
@@ -145,6 +153,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             summary["missing_symbol_history"] += 1
             continue
         event_day = _event_day(ts)
+        feature_cutoff_day = _feature_cutoff_day(ts)
         history = market[symbol]
         idx = _feature_row_index(history, ts)
         if idx is None or idx < 5:

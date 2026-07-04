@@ -66,3 +66,13 @@ The recommended production setup is the scheduled `Track B Offline Challenger` G
 The workflow ingests Massive flat files, exports decision logs, builds leakage-safe rows, materializes the feature store, trains the challenger suite, backtests/gates every challenger, prepares manual Render promotion artifacts, and uploads derived artifacts plus ingest manifests. Raw vendor files are intentionally not uploaded as GitHub artifacts.
 
 Promotion remains manual through the `Promote Track B Candidate` workflow. That workflow downloads the offline artifacts, rejects non-winning or non-gated reports by default, and only calls Render's promotion endpoint after manual dispatch.
+
+## 6. Local smoke test before enabling scheduled runs
+
+Run this test after changing the offline workflow or model-training scripts:
+
+```bash
+python -m pytest tests/test_offline_pipeline_smoke.py -q
+```
+
+The smoke test creates synthetic raw Massive-style market files and decision logs, then runs the join, feature-store materialization, challenger training, backtest/gating, and promotion-prep commands end to end without network access or real credentials.
