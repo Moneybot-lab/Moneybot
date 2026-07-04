@@ -105,6 +105,10 @@ def _event_day(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
 
 
+def _event_market_day(ts: int) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(MARKET_TIMEZONE).date().isoformat()
+
+
 def _feature_cutoff_day(ts: int) -> str:
     event_at_market = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(MARKET_TIMEZONE)
     event_date = event_at_market.date()
@@ -140,13 +144,18 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             summary["missing_symbol_history"] += 1
             continue
         event_day = _event_day(ts)
+        event_market_day = _event_market_day(ts)
         feature_cutoff_day = _feature_cutoff_day(ts)
         history = market[symbol]
         idx = _row_before_or_on(history, feature_cutoff_day)
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
-        label_idx = idx + max(1, horizon_days)
+        label_anchor_idx = _row_before_or_on(history, event_market_day)
+        if label_anchor_idx is None:
+            summary["insufficient_history"] += 1
+            continue
+        label_idx = label_anchor_idx + max(1, horizon_days)
         if label_idx >= len(history):
             summary["insufficient_forward_window"] += 1
             continue
@@ -163,6 +172,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "ts": ts,
             "event_date": event_day,
             "market_asof_date": asof["date"],
+            "label_anchor_date": history[label_anchor_idx]["date"],
             "label_asof_date": future["date"],
             "symbol": symbol,
             "endpoint": str(event.get("endpoint") or "unknown"),
@@ -176,7 +186,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_volume": asof.get("volume"),
             f"return_{horizon_days}d": return_fwd,
             f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
-            "leakage_guard": "features_use_previous_completed_market_close_unless_decision_after_market_close_labels_after_feature_row",
+            "leakage_guard": "features_use_previous_completed_market_close_unless_decision_after_market_close_labels_after_decision_day",
         }
         rows.append(row)
         summary["rows_joined"] += 1
@@ -196,7 +206,7 @@ def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], 
         "output_path": str(path),
         "horizon_days": horizon_days,
         "leakage_safe": True,
-        "join_policy": "last_completed_market_close_before_decision_timestamp_or_same_day_after_16:00_America/New_York; labels strictly after that row",
+        "join_policy": "last_completed_market_close_before_decision_timestamp_or_same_day_after_16:00_America/New_York; labels strictly after the decision market day",
         **summary,
     }
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
