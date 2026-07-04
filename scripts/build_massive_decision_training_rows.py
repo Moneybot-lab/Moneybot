@@ -7,6 +7,7 @@ import gzip
 import json
 from datetime import datetime, time, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from typing import Any, Iterable
 
 from moneybot.services.decision_log import read_decision_events
@@ -100,10 +101,22 @@ def _event_day(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
 
 
+def _feature_cutoff_day(ts: int) -> str:
+    event_at_market = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(MARKET_TIMEZONE)
+    event_date = event_at_market.date()
+    if event_at_market.time() >= MARKET_CLOSE_TIME:
+        return event_date.isoformat()
+    return (event_date - timedelta(days=1)).isoformat()
+
+
 def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
+    return _row_before(rows, day, inclusive=True)
+
+
+def _row_before(rows: list[dict[str, Any]], day: str, *, inclusive: bool) -> int | None:
     idx = None
     for pos, row in enumerate(rows):
-        if row["date"] <= day:
+        if row["date"] < day or (inclusive and row["date"] == day):
             idx = pos
         else:
             break
@@ -137,6 +150,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             summary["missing_symbol_history"] += 1
             continue
         event_day = _event_day(ts)
+        feature_cutoff_day = _feature_cutoff_day(ts)
         history = market[symbol]
         idx = _row_asof_decision(history, ts)
         if idx is None or idx < 5:
@@ -172,7 +186,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_volume": asof.get("volume"),
             f"return_{horizon_days}d": return_fwd,
             f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
-            "leakage_guard": "features_asof_market_close_on_or_before_decision_date_labels_after_decision_date",
+            "leakage_guard": "features_asof_prior_completed_market_close_labels_after_decision_date",
         }
         rows.append(row)
         summary["rows_joined"] += 1
