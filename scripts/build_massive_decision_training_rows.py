@@ -7,7 +7,6 @@ import gzip
 import json
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
-from zoneinfo import ZoneInfo
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
 
@@ -106,8 +105,13 @@ def _event_day(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
 
 
-def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
-    return _row_before(rows, day, inclusive=True)
+def _market_event_day(ts: int) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(MARKET_TIMEZONE).date().isoformat()
+
+
+def _event_after_regular_market_close(ts: int) -> bool:
+    event_dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(MARKET_TIMEZONE)
+    return event_dt.time() >= REGULAR_MARKET_CLOSE
 
 
 def _row_asof_decision_time(rows: list[dict[str, Any]], day: str, *, include_event_day: bool) -> int | None:
@@ -119,22 +123,6 @@ def _row_asof_decision_time(rows: list[dict[str, Any]], day: str, *, include_eve
         elif row_day >= day:
             break
     return idx
-
-
-def _feature_row_index(rows: list[dict[str, Any]], ts: int) -> int | None:
-    return _row_before_or_on(rows, _feature_cutoff_day(ts))
-
-
-def _label_anchor_asof_decision(rows: list[dict[str, Any]], ts: int, feature_idx: int) -> int | None:
-    decision_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-    decision_day = decision_dt.date().isoformat()
-    feature_day = rows[feature_idx]["date"]
-    if feature_day == decision_day:
-        return feature_idx
-    for pos in range(feature_idx + 1, len(rows)):
-        if rows[pos]["date"] >= decision_day:
-            return pos
-    return None
 
 
 def _pct(newer: float, older: float | None) -> float | None:
@@ -154,8 +142,9 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             summary["missing_symbol_history"] += 1
             continue
         event_day = _event_day(ts)
+        market_event_day = _market_event_day(ts)
         history = market[symbol]
-        idx = _row_asof_decision_time(history, event_day, include_event_day=_event_after_regular_market_close(ts))
+        idx = _row_asof_decision_time(history, market_event_day, include_event_day=_event_after_regular_market_close(ts))
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
