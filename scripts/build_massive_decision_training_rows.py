@@ -5,7 +5,7 @@ import argparse
 import csv
 import gzip
 import json
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
@@ -148,23 +148,29 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
-        label_idx = idx + max(1, horizon_days)
+        label_anchor_idx = _label_anchor_asof_decision(history, ts, idx)
+        if label_anchor_idx is None:
+            summary["insufficient_forward_window"] += 1
+            continue
+        label_idx = label_anchor_idx + max(1, horizon_days)
         if label_idx >= len(history):
             summary["insufficient_forward_window"] += 1
             continue
 
         asof = history[idx]
+        label_anchor = history[label_anchor_idx]
         prev1 = history[idx - 1]
         prev5 = history[idx - 5]
         future = history[label_idx]
         close = float(asof["close"])
-        return_fwd = _pct(float(future["close"]), close)
+        return_fwd = _pct(float(future["close"]), label_anchor.get("close"))
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
         row = {
             "ts": ts,
             "event_date": event_day,
             "market_asof_date": asof["date"],
+            "label_baseline_date": label_anchor["date"],
             "label_asof_date": future["date"],
             "symbol": symbol,
             "endpoint": str(event.get("endpoint") or "unknown"),
@@ -178,7 +184,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_volume": asof.get("volume"),
             f"return_{horizon_days}d": return_fwd,
             f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
-            "leakage_guard": "features_asof_prior_completed_market_close_unless_decision_after_close_labels_after_feature_row",
+            "leakage_guard": "features_asof_prior_completed_market_close_labels_anchored_after_decision",
         }
         rows.append(row)
         summary["rows_joined"] += 1
@@ -198,7 +204,8 @@ def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], 
         "output_path": str(path),
         "horizon_days": horizon_days,
         "leakage_safe": True,
-        "join_policy": "last_completed_market_row_before_decision_time; same-day row only after regular market close; labels strictly after feature row",
+        "join_policy": "last_completed_market_row_before_decision_cutoff; label baseline is first completed market row at or after decision; labels strictly after baseline",
+        "market_daily_bar_cutoff_utc": MARKET_DAILY_BAR_CUTOFF_UTC.isoformat(),
         **summary,
     }
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")

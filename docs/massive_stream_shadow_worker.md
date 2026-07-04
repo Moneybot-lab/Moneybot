@@ -43,7 +43,7 @@ Every reconciliation compares desired and actual subscriptions, sends only the d
 ## Reliability and ordering
 
 - WebSocket pings and pong timeouts use the `websockets` client keepalive.
-- No-message heartbeat timeout defaults to 45 seconds.
+- No-message heartbeat timeout defaults to disabled (`0`) because the WebSocket client keepalive already verifies ping/pong liveness and market events can be legitimately sparse.
 - Reconnect delay is jittered exponential backoff bounded to 1–30 seconds.
 - Provider event IDs and sequences identify duplicates, out-of-order events, and gaps.
 - A gap or disconnect marks affected Redis state stale and fetches a Massive REST snapshot before clearing recovery state.
