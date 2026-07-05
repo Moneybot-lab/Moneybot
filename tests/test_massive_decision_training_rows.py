@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 from scripts.build_massive_decision_training_rows import build_training_rows_from_raw_market, load_market_history, write_rows
 
 
-def _ts(day: str) -> int:
-    return int(datetime.fromisoformat(day).replace(tzinfo=timezone.utc).timestamp())
+def _ts(day: str, hour: int = 0) -> int:
+    return int(datetime.fromisoformat(day).replace(hour=hour, tzinfo=timezone.utc).timestamp())
 
 
 def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):
@@ -16,7 +16,7 @@ def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):
         csv_rows.append(f"AAPL,2026-01-{idx:02d},{close},{close},{close},{close},{1000 + idx}")
     (raw / "aapl.csv").write_text("\n".join(csv_rows) + "\n", encoding="utf-8")
     market = load_market_history(tmp_path / "raw")
-    events = [{"ts": _ts("2026-01-06"), "symbol": "AAPL", "endpoint": "quick_ask", "decision_source": "deterministic", "payload": {"recommendation": "BUY"}}]
+    events = [{"ts": _ts("2026-01-06", hour=22), "symbol": "AAPL", "endpoint": "quick_ask", "decision_source": "deterministic", "payload": {"recommendation": "BUY"}}]
 
     rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=3)
 
