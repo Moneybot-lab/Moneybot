@@ -125,12 +125,12 @@ def materialize_flat_feature_store(input_path: Path, output_dir: Path, *, train_
     for split_name, split_rows in splits.items():
         jsonl_path = output_dir / f"{split_name}.jsonl"
         _write_jsonl(jsonl_path, split_rows)
-        entry: dict[str, Any] = {"split": split_name, "format": "jsonl", "path": str(jsonl_path), "rows": len(split_rows)}
+        entry: dict[str, Any] = {"split": split_name, "format": "jsonl", "path": str(jsonl_path), "rows": len(split_rows), "sha256": _dataset_sha256(jsonl_path)}
         dataset_files.append(entry)
         if write_csv:
             csv_path = output_dir / f"{split_name}.csv"
             _write_csv(csv_path, split_rows, columns)
-            dataset_files.append({"split": split_name, "format": "csv", "path": str(csv_path), "rows": len(split_rows)})
+            dataset_files.append({"split": split_name, "format": "csv", "path": str(csv_path), "rows": len(split_rows), "sha256": _dataset_sha256(csv_path)})
 
     partition_count = 0
     partition_rows = 0
@@ -140,7 +140,7 @@ def materialize_flat_feature_store(input_path: Path, output_dir: Path, *, train_
     for (symbol, year), partition in sorted(by_partition.items()):
         partition_path = output_dir / "partitions" / f"symbol={symbol}" / f"year={year}" / "data.jsonl"
         _write_jsonl(partition_path, sorted(partition, key=_row_key))
-        dataset_files.append({"split": "all", "format": "jsonl", "path": str(partition_path), "rows": len(partition), "partition": {"symbol": symbol, "year": year}})
+        dataset_files.append({"split": "all", "format": "jsonl", "path": str(partition_path), "rows": len(partition), "sha256": _dataset_sha256(partition_path), "partition": {"symbol": symbol, "year": year}})
         partition_count += 1
         partition_rows += len(partition)
 
@@ -161,6 +161,7 @@ def materialize_flat_feature_store(input_path: Path, output_dir: Path, *, train_
         "partitioning": {"keys": ["symbol", "event_year"], "partitions": partition_count, "partition_rows": partition_rows},
         "files": dataset_files,
         "intended_uses": ["training", "backtesting", "challenger_models", "offline_analysis"],
+        "reproducibility": {"output_file_hashes": True, "split_policy": "chronological", "source_input_hash": _dataset_sha256(input_path)},
         "live_routing": False,
     }
     (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
