@@ -47,9 +47,9 @@ def test_build_training_rows_uses_prior_completed_bar_before_daily_aggregate_ava
     row = rows[0]
     assert row["event_date"] == "2026-01-07"
     assert row["market_asof_date"] == "2026-01-06"
-    assert row["label_asof_date"] == "2026-01-09"
+    assert row["label_asof_date"] == "2026-01-10"
     assert row["feature_close"] == 15.0
-    assert row["return_3d"] == round(21 / 15 - 1, 6)
+    assert row["return_3d"] == round(20 / 15 - 1, 6)
 
 
 def test_write_rows_creates_reproducible_join_manifest(tmp_path):
@@ -68,7 +68,7 @@ def test_write_rows_creates_reproducible_join_manifest(tmp_path):
     saved = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == "massive-decision-training-rows.v1"
     assert saved["leakage_safe"] is True
-    assert saved["join_policy"] == "same-day market row only when decision timestamp is at or after 21:00 UTC aggregate availability cutoff; otherwise prior completed market row; labels strictly after feature row"
+    assert saved["join_policy"] == "same-day market row only when decision timestamp is at or after 21:00 UTC aggregate availability cutoff; otherwise prior completed market row; labels anchored after the decision date rather than the shifted feature row"
 
 
 def test_load_market_history_normalizes_massive_nanosecond_window_start(tmp_path):

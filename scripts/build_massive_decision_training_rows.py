@@ -153,7 +153,11 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
-        label_idx = idx + max(1, horizon_days)
+        label_anchor_idx = _row_before_or_on(history, event_day)
+        if label_anchor_idx is None:
+            summary["insufficient_forward_window"] += 1
+            continue
+        label_idx = label_anchor_idx + max(1, horizon_days)
         if label_idx >= len(history):
             summary["insufficient_forward_window"] += 1
             continue
@@ -183,7 +187,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_volume": asof.get("volume"),
             f"return_{horizon_days}d": return_fwd,
             f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
-            "leakage_guard": "features_asof_completed_daily_aggregate_available_before_decision_labels_after_decision_date",
+            "leakage_guard": "features_asof_completed_daily_aggregate_available_before_decision_labels_anchored_after_decision_date",
         }
         rows.append(row)
         summary["rows_joined"] += 1
@@ -203,7 +207,7 @@ def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], 
         "output_path": str(path),
         "horizon_days": horizon_days,
         "leakage_safe": True,
-        "join_policy": "same-day market row only when decision timestamp is at or after 21:00 UTC aggregate availability cutoff; otherwise prior completed market row; labels strictly after feature row",
+        "join_policy": "same-day market row only when decision timestamp is at or after 21:00 UTC aggregate availability cutoff; otherwise prior completed market row; labels anchored after the decision date rather than the shifted feature row",
         **summary,
     }
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
