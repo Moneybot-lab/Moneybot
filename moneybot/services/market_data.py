@@ -1813,10 +1813,7 @@ class MarketDataService:
         source_label = str(history.get("source") or "recent history")
         rsi_label = f"{rsi:.2f}" if rsi is not None else "n/a"
         macd_label = f"{macd_histogram:.4f}" if macd_histogram is not None else "n/a"
-        reason = (
-            f"Advice: {action}. Price: ${latest_close:.2f}. "
-            f"Source: rule_based. RSI: {rsi_label}. MACD histogram: {macd_label}."
-        )
+        reason = f"Source: rule_based. RSI: {rsi_label}. MACD histogram: {macd_label}."
         return {
             "symbol": symbol_key,
             "action": action,
