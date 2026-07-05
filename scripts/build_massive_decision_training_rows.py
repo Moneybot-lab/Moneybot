@@ -5,7 +5,7 @@ import argparse
 import csv
 import gzip
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -13,7 +13,6 @@ from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import normalize_action, normalize_unix_ts
 
 SCHEMA_VERSION = "massive-decision-training-rows.v1"
-DAILY_AGGREGATE_AVAILABLE_UTC = time(hour=21)
 
 
 def _iter_text(path: Path):
@@ -143,24 +142,6 @@ def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
         else:
             break
     return idx
-
-
-def _row_before(rows: list[dict[str, Any]], day: str) -> int | None:
-    idx = None
-    for pos, row in enumerate(rows):
-        if row["date"] < day:
-            idx = pos
-        else:
-            break
-    return idx
-
-
-def _feature_asof_index(rows: list[dict[str, Any]], ts: int) -> int | None:
-    event_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-    event_day = event_dt.date().isoformat()
-    if event_dt.time() >= DAILY_AGGREGATE_AVAILABLE_UTC:
-        return _row_before_or_on(rows, event_day)
-    return _row_before(rows, event_day)
 
 
 def _pct(newer: float, older: float | None) -> float | None:
