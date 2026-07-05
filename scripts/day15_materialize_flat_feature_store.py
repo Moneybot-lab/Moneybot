@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 FEATURE_STORE_SCHEMA = "flat-feature-store.v1"
+FUTURE_RETURN_FEATURE_COLUMNS = {"feature_return_1d", "feature_return_5d"}
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -144,7 +145,9 @@ def materialize_flat_feature_store(input_path: Path, output_dir: Path, *, train_
         partition_count += 1
         partition_rows += len(partition)
 
-    feature_columns = sorted(col for col in columns if col.startswith("feature_"))
+    feature_columns = sorted(
+        col for col in columns if col.startswith("feature_") and col not in FUTURE_RETURN_FEATURE_COLUMNS
+    )
     manifest = {
         "schema_version": FEATURE_STORE_SCHEMA,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -157,7 +160,11 @@ def materialize_flat_feature_store(input_path: Path, output_dir: Path, *, train_
         "train_ratio": train_ratio,
         "columns": columns,
         "feature_columns": feature_columns,
-        "label_columns": sorted(col for col in columns if col.startswith("label_") or col.startswith("return_")),
+        "label_columns": sorted(
+            col
+            for col in columns
+            if col.startswith("label_") or col.startswith("return_") or col in FUTURE_RETURN_FEATURE_COLUMNS
+        ),
         "partitioning": {"keys": ["symbol", "event_year"], "partitions": partition_count, "partition_rows": partition_rows},
         "files": dataset_files,
         "intended_uses": ["training", "backtesting", "challenger_models", "offline_analysis"],
