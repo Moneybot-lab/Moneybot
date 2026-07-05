@@ -141,12 +141,15 @@ jobs:
 
       - name: Build leakage-safe Massive decision training rows
         run: |
-          python3 scripts/build_massive_decision_training_rows.py \
+          set -euo pipefail
+          timeout 600 python3 scripts/build_massive_decision_training_rows.py \
             --raw-root data/raw/massive_flatfiles \
             --decision-log data/decision_events.jsonl \
             --output data/track_b/decision_training_snapshot_massive.jsonl \
             --limit 50000 \
             --horizon-days 5
+          echo "Training-row manifest:"
+          sed -n '1,200p' data/track_b/decision_training_snapshot_massive.jsonl.manifest.json
 
       - name: Clean and quality-gate training rows
         run: |

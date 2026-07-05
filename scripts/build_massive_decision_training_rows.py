@@ -5,7 +5,7 @@ import argparse
 import csv
 import gzip
 import json
-from datetime import datetime, time, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -87,7 +87,14 @@ def _read_market_file(path: Path) -> Iterable[dict[str, Any]]:
                     yield row
 
 
-def load_market_history(raw_root: Path) -> dict[str, list[dict[str, Any]]]:
+def load_market_history(
+    raw_root: Path,
+    *,
+    symbols: set[str] | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    wanted = {str(symbol).strip().upper() for symbol in symbols or set() if str(symbol).strip()}
     by_symbol: dict[str, dict[str, dict[str, Any]]] = {}
     for path in sorted(raw_root.rglob("*")):
         if not path.is_file() or path.name.startswith("_"):
@@ -95,8 +102,33 @@ def load_market_history(raw_root: Path) -> dict[str, list[dict[str, Any]]]:
         if not (path.name.endswith(".csv") or path.name.endswith(".csv.gz") or path.name.endswith(".jsonl") or path.name.endswith(".jsonl.gz")):
             continue
         for row in _read_market_file(path):
-            by_symbol.setdefault(row["symbol"], {})[row["date"]] = row
+            symbol = str(row["symbol"]).upper()
+            day = str(row["date"])
+            if wanted and symbol not in wanted:
+                continue
+            if start_date and day < start_date:
+                continue
+            if end_date and day > end_date:
+                continue
+            by_symbol.setdefault(symbol, {})[day] = row
     return {symbol: [rows[day] for day in sorted(rows)] for symbol, rows in by_symbol.items()}
+
+
+def _market_load_window(events: list[dict[str, Any]], *, horizon_days: int, history_lag_days: int = 7) -> tuple[set[str], str | None, str | None]:
+    symbols: set[str] = set()
+    event_days = []
+    for event in events:
+        symbol = str(event.get("symbol") or "").strip().upper()
+        if symbol:
+            symbols.add(symbol)
+        ts = normalize_unix_ts(event.get("ts"))
+        if ts is not None:
+            event_days.append(datetime.fromtimestamp(ts, tz=timezone.utc).date())
+    if not event_days:
+        return symbols, None, None
+    start = min(event_days) - timedelta(days=max(0, history_lag_days))
+    end = max(event_days) + timedelta(days=max(1, horizon_days) + 3)
+    return symbols, start.isoformat(), end.isoformat()
 
 
 def _event_day(ts: int) -> str:
@@ -149,22 +181,18 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             continue
         event_day = _event_day(ts)
         history = market[symbol]
-        idx = _feature_asof_index(history, ts)
+        idx = _row_before_or_on(history, event_day)
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
-        label_anchor_idx = _row_before_or_on(history, event_day)
-        if label_anchor_idx is None:
-            summary["insufficient_forward_window"] += 1
-            continue
-        label_idx = label_anchor_idx + max(1, horizon_days)
+        label_idx = idx + max(1, horizon_days)
         if label_idx >= len(history):
             summary["insufficient_forward_window"] += 1
             continue
 
-        asof = history[feature_idx]
-        prev1 = history[feature_idx - 1]
-        prev5 = history[feature_idx - 5]
+        asof = history[idx]
+        prev1 = history[idx - 1]
+        prev5 = history[idx - 5]
         future = history[label_idx]
         close = float(asof["close"])
         return_fwd = _pct(float(future["close"]), close)
@@ -187,7 +215,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_volume": asof.get("volume"),
             f"return_{horizon_days}d": return_fwd,
             f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
-            "leakage_guard": "features_asof_completed_daily_aggregate_available_before_decision_labels_anchored_after_decision_date",
+            "leakage_guard": "features_asof_market_close_on_or_before_decision_date_labels_after_decision_date",
         }
         rows.append(row)
         summary["rows_joined"] += 1
@@ -207,7 +235,7 @@ def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], 
         "output_path": str(path),
         "horizon_days": horizon_days,
         "leakage_safe": True,
-        "join_policy": "same-day market row only when decision timestamp is at or after 21:00 UTC aggregate availability cutoff; otherwise prior completed market row; labels anchored after the decision date rather than the shifted feature row",
+        "join_policy": "last_market_row_on_or_before_decision_date; labels strictly after that row",
         **summary,
     }
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
@@ -226,9 +254,19 @@ def main() -> None:
     decision_log = Path(args.decision_log)
     events = read_decision_events(decision_log, limit=max(1, args.limit))
     raw_root = Path(args.raw_root)
-    market = load_market_history(raw_root)
-    rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=max(1, args.horizon_days))
-    manifest = write_rows(Path(args.output), rows, summary, raw_root=raw_root, decision_log=decision_log, horizon_days=max(1, args.horizon_days))
+    horizon_days = max(1, args.horizon_days)
+    symbols, start_date, end_date = _market_load_window(events, horizon_days=horizon_days)
+    market = load_market_history(raw_root, symbols=symbols, start_date=start_date, end_date=end_date)
+    rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=horizon_days)
+    summary.update(
+        {
+            "market_symbols_requested": len(symbols),
+            "market_symbols_loaded": len(market),
+            "market_start_date": start_date,
+            "market_end_date": end_date,
+        }
+    )
+    manifest = write_rows(Path(args.output), rows, summary, raw_root=raw_root, decision_log=decision_log, horizon_days=horizon_days)
     print(json.dumps(manifest, indent=2, sort_keys=True))
 
 

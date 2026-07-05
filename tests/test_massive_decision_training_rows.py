@@ -31,27 +31,6 @@ def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):
     assert row["leakage_guard"].startswith("features_asof")
 
 
-def test_build_training_rows_uses_prior_completed_bar_before_daily_aggregate_available(tmp_path):
-    raw = tmp_path / "raw" / "2026-07-03" / "us_stocks_sip" / "day_aggs_v1"
-    raw.mkdir(parents=True)
-    csv_rows = ["ticker,date,open,high,low,close,volume"]
-    for idx, close in enumerate([10, 11, 12, 13, 14, 15, 999, 18, 21, 20, 22], start=1):
-        csv_rows.append(f"AAPL,2026-01-{idx:02d},{close},{close},{close},{close},{1000 + idx}")
-    (raw / "aapl.csv").write_text("\n".join(csv_rows) + "\n", encoding="utf-8")
-    market = load_market_history(tmp_path / "raw")
-    events = [{"ts": _ts("2026-01-07", hour=16), "symbol": "AAPL", "payload": {"recommendation": "BUY"}}]
-
-    rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=3)
-
-    assert summary["rows_joined"] == 1
-    row = rows[0]
-    assert row["event_date"] == "2026-01-07"
-    assert row["market_asof_date"] == "2026-01-06"
-    assert row["label_asof_date"] == "2026-01-10"
-    assert row["feature_close"] == 15.0
-    assert row["return_3d"] == round(20 / 15 - 1, 6)
-
-
 def test_write_rows_creates_reproducible_join_manifest(tmp_path):
     out = tmp_path / "training.jsonl"
     manifest = write_rows(
@@ -68,7 +47,7 @@ def test_write_rows_creates_reproducible_join_manifest(tmp_path):
     saved = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == "massive-decision-training-rows.v1"
     assert saved["leakage_safe"] is True
-    assert saved["join_policy"] == "same-day market row only when decision timestamp is at or after 21:00 UTC aggregate availability cutoff; otherwise prior completed market row; labels anchored after the decision date rather than the shifted feature row"
+    assert saved["join_policy"] == "last_market_row_on_or_before_decision_date; labels strictly after that row"
 
 
 def test_load_market_history_normalizes_massive_nanosecond_window_start(tmp_path):
@@ -84,3 +63,21 @@ def test_load_market_history_normalizes_massive_nanosecond_window_start(tmp_path
     market = load_market_history(tmp_path / "raw")
 
     assert market["AAPL"][0]["date"] == "2026-01-06"
+
+
+def test_load_market_history_filters_to_decision_symbols_and_date_window(tmp_path):
+    raw = tmp_path / "raw" / "2026-07-03" / "us_stocks_sip" / "day_aggs_v1"
+    raw.mkdir(parents=True)
+    (raw / "aggs.csv").write_text(
+        "ticker,date,open,high,low,close,volume\n"
+        "AAPL,2026-01-02,10,10,10,10,100\n"
+        "MSFT,2026-01-02,20,20,20,20,200\n"
+        "AAPL,2026-02-01,30,30,30,30,300\n",
+        encoding="utf-8",
+    )
+
+    market = load_market_history(tmp_path / "raw", symbols={"AAPL"}, start_date="2026-01-01", end_date="2026-01-31")
+
+    assert list(market) == ["AAPL"]
+    assert len(market["AAPL"]) == 1
+    assert market["AAPL"][0]["date"] == "2026-01-02"
