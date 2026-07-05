@@ -1758,6 +1758,87 @@ class MarketDataService:
         signal = ema(macd, 9)
         return round(rsi, 4), round(macd[-1] - signal[-1], 6)
 
+    @staticmethod
+    def _recent_data_fallback_action(rsi: float | None, macd_histogram: float | None, change_percent: float | None) -> str:
+        if rsi is None and macd_histogram is None:
+            return "HOLD"
+        if rsi is not None and rsi >= 72 and (macd_histogram is None or macd_histogram < 0):
+            return "HOLD"
+        if rsi is not None and rsi <= 35 and (macd_histogram is None or macd_histogram >= 0):
+            return "BUY"
+        if (
+            rsi is not None
+            and rsi < 58
+            and macd_histogram is not None
+            and macd_histogram >= 0
+            and (change_percent is None or change_percent > -3.0)
+        ):
+            return "BUY"
+        return "HOLD"
+
+    def _signal_from_recent_data_fallback(self, symbol_key: str, quote: Dict[str, Any]) -> Dict[str, Any] | None:
+        history = self.get_price_history_data(symbol_key, days=90)
+        closes = [float(value) for value in (history.get("closes") or []) if isinstance(value, (int, float))]
+        if len(closes) < 15:
+            return None
+
+        latest_close = closes[-1]
+        previous_close = closes[-2] if len(closes) > 1 else None
+        change_percent = None
+        if previous_close not in (None, 0):
+            change_percent = ((latest_close - float(previous_close)) / float(previous_close)) * 100.0
+
+        rsi, macd_histogram = self._technical_indicators_from_closes(closes)
+        action = self._recent_data_fallback_action(rsi, macd_histogram, change_percent)
+
+        fallback_quote = dict(quote)
+        fallback_quote["price"] = latest_close
+        fallback_quote["change_percent"] = change_percent
+        fallback_quote["live_data_available"] = False
+        fallback_quote["quote_source"] = history.get("source") or fallback_quote.get("quote_source") or "recent_history"
+        quality_flags = list(fallback_quote.get("quality_flags") or [])
+        quality_flags.extend(["recent_history_price_fallback", "not_realtime"])
+        fallback_quote["quality_flags"] = list(dict.fromkeys(quality_flags))
+        diagnostics = dict(fallback_quote.get("diagnostics") or {})
+        diagnostics.update({
+            "error": diagnostics.get("error"),
+            "recent_data_fallback": True,
+            "recent_data_source": history.get("source"),
+            "recent_data_source_mode": history.get("source_mode"),
+            "recent_data_schema_version": history.get("schema_version"),
+            "recent_data_bar_count": len(closes),
+        })
+        fallback_quote["diagnostics"] = diagnostics
+
+        source_label = str(history.get("source") or "recent history")
+        reason = (
+            f"Live quote unavailable; rule-based signal used the most recent {source_label} close "
+            f"({latest_close:.2f}) with RSI {rsi if rsi is not None else 'n/a'} and "
+            f"MACD histogram {macd_histogram if macd_histogram is not None else 'n/a'}."
+        )
+        return {
+            "symbol": symbol_key,
+            "action": action,
+            "verdict": action,
+            "hybrid_score": None,
+            "score": None,
+            "technical": {"rsi": rsi, "macd_histogram": macd_histogram, "source": f"{source_label}_recent_fallback"},
+            "rsi": rsi,
+            "macd_hist": macd_histogram,
+            "volume_today": None,
+            "volume_ratio": None,
+            "sentiment": {"score": None, "label": "n/a", "headlines": []},
+            "rationale": [reason],
+            "reasons": [reason],
+            "quote": fallback_quote,
+            "quote_data_available": False,
+            "diagnostics": {
+                "provider": source_label,
+                "technical_source": f"{source_label}_recent_fallback",
+                "error": "live_quote_unavailable_recent_data_fallback",
+            },
+        }
+
     def get_signal(self, symbol: str, include_company_snapshot: bool = True) -> Dict[str, Any]:
         symbol_key = symbol.upper()
         cache_key = f"{symbol_key}:company" if include_company_snapshot else f"{symbol_key}:lite"
@@ -1773,6 +1854,10 @@ class MarketDataService:
     def _fetch_signal_uncached(self, symbol_key: str, cache_key: str, *, include_company_snapshot: bool = True) -> Dict[str, Any]:
         quote = self.get_quote(symbol_key)
         if not quote.get("live_data_available"):
+            recent_payload = self._signal_from_recent_data_fallback(symbol_key, quote)
+            if recent_payload is not None:
+                self.signal_cache.set(cache_key, recent_payload)
+                return recent_payload
             payload = {
                 "symbol": symbol_key,
                 "action": "HOLD",
