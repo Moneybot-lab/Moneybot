@@ -151,7 +151,7 @@ def test_get_quote_stops_yfinance_retries_on_rate_limit(monkeypatch):
     assert quote["live_data_available"] is False
     assert calls["count"] == 1
 
-def test_get_signal_skips_analysis_when_quote_missing(monkeypatch):
+def test_get_signal_uses_recent_history_when_quote_missing(monkeypatch):
     svc = MarketDataService()
 
     monkeypatch.setattr(
@@ -164,6 +164,63 @@ def test_get_signal_skips_analysis_when_quote_missing(monkeypatch):
             "live_data_available": False,
             "quote_source": "yfinance",
             "diagnostics": {"provider": "yfinance", "error": "not_found"},
+        },
+    )
+
+    def explode(_symbol):
+        raise AssertionError("analyze_ticker should not be called when quote is unavailable")
+
+    monkeypatch.setattr("moneybot.services.market_data.analyze_ticker", explode)
+    monkeypatch.setattr(
+        svc,
+        "get_price_history_data",
+        lambda _symbol, days=90: {
+            "symbol": "LCDI",
+            "closes": [
+                10.0, 10.2, 10.1, 10.4, 10.5, 10.7, 10.8, 10.6, 10.9, 11.0,
+                11.2, 11.1, 11.3, 11.5, 11.7, 11.8, 12.0, 12.2, 12.3, 12.5,
+            ],
+            "source": "massive",
+            "source_mode": "rest",
+            "schema_version": "market-data.v1",
+        },
+    )
+
+    signal = svc.get_signal("LCDI")
+
+    assert signal["action"] in {"BUY", "HOLD"}
+    assert signal["quote_data_available"] is False
+    assert signal["diagnostics"]["error"] == "live_quote_unavailable_recent_data_fallback"
+    assert signal["technical"]["source"] == "massive_recent_fallback"
+    assert signal["quote"]["price"] == 12.5
+    assert signal["reasons"][0].startswith(f"Advice: {signal['action']}. Price: $12.50. Source: rule_based. RSI:")
+    assert "MACD histogram:" in signal["reasons"][0]
+
+
+def test_get_signal_still_skips_when_quote_and_recent_history_missing(monkeypatch):
+    svc = MarketDataService()
+
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda _symbol: {
+            "symbol": "LCDI",
+            "price": "DATA_MISSING",
+            "change_percent": "DATA_MISSING",
+            "live_data_available": False,
+            "quote_source": "yfinance",
+            "diagnostics": {"provider": "yfinance", "error": "not_found"},
+        },
+    )
+    monkeypatch.setattr(
+        svc,
+        "get_price_history_data",
+        lambda _symbol, days=90: {
+            "symbol": "LCDI",
+            "closes": [],
+            "source": "none",
+            "source_mode": "fallback",
+            "schema_version": "market-data.v1",
         },
     )
 
