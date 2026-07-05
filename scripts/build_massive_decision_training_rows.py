@@ -162,9 +162,9 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             summary["insufficient_forward_window"] += 1
             continue
 
-        asof = history[idx]
-        prev1 = history[idx - 1]
-        prev5 = history[idx - 5]
+        asof = history[feature_idx]
+        prev1 = history[feature_idx - 1]
+        prev5 = history[feature_idx - 5]
         future = history[label_idx]
         close = float(asof["close"])
         return_fwd = _pct(float(future["close"]), close)
