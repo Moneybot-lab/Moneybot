@@ -1811,10 +1811,11 @@ class MarketDataService:
         fallback_quote["diagnostics"] = diagnostics
 
         source_label = str(history.get("source") or "recent history")
+        rsi_label = f"{rsi:.2f}" if rsi is not None else "n/a"
+        macd_label = f"{macd_histogram:.4f}" if macd_histogram is not None else "n/a"
         reason = (
-            f"Live quote unavailable; rule-based signal used the most recent {source_label} close "
-            f"({latest_close:.2f}) with RSI {rsi if rsi is not None else 'n/a'} and "
-            f"MACD histogram {macd_histogram if macd_histogram is not None else 'n/a'}."
+            f"Advice: {action}. Price: ${latest_close:.2f}. "
+            f"Source: rule_based. RSI: {rsi_label}. MACD histogram: {macd_label}."
         )
         return {
             "symbol": symbol_key,

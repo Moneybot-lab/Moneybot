@@ -193,7 +193,8 @@ def test_get_signal_uses_recent_history_when_quote_missing(monkeypatch):
     assert signal["diagnostics"]["error"] == "live_quote_unavailable_recent_data_fallback"
     assert signal["technical"]["source"] == "massive_recent_fallback"
     assert signal["quote"]["price"] == 12.5
-    assert "Live quote unavailable; rule-based signal used the most recent massive close" in signal["reasons"][0]
+    assert signal["reasons"][0].startswith(f"Advice: {signal['action']}. Price: $12.50. Source: rule_based. RSI:")
+    assert "MACD histogram:" in signal["reasons"][0]
 
 
 def test_get_signal_still_skips_when_quote_and_recent_history_missing(monkeypatch):
