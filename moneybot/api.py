@@ -364,20 +364,26 @@ def _request_context_setup():
 
 
 _RATE: dict[Tuple[str, str], deque] = defaultdict(deque)
-WINDOW_SECONDS = 60
-MAX_REQUESTS_PER_WINDOW = 120
+DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60
+DEFAULT_RATE_LIMIT_MAX_REQUESTS = 120
 
 
 @api_bp.before_request
 def _basic_rate_limit():
+    load_test_token = str(current_app.config.get("LOAD_TEST_RATE_LIMIT_TOKEN") or "").strip()
+    if load_test_token and request.headers.get("X-Load-Test-Token") == load_test_token:
+        return None
+
     ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(","
     )[0].strip()
     key = (ip, request.endpoint or "")
     now = time.time()
     dq = _RATE[key]
-    while dq and now - dq[0] > WINDOW_SECONDS:
+    window_seconds = max(1, int(current_app.config.get("API_RATE_LIMIT_WINDOW_SECONDS") or DEFAULT_RATE_LIMIT_WINDOW_SECONDS))
+    max_requests = max(1, int(current_app.config.get("API_RATE_LIMIT_MAX_REQUESTS") or DEFAULT_RATE_LIMIT_MAX_REQUESTS))
+    while dq and now - dq[0] > window_seconds:
         dq.popleft()
-    if len(dq) >= MAX_REQUESTS_PER_WINDOW:
+    if len(dq) >= max_requests:
         return jsonify({"error": "rate limit exceeded", "request_id": g.request_id}), 429
     dq.append(now)
 
@@ -538,6 +544,7 @@ def _notification_trigger_payload(item: NotificationTriggerPreference) -> Dict[s
         "portfolio_sell_advice_change": bool(item.portfolio_sell_advice_change),
         "portfolio_buy_advice_change": bool(item.portfolio_buy_advice_change),
         "hot_momentum_score_crosses_8": bool(item.hot_momentum_score_crosses_8),
+        "fresh_breakouts": bool(getattr(item, "fresh_breakouts", True)),
         "whale_top_investor_added": bool(item.whale_top_investor_added),
         "clearview_hold_off_to_buy": bool(item.clearview_hold_off_to_buy),
         "push_notifications_enabled": bool(item.push_notifications_enabled),
@@ -572,6 +579,10 @@ def _ensure_clearview_trigger_column() -> None:
         statements.append(
             "ALTER TABLE notification_trigger_preferences ADD COLUMN clearview_hold_off_to_buy BOOLEAN NOT NULL DEFAULT TRUE"
         )
+    if "fresh_breakouts" not in columns:
+        statements.append(
+            "ALTER TABLE notification_trigger_preferences ADD COLUMN fresh_breakouts BOOLEAN NOT NULL DEFAULT TRUE"
+        )
     if "push_notifications_enabled" not in columns:
         statements.append(
             "ALTER TABLE notification_trigger_preferences ADD COLUMN push_notifications_enabled BOOLEAN NOT NULL DEFAULT FALSE"
@@ -596,16 +607,17 @@ def _notification_trigger_state_path() -> str:
 def _load_notification_trigger_state() -> dict[str, Any]:
     path = Path(_notification_trigger_state_path())
     if not path.exists():
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "breakout_symbols": [], "wells_snapshot": {}, "clearview_advice": {}}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "breakout_symbols": [], "wells_snapshot": {}, "clearview_advice": {}}
     if not isinstance(payload, dict):
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "breakout_symbols": [], "wells_snapshot": {}, "clearview_advice": {}}
     return {
         "portfolio_advice": payload.get("portfolio_advice") if isinstance(payload.get("portfolio_advice"), dict) else {},
         "momentum_scores": payload.get("momentum_scores") if isinstance(payload.get("momentum_scores"), dict) else {},
+        "breakout_symbols": payload.get("breakout_symbols") if isinstance(payload.get("breakout_symbols"), list) else [],
         "wells_snapshot": payload.get("wells_snapshot") if isinstance(payload.get("wells_snapshot"), dict) else {},
         "clearview_advice": payload.get("clearview_advice") if isinstance(payload.get("clearview_advice"), dict) else {},
     }
@@ -1208,6 +1220,7 @@ def update_notification_triggers():
         "portfolio_sell_advice_change",
         "portfolio_buy_advice_change",
         "hot_momentum_score_crosses_8",
+        "fresh_breakouts",
         "whale_top_investor_added",
         "clearview_hold_off_to_buy",
         "push_notifications_enabled",
@@ -1351,6 +1364,10 @@ def user_watchlist():
         .all()
     )
     base_items = [_watchlist_item_payload(i) for i in items]
+    skip_market_data = str(request.args.get("skip_market_data") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if skip_market_data:
+        return jsonify({"items": base_items, "enriched_items": [], "request_id": g.request_id})
+
     _register_stream_demand(f"portfolio:{session['user_id']}", {str(item.get("symbol") or "") for item in base_items})
 
     svc = current_app.extensions.get("market_data_service")
@@ -1928,7 +1945,8 @@ def portfolio_summary():
         .all()
     )
 
-    svc = current_app.extensions.get("market_data_service")
+    skip_market_data = str(request.args.get("skip_market_data") or "").strip().lower() in {"1", "true", "yes", "on"}
+    svc = None if skip_market_data else current_app.extensions.get("market_data_service")
     total_value = 0.0
     score_values: list[float] = []
     sector_totals: Dict[str, float] = defaultdict(float)
@@ -2364,6 +2382,7 @@ def run_notification_triggers():
         except (TypeError, ValueError):
             continue
     clearview_state: dict[str, str] = {str(k): str(v).upper() for k, v in (state.get("clearview_advice") or {}).items() if str(k)}
+    previous_breakouts: set[str] = {str(symbol).strip().upper() for symbol in (state.get("breakout_symbols") or []) if str(symbol).strip()}
 
     wells_prev = {
         str(k): [str(t).upper() for t in v if str(t).strip()]
@@ -2555,6 +2574,41 @@ def run_notification_triggers():
                     symbol=symbol,
                 )
 
+    breakout_items = []
+    if hasattr(svc, "get_breakout_radar"):
+        try:
+            breakout_items = svc.get_breakout_radar() or []
+        except Exception:  # noqa: BLE001
+            breakout_items = []
+    current_breakouts: set[str] = set()
+    fresh_breakout_rows: list[dict[str, Any]] = []
+    for row in breakout_items:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        current_breakouts.add(symbol)
+        if symbol not in previous_breakouts:
+            fresh_breakout_rows.append(row)
+    for row in fresh_breakout_rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        score = row.get("score")
+        score_text = f" Score: {float(score):.2f}." if isinstance(score, (int, float)) else ""
+        for user in users:
+            prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
+            if not prefs.push_notifications_enabled:
+                continue
+            if not getattr(prefs, "fresh_breakouts", True):
+                continue
+            queue_user_event(
+                user.id,
+                title=f"{symbol}: Fresh breakout",
+                body=f"{symbol} just appeared on Breakout Radar.{score_text}",
+                kind="fresh_breakout",
+                symbol=symbol,
+            )
+
     wells_items = []
     try:
         wells_items = svc.get_wells_picks() or []
@@ -2643,6 +2697,7 @@ def run_notification_triggers():
         {
             "portfolio_advice": portfolio_state,
             "momentum_scores": momentum_scores,
+            "breakout_symbols": sorted(current_breakouts),
             "wells_snapshot": wells_now,
             "clearview_advice": clearview_state,
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -2870,12 +2925,33 @@ def promote_track_b_candidate():
         ), 500
 
     promoted = completed.returncode == 0 and "promoted candidate" in (completed.stdout or "")
-    status = 200 if completed.returncode == 0 else 500
+    advisor_reload_success = None
+    advisor_reload_error = None
+    if completed.returncode == 0:
+        deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
+        if deterministic_svc is not None:
+            try:
+                if hasattr(deterministic_svc, "reload_artifact"):
+                    advisor_reload_success = bool(deterministic_svc.reload_artifact())
+                elif hasattr(deterministic_svc, "_load_artifact"):
+                    deterministic_svc._load_artifact()
+                    advisor_reload_success = getattr(deterministic_svc, "artifact", None) is not None
+                else:
+                    advisor_reload_success = False
+                    advisor_reload_error = "deterministic advisor does not support artifact reload"
+            except Exception as exc:  # noqa: BLE001
+                logging.exception("promote-track-b-candidate promoted but failed to reload deterministic advisor.")
+                advisor_reload_success = False
+                advisor_reload_error = str(exc)
+
+    status = 200 if completed.returncode == 0 and advisor_reload_success is not False else 500
     return jsonify(
         {
             "data": {
-                "success": completed.returncode == 0,
+                "success": completed.returncode == 0 and advisor_reload_success is not False,
                 "promoted": promoted,
+                "advisor_reloaded": advisor_reload_success,
+                "advisor_reload_error": advisor_reload_error,
                 "candidate_win": candidate_win,
                 "reasons": comparison_report.get("reasons") or [],
                 "command": command,

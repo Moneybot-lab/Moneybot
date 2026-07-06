@@ -104,6 +104,20 @@ def test_authentication_acknowledgement_is_required():
 
     asyncio.run(scenario())
 
+
+def test_status_frames_update_worker_heartbeat_timestamp():
+    async def scenario():
+        instance = worker()
+        socket = FakeWebSocket([fixture("status_auth_success.json")])
+
+        assert instance.health_payload()["last_message_at"] is None
+
+        await instance.authenticate(socket)
+
+        assert instance.health_payload()["last_message_at"] == NOW.isoformat()
+
+    asyncio.run(scenario())
+
 def test_subscription_manager_reference_counts_caps_and_forbids_wildcards():
     manager = SubscriptionManager(global_symbol_cap=3, quote_cap=2, trade_cap=1, server_symbols=("SPY",))
     plan = manager.plan({"portfolio:1": {"AAPL", "MSFT"}, "quick:1": {"AAPL", "NVDA", "*"}})
@@ -201,6 +215,7 @@ def test_worker_config_defaults_to_disabled_shadow_and_bounded_budget():
     assert config.enabled is False
     assert config.shadow_mode is True
     assert config.symbol_cap == 250
+    assert config.heartbeat_timeout_seconds == 0
     assert config.server_symbols == ("SPY", "QQQ")
 
 

@@ -151,7 +151,7 @@ def test_get_quote_stops_yfinance_retries_on_rate_limit(monkeypatch):
     assert quote["live_data_available"] is False
     assert calls["count"] == 1
 
-def test_get_signal_skips_analysis_when_quote_missing(monkeypatch):
+def test_get_signal_uses_recent_history_when_quote_missing(monkeypatch):
     svc = MarketDataService()
 
     monkeypatch.setattr(
@@ -164,6 +164,64 @@ def test_get_signal_skips_analysis_when_quote_missing(monkeypatch):
             "live_data_available": False,
             "quote_source": "yfinance",
             "diagnostics": {"provider": "yfinance", "error": "not_found"},
+        },
+    )
+
+    def explode(_symbol):
+        raise AssertionError("analyze_ticker should not be called when quote is unavailable")
+
+    monkeypatch.setattr("moneybot.services.market_data.analyze_ticker", explode)
+    monkeypatch.setattr(
+        svc,
+        "get_price_history_data",
+        lambda _symbol, days=90: {
+            "symbol": "LCDI",
+            "closes": [
+                10.0, 10.2, 10.1, 10.4, 10.5, 10.7, 10.8, 10.6, 10.9, 11.0,
+                11.2, 11.1, 11.3, 11.5, 11.7, 11.8, 12.0, 12.2, 12.3, 12.5,
+            ],
+            "source": "massive",
+            "source_mode": "rest",
+            "schema_version": "market-data.v1",
+        },
+    )
+
+    signal = svc.get_signal("LCDI")
+
+    assert signal["action"] in {"BUY", "HOLD"}
+    assert signal["quote_data_available"] is False
+    assert signal["diagnostics"]["error"] == "live_quote_unavailable_recent_data_fallback"
+    assert signal["technical"]["source"] == "massive_recent_fallback"
+    assert signal["quote"]["price"] == 12.5
+    assert signal["reasons"][0].startswith("Source: rule_based. RSI:")
+    assert "Price:" not in signal["reasons"][0]
+    assert "MACD histogram:" in signal["reasons"][0]
+
+
+def test_get_signal_still_skips_when_quote_and_recent_history_missing(monkeypatch):
+    svc = MarketDataService()
+
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda _symbol: {
+            "symbol": "LCDI",
+            "price": "DATA_MISSING",
+            "change_percent": "DATA_MISSING",
+            "live_data_available": False,
+            "quote_source": "yfinance",
+            "diagnostics": {"provider": "yfinance", "error": "not_found"},
+        },
+    )
+    monkeypatch.setattr(
+        svc,
+        "get_price_history_data",
+        lambda _symbol, days=90: {
+            "symbol": "LCDI",
+            "closes": [],
+            "source": "none",
+            "source_mode": "fallback",
+            "schema_version": "market-data.v1",
         },
     )
 
@@ -403,17 +461,15 @@ def test_get_company_snapshot_skips_placeholder_news(monkeypatch):
         ]
 
     monkeypatch.setattr("moneybot.services.market_data.yf.Ticker", lambda _symbol: DummyTicker())
+    monkeypatch.setattr(svc, "_google_news_headlines", lambda *_args, **_kwargs: [])
 
     snapshot = svc.get_company_snapshot("LCID")
 
     assert snapshot["company_name"] == "Lucid Group, Inc."
-    assert snapshot["latest_news"] == [
-        {
-            "title": "Valid headline",
-            "publisher": "Reuters",
-            "link": "https://example.com/b",
-        }
-    ]
+    assert len(snapshot["latest_news"]) == 1
+    assert snapshot["latest_news"][0]["title"] == "Valid headline"
+    assert snapshot["latest_news"][0]["publisher"] == "Reuters"
+    assert snapshot["latest_news"][0]["link"] == "https://example.com/b"
 
 
 def test_get_quote_uses_twelve_data_when_massive_and_finnhub_unavailable(monkeypatch):
@@ -874,6 +930,11 @@ def test_get_breakout_radar_includes_dynamic_early_breakout_scanner_names(monkey
         "get_signal",
         lambda symbol: {"symbol": symbol, "action": "HOLD" if symbol == "ASTC" else "BUY", "score": 8.0, "technical": {}, "volume_ratio": 12.0 if symbol == "ASTC" else 1.0, "reasons": [f"{symbol} signal"]},
     )
+    monkeypatch.setattr(
+        svc,
+        "_intraday_breakout_snapshot",
+        lambda symbol: {"status": "ok", "qualifies": True, "intraday_change_percent": 8.5, "pullback_from_high_percent": 1.2},
+    )
 
     out = svc.get_breakout_radar()
     astc = next(item for item in out if item["symbol"] == "ASTC")
@@ -1039,6 +1100,11 @@ def test_get_breakout_radar_includes_dynamic_early_breakout_scanner_names(monkey
         svc,
         "get_signal",
         lambda symbol: {"symbol": symbol, "action": "HOLD" if symbol == "ASTC" else "BUY", "score": 8.0, "technical": {}, "volume_ratio": 12.0 if symbol == "ASTC" else 1.0, "reasons": [f"{symbol} signal"]},
+    )
+    monkeypatch.setattr(
+        svc,
+        "_intraday_breakout_snapshot",
+        lambda symbol: {"status": "ok", "qualifies": True, "intraday_change_percent": 8.5, "pullback_from_high_percent": 1.2},
     )
 
     out = svc.get_breakout_radar()
@@ -1259,3 +1325,63 @@ def test_hot_momentum_keeps_ranked_seed_fallback_when_live_data_is_unavailable(m
     assert all(item["live_data_available"] is False for item in momentum)
     assert all("Signal skipped" not in item["rationale"] for item in momentum)
     assert all(any("curated watchlist seed" in part for part in item["score_components"]) for item in momentum)
+
+
+def test_get_quote_single_flights_concurrent_cache_misses(monkeypatch):
+    import concurrent.futures
+    import threading
+    import time
+
+    svc = MarketDataService()
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def fake_fetch(cache_key):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        time.sleep(0.05)
+        payload = {
+            "symbol": cache_key,
+            "price": 123.0,
+            "change_percent": 1.0,
+            "live_data_available": True,
+            "quote_source": "test",
+        }
+        svc.quote_cache.set(cache_key, payload)
+        return payload
+
+    monkeypatch.setattr(svc, "_fetch_quote_uncached", fake_fetch)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _: svc.get_quote("AAPL"), range(8)))
+
+    assert calls == 1
+    assert {result["price"] for result in results} == {123.0}
+
+
+def test_get_signal_single_flights_concurrent_cache_misses(monkeypatch):
+    import concurrent.futures
+    import threading
+    import time
+
+    svc = MarketDataService()
+    calls = 0
+    calls_lock = threading.Lock()
+
+    def fake_fetch(symbol_key, cache_key, *, include_company_snapshot=True):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        time.sleep(0.05)
+        payload = {"symbol": symbol_key, "action": "HOLD", "quote_data_available": True}
+        svc.signal_cache.set(cache_key, payload)
+        return payload
+
+    monkeypatch.setattr(svc, "_fetch_signal_uncached", fake_fetch)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(lambda _: svc.get_signal("MSFT"), range(8)))
+
+    assert calls == 1
+    assert {result["action"] for result in results} == {"HOLD"}

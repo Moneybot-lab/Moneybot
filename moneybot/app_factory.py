@@ -113,6 +113,12 @@ def _ensure_notification_trigger_schema() -> None:
                 "ALTER TABLE notification_trigger_preferences ADD COLUMN hot_momentum_score_crosses_8 BOOLEAN DEFAULT TRUE",
             ),
         )
+    if "fresh_breakouts" not in columns:
+        db.session.execute(
+            db.text(
+                "ALTER TABLE notification_trigger_preferences ADD COLUMN fresh_breakouts BOOLEAN DEFAULT TRUE",
+            ),
+        )
     if "whale_top_investor_added" not in columns:
         db.session.execute(
             db.text(
@@ -145,6 +151,7 @@ def _ensure_notification_trigger_schema() -> None:
             "portfolio_sell_advice_change=COALESCE(portfolio_sell_advice_change, TRUE), "
             "portfolio_buy_advice_change=COALESCE(portfolio_buy_advice_change, TRUE), "
             "hot_momentum_score_crosses_8=COALESCE(hot_momentum_score_crosses_8, TRUE), "
+            "fresh_breakouts=COALESCE(fresh_breakouts, TRUE), "
             "whale_top_investor_added=COALESCE(whale_top_investor_added, TRUE), "
             "whales_top_stock_list_changes=COALESCE(whales_top_stock_list_changes, TRUE), "
             "push_notifications_enabled=COALESCE(push_notifications_enabled, FALSE), "
@@ -246,6 +253,21 @@ def _resolve_database_url() -> str:
 
     return database_url
 
+
+
+
+def _database_engine_options(database_url: str) -> dict:
+    """Return production-safe SQLAlchemy pool settings for network databases."""
+    if not database_url.startswith("postgresql"):
+        return {}
+    return {
+        "pool_size": _parse_int_env("SQLALCHEMY_POOL_SIZE", 10),
+        "max_overflow": _parse_int_env("SQLALCHEMY_MAX_OVERFLOW", 20),
+        "pool_timeout": _parse_int_env("SQLALCHEMY_POOL_TIMEOUT", 10),
+        "pool_recycle": _parse_int_env("SQLALCHEMY_POOL_RECYCLE", 300),
+        "pool_pre_ping": os.environ.get("SQLALCHEMY_POOL_PRE_PING", "true").strip().lower()
+        in {"1", "true", "yes", "on"},
+    }
 
 def _waitlist_email_configured(app: Flask) -> bool:
     smtp_host = (app.config.get("SMTP_HOST") or "").strip()
@@ -364,6 +386,7 @@ def create_app() -> Flask:
         PERMANENT_SESSION_LIFETIME=timedelta(days=30),
         SESSION_REFRESH_EACH_REQUEST=True,
         SQLALCHEMY_DATABASE_URI=database_url,
+        SQLALCHEMY_ENGINE_OPTIONS=_database_engine_options(database_url),
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
         DATA_PROVIDER=os.environ.get("DATA_PROVIDER", "yfinance"),
         PUBLIC_BASE_URL=os.environ.get("PUBLIC_BASE_URL", ""),
@@ -976,7 +999,7 @@ def create_app() -> Flask:
                 <h2>Profile and Account Settings</h2><p>The Profile / Account Settings area lets users update their display name, username, profile picture, and investor preferences.</p><p>The investor profile records goals, time horizon, risk tolerance, loss capacity, liquidity needs, experience, account context, portfolio concentration limits, and security preferences. Incomplete profiles use conservative defaults until all required questions are answered.</p><p>The profile image tool includes crop-style controls such as zoom, horizontal position, and vertical position before saving the picture.</p>
                 <h2>Security</h2><p>The Security page lets users update sensitive account information, including email address and password.</p><p>For protection, MoneyBot Labs may require the current password before saving security changes.</p>
                 <h2>Password Recovery</h2><p>If you forget your password, use the Forgot Password option on the login page.</p><p>MoneyBot Labs may send password recovery instructions to the email address on the account, if email delivery is configured.</p><p>For security, the website may show the same general message whether or not an email exists. This helps protect user privacy.</p>
-                <h2>Notifications</h2><p>The Notifications page is used to manage push alerts.</p><p>Depending on browser and device support, users may enable push notifications for certain MoneyBot activity.</p><p>Possible notification types include portfolio advice changes, buy advice changes, sell advice changes, hot momentum score changes, whale investor list changes, and new whale-related stock activity.</p><p>To receive notifications, the browser may ask for permission. If permission is blocked, users may need to adjust browser or device notification settings.</p>
+                <h2>Notifications</h2><p>The Notifications page is used to manage push alerts.</p><p>Depending on browser and device support, users may enable push notifications for certain MoneyBot activity.</p><p>Possible notification types include portfolio advice changes, buy advice changes, sell advice changes, hot momentum score changes, fresh breakout radar names, whale investor list changes, and new whale-related stock activity.</p><p>To receive notifications, the browser may ask for permission. If permission is blocked, users may need to adjust browser or device notification settings.</p>
                 <h2>AI Performance</h2><p>The AI Performance page is designed to show how the system is performing over time.</p><p>This section may include model health, whether the model is loaded, decision logging status, recent decision counts, one-day and five-day outcome tracking, calibration status, and backtested/historical performance summaries.</p>
                 <h3>What backtested results mean</h3><p>Backtested results compare past AI signals against later market outcomes. Backtesting helps show whether the system is improving, but it does not guarantee future results.</p>
                 <h2>Understanding AI Recommendations</h2><table style="width:100%;border-collapse:collapse"><tr><th align="left">Signal Source</th><th align="left">Meaning</th></tr><tr><td>AI-assisted explanation</td><td>A plain-English explanation generated from available stock context.</td></tr><tr><td>Deterministic model</td><td>A structured model that applies repeatable thresholds and learned signal behavior.</td></tr><tr><td>Rule-based logic</td><td>A fallback system based on indicators, price movement, and simple signal rules.</td></tr><tr><td>Market data checks</td><td>Current price, recent history, trend movement, and available company context.</td></tr><tr><td>News context</td><td>Recent headlines or company-related news when available.</td></tr></table><p>The goal is to make the stock signal easier to understand, not to guarantee a profitable trade.</p>

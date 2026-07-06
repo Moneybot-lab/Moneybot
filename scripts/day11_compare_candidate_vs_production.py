@@ -18,6 +18,11 @@ from moneybot.services.deterministic_model import load_artifact, predict_proba
 
 RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
 TARGET_GAIN_BUCKETS = {"gain", "big_gain"}
+MIN_BIG_GAIN_CAPTURE_RATE = 0.10
+UTILITY_BIG_GAIN_WEIGHT = 0.10
+UTILITY_DOWNSIDE_WEIGHT = 1.0
+UTILITY_BIG_LOSS_WEIGHT = 1.0
+MIN_UTILITY_IMPROVEMENT = 0.0
 
 
 def _load_jsonl(path: str) -> pd.DataFrame:
@@ -138,7 +143,7 @@ def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
         downside_risk = 0.0 if negative_signal_returns.empty else float(abs(negative_signal_returns.mean()))
     brier = _brier_score(y.astype(float), probs.astype(float))
     signal_rates = _bucket_signal_rates(usable, preds)
-    return {
+    metrics = {
         "accuracy": round(accuracy, 4),
         "avg_return": round(avg_return, 4) if avg_return is not None else None,
         "brier_score": round(brier, 4),
@@ -149,6 +154,9 @@ def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
         "bucket_metrics": _bucket_metrics(usable, preds, probs),
         "rows": int(len(usable)),
     }
+    utility = _utility_score(metrics)
+    metrics["utility_score"] = round(utility, 4) if utility is not None else None
+    return metrics
 
 
 def _numeric_metric(metrics: dict[str, Any], key: str) -> float | None:
@@ -160,6 +168,24 @@ def _numeric_metric(metrics: dict[str, Any], key: str) -> float | None:
     except (TypeError, ValueError):
         return None
     return numeric if np.isfinite(numeric) else None
+
+
+def _utility_score(metrics: dict[str, Any]) -> float | None:
+    avg_return = _numeric_metric(metrics, "avg_return")
+    downside = _numeric_metric(metrics, "downside_risk")
+    big_loss_rate = _numeric_metric(metrics, "big_loss_prediction_rate")
+    big_gain_rate = _numeric_metric(metrics, "big_gain_capture_rate")
+    if avg_return is None or downside is None:
+        return None
+    downside = downside or 0.0
+    big_loss_rate = big_loss_rate or 0.0
+    big_gain_rate = big_gain_rate or 0.0
+    return (
+        avg_return
+        - (UTILITY_DOWNSIDE_WEIGHT * downside)
+        - (UTILITY_BIG_LOSS_WEIGHT * big_loss_rate)
+        + (UTILITY_BIG_GAIN_WEIGHT * big_gain_rate)
+    )
 
 
 def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: int = 200) -> tuple[bool, list[str]]:
@@ -184,33 +210,39 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
     c_big_loss_rate = _numeric_metric(candidate, "big_loss_prediction_rate")
     p_big_loss_rate = _numeric_metric(production, "big_loss_prediction_rate")
     c_big_gain_rate = _numeric_metric(candidate, "big_gain_capture_rate")
-    p_big_gain_rate = _numeric_metric(production, "big_gain_capture_rate")
+    c_utility = _utility_score(candidate)
+    p_utility = _utility_score(production)
+    if c_utility is None or p_utility is None:
+        reasons.append("insufficient comparable utility metrics")
+        return False, reasons
 
     accuracy_ok = c_acc > p_acc
     brier_ok = c_brier < p_brier
     return_ok = c_return >= p_return
     downside_ok = c_downside <= p_downside
     big_loss_ok = True if c_big_loss_rate is None or p_big_loss_rate is None else c_big_loss_rate <= p_big_loss_rate
-    big_gain_ok = True if c_big_gain_rate is None or p_big_gain_rate is None else c_big_gain_rate >= p_big_gain_rate
+    big_gain_floor_ok = (c_big_gain_rate or 0.0) >= MIN_BIG_GAIN_CAPTURE_RATE
+    utility_ok = c_utility > (p_utility + MIN_UTILITY_IMPROVEMENT)
 
     if not accuracy_ok:
-        reasons.append("candidate accuracy does not exceed production")
+        reasons.append("candidate accuracy is below production, but accuracy is informational when profit utility improves")
     if not brier_ok:
         reasons.append("candidate brier score does not improve production")
     if not (return_ok or downside_ok):
         reasons.append("candidate avg_return is lower and downside_risk is higher than production")
     if not big_loss_ok:
         reasons.append("candidate signals too many big-loss rows versus production")
-    if not big_gain_ok:
-        reasons.append("candidate captures fewer big-gain rows than production")
+    if not big_gain_floor_ok:
+        reasons.append(f"candidate big-gain capture is below minimum ({c_big_gain_rate or 0.0:.4f} < {MIN_BIG_GAIN_CAPTURE_RATE:.4f})")
+    if not utility_ok:
+        reasons.append("candidate profit utility does not exceed production")
 
-    if accuracy_ok and brier_ok and (return_ok or downside_ok) and big_loss_ok and big_gain_ok:
-        reasons.append("candidate improves accuracy and brier with acceptable return/downside, big-loss avoidance, and big-gain capture")
+    if brier_ok and (return_ok or downside_ok) and big_loss_ok and big_gain_floor_ok and utility_ok:
+        reasons.append("candidate improves profit utility with acceptable brier, return/downside, big-loss avoidance, and minimum big-gain capture")
         return True, reasons
 
     reasons.append("candidate did not satisfy profit-aware promotion thresholds")
     return False, reasons
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare candidate model against production model on same holdout.")

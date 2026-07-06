@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from datetime import date, datetime, timedelta, timezone
 from dataclasses import dataclass
@@ -73,6 +74,17 @@ class MarketDataService:
         self.history_cache = TTLCache(ttl_seconds=300)
         self._history_diagnostics_by_symbol: dict[str, dict[str, Any]] = {}
         self._fallback_counts: dict[str, int] = {}
+        self._cache_lock_guard = threading.Lock()
+        self._quote_locks: dict[str, threading.Lock] = {}
+        self._signal_locks: dict[str, threading.Lock] = {}
+
+    def _lock_for_key(self, lock_map: dict[str, threading.Lock], key: str) -> threading.Lock:
+        with self._cache_lock_guard:
+            lock = lock_map.get(key)
+            if lock is None:
+                lock = threading.Lock()
+                lock_map[key] = lock
+            return lock
 
     def _build_fallback_company_summary(self, symbol: str, info: dict[str, Any]) -> str:
         company_name = str(info.get("longName") or info.get("shortName") or symbol).strip()
@@ -317,6 +329,121 @@ class MarketDataService:
             {"symbol": "F", "price": 12.55, "score": 7.4, "rationale": "Low-priced cyclical with renewed momentum interest."},
             {"symbol": "PFE", "price": 28.77, "score": 7.2, "rationale": "Defensive rotation candidate near support."},
         ]
+
+
+    @staticmethod
+    def _series_values(frame: Any, column: str) -> list[float]:
+        try:
+            raw_values = frame[column]
+        except Exception:  # noqa: BLE001
+            return []
+        if hasattr(raw_values, "tolist"):
+            raw_values = raw_values.tolist()
+        values: list[float] = []
+        for value in raw_values:
+            try:
+                values.append(float(value))
+            except (TypeError, ValueError):
+                continue
+        return values
+
+    def _intraday_breakout_snapshot(self, symbol: str) -> Dict[str, Any]:
+        symbol_key = str(symbol or "").strip().upper()
+        if not symbol_key:
+            return {"status": "unavailable", "reason": "missing symbol"}
+
+        cache_key = f"intraday-breakout:{symbol_key}"
+        cached = self.history_cache.get(cache_key)
+        if cached:
+            return cached
+
+        try:
+            hist = yf.Ticker(symbol_key).history(period="1d", interval="5m")
+            if hist is None or getattr(hist, "empty", False):
+                raise ValueError("empty intraday history")
+            closes = self._series_values(hist, "Close")
+            highs = self._series_values(hist, "High") or closes
+            lows = self._series_values(hist, "Low") or closes
+            opens = self._series_values(hist, "Open") or closes
+            if len(closes) < 2 or not opens:
+                raise ValueError("insufficient intraday bars")
+
+            day_open = opens[0]
+            latest = closes[-1]
+            day_high = max(highs)
+            day_low = min(lows)
+            intraday_change = ((latest - day_open) / day_open) * 100.0 if day_open > 0 else 0.0
+            pullback_from_high = ((day_high - latest) / day_high) * 100.0 if day_high > 0 else 0.0
+            bounce_from_low = ((latest - day_low) / day_low) * 100.0 if day_low > 0 else 0.0
+            higher_than_recent = latest >= max(closes[-min(6, len(closes)):]) * 0.995
+            qualifies = bool(
+                intraday_change >= 3.0
+                and pullback_from_high <= 3.0
+                and (higher_than_recent or bounce_from_low >= 5.0)
+            )
+            payload = {
+                "status": "ok",
+                "qualifies": qualifies,
+                "intraday_change_percent": round(intraday_change, 2),
+                "pullback_from_high_percent": round(pullback_from_high, 2),
+                "day_open": round(day_open, 4),
+                "day_high": round(day_high, 4),
+                "latest": round(latest, 4),
+            }
+        except Exception as exc:  # noqa: BLE001
+            logging.info("Intraday breakout validation unavailable for %s: %s", symbol_key, exc)
+            payload = {"status": "unavailable", "qualifies": None, "reason": str(exc)}
+
+        self.history_cache.set(cache_key, payload)
+        return payload
+
+    def get_breakout_radar(self) -> list[Dict[str, Any]]:
+        candidates = self._dynamic_hot_momentum_candidates(screeners=("small_cap_gainers", "day_gainers"))
+        enriched: list[Dict[str, Any]] = []
+        for item in candidates:
+            quote = self.get_quote(item["symbol"])
+            signal = self.get_signal(item["symbol"])
+            merged = dict(item)
+            if isinstance(quote.get("price"), (int, float)):
+                merged["price"] = round(float(quote["price"]), 2)
+            base_score, score_basis, base_components = self._hot_momentum_base_score(item, signal)
+            score, score_components = self._hot_momentum_score_components(
+                base_score=base_score,
+                score_basis=score_basis,
+                base_components=base_components,
+                quote=quote,
+                signal=signal,
+            )
+            if score is not None:
+                merged["score"] = score
+            merged["score_basis"] = score_basis
+            merged["score_components"] = score_components
+            merged["rationale"] = self._early_momentum_reason(
+                self._reason_from_signal(signal, str(item.get("rationale") or "Live breakout scanner candidate.")),
+                quote,
+                signal,
+            )
+            merged["change_percent"] = quote.get("change_percent", item.get("change_percent"))
+            merged["quote_source"] = quote.get("quote_source")
+            merged["live_data_available"] = bool(quote.get("live_data_available"))
+            merged["decision_source"] = str(item.get("candidate_source") or "scanner")
+            intraday_breakout = self._intraday_breakout_snapshot(item["symbol"])
+            merged["intraday_breakout"] = intraday_breakout
+            if intraday_breakout.get("qualifies") is False:
+                continue
+            if intraday_breakout.get("status") == "ok":
+                merged["rationale"] = (
+                    f"Confirmed intraday breakout: price is up "
+                    f"{intraday_breakout.get('intraday_change_percent')}% from today's open and "
+                    f"within {intraday_breakout.get('pullback_from_high_percent')}% of today's high. "
+                    f"{merged['rationale']}"
+                )
+            enriched.append(merged)
+        return sorted(
+            enriched,
+            key=lambda x: (float(x.get("score") or 0.0), self._change_percent_sort_value(x.get("change_percent"))),
+            reverse=True,
+        )[:20]
 
     def get_wells_picks(self) -> list[Dict[str, Any]]:
         return [
@@ -674,6 +801,54 @@ class MarketDataService:
             {"symbol": "F", "price": 12.55, "score": 7.4, "rationale": "Low-priced cyclical with renewed momentum interest."},
             {"symbol": "PFE", "price": 28.77, "score": 7.2, "rationale": "Defensive rotation candidate near support."},
         ]
+
+    def get_breakout_radar(self) -> list[Dict[str, Any]]:
+        candidates = self._dynamic_hot_momentum_candidates(screeners=("small_cap_gainers", "day_gainers"))
+        enriched: list[Dict[str, Any]] = []
+        for item in candidates:
+            quote = self.get_quote(item["symbol"])
+            signal = self.get_signal(item["symbol"])
+            merged = dict(item)
+            if isinstance(quote.get("price"), (int, float)):
+                merged["price"] = round(float(quote["price"]), 2)
+            base_score, score_basis, base_components = self._hot_momentum_base_score(item, signal)
+            score, score_components = self._hot_momentum_score_components(
+                base_score=base_score,
+                score_basis=score_basis,
+                base_components=base_components,
+                quote=quote,
+                signal=signal,
+            )
+            if score is not None:
+                merged["score"] = score
+            merged["score_basis"] = score_basis
+            merged["score_components"] = score_components
+            merged["rationale"] = self._early_momentum_reason(
+                self._reason_from_signal(signal, str(item.get("rationale") or "Live breakout scanner candidate.")),
+                quote,
+                signal,
+            )
+            merged["change_percent"] = quote.get("change_percent", item.get("change_percent"))
+            merged["quote_source"] = quote.get("quote_source")
+            merged["live_data_available"] = bool(quote.get("live_data_available"))
+            merged["decision_source"] = str(item.get("candidate_source") or "scanner")
+            intraday_breakout = self._intraday_breakout_snapshot(item["symbol"])
+            merged["intraday_breakout"] = intraday_breakout
+            if intraday_breakout.get("qualifies") is False:
+                continue
+            if intraday_breakout.get("status") == "ok":
+                merged["rationale"] = (
+                    f"Confirmed intraday breakout: price is up "
+                    f"{intraday_breakout.get('intraday_change_percent')}% from today's open and "
+                    f"within {intraday_breakout.get('pullback_from_high_percent')}% of today's high. "
+                    f"{merged['rationale']}"
+                )
+            enriched.append(merged)
+        return sorted(
+            enriched,
+            key=lambda x: (float(x.get("score") or 0.0), self._change_percent_sort_value(x.get("change_percent"))),
+            reverse=True,
+        )[:20]
 
     def get_wells_picks(self) -> list[Dict[str, Any]]:
         return [
@@ -1360,7 +1535,13 @@ class MarketDataService:
         cached = self.quote_cache.get(cache_key)
         if cached:
             return cached
+        with self._lock_for_key(self._quote_locks, cache_key):
+            cached = self.quote_cache.get(cache_key)
+            if cached:
+                return cached
+            return self._fetch_quote_uncached(cache_key)
 
+    def _fetch_quote_uncached(self, cache_key: str) -> Dict[str, Any]:
         def _yfinance_quote() -> Dict[str, Any]:
             last_error = "unknown"
             for _ in range(self.retries + 1):
@@ -1584,15 +1765,104 @@ class MarketDataService:
         signal = ema(macd, 9)
         return round(rsi, 4), round(macd[-1] - signal[-1], 6)
 
+    @staticmethod
+    def _recent_data_fallback_action(rsi: float | None, macd_histogram: float | None, change_percent: float | None) -> str:
+        if rsi is None and macd_histogram is None:
+            return "HOLD"
+        if rsi is not None and rsi >= 72 and (macd_histogram is None or macd_histogram < 0):
+            return "HOLD"
+        if rsi is not None and rsi <= 35 and (macd_histogram is None or macd_histogram >= 0):
+            return "BUY"
+        if (
+            rsi is not None
+            and rsi < 58
+            and macd_histogram is not None
+            and macd_histogram >= 0
+            and (change_percent is None or change_percent > -3.0)
+        ):
+            return "BUY"
+        return "HOLD"
+
+    def _signal_from_recent_data_fallback(self, symbol_key: str, quote: Dict[str, Any]) -> Dict[str, Any] | None:
+        history = self.get_price_history_data(symbol_key, days=90)
+        closes = [float(value) for value in (history.get("closes") or []) if isinstance(value, (int, float))]
+        if len(closes) < 15:
+            return None
+
+        latest_close = closes[-1]
+        previous_close = closes[-2] if len(closes) > 1 else None
+        change_percent = None
+        if previous_close not in (None, 0):
+            change_percent = ((latest_close - float(previous_close)) / float(previous_close)) * 100.0
+
+        rsi, macd_histogram = self._technical_indicators_from_closes(closes)
+        action = self._recent_data_fallback_action(rsi, macd_histogram, change_percent)
+
+        fallback_quote = dict(quote)
+        fallback_quote["price"] = latest_close
+        fallback_quote["change_percent"] = change_percent
+        fallback_quote["live_data_available"] = False
+        fallback_quote["quote_source"] = history.get("source") or fallback_quote.get("quote_source") or "recent_history"
+        quality_flags = list(fallback_quote.get("quality_flags") or [])
+        quality_flags.extend(["recent_history_price_fallback", "not_realtime"])
+        fallback_quote["quality_flags"] = list(dict.fromkeys(quality_flags))
+        diagnostics = dict(fallback_quote.get("diagnostics") or {})
+        diagnostics.update({
+            "error": diagnostics.get("error"),
+            "recent_data_fallback": True,
+            "recent_data_source": history.get("source"),
+            "recent_data_source_mode": history.get("source_mode"),
+            "recent_data_schema_version": history.get("schema_version"),
+            "recent_data_bar_count": len(closes),
+        })
+        fallback_quote["diagnostics"] = diagnostics
+
+        source_label = str(history.get("source") or "recent history")
+        rsi_label = f"{rsi:.2f}" if rsi is not None else "n/a"
+        macd_label = f"{macd_histogram:.4f}" if macd_histogram is not None else "n/a"
+        reason = f"Source: rule_based. RSI: {rsi_label}. MACD histogram: {macd_label}."
+        return {
+            "symbol": symbol_key,
+            "action": action,
+            "verdict": action,
+            "hybrid_score": None,
+            "score": None,
+            "technical": {"rsi": rsi, "macd_histogram": macd_histogram, "source": f"{source_label}_recent_fallback"},
+            "rsi": rsi,
+            "macd_hist": macd_histogram,
+            "volume_today": None,
+            "volume_ratio": None,
+            "sentiment": {"score": None, "label": "n/a", "headlines": []},
+            "rationale": [reason],
+            "reasons": [reason],
+            "quote": fallback_quote,
+            "quote_data_available": False,
+            "diagnostics": {
+                "provider": source_label,
+                "technical_source": f"{source_label}_recent_fallback",
+                "error": "live_quote_unavailable_recent_data_fallback",
+            },
+        }
+
     def get_signal(self, symbol: str, include_company_snapshot: bool = True) -> Dict[str, Any]:
         symbol_key = symbol.upper()
         cache_key = f"{symbol_key}:company" if include_company_snapshot else f"{symbol_key}:lite"
         cached = self.signal_cache.get(cache_key)
         if cached:
             return cached
+        with self._lock_for_key(self._signal_locks, cache_key):
+            cached = self.signal_cache.get(cache_key)
+            if cached:
+                return cached
+            return self._fetch_signal_uncached(symbol_key, cache_key, include_company_snapshot=include_company_snapshot)
 
+    def _fetch_signal_uncached(self, symbol_key: str, cache_key: str, *, include_company_snapshot: bool = True) -> Dict[str, Any]:
         quote = self.get_quote(symbol_key)
         if not quote.get("live_data_available"):
+            recent_payload = self._signal_from_recent_data_fallback(symbol_key, quote)
+            if recent_payload is not None:
+                self.signal_cache.set(cache_key, recent_payload)
+                return recent_payload
             payload = {
                 "symbol": symbol_key,
                 "action": "HOLD",
