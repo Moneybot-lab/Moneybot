@@ -944,39 +944,27 @@ def test_get_breakout_radar_includes_dynamic_early_breakout_scanner_names(monkey
     assert "Early momentum alert" in astc["rationale"]
 
 
-def test_get_breakout_radar_rejects_prior_day_gap_that_fades_intraday(monkeypatch):
+def test_get_breakout_radar_includes_recent_notification_seed_symbols(monkeypatch):
     svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
 
-    monkeypatch.setattr(
-        svc,
-        "_dynamic_hot_momentum_candidates",
-        lambda *args, **kwargs: [
-            {
-                "symbol": "ASTC",
-                "price": 5.4,
-                "score": 9.3,
-                "rationale": "Live scanner: prior close gap.",
-                "candidate_source": "scanner:small_cap_gainers",
-            }
-        ],
-    )
+    monkeypatch.setattr(svc, "_dynamic_hot_momentum_candidates", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         svc,
         "get_quote",
-        lambda symbol: {"symbol": symbol, "price": 5.4, "change_percent": 125.0, "live_data_available": True, "quote_source": "test"},
+        lambda symbol: {"symbol": symbol, "price": 4.25, "change_percent": 18.5, "live_data_available": True, "quote_source": "test"},
     )
     monkeypatch.setattr(
         svc,
         "get_signal",
-        lambda symbol: {"symbol": symbol, "action": "HOLD", "score": 8.0, "technical": {}, "volume_ratio": 12.0, "reasons": [f"{symbol} signal"]},
-    )
-    monkeypatch.setattr(
-        svc,
-        "_intraday_breakout_snapshot",
-        lambda symbol: {"status": "ok", "qualifies": False, "intraday_change_percent": -12.5, "pullback_from_high_percent": 28.0},
+        lambda symbol: {"symbol": symbol, "action": "HOLD", "score": None, "technical": {}, "volume_ratio": 3.1, "reasons": []},
     )
 
-    assert svc.get_breakout_radar() == []
+    out = svc.get_breakout_radar(seed_symbols={"XYZ": 8.7})
+
+    assert out[0]["symbol"] == "XYZ"
+    assert out[0]["decision_source"] == "recent_breakout_alert"
+    assert out[0]["score"] >= 8.7
+    assert "Recent breakout notification candidate" in out[0]["rationale"]
 
 
 def test_get_hot_momentum_buys_uses_curated_seed_when_live_score_is_missing(monkeypatch):

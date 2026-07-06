@@ -74,7 +74,7 @@ class StubMarketService:
     def get_hot_momentum_buys(self):
         return [{"symbol": "NVDA", "price": 900.33, "score": 9.4, "rationale": "Strong breakout"}]
 
-    def get_breakout_radar(self):
+    def get_breakout_radar(self, **_kwargs):
         return [{"symbol": "ASTC", "price": 5.43, "score": 9.8, "decision_source": "scanner:small_cap_gainers", "rationale": "Live breakout scanner candidate."}]
 
     def get_wells_picks(self):

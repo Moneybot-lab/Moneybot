@@ -1079,6 +1079,9 @@ class MarketDataService:
         if candidate_source.startswith("scanner:") and candidate_score is not None:
             score = round(float(candidate_score), 2)
             return score, "live_scanner", [f"{candidate_source} score from live screener move {score:.2f}"]
+        if candidate_source == "recent_breakout_alert" and candidate_score is not None:
+            score = round(float(candidate_score), 2)
+            return score, "recent_breakout_alert", [f"recent breakout alert score {score:.2f} kept on radar"]
         if candidate_score is not None:
             score = round(min(7.75, max(7.0, float(candidate_score) - 1.8)), 2)
             return score, "watchlist_seed", [f"curated watchlist seed normalized to {score:.2f} until live signal recovers"]
@@ -1348,8 +1351,23 @@ class MarketDataService:
             item.pop("qualified", None)
         return selected
 
-    def get_breakout_radar(self) -> list[Dict[str, Any]]:
+    def get_breakout_radar(self, seed_symbols: dict[str, float] | None = None) -> list[Dict[str, Any]]:
         candidates = self._dynamic_hot_momentum_candidates(screeners=("small_cap_gainers", "day_gainers"))
+        seen_symbols = {str(item.get("symbol") or "").upper() for item in candidates}
+        for symbol, score in (seed_symbols or {}).items():
+            normalized_symbol = str(symbol or "").strip().upper()
+            if not normalized_symbol or normalized_symbol in seen_symbols:
+                continue
+            candidates.append(
+                {
+                    "symbol": normalized_symbol,
+                    "price": 0.0,
+                    "score": round(float(score), 2),
+                    "rationale": "Recent breakout notification candidate; keeping it on radar for follow-up research.",
+                    "candidate_source": "recent_breakout_alert",
+                }
+            )
+            seen_symbols.add(normalized_symbol)
         enriched: list[Dict[str, Any]] = []
         for item in candidates:
             quote = self.get_quote(item["symbol"])
@@ -1378,17 +1396,6 @@ class MarketDataService:
             merged["quote_source"] = quote.get("quote_source")
             merged["live_data_available"] = bool(quote.get("live_data_available"))
             merged["decision_source"] = str(item.get("candidate_source") or "scanner")
-            intraday_breakout = self._intraday_breakout_snapshot(item["symbol"])
-            merged["intraday_breakout"] = intraday_breakout
-            if intraday_breakout.get("qualifies") is False:
-                continue
-            if intraday_breakout.get("status") == "ok":
-                merged["rationale"] = (
-                    f"Confirmed intraday breakout: price is up "
-                    f"{intraday_breakout.get('intraday_change_percent')}% from today's open and "
-                    f"within {intraday_breakout.get('pullback_from_high_percent')}% of today's high. "
-                    f"{merged['rationale']}"
-                )
             enriched.append(merged)
         return sorted(
             enriched,

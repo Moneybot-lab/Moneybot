@@ -8,7 +8,7 @@ const fallbackData = {
                     ],
                     stable: [{ symbol: 'MSFT', company: 'Microsoft', price: 418.2, signal_score: 7.9, transparency: 'Strong balance sheet and recurring revenue.' }],
                     momentum: [{ symbol: 'SOFI', price: 9.84, score: 9.4, decision_source: 'rule_based', rationale: 'Member growth trend and improving margins.' }],
-                    breakout: [{ symbol: 'ASTC', price: 5.43, score: 9.8, decision_source: 'scanner:small_cap_gainers', rationale: 'Live breakout scanner candidate.' }],
+                    breakout: [],
                     wells: [{ investor: 'Warren Buffett', stocks: [{ ticker: 'AAPL', price: 191.2, performance: 1.42 }] }],
                     ops: {
                       health: {
@@ -207,7 +207,8 @@ const fallbackData = {
 
                   async function fetchWithFallback(url, key){
                     try {
-                      const res = await fetch(url);
+                      const separator = url.includes('?') ? '&' : '?';
+                      const res = await apiFetch(`${url}${separator}_=${Date.now()}`, { cache: 'no-store' });
                       if(!res.ok) throw new Error('non-200');
                       const data = await res.json();
                       return data.items || fallbackData[key];
@@ -428,7 +429,12 @@ const fallbackData = {
                   }
 
                   function renderBreakout(items){
-                    document.getElementById('breakout').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Scanner</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Transparency</th></tr></thead><tbody>${items.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.score}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.decision_source || item.candidate_source || 'scanner'}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.rationale}</td></tr>`).join('')}</tbody></table><p style="margin:10px 0 0 0;color:#166534;font-size:12px;font-weight:700">Breakout Radar is powered by live small-cap and day-gainer scanners.</p>`;
+                    const rows = Array.isArray(items) ? items : [];
+                    if(!rows.length){
+                      document.getElementById('breakout').innerHTML = '<p style="margin:0;color:#166534;font-weight:700">No live breakout radar names are available yet. Check back after the next scanner refresh.</p>';
+                      return;
+                    }
+                    document.getElementById('breakout').innerHTML = `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Ticker</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Price</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Score</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Scanner</th><th style="text-align:left;padding:8px;border-bottom:1px solid #d1fae5">Transparency</th></tr></thead><tbody>${rows.map(item=>`<tr><td style="padding:8px;border-bottom:1px solid #dcfce7">${tickerButton(item.symbol)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${formatMoney(item.price)}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.score}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.decision_source || item.candidate_source || 'scanner'}</td><td style="padding:8px;border-bottom:1px solid #dcfce7">${item.rationale}</td></tr>`).join('')}</tbody></table><p style="margin:10px 0 0 0;color:#166534;font-size:12px;font-weight:700">Breakout Radar is powered by live small-cap, day-gainer, and recent breakout-alert candidates.</p>`;
                   }
 
                   function renderWells(items){
