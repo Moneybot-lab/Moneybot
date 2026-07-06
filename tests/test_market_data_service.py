@@ -814,6 +814,7 @@ def test_get_hot_momentum_buys_does_not_let_hold_model_empty_rule_candidates(mon
     out = svc.get_hot_momentum_buys()
 
     assert len(out) == 20
+    assert {item["decision_source"] for item in out} <= {"deterministic_model", "rule_based"}
     assert out[0]["decision_source"] == "rule_based"
     assert out[0]["score"] >= 8.0
     assert out[0]["model_version"] == "alpha-atlas-v1"
@@ -847,13 +848,13 @@ def test_dynamic_hot_momentum_candidates_reads_yahoo_screeners(monkeypatch):
     ]
 
 
-def test_get_hot_momentum_buys_includes_dynamic_early_breakout_scanner_names(monkeypatch):
+def test_get_breakout_radar_includes_dynamic_early_breakout_scanner_names(monkeypatch):
     svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
 
     monkeypatch.setattr(
         svc,
         "_dynamic_hot_momentum_candidates",
-        lambda: [
+        lambda *args, **kwargs: [
             {
                 "symbol": "ASTC",
                 "price": 3.2,
@@ -874,12 +875,35 @@ def test_get_hot_momentum_buys_includes_dynamic_early_breakout_scanner_names(mon
         lambda symbol: {"symbol": symbol, "action": "HOLD" if symbol == "ASTC" else "BUY", "score": 8.0, "technical": {}, "volume_ratio": 12.0 if symbol == "ASTC" else 1.0, "reasons": [f"{symbol} signal"]},
     )
 
-    out = svc.get_hot_momentum_buys()
+    out = svc.get_breakout_radar()
     astc = next(item for item in out if item["symbol"] == "ASTC")
 
-    assert astc["decision_source"] in {"explosive_watchlist", "scanner:small_cap_gainers"}
+    assert astc["decision_source"] == "scanner:small_cap_gainers"
     assert astc["score"] >= 9.0
     assert "Early momentum alert" in astc["rationale"]
+
+
+def test_get_breakout_radar_includes_recent_notification_seed_symbols(monkeypatch):
+    svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
+
+    monkeypatch.setattr(svc, "_dynamic_hot_momentum_candidates", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda symbol: {"symbol": symbol, "price": 4.25, "change_percent": 18.5, "live_data_available": True, "quote_source": "test"},
+    )
+    monkeypatch.setattr(
+        svc,
+        "get_signal",
+        lambda symbol: {"symbol": symbol, "action": "HOLD", "score": None, "technical": {}, "volume_ratio": 3.1, "reasons": []},
+    )
+
+    out = svc.get_breakout_radar(seed_symbols={"XYZ": 8.7})
+
+    assert out[0]["symbol"] == "XYZ"
+    assert out[0]["decision_source"] == "recent_breakout_alert"
+    assert out[0]["score"] >= 8.7
+    assert "Recent breakout notification candidate" in out[0]["rationale"]
 
 
 def test_get_hot_momentum_buys_uses_curated_seed_when_live_score_is_missing(monkeypatch):
@@ -956,6 +980,7 @@ def test_get_hot_momentum_buys_does_not_let_hold_model_empty_rule_candidates(mon
     out = svc.get_hot_momentum_buys()
 
     assert len(out) == 20
+    assert {item["decision_source"] for item in out} <= {"deterministic_model", "rule_based"}
     assert out[0]["decision_source"] == "rule_based"
     assert out[0]["score"] >= 8.0
     assert out[0]["model_version"] == "alpha-atlas-v1"
@@ -989,13 +1014,13 @@ def test_dynamic_hot_momentum_candidates_reads_yahoo_screeners(monkeypatch):
     ]
 
 
-def test_get_hot_momentum_buys_includes_dynamic_early_breakout_scanner_names(monkeypatch):
+def test_get_breakout_radar_includes_dynamic_early_breakout_scanner_names(monkeypatch):
     svc = MarketDataService(deterministic_quick_advisor=None, deterministic_momentum_enabled=False)
 
     monkeypatch.setattr(
         svc,
         "_dynamic_hot_momentum_candidates",
-        lambda: [
+        lambda *args, **kwargs: [
             {
                 "symbol": "ASTC",
                 "price": 3.2,
@@ -1016,7 +1041,7 @@ def test_get_hot_momentum_buys_includes_dynamic_early_breakout_scanner_names(mon
         lambda symbol: {"symbol": symbol, "action": "HOLD" if symbol == "ASTC" else "BUY", "score": 8.0, "technical": {}, "volume_ratio": 12.0 if symbol == "ASTC" else 1.0, "reasons": [f"{symbol} signal"]},
     )
 
-    out = svc.get_hot_momentum_buys()
+    out = svc.get_breakout_radar()
     astc = next(item for item in out if item["symbol"] == "ASTC")
 
     assert astc["decision_source"] == "scanner:small_cap_gainers"

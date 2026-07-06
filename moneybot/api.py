@@ -2523,6 +2523,11 @@ def run_notification_triggers():
         momentum_items = svc.get_hot_momentum_buys() or []
     except Exception:  # noqa: BLE001
         momentum_items = []
+    try:
+        breakout_items = svc.get_breakout_radar() or []
+    except Exception:  # noqa: BLE001
+        breakout_items = []
+    momentum_items = list(momentum_items) + [item for item in breakout_items if isinstance(item, dict)]
     for row in momentum_items:
         if not isinstance(row, dict):
             continue
@@ -2751,6 +2756,21 @@ def hot_momentum_buys():
                 },
             )
     return jsonify({"items": items, "request_id": g.request_id})
+
+
+@api_bp.get("/breakout-radar")
+def breakout_radar():
+    svc = current_app.extensions["market_data_service"]
+    state = _load_notification_trigger_state()
+    seed_symbols: dict[str, float] = {}
+    for symbol, score in (state.get("momentum_scores") or {}).items():
+        try:
+            numeric_score = float(score)
+        except (TypeError, ValueError):
+            continue
+        if numeric_score > 8.0:
+            seed_symbols[str(symbol).upper()] = numeric_score
+    return jsonify({"items": svc.get_breakout_radar(seed_symbols=seed_symbols), "request_id": g.request_id})
 
 
 
