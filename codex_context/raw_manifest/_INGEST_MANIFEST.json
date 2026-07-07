@@ -1,0 +1,23 @@
+{
+  "bucket": "flatfiles",
+  "command": [
+    "aws",
+    "s3",
+    "sync",
+    "s3://flatfiles/us_stocks_sip/day_aggs_v1",
+    "data/raw/massive_flatfiles/2026-07-07/us_stocks_sip/day_aggs_v1",
+    "--endpoint-url",
+    "https://files.massive.com",
+    "--only-show-errors"
+  ],
+  "credentials": {
+    "access_key_id_configured": true,
+    "secret_access_key_configured": true
+  },
+  "dataset_date": "2026-07-07",
+  "destination": "data/raw/massive_flatfiles/2026-07-07/us_stocks_sip/day_aggs_v1",
+  "dry_run": false,
+  "endpoint": "https://files.massive.com",
+  "prefix": "us_stocks_sip/day_aggs_v1",
+  "schema_version": "massive-flatfiles-raw-ingest.v1"
+}

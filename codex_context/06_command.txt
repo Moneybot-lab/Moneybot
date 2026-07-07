@@ -1,1 +1,0 @@
-python3 -m json.tool track_b/candidate_model_track_b.json

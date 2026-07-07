@@ -1,0 +1,7 @@
+{
+  "model_type": "baseline_classifier",
+  "training_spec": {
+    "majority_class": 1
+  },
+  "version": "challenger-baseline-majority-v1"
+}

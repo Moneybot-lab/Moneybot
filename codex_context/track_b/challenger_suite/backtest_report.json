@@ -1,0 +1,1759 @@
+{
+  "benchmark": {
+    "buy_and_hold_return": -1.0,
+    "cash_return": 0.0,
+    "equal_weight_long_cash_return": -1.0
+  },
+  "challengers": [
+    {
+      "backtest_metrics": {
+        "accuracy": 0.431747,
+        "avg_return_net": -0.033817,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.382043,
+              "lower": 0.2,
+              "observed_rate": 0.0,
+              "rows": 32,
+              "upper": 0.4
+            },
+            {
+              "avg_probability": 0.506347,
+              "lower": 0.4,
+              "observed_rate": 0.425283,
+              "rows": 5039,
+              "upper": 0.6
+            },
+            {
+              "avg_probability": 0.624995,
+              "lower": 0.6,
+              "observed_rate": 0.307692,
+              "rows": 13,
+              "upper": 0.8
+            }
+          ],
+          "brier_score": 0.249503,
+          "ece": 0.083563
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -1.0,
+        "positive_rate": 0.990559,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -1.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 93.0
+      },
+      "metrics": {
+        "accuracy": 0.2712,
+        "positive_rate": 0.9907,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p0005-thr45-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p0005-thr45-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "epochs": 550,
+        "l2": 0.0005,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p0005-thr45-v1",
+        "threshold": 0.45
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.492329,
+        "avg_return_net": -0.020443,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.382043,
+              "lower": 0.2,
+              "observed_rate": 0.0,
+              "rows": 32,
+              "upper": 0.4
+            },
+            {
+              "avg_probability": 0.506347,
+              "lower": 0.4,
+              "observed_rate": 0.425283,
+              "rows": 5039,
+              "upper": 0.6
+            },
+            {
+              "avg_probability": 0.624995,
+              "lower": 0.6,
+              "observed_rate": 0.307692,
+              "rows": 13,
+              "upper": 0.8
+            }
+          ],
+          "brier_score": 0.249503,
+          "ece": 0.083563
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -1.0,
+        "positive_rate": 0.666798,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -1.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 2325.0
+      },
+      "metrics": {
+        "accuracy": 0.4861,
+        "positive_rate": 0.6292,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p0005-thr50-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p0005-thr50-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "epochs": 550,
+        "l2": 0.0005,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p0005-thr50-v1",
+        "threshold": 0.5
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.577105,
+        "avg_return_net": -5.7e-05,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.382043,
+              "lower": 0.2,
+              "observed_rate": 0.0,
+              "rows": 32,
+              "upper": 0.4
+            },
+            {
+              "avg_probability": 0.506347,
+              "lower": 0.4,
+              "observed_rate": 0.425283,
+              "rows": 5039,
+              "upper": 0.6
+            },
+            {
+              "avg_probability": 0.624995,
+              "lower": 0.6,
+              "observed_rate": 0.307692,
+              "rows": 13,
+              "upper": 0.8
+            }
+          ],
+          "brier_score": 0.249503,
+          "ece": 0.083563
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -0.993047,
+        "positive_rate": 0.024587,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -0.763777,
+        "transaction_cost_bps": 5.0,
+        "turnover": 238.0
+      },
+      "metrics": {
+        "accuracy": 0.7372,
+        "positive_rate": 0.0384,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p0005-thr55-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p0005-thr55-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "epochs": 550,
+        "l2": 0.0005,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p0005-thr55-v1",
+        "threshold": 0.55
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.576711,
+        "avg_return_net": -4.1e-05,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.382043,
+              "lower": 0.2,
+              "observed_rate": 0.0,
+              "rows": 32,
+              "upper": 0.4
+            },
+            {
+              "avg_probability": 0.506347,
+              "lower": 0.4,
+              "observed_rate": 0.425283,
+              "rows": 5039,
+              "upper": 0.6
+            },
+            {
+              "avg_probability": 0.624995,
+              "lower": 0.6,
+              "observed_rate": 0.307692,
+              "rows": 13,
+              "upper": 0.8
+            }
+          ],
+          "brier_score": 0.249503,
+          "ece": 0.083563
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -0.305092,
+        "positive_rate": 0.002557,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -0.201728,
+        "transaction_cost_bps": 5.0,
+        "turnover": 22.0
+      },
+      "metrics": {
+        "accuracy": 0.7502,
+        "positive_rate": 0.0125,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p0005-thr60-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p0005-thr60-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "epochs": 550,
+        "l2": 0.0005,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p0005-thr60-v1",
+        "threshold": 0.6
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.431747,
+        "avg_return_net": -0.033817,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.383401,
+              "lower": 0.2,
+              "observed_rate": 0.0,
+              "rows": 32,
+              "upper": 0.4
+            },
+            {
+              "avg_probability": 0.506347,
+              "lower": 0.4,
+              "observed_rate": 0.425283,
+              "rows": 5039,
+              "upper": 0.6
+            },
+            {
+              "avg_probability": 0.62465,
+              "lower": 0.6,
+              "observed_rate": 0.307692,
+              "rows": 13,
+              "upper": 0.8
+            }
+          ],
+          "brier_score": 0.249517,
+          "ece": 0.08357
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -1.0,
+        "positive_rate": 0.990559,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -1.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 93.0
+      },
+      "metrics": {
+        "accuracy": 0.2712,
+        "positive_rate": 0.9907,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p001-thr45-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p001-thr45-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "epochs": 550,
+        "l2": 0.001,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p001-thr45-v1",
+        "threshold": 0.45
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.492329,
+        "avg_return_net": -0.020443,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.383401,
+              "lower": 0.2,
+              "observed_rate": 0.0,
+              "rows": 32,
+              "upper": 0.4
+            },
+            {
+              "avg_probability": 0.506347,
+              "lower": 0.4,
+              "observed_rate": 0.425283,
+              "rows": 5039,
+              "upper": 0.6
+            },
+            {
+              "avg_probability": 0.62465,
+              "lower": 0.6,
+              "observed_rate": 0.307692,
+              "rows": 13,
+              "upper": 0.8
+            }
+          ],
+          "brier_score": 0.249517,
+          "ece": 0.08357
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -1.0,
+        "positive_rate": 0.666798,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -1.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 2325.0
+      },
+      "metrics": {
+        "accuracy": 0.4861,
+        "positive_rate": 0.6292,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p001-thr50-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p001-thr50-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "epochs": 550,
+        "l2": 0.001,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p001-thr50-v1",
+        "threshold": 0.5
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.577105,
+        "avg_return_net": -5.7e-05,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.383401,
+              "lower": 0.2,
+              "observed_rate": 0.0,
+              "rows": 32,
+              "upper": 0.4
+            },
+            {
+              "avg_probability": 0.506347,
+              "lower": 0.4,
+              "observed_rate": 0.425283,
+              "rows": 5039,
+              "upper": 0.6
+            },
+            {
+              "avg_probability": 0.62465,
+              "lower": 0.6,
+              "observed_rate": 0.307692,
+              "rows": 13,
+              "upper": 0.8
+            }
+          ],
+          "brier_score": 0.249517,
+          "ece": 0.08357
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -0.993047,
+        "positive_rate": 0.024587,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -0.763777,
+        "transaction_cost_bps": 5.0,
+        "turnover": 238.0
+      },
+      "metrics": {
+        "accuracy": 0.7372,
+        "positive_rate": 0.0384,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p001-thr55-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p001-thr55-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "epochs": 550,
+        "l2": 0.001,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p001-thr55-v1",
+        "threshold": 0.55
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.576711,
+        "avg_return_net": -4.1e-05,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.383401,
+              "lower": 0.2,
+              "observed_rate": 0.0,
+              "rows": 32,
+              "upper": 0.4
+            },
+            {
+              "avg_probability": 0.506347,
+              "lower": 0.4,
+              "observed_rate": 0.425283,
+              "rows": 5039,
+              "upper": 0.6
+            },
+            {
+              "avg_probability": 0.62465,
+              "lower": 0.6,
+              "observed_rate": 0.307692,
+              "rows": 13,
+              "upper": 0.8
+            }
+          ],
+          "brier_score": 0.249517,
+          "ece": 0.08357
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -0.305092,
+        "positive_rate": 0.002557,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -0.201728,
+        "transaction_cost_bps": 5.0,
+        "turnover": 22.0
+      },
+      "metrics": {
+        "accuracy": 0.7502,
+        "positive_rate": 0.0125,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p001-thr60-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p001-thr60-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "epochs": 550,
+        "l2": 0.001,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p001-thr60-v1",
+        "threshold": 0.6
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.431747,
+        "avg_return_net": -0.033817,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.393407,
+              "lower": 0.2,
+              "observed_rate": 0.0,
+              "rows": 32,
+              "upper": 0.4
+            },
+            {
+              "avg_probability": 0.506352,
+              "lower": 0.4,
+              "observed_rate": 0.425283,
+              "rows": 5039,
+              "upper": 0.6
+            },
+            {
+              "avg_probability": 0.62201,
+              "lower": 0.6,
+              "observed_rate": 0.307692,
+              "rows": 13,
+              "upper": 0.8
+            }
+          ],
+          "brier_score": 0.249621,
+          "ece": 0.083631
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -1.0,
+        "positive_rate": 0.990559,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -1.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 93.0
+      },
+      "metrics": {
+        "accuracy": 0.2712,
+        "positive_rate": 0.9907,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p005-thr45-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p005-thr45-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "epochs": 550,
+        "l2": 0.005,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p005-thr45-v1",
+        "threshold": 0.45
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.491739,
+        "avg_return_net": -0.020563,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.393407,
+              "lower": 0.2,
+              "observed_rate": 0.0,
+              "rows": 32,
+              "upper": 0.4
+            },
+            {
+              "avg_probability": 0.506352,
+              "lower": 0.4,
+              "observed_rate": 0.425283,
+              "rows": 5039,
+              "upper": 0.6
+            },
+            {
+              "avg_probability": 0.62201,
+              "lower": 0.6,
+              "observed_rate": 0.307692,
+              "rows": 13,
+              "upper": 0.8
+            }
+          ],
+          "brier_score": 0.249621,
+          "ece": 0.083631
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -1.0,
+        "positive_rate": 0.667388,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -1.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 2319.0
+      },
+      "metrics": {
+        "accuracy": 0.4802,
+        "positive_rate": 0.643,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p005-thr50-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p005-thr50-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "epochs": 550,
+        "l2": 0.005,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p005-thr50-v1",
+        "threshold": 0.5
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.576515,
+        "avg_return_net": -0.000153,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.393407,
+              "lower": 0.2,
+              "observed_rate": 0.0,
+              "rows": 32,
+              "upper": 0.4
+            },
+            {
+              "avg_probability": 0.506352,
+              "lower": 0.4,
+              "observed_rate": 0.425283,
+              "rows": 5039,
+              "upper": 0.6
+            },
+            {
+              "avg_probability": 0.62201,
+              "lower": 0.6,
+              "observed_rate": 0.307692,
+              "rows": 13,
+              "upper": 0.8
+            }
+          ],
+          "brier_score": 0.249621,
+          "ece": 0.083631
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -0.993047,
+        "positive_rate": 0.023997,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -0.849673,
+        "transaction_cost_bps": 5.0,
+        "turnover": 232.0
+      },
+      "metrics": {
+        "accuracy": 0.7384,
+        "positive_rate": 0.0371,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p005-thr55-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p005-thr55-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "epochs": 550,
+        "l2": 0.005,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p005-thr55-v1",
+        "threshold": 0.55
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.576711,
+        "avg_return_net": -4.1e-05,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.393407,
+              "lower": 0.2,
+              "observed_rate": 0.0,
+              "rows": 32,
+              "upper": 0.4
+            },
+            {
+              "avg_probability": 0.506352,
+              "lower": 0.4,
+              "observed_rate": 0.425283,
+              "rows": 5039,
+              "upper": 0.6
+            },
+            {
+              "avg_probability": 0.62201,
+              "lower": 0.6,
+              "observed_rate": 0.307692,
+              "rows": 13,
+              "upper": 0.8
+            }
+          ],
+          "brier_score": 0.249621,
+          "ece": 0.083631
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -0.305092,
+        "positive_rate": 0.002557,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -0.201728,
+        "transaction_cost_bps": 5.0,
+        "turnover": 22.0
+      },
+      "metrics": {
+        "accuracy": 0.7502,
+        "positive_rate": 0.0125,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p005-thr60-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p005-thr60-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "epochs": 550,
+        "l2": 0.005,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p005-thr60-v1",
+        "threshold": 0.6
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.513375,
+        "avg_return_net": -0.013401,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.0,
+              "lower": 0.0,
+              "observed_rate": 0.338451,
+              "rows": 1433,
+              "upper": 0.2
+            },
+            {
+              "avg_probability": 1.0,
+              "lower": 0.8,
+              "observed_rate": 0.455218,
+              "rows": 3651,
+              "upper": 1.0
+            }
+          ],
+          "brier_score": 0.486625,
+          "ece": 0.486625
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -1.0,
+        "positive_rate": 0.718135,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -1.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 1684.0
+      },
+      "metrics": {
+        "accuracy": 0.7054,
+        "positive_rate": 0.3661,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-stump-01-return-5d-lagged-v1.json",
+      "model_type": "decision_stump",
+      "model_version": "challenger-stump-01-return-5d-lagged-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed",
+          "calibration_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "direction": "lt_positive",
+        "feature": "feature_return_5d_lagged",
+        "threshold": 0.025223,
+        "train_accuracy": 0.5783
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.509638,
+        "avg_return_net": -0.015677,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.0,
+              "lower": 0.0,
+              "observed_rate": 0.409829,
+              "rows": 2462,
+              "upper": 0.2
+            },
+            {
+              "avg_probability": 1.0,
+              "lower": 0.8,
+              "observed_rate": 0.43402,
+              "rows": 2622,
+              "upper": 1.0
+            }
+          ],
+          "brier_score": 0.490362,
+          "ece": 0.490362
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -1.0,
+        "positive_rate": 0.515736,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -1.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 2272.0
+      },
+      "metrics": {
+        "accuracy": 0.4864,
+        "positive_rate": 0.5891,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-stump-02-return-1d-lagged-v1.json",
+      "model_type": "decision_stump",
+      "model_version": "challenger-stump-02-return-1d-lagged-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed",
+          "calibration_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "direction": "lt_positive",
+        "feature": "feature_return_1d_lagged",
+        "threshold": 0.002318,
+        "train_accuracy": 0.5216
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.38572,
+        "avg_return_net": -0.031358,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.0,
+              "lower": 0.0,
+              "observed_rate": 0.555755,
+              "rows": 1668,
+              "upper": 0.2
+            },
+            {
+              "avg_probability": 1.0,
+              "lower": 0.8,
+              "observed_rate": 0.357143,
+              "rows": 3416,
+              "upper": 1.0
+            }
+          ],
+          "brier_score": 0.61428,
+          "ece": 0.61428
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -1.0,
+        "positive_rate": 0.671912,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -1.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 2304.0
+      },
+      "metrics": {
+        "accuracy": 0.3978,
+        "positive_rate": 0.5582,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-stump-03-close-v1.json",
+      "model_type": "decision_stump",
+      "model_version": "challenger-stump-03-close-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed",
+          "calibration_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "direction": "lt_positive",
+        "feature": "feature_close",
+        "threshold": 16.52,
+        "train_accuracy": 0.5087
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.583596,
+        "avg_return_net": -0.012153,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.0,
+              "lower": 0.0,
+              "observed_rate": 0.253606,
+              "rows": 1664,
+              "upper": 0.2
+            },
+            {
+              "avg_probability": 1.0,
+              "lower": 0.8,
+              "observed_rate": 0.504386,
+              "rows": 3420,
+              "upper": 1.0
+            }
+          ],
+          "brier_score": 0.416404,
+          "ece": 0.416404
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -1.0,
+        "positive_rate": 0.672699,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -1.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 1839.0
+      },
+      "metrics": {
+        "accuracy": 0.5355,
+        "positive_rate": 0.5478,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-stump-04-volume-v1.json",
+      "model_type": "decision_stump",
+      "model_version": "challenger-stump-04-volume-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed",
+          "calibration_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "direction": "lt_positive",
+        "feature": "feature_volume",
+        "threshold": 21590714.774208,
+        "train_accuracy": 0.5073
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.416404,
+        "avg_return_net": -0.024052,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.0,
+              "lower": 0.0,
+              "observed_rate": 0.504386,
+              "rows": 3420,
+              "upper": 0.2
+            },
+            {
+              "avg_probability": 1.0,
+              "lower": 0.8,
+              "observed_rate": 0.253606,
+              "rows": 1664,
+              "upper": 1.0
+            }
+          ],
+          "brier_score": 0.583596,
+          "ece": 0.583596
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -1.0,
+        "positive_rate": 0.327301,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -1.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 1838.0
+      },
+      "metrics": {
+        "accuracy": 0.4645,
+        "positive_rate": 0.4522,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-stump-05-volume-v1.json",
+      "model_type": "decision_stump",
+      "model_version": "challenger-stump-05-volume-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed",
+          "calibration_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "direction": "gte_positive",
+        "feature": "feature_volume",
+        "threshold": 21590714.774208,
+        "train_accuracy": 0.4927
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.61428,
+        "avg_return_net": -0.005031,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.0,
+              "lower": 0.0,
+              "observed_rate": 0.357143,
+              "rows": 3416,
+              "upper": 0.2
+            },
+            {
+              "avg_probability": 1.0,
+              "lower": 0.8,
+              "observed_rate": 0.555755,
+              "rows": 1668,
+              "upper": 1.0
+            }
+          ],
+          "brier_score": 0.38572,
+          "ece": 0.38572
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -1.0,
+        "positive_rate": 0.328088,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -1.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 2305.0
+      },
+      "metrics": {
+        "accuracy": 0.6022,
+        "positive_rate": 0.4418,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-stump-06-close-v1.json",
+      "model_type": "decision_stump",
+      "model_version": "challenger-stump-06-close-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed",
+          "calibration_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "direction": "gte_positive",
+        "feature": "feature_close",
+        "threshold": 16.52,
+        "train_accuracy": 0.4913
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.490362,
+        "avg_return_net": -0.020699,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.0,
+              "lower": 0.0,
+              "observed_rate": 0.43402,
+              "rows": 2622,
+              "upper": 0.2
+            },
+            {
+              "avg_probability": 1.0,
+              "lower": 0.8,
+              "observed_rate": 0.409829,
+              "rows": 2462,
+              "upper": 1.0
+            }
+          ],
+          "brier_score": 0.509638,
+          "ece": 0.509638
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -1.0,
+        "positive_rate": 0.484264,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -1.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 2271.0
+      },
+      "metrics": {
+        "accuracy": 0.5136,
+        "positive_rate": 0.4109,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-stump-07-return-1d-lagged-v1.json",
+      "model_type": "decision_stump",
+      "model_version": "challenger-stump-07-return-1d-lagged-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed",
+          "calibration_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "direction": "gte_positive",
+        "feature": "feature_return_1d_lagged",
+        "threshold": 0.002318,
+        "train_accuracy": 0.4784
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.486625,
+        "avg_return_net": -0.022744,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.0,
+              "lower": 0.0,
+              "observed_rate": 0.455218,
+              "rows": 3651,
+              "upper": 0.2
+            },
+            {
+              "avg_probability": 1.0,
+              "lower": 0.8,
+              "observed_rate": 0.338451,
+              "rows": 1433,
+              "upper": 1.0
+            }
+          ],
+          "brier_score": 0.513375,
+          "ece": 0.513375
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -1.0,
+        "positive_rate": 0.281865,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -1.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 1683.0
+      },
+      "metrics": {
+        "accuracy": 0.2946,
+        "positive_rate": 0.6339,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-stump-08-return-5d-lagged-v1.json",
+      "model_type": "decision_stump",
+      "model_version": "challenger-stump-08-return-5d-lagged-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed",
+          "calibration_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "direction": "gte_positive",
+        "feature": "feature_return_5d_lagged",
+        "threshold": 0.025223,
+        "train_accuracy": 0.4217
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.422305,
+        "avg_return_net": -0.035482,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 1.0,
+              "lower": 0.8,
+              "observed_rate": 0.422305,
+              "rows": 5084,
+              "upper": 1.0
+            }
+          ],
+          "brier_score": 0.577695,
+          "ece": 0.577695
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -1.0,
+        "positive_rate": 1.0,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -1.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 1.0
+      },
+      "metrics": {
+        "accuracy": 0.2619,
+        "positive_rate": 1.0,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-baseline-majority-v1.json",
+      "model_type": "baseline_classifier",
+      "model_version": "challenger-baseline-majority-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed",
+          "calibration_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {
+        "majority_class": 1
+      }
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.422305,
+        "avg_return_net": -0.035482,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 1.0,
+              "lower": 0.8,
+              "observed_rate": 0.422305,
+              "rows": 5084,
+              "upper": 1.0
+            }
+          ],
+          "brier_score": 0.577695,
+          "ece": 0.577695
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": -1.0,
+        "positive_rate": 1.0,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": -1.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 1.0
+      },
+      "metrics": {
+        "accuracy": 0.2619,
+        "positive_rate": 1.0,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-baseline-always-up-v1.json",
+      "model_type": "baseline_classifier",
+      "model_version": "challenger-baseline-always-up-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "drawdown_gate_failed",
+          "calibration_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {}
+    },
+    {
+      "backtest_metrics": {
+        "accuracy": 0.577695,
+        "avg_return_net": 0.0,
+        "calibration": {
+          "bins": [
+            {
+              "avg_probability": 0.0,
+              "lower": 0.0,
+              "observed_rate": 0.422305,
+              "rows": 5084,
+              "upper": 0.2
+            }
+          ],
+          "brier_score": 0.422305,
+          "ece": 0.422305
+        },
+        "drift": {
+          "feature_shifts": {
+            "feature_close": 0.194334,
+            "feature_return_1d_lagged": 0.024223,
+            "feature_return_5d_lagged": 0.631631,
+            "feature_volume": 0.362526
+          },
+          "max_mean_shift": 0.631631
+        },
+        "max_drawdown": 0.0,
+        "positive_rate": 0.0,
+        "rows": 5084,
+        "slippage_bps": 5.0,
+        "total_return_net": 0.0,
+        "transaction_cost_bps": 5.0,
+        "turnover": 0.0
+      },
+      "metrics": {
+        "accuracy": 0.7381,
+        "positive_rate": 0.0,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-baseline-always-down-v1.json",
+      "model_type": "baseline_classifier",
+      "model_version": "challenger-baseline-always-down-v1",
+      "promotion_gates": {
+        "failed_gates": [
+          "calibration_gate_failed"
+        ],
+        "objective_gates": {
+          "max_drawdown": 0.2,
+          "max_drift_shift": 3.0,
+          "max_ece": 0.2,
+          "min_excess_return": 0.0,
+          "min_rows": 200
+        },
+        "promotion_ready": false
+      },
+      "routing_allowed": false,
+      "shadow_logging_recommended": false,
+      "spec": {}
+    }
+  ],
+  "created_at_utc": "2026-07-07T10:07:09.967184+00:00",
+  "feature_store_path": "data/track_b/flat_feature_store/test.jsonl",
+  "horizon_days": 5,
+  "ranked_model_versions": [
+    "challenger-baseline-always-down-v1",
+    "challenger-logreg-l20p0005-thr60-v1",
+    "challenger-logreg-l20p001-thr60-v1",
+    "challenger-logreg-l20p005-thr60-v1",
+    "challenger-logreg-l20p0005-thr55-v1",
+    "challenger-logreg-l20p001-thr55-v1",
+    "challenger-logreg-l20p005-thr55-v1",
+    "challenger-logreg-l20p0005-thr45-v1",
+    "challenger-logreg-l20p0005-thr50-v1",
+    "challenger-logreg-l20p001-thr45-v1",
+    "challenger-logreg-l20p001-thr50-v1",
+    "challenger-logreg-l20p005-thr45-v1",
+    "challenger-logreg-l20p005-thr50-v1",
+    "challenger-stump-06-close-v1",
+    "challenger-stump-04-volume-v1",
+    "challenger-stump-01-return-5d-lagged-v1",
+    "challenger-stump-02-return-1d-lagged-v1",
+    "challenger-stump-07-return-1d-lagged-v1",
+    "challenger-stump-08-return-5d-lagged-v1",
+    "challenger-baseline-majority-v1",
+    "challenger-baseline-always-up-v1",
+    "challenger-stump-05-volume-v1",
+    "challenger-stump-03-close-v1"
+  ],
+  "routing_policy": "shadow-log first; user-facing routing remains disabled until gates pass and human promotion occurs",
+  "rows": 5084,
+  "schema_version": "moneybot-challenger-backtest.v1",
+  "shadow_candidates": [],
+  "suite_manifest_path": "data/track_b/challenger_suite/challenger_suite_manifest.json"
+}

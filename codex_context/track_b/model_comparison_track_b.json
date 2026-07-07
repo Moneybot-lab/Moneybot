@@ -1,0 +1,9 @@
+{
+  "backtest_report_path": "data/track_b/challenger_suite/backtest_report.json",
+  "candidate_win": false,
+  "prepared_at_utc": "2026-07-07T10:07:10.060627+00:00",
+  "reasons": [
+    "no logistic challenger cleared objective backtest, calibration, drawdown, benchmark, and drift gates"
+  ],
+  "schema_version": "moneybot-challenger-promotion.v1"
+}

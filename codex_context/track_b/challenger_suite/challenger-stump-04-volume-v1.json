@@ -1,0 +1,13 @@
+{
+  "direction": "lt_positive",
+  "feature": "feature_volume",
+  "model_type": "decision_stump",
+  "threshold": 21590714.774208,
+  "training_spec": {
+    "direction": "lt_positive",
+    "feature": "feature_volume",
+    "threshold": 21590714.774208,
+    "train_accuracy": 0.5073
+  },
+  "version": "challenger-stump-04-volume-v1"
+}

@@ -1,0 +1,19 @@
+{
+  "created_at_utc": "2026-07-07T10:07:05.218854+00:00",
+  "decision_log": "data/decision_events.jsonl",
+  "events_scanned": 33058,
+  "horizon_days": 5,
+  "insufficient_forward_window": 6432,
+  "insufficient_history": 108,
+  "join_policy": "last_market_row_on_or_before_decision_date; labels strictly after that row",
+  "leakage_safe": true,
+  "market_end_date": "2026-07-15",
+  "market_start_date": "2026-03-28",
+  "market_symbols_loaded": 449,
+  "market_symbols_requested": 512,
+  "missing_symbol_history": 269,
+  "output_path": "data/track_b/decision_training_snapshot_massive.jsonl",
+  "raw_market_root": "data/raw/massive_flatfiles",
+  "rows_joined": 26249,
+  "schema_version": "massive-decision-training-rows.v1"
+}

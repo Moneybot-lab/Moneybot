@@ -1,0 +1,5 @@
+{
+  "model_type": "baseline_classifier",
+  "training_spec": {},
+  "version": "challenger-baseline-always-up-v1"
+}

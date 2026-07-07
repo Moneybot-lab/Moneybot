@@ -1,0 +1,13 @@
+{
+  "direction": "lt_positive",
+  "feature": "feature_return_5d_lagged",
+  "model_type": "decision_stump",
+  "threshold": 0.025223,
+  "training_spec": {
+    "direction": "lt_positive",
+    "feature": "feature_return_5d_lagged",
+    "threshold": 0.025223,
+    "train_accuracy": 0.5783
+  },
+  "version": "challenger-stump-01-return-5d-lagged-v1"
+}

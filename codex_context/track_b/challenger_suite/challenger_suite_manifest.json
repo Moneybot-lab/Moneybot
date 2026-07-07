@@ -1,0 +1,435 @@
+{
+  "challenger_count": 23,
+  "challengers": [
+    {
+      "metrics": {
+        "accuracy": 0.2712,
+        "positive_rate": 0.9907,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p0005-thr45-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p0005-thr45-v1",
+      "spec": {
+        "epochs": 550,
+        "l2": 0.0005,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p0005-thr45-v1",
+        "threshold": 0.45
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.4861,
+        "positive_rate": 0.6292,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p0005-thr50-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p0005-thr50-v1",
+      "spec": {
+        "epochs": 550,
+        "l2": 0.0005,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p0005-thr50-v1",
+        "threshold": 0.5
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.7372,
+        "positive_rate": 0.0384,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p0005-thr55-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p0005-thr55-v1",
+      "spec": {
+        "epochs": 550,
+        "l2": 0.0005,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p0005-thr55-v1",
+        "threshold": 0.55
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.7502,
+        "positive_rate": 0.0125,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p0005-thr60-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p0005-thr60-v1",
+      "spec": {
+        "epochs": 550,
+        "l2": 0.0005,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p0005-thr60-v1",
+        "threshold": 0.6
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.2712,
+        "positive_rate": 0.9907,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p001-thr45-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p001-thr45-v1",
+      "spec": {
+        "epochs": 550,
+        "l2": 0.001,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p001-thr45-v1",
+        "threshold": 0.45
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.4861,
+        "positive_rate": 0.6292,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p001-thr50-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p001-thr50-v1",
+      "spec": {
+        "epochs": 550,
+        "l2": 0.001,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p001-thr50-v1",
+        "threshold": 0.5
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.7372,
+        "positive_rate": 0.0384,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p001-thr55-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p001-thr55-v1",
+      "spec": {
+        "epochs": 550,
+        "l2": 0.001,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p001-thr55-v1",
+        "threshold": 0.55
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.7502,
+        "positive_rate": 0.0125,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p001-thr60-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p001-thr60-v1",
+      "spec": {
+        "epochs": 550,
+        "l2": 0.001,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p001-thr60-v1",
+        "threshold": 0.6
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.2712,
+        "positive_rate": 0.9907,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p005-thr45-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p005-thr45-v1",
+      "spec": {
+        "epochs": 550,
+        "l2": 0.005,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p005-thr45-v1",
+        "threshold": 0.45
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.4802,
+        "positive_rate": 0.643,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p005-thr50-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p005-thr50-v1",
+      "spec": {
+        "epochs": 550,
+        "l2": 0.005,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p005-thr50-v1",
+        "threshold": 0.5
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.7384,
+        "positive_rate": 0.0371,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p005-thr55-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p005-thr55-v1",
+      "spec": {
+        "epochs": 550,
+        "l2": 0.005,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p005-thr55-v1",
+        "threshold": 0.55
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.7502,
+        "positive_rate": 0.0125,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-logreg-l20p005-thr60-v1.json",
+      "model_type": "logistic_regression",
+      "model_version": "challenger-logreg-l20p005-thr60-v1",
+      "spec": {
+        "epochs": 550,
+        "l2": 0.005,
+        "lr": 0.08,
+        "model_type": "logistic_regression",
+        "name": "challenger-logreg-l20p005-thr60-v1",
+        "threshold": 0.6
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.7054,
+        "positive_rate": 0.3661,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-stump-01-return-5d-lagged-v1.json",
+      "model_type": "decision_stump",
+      "model_version": "challenger-stump-01-return-5d-lagged-v1",
+      "spec": {
+        "direction": "lt_positive",
+        "feature": "feature_return_5d_lagged",
+        "threshold": 0.025223,
+        "train_accuracy": 0.5783
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.4864,
+        "positive_rate": 0.5891,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-stump-02-return-1d-lagged-v1.json",
+      "model_type": "decision_stump",
+      "model_version": "challenger-stump-02-return-1d-lagged-v1",
+      "spec": {
+        "direction": "lt_positive",
+        "feature": "feature_return_1d_lagged",
+        "threshold": 0.002318,
+        "train_accuracy": 0.5216
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.3978,
+        "positive_rate": 0.5582,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-stump-03-close-v1.json",
+      "model_type": "decision_stump",
+      "model_version": "challenger-stump-03-close-v1",
+      "spec": {
+        "direction": "lt_positive",
+        "feature": "feature_close",
+        "threshold": 16.52,
+        "train_accuracy": 0.5087
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.5355,
+        "positive_rate": 0.5478,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-stump-04-volume-v1.json",
+      "model_type": "decision_stump",
+      "model_version": "challenger-stump-04-volume-v1",
+      "spec": {
+        "direction": "lt_positive",
+        "feature": "feature_volume",
+        "threshold": 21590714.774208,
+        "train_accuracy": 0.5073
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.4645,
+        "positive_rate": 0.4522,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-stump-05-volume-v1.json",
+      "model_type": "decision_stump",
+      "model_version": "challenger-stump-05-volume-v1",
+      "spec": {
+        "direction": "gte_positive",
+        "feature": "feature_volume",
+        "threshold": 21590714.774208,
+        "train_accuracy": 0.4927
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.6022,
+        "positive_rate": 0.4418,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-stump-06-close-v1.json",
+      "model_type": "decision_stump",
+      "model_version": "challenger-stump-06-close-v1",
+      "spec": {
+        "direction": "gte_positive",
+        "feature": "feature_close",
+        "threshold": 16.52,
+        "train_accuracy": 0.4913
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.5136,
+        "positive_rate": 0.4109,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-stump-07-return-1d-lagged-v1.json",
+      "model_type": "decision_stump",
+      "model_version": "challenger-stump-07-return-1d-lagged-v1",
+      "spec": {
+        "direction": "gte_positive",
+        "feature": "feature_return_1d_lagged",
+        "threshold": 0.002318,
+        "train_accuracy": 0.4784
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.2946,
+        "positive_rate": 0.6339,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-stump-08-return-5d-lagged-v1.json",
+      "model_type": "decision_stump",
+      "model_version": "challenger-stump-08-return-5d-lagged-v1",
+      "spec": {
+        "direction": "gte_positive",
+        "feature": "feature_return_5d_lagged",
+        "threshold": 0.025223,
+        "train_accuracy": 0.4217
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.2619,
+        "positive_rate": 1.0,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-baseline-majority-v1.json",
+      "model_type": "baseline_classifier",
+      "model_version": "challenger-baseline-majority-v1",
+      "spec": {
+        "majority_class": 1
+      }
+    },
+    {
+      "metrics": {
+        "accuracy": 0.2619,
+        "positive_rate": 1.0,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-baseline-always-up-v1.json",
+      "model_type": "baseline_classifier",
+      "model_version": "challenger-baseline-always-up-v1",
+      "spec": {}
+    },
+    {
+      "metrics": {
+        "accuracy": 0.7381,
+        "positive_rate": 0.0,
+        "rows": 4067.0
+      },
+      "model_path": "data/track_b/challenger_suite/challenger-baseline-always-down-v1.json",
+      "model_type": "baseline_classifier",
+      "model_version": "challenger-baseline-always-down-v1",
+      "spec": {}
+    }
+  ],
+  "created_at_utc": "2026-07-07T10:07:09.543004+00:00",
+  "feature_columns": [
+    "feature_close",
+    "feature_return_1d_lagged",
+    "feature_return_5d_lagged",
+    "feature_volume"
+  ],
+  "feature_fill_values": {
+    "feature_close": 15.75,
+    "feature_return_1d_lagged": 0.0,
+    "feature_return_5d_lagged": 0.030382,
+    "feature_volume": 20873084.141934
+  },
+  "input_path": "data/track_b/flat_feature_store/train.jsonl",
+  "live_routing": false,
+  "model_type_counts": {
+    "baseline_classifier": 3,
+    "decision_stump": 8,
+    "logistic_regression": 12
+  },
+  "output_dir": "data/track_b/challenger_suite",
+  "ranked_model_versions": [
+    "challenger-logreg-l20p0005-thr60-v1",
+    "challenger-logreg-l20p001-thr60-v1",
+    "challenger-logreg-l20p005-thr60-v1",
+    "challenger-logreg-l20p005-thr55-v1",
+    "challenger-baseline-always-down-v1",
+    "challenger-logreg-l20p0005-thr55-v1",
+    "challenger-logreg-l20p001-thr55-v1",
+    "challenger-stump-01-return-5d-lagged-v1",
+    "challenger-stump-06-close-v1",
+    "challenger-stump-04-volume-v1",
+    "challenger-stump-07-return-1d-lagged-v1",
+    "challenger-stump-02-return-1d-lagged-v1",
+    "challenger-logreg-l20p0005-thr50-v1",
+    "challenger-logreg-l20p001-thr50-v1",
+    "challenger-logreg-l20p005-thr50-v1",
+    "challenger-stump-05-volume-v1",
+    "challenger-stump-03-close-v1",
+    "challenger-stump-08-return-5d-lagged-v1",
+    "challenger-logreg-l20p0005-thr45-v1",
+    "challenger-logreg-l20p001-thr45-v1",
+    "challenger-logreg-l20p005-thr45-v1",
+    "challenger-baseline-majority-v1",
+    "challenger-baseline-always-up-v1"
+  ],
+  "rows": 20334,
+  "schema_version": "moneybot-challenger-suite.v2",
+  "target_column": "label_up_5d",
+  "test_rows": 4067,
+  "train_rows": 16267
+}

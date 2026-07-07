@@ -1,5 +1,0 @@
-usage: python -m json.tool [-h] [--sort-keys] [--no-ensure-ascii]
-                           [--json-lines]
-                           [--indent INDENT | --tab | --no-indent | --compact]
-                           [infile] [outfile]
-python -m json.tool: error: argument infile: can't open 'track_b/flat_feature_store/manifest.json': [Errno 2] No such file or directory: 'track_b/flat_feature_store/manifest.json'

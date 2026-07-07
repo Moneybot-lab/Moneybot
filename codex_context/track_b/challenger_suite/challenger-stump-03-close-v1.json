@@ -1,0 +1,13 @@
+{
+  "direction": "lt_positive",
+  "feature": "feature_close",
+  "model_type": "decision_stump",
+  "threshold": 16.52,
+  "training_spec": {
+    "direction": "lt_positive",
+    "feature": "feature_close",
+    "threshold": 16.52,
+    "train_accuracy": 0.5087
+  },
+  "version": "challenger-stump-03-close-v1"
+}

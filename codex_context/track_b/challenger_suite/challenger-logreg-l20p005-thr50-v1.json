@@ -1,0 +1,38 @@
+{
+  "bias": 0.02658289561473602,
+  "decision_threshold": 0.5,
+  "feature_columns": [
+    "feature_close",
+    "feature_return_1d_lagged",
+    "feature_return_5d_lagged",
+    "feature_volume"
+  ],
+  "means": [
+    61.90040772115326,
+    0.436761347636319,
+    0.6047728694903793,
+    35218089.880931236
+  ],
+  "model_type": "logistic_regression",
+  "stds": [
+    108.89436807067109,
+    7.56483438077561,
+    6.1980874195831825,
+    97159276.86624916
+  ],
+  "training_spec": {
+    "epochs": 550,
+    "l2": 0.005,
+    "lr": 0.08,
+    "model_type": "logistic_regression",
+    "name": "challenger-logreg-l20p005-thr50-v1",
+    "threshold": 0.5
+  },
+  "version": "challenger-logreg-l20p005-thr50-v1",
+  "weights": [
+    0.056077360478961655,
+    -0.06280555751470429,
+    -0.29788834651383944,
+    0.11780766964156687
+  ]
+}
