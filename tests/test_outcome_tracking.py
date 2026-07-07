@@ -46,7 +46,7 @@ def test_close_values_handles_dataframe_close_column():
 
 def test_evaluate_decision_events_builds_rows_with_outcomes():
     events = [
-        {"symbol": "AAPL", "endpoint": "quick_ask", "decision_source": "deterministic_model", "ts": 1, "payload": {"recommendation": "BUY", "model_version": "alpha-atlas-v1"}},
+        {"symbol": "AAPL", "endpoint": "quick_ask", "decision_source": "deterministic_model", "ts": 1, "payload": {"recommendation": "BUY", "model_version": "alpha-atlas-v1", "probability_up": 0.72}, "snapshot": {"quote": {"source_mode": "websocket", "is_stale": False}, "market_data": {"schema_version": "market-data.v1"}, "personalization": {"base_action": "BUY", "action": "HOLD"}}},
         {"symbol": "TSLA", "endpoint": "user_watchlist", "decision_source": "rule_based", "ts": 2, "payload": {"advice": "SELL"}},
     ]
 
@@ -57,6 +57,10 @@ def test_evaluate_decision_events_builds_rows_with_outcomes():
 
     assert rows[0]["outcome_1d"] == "correct"
     assert rows[0]["model_version"] == "alpha-atlas-v1"
+    assert rows[0]["probability_up"] == 0.72
+    assert rows[0]["source_mode"] == "websocket"
+    assert rows[0]["is_stale"] is False
+    assert rows[0]["personalization"]["action"] == "HOLD"
     assert rows[1]["outcome_5d"] == "correct"
 
 
