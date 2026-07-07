@@ -269,13 +269,27 @@ def test_day10_prepares_fallback_numeric_features_when_snapshot_features_missing
 
     df = pd.DataFrame(
         [
-            {"ts": 1, "recommendation": "BUY", "probability_up": None, "feature_return_1d": 0.02, "return_5d": 0.03},
-            {"ts": 2, "recommendation": "SELL", "probability_up": 0.3, "feature_return_1d": -0.01, "return_5d": -0.02},
+            {"ts": 1, "recommendation": "BUY", "probability_up": None, "endpoint": "quick_ask", "decision_source": "ai_enhanced", "feature_return_1d": 0.02, "return_5d": 0.03},
+            {"ts": 2, "recommendation": "SELL", "probability_up": 0.3, "endpoint": "user_watchlist", "decision_source": "rule_based", "feature_return_1d": -0.01, "return_5d": -0.02},
+            {"ts": 3, "recommendation": "STRONG BUY", "probability_up": 0.7, "endpoint": "hot_momentum_buys", "decision_source": "deterministic_model", "feature_return_1d": 0.04, "return_5d": 0.05},
         ]
     )
     prepared = day10._prepare_frame(df)
     cols = day10._select_feature_columns(prepared)
     assert "feature_return_1d" in cols
+    assert "feature_probability_up" in cols
+    assert "feature_rec_buy" in cols
+    assert "feature_rec_sell" in cols
+    assert "feature_rec_strong_buy" in cols
+    assert "feature_rec_positive" in cols
+    assert "feature_rec_negative" in cols
+    assert "feature_endpoint_quick_ask" in cols
+    assert "feature_endpoint_hot_momentum_buys" in cols
+    assert "feature_endpoint_user_watchlist" in cols
+    assert "feature_source_ai_enhanced" in cols
+    assert "feature_source_deterministic_model" in cols
+    assert "feature_source_rule_based" in cols
+    assert prepared["feature_probability_up"].tolist() == [0.5, 0.3, 0.7]
 
 
 def test_day10_trains_when_feature_columns_exist(tmp_path, monkeypatch):
