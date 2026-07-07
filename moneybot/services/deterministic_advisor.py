@@ -67,6 +67,11 @@ class DeterministicQuickAdvisor:
         if self.enabled:
             self._load_artifact()
 
+    def reload_artifact(self) -> bool:
+        """Reload the model artifact from disk and report whether it is usable."""
+        self._load_artifact()
+        return self.artifact is not None
+
     def _load_artifact(self) -> None:
         try:
             self.artifact = load_artifact(self.artifact_path)
