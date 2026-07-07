@@ -1,6 +1,7 @@
 import os
 import json
-from datetime import datetime, timezone
+from io import BytesIO
+from datetime import datetime, timedelta, timezone
 
 from flask import current_app
 from moneybot.app_factory import create_app
@@ -734,7 +735,69 @@ def test_decision_outcomes_uses_materialized_snapshot_when_fresh(tmp_path, monke
     data = res.get_json()["data"]
     assert data["snapshot_source"] == "materialized"
     assert data["rows"][0]["symbol"] == "AAPL"
+    assert data["paper_pnl_by_recommendation"]["BUY"]["rows"] == 1
     assert data["snapshot_age_seconds"] >= 0
+
+
+def test_decision_outcomes_uses_daily_snapshot_for_default_ttl(tmp_path, monkeypatch):
+    snapshot_path = tmp_path / "decision_outcomes_snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "computed_at_utc": (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(),
+                "data": {
+                    "rows": [{"symbol": "SNAP", "action": "BUY", "return_1d": 0.01}],
+                    "summary_1d": {"rows": 1, "evaluated_rows": 1, "accuracy": 1.0},
+                    "summary_5d": {"rows": 0, "evaluated_rows": 0, "accuracy": None},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_PATH", str(snapshot_path))
+    monkeypatch.delenv("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", raising=False)
+    client = _client()
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should use daily snapshot")))
+
+    res = client.get("/api/decision-outcomes?limit=10")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["snapshot_source"] == "materialized"
+    assert data["rows"][0]["symbol"] == "SNAP"
+    assert data["snapshot_age_seconds"] >= 24 * 60 * 60
+
+
+def test_decision_outcomes_serves_stale_snapshot_instead_of_live_fanout(tmp_path, monkeypatch):
+    snapshot_path = tmp_path / "decision_outcomes_snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "computed_at_utc": (datetime.now(timezone.utc) - timedelta(days=3)).isoformat(),
+                "data": {
+                    "rows": [{"symbol": "STALE", "action": "BUY", "return_1d": 0.01}],
+                    "summary_1d": {"rows": 1, "evaluated_rows": 1, "accuracy": 1.0},
+                    "summary_5d": {"rows": 0, "evaluated_rows": 0, "accuracy": None},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_PATH", str(snapshot_path))
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")
+    client = _client()
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not fan out live lookups")))
+
+    res = client.get("/api/decision-outcomes?limit=10")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["snapshot_source"] == "materialized_stale"
+    assert data["snapshot_stale"] is True
+    assert data["rows"][0]["symbol"] == "STALE"
+    assert data["paper_pnl_by_recommendation"]["BUY"]["rows"] == 1
 
 
 def test_decision_outcomes_force_live_bypasses_materialized_snapshot(tmp_path, monkeypatch):
@@ -1252,3 +1315,154 @@ def test_export_decision_log_returns_ndjson_with_token(tmp_path):
     assert len(lines) == 1
     payload = json.loads(lines[0])
     assert payload['symbol'] == 'TSLA'
+
+
+def test_model_health_includes_safe_historical_validation_when_default_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
+    client = _client()
+
+    res = client.get("/api/model-health")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["historical_validation"]["available"] is False
+    assert data["historical_validation"]["configured"] is True
+    assert data["historical_validation"]["path"] == str(tmp_path / "historical_validation_report.json")
+    assert data["historical_validation"]["exists"] is False
+    assert data["historical_validation"]["summary"] is None
+    assert data["historical_validation"]["error"] is None
+
+
+def test_model_health_loads_historical_validation_summary(tmp_path):
+    report_path = tmp_path / "historical_validation.json"
+    report_path.write_text(
+        json.dumps({"generated_at_utc": "2026-06-21T00:00:00+00:00", "rows": 42, "accuracy": 0.72, "ignored": "large"}),
+        encoding="utf-8",
+    )
+    client = _client()
+    client.application.config["HISTORICAL_VALIDATION_REPORT_PATH"] = str(report_path)
+
+    res = client.get("/api/model-health")
+
+    assert res.status_code == 200
+    historical = res.get_json()["data"]["historical_validation"]
+    assert historical["available"] is True
+    assert historical["configured"] is True
+    assert historical["path"] == str(report_path)
+    assert historical["exists"] is True
+    assert historical["summary"] == {"generated_at_utc": "2026-06-21T00:00:00+00:00", "rows": 42, "accuracy": 0.72}
+
+
+def test_promote_track_b_candidate_requires_token():
+    client = _client()
+    client.application.config["TRACK_B_PROMOTION_TOKEN"] = "promote-token"
+
+    res = client.post("/api/promote-track-b-candidate")
+
+    assert res.status_code == 401
+    assert res.get_json()["error"] == "unauthorized"
+
+
+def test_promote_track_b_candidate_rejects_losing_report(tmp_path, monkeypatch):
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
+    client = _client()
+    client.application.config["TRACK_B_PROMOTION_TOKEN"] = "promote-token"
+
+    res = client.post(
+        "/api/promote-track-b-candidate",
+        headers={"X-Track-B-Promotion-Token": "promote-token"},
+        data={
+            "comparison_report": (BytesIO(json.dumps({"candidate_win": False, "reasons": ["not enough"]}).encode()), "model_comparison_track_b.json"),
+            "candidate_model": (BytesIO(json.dumps({"version": "candidate"}).encode()), "candidate_model_track_b.json"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert res.status_code == 409
+    payload = res.get_json()["data"]
+    assert payload["success"] is False
+    assert payload["promoted"] is False
+    assert payload["reasons"] == ["not enough"]
+
+
+def test_promote_track_b_candidate_rejects_no_promotable_placeholder(tmp_path, monkeypatch):
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
+    client = _client()
+    client.application.config["TRACK_B_PROMOTION_TOKEN"] = "promote-token"
+
+    res = client.post(
+        "/api/promote-track-b-candidate",
+        headers={"X-Track-B-Promotion-Token": "promote-token"},
+        data={
+            "comparison_report": (BytesIO(json.dumps({"candidate_win": True, "reasons": ["approved"]}).encode()), "model_comparison_track_b.json"),
+            "candidate_model": (
+                BytesIO(json.dumps({"promotion_ready": False, "version": "no-promotable-challenger"}).encode()),
+                "candidate_model_track_b.json",
+            ),
+            "force": "true",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert res.status_code == 409
+    payload = res.get_json()["data"]
+    assert payload["success"] is False
+    assert payload["promoted"] is False
+    assert payload["candidate_model_version"] == "no-promotable-challenger"
+    assert "cannot be promoted" in payload["message"]
+
+
+def test_promote_track_b_candidate_uploads_and_runs_promotion(monkeypatch, tmp_path):
+    class Completed:
+        returncode = 0
+        stdout = "promoted candidate -> /var/data/moneybot/day1_baseline_model.json\n"
+        stderr = ""
+
+    captured = {}
+
+    def fake_run(command, cwd, capture_output, text, check):
+        captured["command"] = command
+        captured["cwd"] = cwd
+        assert capture_output is True
+        assert text is True
+        assert check is False
+        return Completed()
+
+    monkeypatch.setattr(api_module.subprocess, "run", fake_run)
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
+
+    client = _client()
+    client.application.config["TRACK_B_PROMOTION_TOKEN"] = "promote-token"
+    client.application.config["DETERMINISTIC_MODEL_PATH"] = str(tmp_path / "day1_baseline_model.json")
+
+    report = {"candidate_win": True, "reasons": ["candidate accuracy exceeds production by at least 0.02"]}
+    candidate = {"version": "candidate-promoted-v1"}
+    res = client.post(
+        "/api/promote-track-b-candidate",
+        headers={"X-Track-B-Promotion-Token": "promote-token"},
+        data={
+            "comparison_report": (BytesIO(json.dumps(report).encode()), "model_comparison_track_b.json"),
+            "candidate_model": (BytesIO(json.dumps(candidate).encode()), "candidate_model_track_b.json"),
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert res.status_code == 200
+    payload = res.get_json()["data"]
+    assert payload["success"] is True
+    assert payload["promoted"] is True
+    assert payload["candidate_win"] is True
+    assert payload["comparison_report_path"] == str(tmp_path / "track_b" / "model_comparison_track_b.json")
+    assert payload["candidate_model_path"] == str(tmp_path / "track_b" / "candidate_model_track_b.json")
+    assert json.loads((tmp_path / "track_b" / "model_comparison_track_b.json").read_text()) == report
+    assert json.loads((tmp_path / "track_b" / "candidate_model_track_b.json").read_text()) == candidate
+    assert captured["command"] == [
+        "python3",
+        "scripts/day14_promote_candidate.py",
+        "--comparison-report",
+        str(tmp_path / "track_b" / "model_comparison_track_b.json"),
+        "--candidate-model",
+        str(tmp_path / "track_b" / "candidate_model_track_b.json"),
+        "--production-model",
+        str(tmp_path / "day1_baseline_model.json"),
+    ]

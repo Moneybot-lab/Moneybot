@@ -374,6 +374,7 @@ def create_app() -> Flask:
         PASSWORD_RESET_FROM_NAME=os.environ.get("PASSWORD_RESET_FROM_NAME", "Moneybot Labs"),
         PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS=int(os.environ.get("PASSWORD_RESET_TOKEN_MAX_AGE_SECONDS", "3600")),
         DAILY_OPS_TOKEN=os.environ.get("DAILY_OPS_TOKEN", ""),
+        TRACK_B_PROMOTION_TOKEN=os.environ.get("TRACK_B_PROMOTION_TOKEN", ""),
         AI_ENABLED=(os.environ.get("AI_ENABLED", "false").lower() == "true"),
         AI_PROVIDER=os.environ.get("AI_PROVIDER", "openai"),
         AI_MODEL=os.environ.get("AI_MODEL", "gpt-5-mini"),
@@ -413,7 +414,7 @@ def create_app() -> Flask:
             "DECISION_OUTCOMES_SNAPSHOT_PATH",
             str(decision_outcomes_snapshot_path()),
         ),
-        DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS=int(os.environ.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")),
+        DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS=int(os.environ.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "129600")),
         DETERMINISTIC_CALIBRATION_REPORT_PATH=os.environ.get(
             "DETERMINISTIC_CALIBRATION_REPORT_PATH",
             str(day13_calibration_report_path()),
