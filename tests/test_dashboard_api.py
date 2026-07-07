@@ -1571,6 +1571,33 @@ def test_promote_track_b_candidate_rejects_losing_report(tmp_path, monkeypatch):
     assert payload["reasons"] == ["not enough"]
 
 
+def test_promote_track_b_candidate_rejects_no_promotable_placeholder(tmp_path, monkeypatch):
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
+    client = _client()
+    client.application.config["TRACK_B_PROMOTION_TOKEN"] = "promote-token"
+
+    res = client.post(
+        "/api/promote-track-b-candidate",
+        headers={"X-Track-B-Promotion-Token": "promote-token"},
+        data={
+            "comparison_report": (BytesIO(json.dumps({"candidate_win": True, "reasons": ["approved"]}).encode()), "model_comparison_track_b.json"),
+            "candidate_model": (
+                BytesIO(json.dumps({"promotion_ready": False, "version": "no-promotable-challenger"}).encode()),
+                "candidate_model_track_b.json",
+            ),
+            "force": "true",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert res.status_code == 409
+    payload = res.get_json()["data"]
+    assert payload["success"] is False
+    assert payload["promoted"] is False
+    assert payload["candidate_model_version"] == "no-promotable-challenger"
+    assert "cannot be promoted" in payload["message"]
+
+
 def test_promote_track_b_candidate_uploads_and_runs_promotion(monkeypatch, tmp_path):
     class Completed:
         returncode = 0
@@ -1594,17 +1621,6 @@ def test_promote_track_b_candidate_uploads_and_runs_promotion(monkeypatch, tmp_p
     client.application.config["TRACK_B_PROMOTION_TOKEN"] = "promote-token"
     client.application.config["DETERMINISTIC_MODEL_PATH"] = str(tmp_path / "day1_baseline_model.json")
 
-    class ReloadableAdvisor:
-        def __init__(self):
-            self.reload_count = 0
-
-        def reload_artifact(self):
-            self.reload_count += 1
-            return True
-
-    advisor = ReloadableAdvisor()
-    client.application.extensions["deterministic_quick_advisor"] = advisor
-
     report = {"candidate_win": True, "reasons": ["candidate accuracy exceeds production by at least 0.02"]}
     candidate = {"version": "candidate-promoted-v1"}
     res = client.post(
@@ -1621,9 +1637,6 @@ def test_promote_track_b_candidate_uploads_and_runs_promotion(monkeypatch, tmp_p
     payload = res.get_json()["data"]
     assert payload["success"] is True
     assert payload["promoted"] is True
-    assert payload["advisor_reloaded"] is True
-    assert payload["advisor_reload_error"] is None
-    assert advisor.reload_count == 1
     assert payload["candidate_win"] is True
     assert payload["comparison_report_path"] == str(tmp_path / "track_b" / "model_comparison_track_b.json")
     assert payload["candidate_model_path"] == str(tmp_path / "track_b" / "candidate_model_track_b.json")

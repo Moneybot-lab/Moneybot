@@ -2813,21 +2813,6 @@ def hot_momentum_buys():
     return jsonify({"items": items, "request_id": g.request_id})
 
 
-@api_bp.get("/breakout-radar")
-def breakout_radar():
-    svc = current_app.extensions["market_data_service"]
-    state = _load_notification_trigger_state()
-    seed_symbols: dict[str, float] = {}
-    for symbol, score in (state.get("momentum_scores") or {}).items():
-        try:
-            numeric_score = float(score)
-        except (TypeError, ValueError):
-            continue
-        if numeric_score > 8.0:
-            seed_symbols[str(symbol).upper()] = numeric_score
-    return jsonify({"items": svc.get_breakout_radar(seed_symbols=seed_symbols), "request_id": g.request_id})
-
-
 
 @api_bp.post("/promote-track-b-candidate")
 def promote_track_b_candidate():
@@ -2849,16 +2834,33 @@ def promote_track_b_candidate():
         comparison_bytes = comparison_file.read()
         candidate_bytes = candidate_file.read()
         comparison_report = json.loads(comparison_bytes.decode("utf-8"))
-        json.loads(candidate_bytes.decode("utf-8"))
+        candidate_model = json.loads(candidate_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return jsonify({"error": "uploaded files must be valid JSON", "request_id": g.request_id}), 400
 
     if not isinstance(comparison_report, dict):
         return jsonify({"error": "comparison_report must be a JSON object", "request_id": g.request_id}), 400
+    if not isinstance(candidate_model, dict):
+        return jsonify({"error": "candidate_model must be a JSON object", "request_id": g.request_id}), 400
 
     force_raw = str(request.form.get("force") or request.args.get("force") or "").strip().lower()
     force = force_raw in {"1", "true", "yes", "y"}
     candidate_win = bool(comparison_report.get("candidate_win"))
+    candidate_version = str(candidate_model.get("version") or candidate_model.get("model_version") or "").strip()
+    if candidate_model.get("promotion_ready") is False or candidate_version == "no-promotable-challenger":
+        return jsonify(
+            {
+                "data": {
+                    "success": False,
+                    "promoted": False,
+                    "candidate_win": candidate_win,
+                    "candidate_model_version": candidate_version,
+                    "reasons": comparison_report.get("reasons") or [],
+                    "message": "candidate_model is an explicit no-promotion placeholder and cannot be promoted, even with force",
+                },
+                "request_id": g.request_id,
+            }
+        ), 409
     if not candidate_win and not force:
         return jsonify(
             {
@@ -2925,33 +2927,12 @@ def promote_track_b_candidate():
         ), 500
 
     promoted = completed.returncode == 0 and "promoted candidate" in (completed.stdout or "")
-    advisor_reload_success = None
-    advisor_reload_error = None
-    if completed.returncode == 0:
-        deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
-        if deterministic_svc is not None:
-            try:
-                if hasattr(deterministic_svc, "reload_artifact"):
-                    advisor_reload_success = bool(deterministic_svc.reload_artifact())
-                elif hasattr(deterministic_svc, "_load_artifact"):
-                    deterministic_svc._load_artifact()
-                    advisor_reload_success = getattr(deterministic_svc, "artifact", None) is not None
-                else:
-                    advisor_reload_success = False
-                    advisor_reload_error = "deterministic advisor does not support artifact reload"
-            except Exception as exc:  # noqa: BLE001
-                logging.exception("promote-track-b-candidate promoted but failed to reload deterministic advisor.")
-                advisor_reload_success = False
-                advisor_reload_error = str(exc)
-
-    status = 200 if completed.returncode == 0 and advisor_reload_success is not False else 500
+    status = 200 if completed.returncode == 0 else 500
     return jsonify(
         {
             "data": {
-                "success": completed.returncode == 0 and advisor_reload_success is not False,
+                "success": completed.returncode == 0,
                 "promoted": promoted,
-                "advisor_reloaded": advisor_reload_success,
-                "advisor_reload_error": advisor_reload_error,
                 "candidate_win": candidate_win,
                 "reasons": comparison_report.get("reasons") or [],
                 "command": command,
