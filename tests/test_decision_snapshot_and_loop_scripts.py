@@ -227,7 +227,7 @@ def test_day10_bucket_sample_weights_prioritize_tail_outcomes():
 
     weights = day10._bucket_sample_weights(df)
 
-    assert weights.tolist() == [2.0, 1.25, 0.75, 1.0, 2.0, 1.0]
+    assert weights.tolist() == [3.0, 1.5, 0.5, 1.25, 4.0, 1.0]
 
 
 def test_day11_bucket_signal_rates_track_big_loss_and_big_gain():

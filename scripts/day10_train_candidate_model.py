@@ -24,7 +24,13 @@ from moneybot.services.model_metadata import append_artifact_history, build_arti
 
 RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
 TARGET_GAIN_BUCKETS = {"gain", "big_gain"}
-RETURN_BIN_SAMPLE_WEIGHTS = {"big_loss": 2.0, "loss": 1.25, "flat": 0.75, "gain": 1.0, "big_gain": 2.0}
+RETURN_BIN_SAMPLE_WEIGHTS = {
+    "big_loss": 3.0,
+    "loss": 1.5,
+    "flat": 0.5,
+    "gain": 1.25,
+    "big_gain": 4.0,
+}
 
 RESERVED_COLUMNS = {
     "ts",
