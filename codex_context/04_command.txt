@@ -1,0 +1,1 @@
+python3 -m json.tool track_b/flat_feature_store/manifest.json
