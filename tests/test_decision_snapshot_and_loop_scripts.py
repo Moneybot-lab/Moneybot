@@ -243,6 +243,36 @@ def test_day11_bucket_signal_rates_track_big_loss_and_big_gain():
     assert rates["big_gain_predictions"] == 1
 
 
+def test_day11_threshold_and_ranking_search_track_capped_top_k_returns():
+    import numpy as np
+    import pandas as pd
+
+    df = pd.DataFrame(
+        [
+            {"event_date": "2026-01-01", "return_5d": 0.10, "return_bin_5d": "big_gain"},
+            {"event_date": "2026-01-01", "return_5d": -0.08, "return_bin_5d": "big_loss"},
+            {"event_date": "2026-01-02", "return_5d": 0.04, "return_bin_5d": "big_gain"},
+            {"event_date": "2026-01-02", "return_5d": -0.03, "return_bin_5d": "big_loss"},
+        ]
+    )
+    probs = np.array([0.90, 0.10, 0.80, 0.20])
+
+    threshold_rows = day11._threshold_search(df, probs)
+    threshold_70 = next(row for row in threshold_rows if row["threshold"] == 0.70)
+    ranking_rows = day11._ranking_backtests(df, probs)
+    top_1 = next(row for row in ranking_rows if row["top_k"] == 1)
+
+    assert threshold_70["positive_predictions"] == 2
+    assert threshold_70["big_gain_capture_rate"] == 1.0
+    assert threshold_70["big_loss_prediction_rate"] == 0.0
+    assert top_1["selected_rows"] == 2
+    assert top_1["days"] == 2
+    assert top_1["total_return"] == 0.014
+    assert top_1["max_drawdown"] == 0.0
+    assert top_1["big_gain_capture_rate"] == 1.0
+    assert top_1["big_loss_selection_rate"] == 0.0
+
+
 def test_day10_candidate_trainer_fails_if_rows_below_min(tmp_path, monkeypatch):
     input_path = tmp_path / "train.jsonl"
     input_path.write_text(json.dumps({"ts": 1, "return_5d": 0.01, "return_1d": 0.01, "x1": 1.0}) + "\n", encoding="utf-8")
