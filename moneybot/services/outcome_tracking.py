@@ -217,13 +217,23 @@ def evaluate_decision_events(
         ts = event.get("ts")
         if not symbol or action is None or not isinstance(ts, int):
             continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
+        quote = snapshot.get("quote") if isinstance(snapshot.get("quote"), dict) else {}
+        market_data = snapshot.get("market_data") if isinstance(snapshot.get("market_data"), dict) else {}
+        personalization = snapshot.get("personalization") if isinstance(snapshot.get("personalization"), dict) else {}
         row = {
             "symbol": symbol,
             "endpoint": event.get("endpoint"),
             "decision_source": event.get("decision_source"),
             "action": action,
             "ts": ts,
-            "model_version": (event.get("payload") or {}).get("model_version") if isinstance(event.get("payload"), dict) else None,
+            "model_version": payload.get("model_version") or snapshot.get("model_version"),
+            "probability_up": payload.get("probability_up") if payload.get("probability_up") is not None else snapshot.get("probability_up"),
+            "market_data": market_data,
+            "personalization": personalization,
+            "source_mode": quote.get("source_mode") or market_data.get("source_mode") or market_data.get("quote_source_mode"),
+            "is_stale": quote.get("is_stale") if isinstance(quote.get("is_stale"), bool) else market_data.get("is_stale"),
         }
         for days in PAPER_PNL_HORIZONS:
             key = f"return_{days}d"
