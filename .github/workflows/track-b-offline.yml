@@ -57,7 +57,8 @@ jobs:
           python3 scripts/run_track_b_offline.py \
             --input-log data/decision_events.jsonl \
             --output-dir data/track_b \
-            --min-rows 200
+            --min-rows 200 \
+            --dataset-limit 50000
 
       - name: Upload Track B artifacts
         if: always()
