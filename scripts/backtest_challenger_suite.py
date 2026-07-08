@@ -10,6 +10,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from scripts.day10_train_candidate_model import _prepare_frame
+
 BACKTEST_SCHEMA_VERSION = "moneybot-challenger-backtest.v1"
 
 
@@ -67,7 +69,18 @@ def _predict(artifact: dict[str, Any], frame: pd.DataFrame, feature_columns: lis
     model_type = str(artifact.get("model_type") or "logistic_regression")
     if model_type == "logistic_regression":
         artifact_features = [str(col) for col in artifact.get("feature_columns") or feature_columns]
-        X = frame[artifact_features].to_numpy(dtype=float)
+        aligned = frame.copy()
+        missing = [col for col in artifact_features if col not in aligned.columns]
+        if missing:
+            fill_values = artifact.get("feature_fill_values") if isinstance(artifact.get("feature_fill_values"), dict) else {}
+            for col in missing:
+                fill = fill_values.get(col, 0.0) if isinstance(fill_values, dict) else 0.0
+                try:
+                    fill = float(fill)
+                except (TypeError, ValueError):
+                    fill = 0.0
+                aligned[col] = fill
+        X = aligned[artifact_features].to_numpy(dtype=float)
         means = np.asarray(artifact.get("means"), dtype=float)
         stds = np.asarray(artifact.get("stds"), dtype=float)
         stds = np.where(stds == 0.0, 1.0, stds)
@@ -76,7 +89,8 @@ def _predict(artifact: dict[str, Any], frame: pd.DataFrame, feature_columns: lis
         preds = (probs >= float(artifact.get("decision_threshold", 0.5))).astype(int)
         return probs, preds
     if model_type == "decision_stump":
-        values = frame[str(artifact["feature"])].to_numpy(dtype=float)
+        feature = str(artifact["feature"])
+        values = (frame[feature] if feature in frame.columns else pd.Series(0.0, index=frame.index)).to_numpy(dtype=float)
         threshold = float(artifact["threshold"])
         if artifact.get("direction") == "gte_positive":
             preds = (values >= threshold).astype(int)
@@ -168,7 +182,7 @@ def backtest_challenger_suite(
     max_drift_shift: float = 3.0,
 ) -> dict[str, Any]:
     suite = _load_json(suite_manifest_path)
-    raw = _load_jsonl(feature_store_path)
+    raw = _prepare_frame(_load_jsonl(feature_store_path))
     if "ts" in raw.columns:
         raw = raw.sort_values("ts")
     raw = raw.reset_index(drop=True)

@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from moneybot.services.deterministic_model import classify, summarize_binary_predictions, train_logistic_baseline
-from scripts.day10_train_candidate_model import _chronological_split, _fill_feature_gaps, _prepare_frame, _select_feature_columns
+from scripts.day10_train_candidate_model import _backtest_compatible_feature_columns, _chronological_split, _fill_feature_gaps, _prepare_frame, _select_feature_columns
 
 SUITE_SCHEMA_VERSION = "moneybot-challenger-suite.v2"
 LOGISTIC_L2_GRID = (5e-4, 1e-3, 5e-3)
@@ -144,13 +144,14 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
     df = _load_jsonl(input_path)
     if df.empty:
         raise ValueError("No rows available in input dataset")
+    persisted_feature_columns = {str(col) for col in df.columns if str(col).startswith("feature_")}
     if "ts" in df.columns:
         df = df.sort_values("ts").reset_index(drop=True)
     df = _prepare_frame(df)
     target_col = _target(df, horizon_days)
     df[target_col] = pd.to_numeric(df[target_col], errors="coerce")
     df = df.dropna(subset=[target_col]).copy()
-    feature_columns = _select_feature_columns(df)
+    feature_columns = _backtest_compatible_feature_columns(_select_feature_columns(df), persisted_feature_columns)
     if not feature_columns:
         raise ValueError("No numeric feature columns found")
     clean, fill_values = _fill_feature_gaps(df, feature_columns)
