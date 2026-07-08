@@ -113,7 +113,7 @@ def load_market_history(
     return {symbol: [rows[day] for day in sorted(rows)] for symbol, rows in by_symbol.items()}
 
 
-def _market_load_window(events: list[dict[str, Any]], *, horizon_days: int, history_lag_days: int = 7) -> tuple[set[str], str | None, str | None]:
+def _market_load_window(events: list[dict[str, Any]], *, horizon_days: int, history_lag_days: int = 35) -> tuple[set[str], str | None, str | None]:
     symbols: set[str] = set()
     event_days = []
     for event in events:
@@ -142,6 +142,79 @@ def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
         else:
             break
     return idx
+
+
+def _mean(values: list[float]) -> float | None:
+    clean = [float(value) for value in values if value is not None]
+    if not clean:
+        return None
+    return sum(clean) / len(clean)
+
+
+def _rolling_close_mean(rows: list[dict[str, Any]], idx: int, window: int) -> float | None:
+    if idx + 1 < window:
+        return None
+    closes = [_coerce_float(row.get("close")) for row in rows[idx - window + 1 : idx + 1]]
+    if any(value is None for value in closes):
+        return None
+    return round(float(sum(closes)) / window, 6)
+
+
+def _ema_at(rows: list[dict[str, Any]], idx: int, span: int) -> float | None:
+    closes = [_coerce_float(row.get("close")) for row in rows[: idx + 1]]
+    if len(closes) < span or any(value is None for value in closes):
+        return None
+    alpha = 2.0 / (span + 1.0)
+    ema = float(closes[0])
+    for close in closes[1:]:
+        ema = (float(close) * alpha) + (ema * (1.0 - alpha))
+    return round(ema, 6)
+
+
+def _rsi_at(rows: list[dict[str, Any]], idx: int, window: int = 14) -> float | None:
+    if idx < window:
+        return None
+    gains: list[float] = []
+    losses: list[float] = []
+    for pos in range(idx - window + 1, idx + 1):
+        close = _coerce_float(rows[pos].get("close"))
+        prev = _coerce_float(rows[pos - 1].get("close"))
+        if close is None or prev is None:
+            return None
+        delta = close - prev
+        gains.append(max(delta, 0.0))
+        losses.append(max(-delta, 0.0))
+    avg_gain = _mean(gains)
+    avg_loss = _mean(losses)
+    if avg_gain is None or avg_loss is None:
+        return None
+    if avg_loss == 0.0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return round(100.0 - (100.0 / (1.0 + rs)), 6)
+
+
+def _macd_at(rows: list[dict[str, Any]], idx: int) -> float | None:
+    ema12 = _ema_at(rows, idx, 12)
+    ema26 = _ema_at(rows, idx, 26)
+    if ema12 is None or ema26 is None:
+        return None
+    return round(ema12 - ema26, 6)
+
+
+def _atr_at(rows: list[dict[str, Any]], idx: int, window: int = 14) -> float | None:
+    if idx < window:
+        return None
+    true_ranges: list[float] = []
+    for pos in range(idx - window + 1, idx + 1):
+        high = _coerce_float(rows[pos].get("high"))
+        low = _coerce_float(rows[pos].get("low"))
+        prev_close = _coerce_float(rows[pos - 1].get("close"))
+        if high is None or low is None or prev_close is None:
+            return None
+        true_ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+    atr = _mean(true_ranges)
+    return round(atr, 6) if atr is not None else None
 
 
 def _pct(newer: float, older: float | None) -> float | None:
@@ -179,6 +252,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         return_fwd = _pct(float(future["close"]), close)
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
+        sma_20 = _rolling_close_mean(history, idx, 20)
         row = {
             "ts": ts,
             "event_date": event_day,
@@ -191,6 +265,12 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "probability_up": snapshot.get("probability_up", payload.get("probability_up")),
             "model_version": snapshot.get("model_version", payload.get("model_version")),
             "feature_close": close,
+            "feature_sma_10": _rolling_close_mean(history, idx, 10),
+            "feature_ema_10": _ema_at(history, idx, 10),
+            "feature_price_vs_sma_20": _pct(close, sma_20),
+            "feature_rsi_14": _rsi_at(history, idx, 14),
+            "feature_macd": _macd_at(history, idx),
+            "feature_atr_14": _atr_at(history, idx, 14),
             "feature_return_1d_lagged": _pct(close, prev1.get("close")),
             "feature_return_5d_lagged": _pct(close, prev5.get("close")),
             "feature_volume": asof.get("volume"),
