@@ -3187,7 +3187,7 @@ def decision_outcomes():
         snapshot = _load_materialized_outcomes_snapshot(
             str(snapshot_path),
             max_age_seconds=snapshot_max_age_seconds,
-            allow_stale=allow_stale_snapshot,
+            allow_stale=True,
         )
         if snapshot is not None:
             snapshot_data = dict(snapshot["data"] or {})

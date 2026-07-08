@@ -114,6 +114,12 @@ def test_day8_builder_outputs_labeled_rows_with_snapshot_fields(monkeypatch):
     assert rows[0]["has_snapshot"] == 1
     assert rows[0]["has_feature_map"] == 1
     assert rows[0]["return_bin_5d"] in {"big_loss", "loss", "flat", "gain", "big_gain"}
+    assert rows[0]["feature_rec_buy"] == 1.0
+    assert rows[0]["feature_rec_positive"] == 1.0
+    assert rows[0]["feature_rec_negative"] == 0.0
+    assert rows[0]["feature_endpoint_quick_ask"] == 1.0
+    assert rows[0]["feature_source_ai_enhanced"] == 1.0
+    assert rows[0]["feature_probability_up"] == 0.61
 
 
 def test_day8_builder_backward_compatible_without_snapshot(monkeypatch):
@@ -132,6 +138,9 @@ def test_day8_builder_backward_compatible_without_snapshot(monkeypatch):
     rows, _ = build_rows(events, horizon_days=5)
     assert rows[0]["recommendation"] == "BUY"
     assert rows[0]["feature_probability_up"] == 0.55
+    assert rows[0]["feature_rec_buy"] == 1.0
+    assert rows[0]["feature_endpoint_quick_ask"] == 1.0
+    assert rows[0]["feature_source_rule_based"] == 1.0
     assert rows[0]["feature_return_1d"] == 0.02
     assert rows[0]["label_up_5d"] == 1
     assert rows[0]["has_snapshot"] == 0

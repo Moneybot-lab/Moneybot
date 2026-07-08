@@ -214,6 +214,30 @@ def _extract_feature_columns(
     return out
 
 
+def _app_signal_feature_columns(*, recommendation: str, probability_up: float | None, endpoint: str, decision_source: str) -> dict[str, float]:
+    rec = str(recommendation or "").strip().upper()
+    clean_endpoint = str(endpoint or "").strip().lower()
+    clean_source = str(decision_source or "").strip().lower()
+    out = {
+        "feature_rec_buy": float(rec == "BUY"),
+        "feature_rec_sell": float(rec == "SELL"),
+        "feature_rec_hold": float(rec == "HOLD"),
+        "feature_rec_hold_off_for_now": float(rec == "HOLD OFF FOR NOW"),
+        "feature_rec_strong_buy": float(rec == "STRONG BUY"),
+        "feature_rec_positive": float(rec in {"BUY", "STRONG BUY"}),
+        "feature_rec_negative": float(rec in {"SELL", "HOLD OFF FOR NOW"}),
+        "feature_endpoint_quick_ask": float(clean_endpoint == "quick_ask"),
+        "feature_endpoint_hot_momentum_buys": float(clean_endpoint == "hot_momentum_buys"),
+        "feature_endpoint_user_watchlist": float(clean_endpoint == "user_watchlist"),
+        "feature_source_ai_enhanced": float(clean_source == "ai_enhanced"),
+        "feature_source_deterministic_model": float(clean_source == "deterministic_model"),
+        "feature_source_rule_based": float(clean_source == "rule_based"),
+    }
+    if isinstance(probability_up, (int, float)):
+        out["feature_probability_up"] = float(probability_up)
+    return out
+
+
 def _return_bin(value: float | None) -> str | None:
     if not isinstance(value, (int, float)):
         return None
@@ -272,13 +296,16 @@ def build_rows(events: list[dict[str, Any]], *, horizon_days: int, bad_symbol_ca
         if ret_1d is None and ret_5d is None:
             continue
 
+        endpoint = str(event.get("endpoint") or "unknown")
+        decision_source = str(event.get("decision_source") or "unknown")
+        probability_up = _extract_probability(snapshot, payload)
         row: dict[str, Any] = {
             "ts": ts,
             "symbol": symbol,
-            "endpoint": str(event.get("endpoint") or "unknown"),
-            "decision_source": str(event.get("decision_source") or "unknown"),
+            "endpoint": endpoint,
+            "decision_source": decision_source,
             "recommendation": recommendation,
-            "probability_up": _extract_probability(snapshot, payload),
+            "probability_up": probability_up,
             "model_version": _extract_model_version(snapshot, payload),
             "return_1d": ret_1d,
             "return_5d": ret_5d,
@@ -303,6 +330,14 @@ def build_rows(events: list[dict[str, Any]], *, horizon_days: int, bad_symbol_ca
                 payload=payload,
                 return_1d=ret_1d,
                 return_5d=ret_5d,
+            )
+        )
+        row.update(
+            _app_signal_feature_columns(
+                recommendation=recommendation,
+                probability_up=probability_up,
+                endpoint=endpoint,
+                decision_source=decision_source,
             )
         )
 
