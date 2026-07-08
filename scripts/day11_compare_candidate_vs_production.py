@@ -222,6 +222,45 @@ def _ranking_backtests(usable: pd.DataFrame, probs: np.ndarray) -> list[dict[str
     return results
 
 
+def _equal_weight_benchmark_backtest(usable: pd.DataFrame) -> dict[str, Any]:
+    """Return a capped equal-weight long benchmark grouped by event date.
+
+    The benchmark intentionally groups rows into dated portfolios before
+    compounding. Treating every event row as a sequential all-in trade can turn a
+    noisy decision log into an artificial -100% benchmark.
+    """
+    work = usable.copy()
+    work["_return"] = pd.to_numeric(work["return_5d"], errors="coerce")
+    work["_event_date"] = _event_date_series(work)
+    work = work.dropna(subset=["_return"]).copy()
+    if work.empty:
+        return {
+            "cash_return": 0.0,
+            "equal_weight_long_cash_return": None,
+            "equal_weight_long_cash_max_drawdown": None,
+            "days": 0,
+            "rows": 0,
+            "max_exposure_per_signal": RANKING_MAX_EXPOSURE_PER_SIGNAL,
+        }
+
+    daily_returns: list[float] = []
+    for _, group in work.groupby("_event_date"):
+        exposure_per_signal = min(RANKING_MAX_EXPOSURE_PER_SIGNAL, 1.0 / float(len(group)))
+        daily_returns.append(float((group["_return"] * exposure_per_signal).sum()))
+
+    total_return = float(np.prod([1.0 + max(-1.0, float(value)) for value in daily_returns]) - 1.0)
+    max_drawdown = _max_drawdown_from_returns(daily_returns)
+    return {
+        "cash_return": 0.0,
+        "equal_weight_long_cash_return": round(total_return, 4),
+        "equal_weight_long_cash_max_drawdown": round(max_drawdown, 4) if max_drawdown is not None else None,
+        "avg_daily_return": round(float(np.mean(daily_returns)), 4) if daily_returns else None,
+        "days": int(len(daily_returns)),
+        "rows": int(len(work)),
+        "max_exposure_per_signal": RANKING_MAX_EXPOSURE_PER_SIGNAL,
+    }
+
+
 def _best_ranking_backtest(backtests: list[dict[str, Any]]) -> dict[str, Any] | None:
     scored = [item for item in backtests if isinstance(item.get("objective_score"), (int, float))]
     if not scored:
@@ -257,6 +296,7 @@ def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
         "threshold_search": _threshold_search(usable, probs),
         "ranking_backtests": ranking_backtests,
         "best_ranking_backtest": _best_ranking_backtest(ranking_backtests),
+        "benchmark_backtest": _equal_weight_benchmark_backtest(usable),
         "rows": int(len(usable)),
     }
     return metrics

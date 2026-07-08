@@ -273,6 +273,27 @@ def test_day11_threshold_and_ranking_search_track_capped_top_k_returns():
     assert top_1["big_loss_selection_rate"] == 0.0
 
 
+def test_day11_equal_weight_benchmark_groups_events_before_compounding():
+    import pandas as pd
+
+    df = pd.DataFrame(
+        [
+            {"event_date": "2026-01-01", "return_5d": -0.50, "return_bin_5d": "big_loss"},
+            {"event_date": "2026-01-01", "return_5d": -0.50, "return_bin_5d": "big_loss"},
+            {"event_date": "2026-01-01", "return_5d": -0.50, "return_bin_5d": "big_loss"},
+            {"event_date": "2026-01-02", "return_5d": 0.20, "return_bin_5d": "big_gain"},
+        ]
+    )
+
+    benchmark = day11._equal_weight_benchmark_backtest(df)
+
+    assert benchmark["rows"] == 4
+    assert benchmark["days"] == 2
+    assert benchmark["cash_return"] == 0.0
+    assert benchmark["equal_weight_long_cash_return"] == -0.133
+    assert benchmark["equal_weight_long_cash_max_drawdown"] == 0.15
+
+
 def test_day10_candidate_trainer_fails_if_rows_below_min(tmp_path, monkeypatch):
     input_path = tmp_path / "train.jsonl"
     input_path.write_text(json.dumps({"ts": 1, "return_5d": 0.01, "return_1d": 0.01, "x1": 1.0}) + "\n", encoding="utf-8")
