@@ -352,13 +352,20 @@ def test_day10_prepares_fallback_numeric_features_when_snapshot_features_missing
     assert prepared["feature_probability_up"].tolist() == [0.5, 0.3, 0.7]
 
 
+def test_day10_keeps_persisted_app_signal_features_for_backtests():
+    feature_columns = ["feature_return_1d", "feature_rec_buy", "feature_endpoint_quick_ask"]
+    persisted = {"feature_return_1d", "feature_rec_buy", "feature_endpoint_quick_ask"}
+
+    assert day10._backtest_compatible_feature_columns(feature_columns, persisted) == feature_columns
+
+
 def test_day10_trains_when_feature_columns_exist(tmp_path, monkeypatch):
     rows = [
-        {"ts": 1, "feature_return_1d": 0.01, "feature_price": 100.0, "label_up_5d": 1, "return_1d": 0.01, "return_5d": 0.02},
-        {"ts": 2, "feature_return_1d": -0.02, "feature_price": 99.0, "label_up_5d": 0, "return_1d": -0.02, "return_5d": -0.03},
-        {"ts": 3, "feature_return_1d": 0.03, "feature_price": 101.0, "label_up_5d": 1, "return_1d": 0.03, "return_5d": 0.04},
-        {"ts": 4, "feature_return_1d": -0.01, "feature_price": 98.0, "label_up_5d": 0, "return_1d": -0.01, "return_5d": -0.01},
-        {"ts": 5, "feature_return_1d": 0.02, "feature_price": 102.0, "label_up_5d": 1, "return_1d": 0.02, "return_5d": 0.03},
+        {"ts": 1, "endpoint": "quick_ask", "decision_source": "ai_enhanced", "recommendation": "BUY", "feature_return_1d": 0.01, "feature_price": 100.0, "label_up_5d": 1, "return_1d": 0.01, "return_5d": 0.02},
+        {"ts": 2, "endpoint": "quick_ask", "decision_source": "ai_enhanced", "recommendation": "SELL", "feature_return_1d": -0.02, "feature_price": 99.0, "label_up_5d": 0, "return_1d": -0.02, "return_5d": -0.03},
+        {"ts": 3, "endpoint": "quick_ask", "decision_source": "ai_enhanced", "recommendation": "BUY", "feature_return_1d": 0.03, "feature_price": 101.0, "label_up_5d": 1, "return_1d": 0.03, "return_5d": 0.04},
+        {"ts": 4, "endpoint": "quick_ask", "decision_source": "ai_enhanced", "recommendation": "SELL", "feature_return_1d": -0.01, "feature_price": 98.0, "label_up_5d": 0, "return_1d": -0.01, "return_5d": -0.01},
+        {"ts": 5, "endpoint": "quick_ask", "decision_source": "ai_enhanced", "recommendation": "BUY", "feature_return_1d": 0.02, "feature_price": 102.0, "label_up_5d": 1, "return_1d": 0.02, "return_5d": 0.03},
     ]
     input_path = tmp_path / "decision_training_snapshot.jsonl"
     input_path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
@@ -380,6 +387,12 @@ def test_day10_trains_when_feature_columns_exist(tmp_path, monkeypatch):
     )
     day10.main()
     assert output_model.exists()
+    artifact = json.loads(output_model.read_text(encoding="utf-8"))
+    assert "feature_return_1d" in artifact["feature_columns"]
+    assert "feature_price" in artifact["feature_columns"]
+    assert "feature_endpoint_quick_ask" not in artifact["feature_columns"]
+    assert "feature_rec_buy" not in artifact["feature_columns"]
+    assert "feature_source_ai_enhanced" not in artifact["feature_columns"]
 
 
 def test_day10_trains_with_sparse_feature_columns_no_complete_raw_rows(tmp_path, monkeypatch):

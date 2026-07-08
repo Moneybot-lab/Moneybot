@@ -32,6 +32,23 @@ RETURN_BIN_SAMPLE_WEIGHTS = {
     "big_gain": 4.0,
 }
 
+APP_SIGNAL_FEATURE_COLUMNS = {
+    "feature_endpoint_hot_momentum_buys",
+    "feature_endpoint_quick_ask",
+    "feature_endpoint_user_watchlist",
+    "feature_probability_up",
+    "feature_rec_buy",
+    "feature_rec_hold",
+    "feature_rec_hold_off_for_now",
+    "feature_rec_negative",
+    "feature_rec_positive",
+    "feature_rec_sell",
+    "feature_rec_strong_buy",
+    "feature_source_ai_enhanced",
+    "feature_source_deterministic_model",
+    "feature_source_rule_based",
+}
+
 RESERVED_COLUMNS = {
     "ts",
     "symbol",
@@ -114,6 +131,23 @@ def _select_feature_columns(df: pd.DataFrame) -> list[str]:
     return sorted(cols)
 
 
+def _backtest_compatible_feature_columns(feature_columns: list[str], persisted_feature_columns: set[str]) -> list[str]:
+    """Keep derived app-signal features only when they are persisted upstream.
+
+    Day 10 can derive app-signal columns from raw row fields for local
+    experiments, but downstream Track B backtests often read the persisted flat
+    feature store directly. If an artifact is trained on derived columns that
+    were not written to that store, the backtest step raises a KeyError when it
+    indexes the frame by artifact feature names.
+    """
+
+    return [
+        col
+        for col in feature_columns
+        if col not in APP_SIGNAL_FEATURE_COLUMNS or col in persisted_feature_columns
+    ]
+
+
 def _fill_feature_gaps(df: pd.DataFrame, feature_columns: list[str]) -> tuple[pd.DataFrame, dict[str, float]]:
     """Coerce sparse feature columns to numeric and median-fill missing values.
 
@@ -193,6 +227,8 @@ def main() -> None:
     if df.empty:
         raise SystemExit("No rows available in input dataset")
 
+    persisted_feature_columns = {str(col) for col in df.columns if str(col).startswith("feature_")}
+
     if "ts" in df.columns:
         df = df.sort_values("ts").reset_index(drop=True)
     df = _prepare_frame(df)
@@ -211,7 +247,10 @@ def main() -> None:
     filtered_target = df.dropna(subset=[target_column]).copy()
     rows_after_target_filter = len(filtered_target)
 
-    feature_columns = _select_feature_columns(filtered_target)
+    feature_columns = _backtest_compatible_feature_columns(
+        _select_feature_columns(filtered_target),
+        persisted_feature_columns,
+    )
     if not feature_columns:
         raise SystemExit("No numeric feature columns found in decision dataset")
 
