@@ -113,7 +113,7 @@
                   <div style="display:grid;grid-template-columns:minmax(300px,430px) minmax(300px,1fr);gap:12px;align-items:start">
                     <div>
                       <div style="display:flex;gap:8px;flex-wrap:wrap">
-                        <input id="quickSymbol" placeholder="Ticker (e.g. AAPL)" style="padding:10px 12px;border:1px solid #166534;border-radius:10px;min-width:210px;background:#000;color:#f7fee7;font-size:1.15rem;font-weight:700;letter-spacing:.01em"/>
+                        <input id="quickSymbol" placeholder="Ticker (e.g. AAPL)" autocapitalize="characters" style="text-transform:uppercase;padding:10px 12px;border:1px solid #166534;border-radius:10px;min-width:210px;background:#000;color:#f7fee7;font-size:1.15rem;font-weight:700;letter-spacing:.01em"/>
                         <button id="quickAskBtn" onclick="quickAsk()" style="padding:10px 16px;border:none;background:#16a34a;color:#f0fdf4;border-radius:10px;font-weight:700;font-size:1.08rem">Analyze</button>
                       </div>
                       <div id="quickOut" style="margin-top:10px;color:#bbf7d0">Type a ticker to get an instant STRONG BUY / BUY / HOLD OFF FOR NOW call.</div>
@@ -129,9 +129,12 @@
                         <div id="quickTrendGraph" style="height:92px;margin-top:8px"></div>
                       </div>
                     </div>
-                    <div id="quickAdvice" style="min-height:72px;background:#052e16;border:1px solid #14532d;border-radius:10px;padding:10px 12px;color:#dcfce7">
-                      <strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong>
-                      <span style="color:#86efac">Advice will appear here after you analyze a ticker.</span>
+                    <div>
+                      <div id="quickAdvice" style="min-height:72px;background:#052e16;border:1px solid #14532d;border-radius:10px;padding:10px 12px;color:#dcfce7">
+                        <strong style="display:block;color:#bbf7d0;margin-bottom:4px">AI key points</strong>
+                        <span style="color:#86efac">Advice will appear here after you analyze a ticker.</span>
+                      </div>
+                      <div id="quickProfileNote" style="display:none;margin-top:10px;color:#fde68a;font-size:12px;font-weight:700;line-height:1.4"></div>
                     </div>
                   </div>
                 </section>
@@ -144,7 +147,8 @@
                 <section style="background:#f7fee7;border:1px solid #bbf7d0;border-radius:12px;padding:14px;margin-bottom:12px">
                   <h3 style="margin:0 0 8px 0">Buyer's Guide</h3>
                   <p style="margin:0 0 6px 0;color:#166534"><strong>Stable Watchlist:</strong> Lower risk, long-term stocks.</p>
-                  <p style="margin:0 0 6px 0;color:#166534"><strong>Hot Momentum:</strong> Higher risk, low-price stocks with growth potential.</p>
+                  <p style="margin:0 0 6px 0;color:#166534"><strong>Hot Momentum:</strong> Higher risk, low-price stocks with growth potential from deterministic or rule-based signals.</p>
+                  <p style="margin:0 0 6px 0;color:#166534"><strong>Breakout Radar:</strong> Live small-cap and day-gainer scanner names making sharp moves.</p>
                   <p style="margin:0;color:#166534"><strong>Whales of Wall Street:</strong> See and follow top investors' picks.</p>
                   <p style="margin:0;color:#166534"><strong>ClearView Signals:</strong> I want to buy this, but waiting for the right time.</p>
                 </section>
@@ -153,6 +157,7 @@
                   <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
                     <button class="tab-btn" data-tab="stable" onclick="switchTab('stable')" style="padding:9px 14px;border:1px solid #bbf7d0;background:#dcfce7;border-radius:8px;font-size:1.06rem;font-weight:700">Stable Watchlist</button>
                     <button class="tab-btn" data-tab="momentum" onclick="switchTab('momentum')" style="padding:9px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px;font-size:1.06rem;font-weight:700">Hot Momentum Buys</button>
+                    <button class="tab-btn" data-tab="breakout" onclick="switchTab('breakout')" style="padding:9px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px;font-size:1.06rem;font-weight:700">Breakout Radar</button>
                     <button class="tab-btn" data-tab="wells" onclick="switchTab('wells')" style="padding:9px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px;font-size:1.06rem;font-weight:700">Whales of Wall Street</button>
                     <button class="tab-btn" data-tab="clearview" onclick="switchTab('clearview')" style="padding:9px 14px;border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px;font-size:1.06rem;font-weight:700">ClearView Signals</button>
                   </div>
@@ -162,6 +167,7 @@
                   </div>
                   <div id="stable" class="tab-panel"></div>
                   <div id="momentum" class="tab-panel" style="display:none"></div>
+                  <div id="breakout" class="tab-panel" style="display:none"></div>
                   <div id="wells" class="tab-panel" style="display:none"></div>
                   <div id="clearview" class="tab-panel" style="display:none"></div>
                 </section>
