@@ -347,7 +347,6 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
     reasons.append("candidate did not satisfy profit-aware promotion thresholds")
     return False, reasons
 
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare candidate model against production model on same holdout.")
     parser.add_argument("--input", default="data/decision_training_snapshot.jsonl")
