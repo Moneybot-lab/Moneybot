@@ -194,12 +194,35 @@ def _rsi_at(rows: list[dict[str, Any]], idx: int, window: int = 14) -> float | N
     return round(100.0 - (100.0 / (1.0 + rs)), 6)
 
 
-def _macd_at(rows: list[dict[str, Any]], idx: int) -> float | None:
+def _macd_line_at(rows: list[dict[str, Any]], idx: int) -> float | None:
     ema12 = _ema_at(rows, idx, 12)
     ema26 = _ema_at(rows, idx, 26)
     if ema12 is None or ema26 is None:
         return None
-    return round(ema12 - ema26, 6)
+    return ema12 - ema26
+
+
+def _ema_values(values: list[float], span: int) -> float | None:
+    if len(values) < span:
+        return None
+    alpha = 2.0 / (span + 1.0)
+    ema = float(values[0])
+    for value in values[1:]:
+        ema = (float(value) * alpha) + (ema * (1.0 - alpha))
+    return ema
+
+
+def _macd_components_at(rows: list[dict[str, Any]], idx: int) -> tuple[float | None, float | None, float | None]:
+    macd_line = _macd_line_at(rows, idx)
+    macd_values = [_macd_line_at(rows, pos) for pos in range(idx + 1)]
+    clean = [float(value) for value in macd_values if value is not None]
+    signal = _ema_values(clean, 9)
+    hist = (macd_line - signal) if macd_line is not None and signal is not None else None
+    return (
+        round(macd_line, 6) if macd_line is not None else None,
+        round(signal, 6) if signal is not None else None,
+        round(hist, 6) if hist is not None else None,
+    )
 
 
 def _atr_at(rows: list[dict[str, Any]], idx: int, window: int = 14) -> float | None:
@@ -215,6 +238,12 @@ def _atr_at(rows: list[dict[str, Any]], idx: int, window: int = 14) -> float | N
         true_ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
     atr = _mean(true_ranges)
     return round(atr, 6) if atr is not None else None
+
+
+def _ratio(numerator: float | None, denominator: float | None) -> float | None:
+    if numerator is None or denominator in {None, 0}:
+        return None
+    return round(float(numerator) / float(denominator), 6)
 
 
 def _pct(newer: float, older: float | None) -> float | None:
@@ -252,8 +281,11 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         return_fwd = _pct(float(future["close"]), close)
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
+        sma_10 = _rolling_close_mean(history, idx, 10)
         sma_20 = _rolling_close_mean(history, idx, 20)
         sma_50 = _rolling_close_mean(history, idx, 50)
+        macd_line, macd_signal, macd_hist = _macd_components_at(history, idx)
+        volume = _coerce_float(asof.get("volume"))
         row = {
             "ts": ts,
             "event_date": event_day,
@@ -266,19 +298,24 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "probability_up": snapshot.get("probability_up", payload.get("probability_up")),
             "model_version": snapshot.get("model_version", payload.get("model_version")),
             "feature_close": close,
-            "feature_sma_10": _rolling_close_mean(history, idx, 10),
+            "feature_sma_10": sma_10,
             "feature_sma_20": sma_20,
             "feature_sma_50": sma_50,
+            "feature_sma_10_over_20": _ratio(sma_10, sma_20),
+            "feature_sma_20_over_50": _ratio(sma_20, sma_50),
             "feature_ema_10": _ema_at(history, idx, 10),
             "feature_ema_20": _ema_at(history, idx, 20),
             "feature_price_vs_sma_20": _pct(close, sma_20),
             "feature_price_vs_sma_50": _pct(close, sma_50),
             "feature_rsi_14": _rsi_at(history, idx, 14),
-            "feature_macd": _macd_at(history, idx),
+            "feature_macd": macd_line,
+            "feature_macd_signal": macd_signal,
+            "feature_macd_hist": macd_hist,
             "feature_atr_14": _atr_at(history, idx, 14),
             "feature_return_1d_lagged": _pct(close, prev1.get("close")),
             "feature_return_5d_lagged": _pct(close, prev5.get("close")),
             "feature_volume": asof.get("volume"),
+            "feature_dollar_volume": round(close * volume, 6) if volume is not None else None,
             f"return_{horizon_days}d": return_fwd,
             f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
             "leakage_guard": "features_asof_market_close_on_or_before_decision_date_labels_after_decision_date",

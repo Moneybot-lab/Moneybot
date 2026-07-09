@@ -55,14 +55,19 @@ def test_build_training_rows_adds_phase_1_technical_features(tmp_path):
     assert row["feature_sma_10"] == 151.5
     assert row["feature_sma_20"] == 146.5
     assert row["feature_sma_50"] == 131.5
+    assert row["feature_sma_10_over_20"] == round(151.5 / 146.5, 6)
+    assert row["feature_sma_20_over_50"] == round(146.5 / 131.5, 6)
     assert row["feature_ema_10"] is not None
     assert row["feature_ema_20"] is not None
     assert row["feature_price_vs_sma_20"] == round(156 / 146.5 - 1, 6)
     assert row["feature_price_vs_sma_50"] == round(156 / 131.5 - 1, 6)
     assert row["feature_rsi_14"] == 100.0
     assert row["feature_macd"] is not None
+    assert row["feature_macd_signal"] is not None
+    assert row["feature_macd_hist"] is not None
     assert row["feature_atr_14"] == 3.0
     assert row["feature_volume"] == 1056.0
+    assert row["feature_dollar_volume"] == 156.0 * 1056.0
 
 
 def test_write_rows_creates_reproducible_join_manifest(tmp_path):
