@@ -113,7 +113,7 @@ def load_market_history(
     return {symbol: [rows[day] for day in sorted(rows)] for symbol, rows in by_symbol.items()}
 
 
-def _market_load_window(events: list[dict[str, Any]], *, horizon_days: int, history_lag_days: int = 35) -> tuple[set[str], str | None, str | None]:
+def _market_load_window(events: list[dict[str, Any]], *, horizon_days: int, history_lag_days: int = 70) -> tuple[set[str], str | None, str | None]:
     symbols: set[str] = set()
     event_days = []
     for event in events:
@@ -253,6 +253,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
         sma_20 = _rolling_close_mean(history, idx, 20)
+        sma_50 = _rolling_close_mean(history, idx, 50)
         row = {
             "ts": ts,
             "event_date": event_day,
@@ -266,8 +267,12 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "model_version": snapshot.get("model_version", payload.get("model_version")),
             "feature_close": close,
             "feature_sma_10": _rolling_close_mean(history, idx, 10),
+            "feature_sma_20": sma_20,
+            "feature_sma_50": sma_50,
             "feature_ema_10": _ema_at(history, idx, 10),
+            "feature_ema_20": _ema_at(history, idx, 20),
             "feature_price_vs_sma_20": _pct(close, sma_20),
+            "feature_price_vs_sma_50": _pct(close, sma_50),
             "feature_rsi_14": _rsi_at(history, idx, 14),
             "feature_macd": _macd_at(history, idx),
             "feature_atr_14": _atr_at(history, idx, 14),
