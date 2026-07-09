@@ -129,6 +129,9 @@ def main() -> None:
             "summary_1d": summarize_horizon(visible_rows_1d, "1d"),
             "summary_5d": summarize_horizon(visible_rows_5d, "5d"),
             "paper_pnl_by_recommendation": summarize_paper_pnl_by_action(rows),
+            "visible_paper_pnl_by_recommendation": summarize_paper_pnl_by_action(
+                visible_rows
+            ),
             "include_skipped": False,
             "rows_scanned": len(rows),
             "evaluated_rows_available": len(evaluated_rows),
