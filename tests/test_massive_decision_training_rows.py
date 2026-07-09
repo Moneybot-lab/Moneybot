@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from scripts.build_massive_decision_training_rows import build_training_rows_from_raw_market, load_market_history, write_rows
 
@@ -29,6 +29,40 @@ def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):
     assert row["return_3d"] == round(21 / 15 - 1, 6)
     assert row["label_up_3d"] == 1
     assert row["leakage_guard"].startswith("features_asof")
+
+
+def test_build_training_rows_adds_phase_1_technical_features(tmp_path):
+    market = {
+        "AAPL": [
+            {
+                "symbol": "AAPL",
+                "date": (date(2026, 1, 1) + timedelta(days=idx - 1)).isoformat(),
+                "open": float(99 + idx),
+                "high": float(101 + idx),
+                "low": float(98 + idx),
+                "close": float(100 + idx),
+                "volume": float(1000 + idx),
+            }
+            for idx in range(1, 61)
+        ]
+    }
+    events = [{"ts": _ts("2026-02-25"), "symbol": "AAPL", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}}]
+
+    rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=3)
+
+    assert summary["rows_joined"] == 1
+    row = rows[0]
+    assert row["feature_sma_10"] == 151.5
+    assert row["feature_sma_20"] == 146.5
+    assert row["feature_sma_50"] == 131.5
+    assert row["feature_ema_10"] is not None
+    assert row["feature_ema_20"] is not None
+    assert row["feature_price_vs_sma_20"] == round(156 / 146.5 - 1, 6)
+    assert row["feature_price_vs_sma_50"] == round(156 / 131.5 - 1, 6)
+    assert row["feature_rsi_14"] == 100.0
+    assert row["feature_macd"] is not None
+    assert row["feature_atr_14"] == 3.0
+    assert row["feature_volume"] == 1056.0
 
 
 def test_write_rows_creates_reproducible_join_manifest(tmp_path):
