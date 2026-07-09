@@ -3191,8 +3191,20 @@ def decision_outcomes():
         )
         if snapshot is not None:
             snapshot_data = dict(snapshot["data"] or {})
-            if "paper_pnl_by_recommendation" not in snapshot_data:
-                snapshot_data["paper_pnl_by_recommendation"] = summarize_paper_pnl_by_action(snapshot_data.get("rows") or [])
+            snapshot_rows = list(snapshot_data.get("rows") or [])[-limit:]
+            snapshot_rows_1d = list(snapshot_data.get("rows_1d") or [])[-limit:]
+            snapshot_rows_5d = list(snapshot_data.get("rows_5d") or [])[-limit:]
+            snapshot_data["rows"] = snapshot_rows
+            if "rows_1d" in snapshot_data:
+                snapshot_data["rows_1d"] = snapshot_rows_1d
+            if "rows_5d" in snapshot_data:
+                snapshot_data["rows_5d"] = snapshot_rows_5d
+            snapshot_data["summary_1d"] = summarize_outcome_rows(snapshot_rows_1d or rows_with_horizon_return(snapshot_rows, "1d"))
+            snapshot_data["summary_5d"] = summarize_outcome_rows([
+                {**row, "return_1d": row.get("return_5d")}
+                for row in (snapshot_rows_5d or rows_with_horizon_return(snapshot_rows, "5d"))
+            ])
+            snapshot_data["paper_pnl_by_recommendation"] = summarize_paper_pnl_by_action(snapshot_rows)
             return jsonify(
                 {
                     "data": {
@@ -3303,7 +3315,7 @@ def decision_outcomes():
                 "rows_5d": visible_rows_5d,
                 "summary_1d": summary_1d,
                 "summary_5d": summary_5d,
-                "paper_pnl_by_recommendation": summarize_paper_pnl_by_action(rows),
+                "paper_pnl_by_recommendation": summarize_paper_pnl_by_action(visible_rows),
                 "include_skipped": include_skipped,
                 "decision_source_filter": decision_source_filter or None,
                 "rows_scanned": len(rows),
