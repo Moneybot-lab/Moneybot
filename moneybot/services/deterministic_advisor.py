@@ -198,7 +198,7 @@ class DeterministicQuickAdvisor:
                 f" intercept={self.calibration_intercept:.2f}."
             )
         if imputed:
-            rationale += f" Missing live features were imputed: {', '.join(imputed)}."
+            rationale += " Some live inputs were unavailable, so the model used safe defaults."
 
         return {
             "recommendation": recommendation,
