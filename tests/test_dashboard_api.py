@@ -758,7 +758,7 @@ def test_decision_outcomes_uses_lookup_cache_for_duplicate_events(tmp_path, monk
     assert data["lookup_cache_size"] == 5
 
 
-def test_decision_outcomes_paper_pnl_summary_respects_limit(tmp_path, monkeypatch):
+def test_decision_outcomes_includes_visible_paper_pnl_summary(tmp_path, monkeypatch):
     events_path = tmp_path / "decision_events.jsonl"
     base_event = {
         "ts": 1700000000,
@@ -777,7 +777,11 @@ def test_decision_outcomes_paper_pnl_summary_respects_limit(tmp_path, monkeypatc
     monkeypatch.setenv("DECISION_LOG_PATH", str(events_path))
     client = _client()
 
-    monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda symbol, ts, days: {"AAPL": 0.01, "MSFT": 0.02}[symbol])
+    monkeypatch.setattr(
+        api_module,
+        "_future_return_for_outcomes",
+        lambda symbol, ts, days: {"AAPL": 0.01, "MSFT": 0.02}[symbol],
+    )
 
     res = client.get("/api/decision-outcomes?limit=1&force_live=true")
 
@@ -785,11 +789,13 @@ def test_decision_outcomes_paper_pnl_summary_respects_limit(tmp_path, monkeypatc
     data = res.get_json()["data"]
     assert len(data["rows"]) == 1
     assert data["rows"][0]["symbol"] == "MSFT"
-    assert data["paper_pnl_by_recommendation"]["BUY"]["rows"] == 1
-    assert data["paper_pnl_by_recommendation"]["BUY"]["avg_paper_return_1d"] == 0.02
+    assert data["paper_pnl_by_recommendation"]["BUY"]["rows"] == 2
+    assert data["paper_pnl_by_recommendation"]["BUY"]["avg_paper_return_1d"] == 0.015
+    assert data["visible_paper_pnl_by_recommendation"]["BUY"]["rows"] == 1
+    assert data["visible_paper_pnl_by_recommendation"]["BUY"]["avg_paper_return_1d"] == 0.02
 
 
-def test_decision_outcomes_snapshot_paper_pnl_summary_respects_limit(tmp_path, monkeypatch):
+def test_decision_outcomes_snapshot_keeps_aggregate_and_visible_paper_pnl(tmp_path, monkeypatch):
     snapshot_path = tmp_path / "decision_outcomes_snapshot.json"
     snapshot_path.write_text(
         json.dumps(
@@ -806,7 +812,12 @@ def test_decision_outcomes_snapshot_paper_pnl_summary_respects_limit(tmp_path, m
                     ],
                     "summary_1d": {"rows": 2},
                     "summary_5d": {"rows": 0},
-                    "paper_pnl_by_recommendation": {"BUY": {"rows": 2}},
+                    "paper_pnl_by_recommendation": {
+                        "BUY": {"rows": 2, "avg_paper_return_1d": 0.015}
+                    },
+                    "visible_paper_pnl_by_recommendation": {
+                        "BUY": {"rows": 1, "avg_paper_return_1d": 0.02}
+                    },
                 },
             }
         ),
@@ -820,11 +831,13 @@ def test_decision_outcomes_snapshot_paper_pnl_summary_respects_limit(tmp_path, m
 
     assert res.status_code == 200
     data = res.get_json()["data"]
-    assert len(data["rows"]) == 1
-    assert data["rows"][0]["symbol"] == "MSFT"
-    assert data["summary_1d"]["rows"] == 1
-    assert data["paper_pnl_by_recommendation"]["BUY"]["rows"] == 1
-    assert data["paper_pnl_by_recommendation"]["BUY"]["avg_paper_return_1d"] == 0.02
+    assert len(data["rows"]) == 2
+    assert data["rows"][1]["symbol"] == "MSFT"
+    assert data["summary_1d"]["rows"] == 2
+    assert data["paper_pnl_by_recommendation"]["BUY"]["rows"] == 2
+    assert data["paper_pnl_by_recommendation"]["BUY"]["avg_paper_return_1d"] == 0.015
+    assert data["visible_paper_pnl_by_recommendation"]["BUY"]["rows"] == 1
+    assert data["visible_paper_pnl_by_recommendation"]["BUY"]["avg_paper_return_1d"] == 0.02
 
 
 def test_decision_outcomes_uses_materialized_snapshot_when_fresh(tmp_path, monkeypatch):
