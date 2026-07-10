@@ -240,6 +240,39 @@ def _atr_at(rows: list[dict[str, Any]], idx: int, window: int = 14) -> float | N
     return round(atr, 6) if atr is not None else None
 
 
+def _rolling_vwap(rows: list[dict[str, Any]], idx: int, window: int = 20) -> float | None:
+    if idx + 1 < window:
+        return None
+    total_dollar_volume = 0.0
+    total_volume = 0.0
+    for row in rows[idx - window + 1 : idx + 1]:
+        close = _coerce_float(row.get("close"))
+        volume = _coerce_float(row.get("volume"))
+        if close is None or volume is None:
+            return None
+        total_dollar_volume += close * volume
+        total_volume += volume
+    if total_volume == 0.0:
+        return None
+    return round(total_dollar_volume / total_volume, 6)
+
+
+def _vwap_slope(rows: list[dict[str, Any]], idx: int, window: int = 10, vwap_window: int = 20) -> float | None:
+    if idx + 1 < window + vwap_window - 1:
+        return None
+    values = [_rolling_vwap(rows, pos, vwap_window) for pos in range(idx - window + 1, idx + 1)]
+    if any(value is None for value in values):
+        return None
+    y = [float(value) for value in values]
+    x_mean = (window - 1) / 2.0
+    y_mean = sum(y) / window
+    denom = sum((pos - x_mean) ** 2 for pos in range(window))
+    if denom == 0.0 or y[0] == 0.0:
+        return None
+    slope = sum((pos - x_mean) * (value - y_mean) for pos, value in enumerate(y)) / denom
+    return round(slope / y[0], 6)
+
+
 def _rolling_numeric_mean(rows: list[dict[str, Any]], idx: int, window: int, column: str) -> float | None:
     if idx + 1 < window:
         return None
@@ -358,6 +391,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         volume = _coerce_float(asof.get("volume"))
         volume_avg_5 = _rolling_numeric_mean(history, idx, 5, "volume")
         volume_avg_20 = _rolling_numeric_mean(history, idx, 20, "volume")
+        vwap = _rolling_vwap(history, idx, 20)
         open_price = _coerce_float(asof.get("open"))
         return_5d_lagged = _pct(close, prev5.get("close"))
         return_20d_lagged = _pct(close, prev20.get("close"))
@@ -407,6 +441,10 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_volume_ratio_20d": _ratio(volume, volume_avg_20),
             "feature_relative_volume_5d": _ratio(volume, volume_avg_5),
             "feature_volume_zscore_20d": _rolling_zscore(history, idx, 20, "volume"),
+            "feature_vwap": vwap,
+            "feature_price_vs_vwap": _pct(close, vwap),
+            "feature_vwap_slope": _vwap_slope(history, idx, 10, 20),
+            "feature_above_vwap": int(close > vwap) if vwap is not None else None,
             "feature_dollar_volume": round(close * volume, 6) if volume is not None else None,
             f"return_{horizon_days}d": return_fwd,
             f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),

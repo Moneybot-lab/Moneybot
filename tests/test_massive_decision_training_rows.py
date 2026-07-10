@@ -82,6 +82,15 @@ def test_build_training_rows_adds_phase_1_technical_features(tmp_path):
     assert row["feature_volume_ratio_20d"] == round(1056.0 / 1046.5, 6)
     assert row["feature_relative_volume_5d"] == round(1056.0 / 1054.0, 6)
     assert row["feature_volume_zscore_20d"] == 1.647509
+    expected_vwap = round(
+        sum(float(100 + idx) * float(1000 + idx) for idx in range(37, 57))
+        / sum(float(1000 + idx) for idx in range(37, 57)),
+        6,
+    )
+    assert row["feature_vwap"] == expected_vwap
+    assert row["feature_price_vs_vwap"] == round(156.0 / expected_vwap - 1, 6)
+    assert row["feature_vwap_slope"] is not None
+    assert row["feature_above_vwap"] == 1
     assert row["feature_dollar_volume"] == 156.0 * 1056.0
 
 
