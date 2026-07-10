@@ -57,6 +57,7 @@ from .services.suitability_policy import UserDecisionContext
 from .services.market_stream import register_demand_safely
 from .services.live_market import LiveQuoteResolver, sse_encode
 from .services.outcome_tracking import (
+    OutcomeHistoryCache,
     close_values,
     evaluate_decision_events,
     merge_recent_rows,
@@ -3187,7 +3188,7 @@ def decision_outcomes():
         snapshot = _load_materialized_outcomes_snapshot(
             str(snapshot_path),
             max_age_seconds=snapshot_max_age_seconds,
-            allow_stale=True,
+            allow_stale=allow_stale_snapshot,
         )
         if snapshot is not None:
             snapshot_data = dict(snapshot["data"] or {})
@@ -3218,56 +3219,71 @@ def decision_outcomes():
         or current_app.config.get("DECISION_LOG_PATH")
         or _runtime_data_path("decision_events.jsonl")
     )
-    lookup_cache: dict[tuple[str, int, int], float | None] = {}
-    price_path_cache: dict[tuple[str, int, int], list[float]] = {}
-    benchmark_cache: dict[tuple[int, int], float | None] = {}
-    cache_hits = 0
-    cache_misses = 0
-    lookup_errors = 0
-
-    def cached_future_return_lookup(symbol: str, ts: int, days: int) -> float | None:
-        nonlocal cache_hits, cache_misses, lookup_errors
-        key = (str(symbol).upper(), int(ts), int(days))
-        if key in lookup_cache:
-            cache_hits += 1
-            return lookup_cache[key]
-
-        cache_misses += 1
-        try:
-            value = _future_return_for_outcomes(symbol, ts, days)
-        except Exception:  # noqa: BLE001
-            lookup_errors += 1
-            value = None
-        lookup_cache[key] = value
-        return value
-
-    def cached_price_path_lookup(symbol: str, ts: int, days: int) -> list[float]:
-        key = (str(symbol).upper(), int(ts), int(days))
-        if key not in price_path_cache:
-            price_path_cache[key] = _price_path_for_outcomes(symbol, ts, days)
-        return price_path_cache[key]
-
-    def cached_benchmark_return_lookup(ts: int, days: int) -> float | None:
-        key = (int(ts), int(days))
-        if key not in benchmark_cache:
-            benchmark_cache[key] = cached_future_return_lookup("SPY", ts, days)
-        return benchmark_cache[key]
+    raw_read_cap = (
+        current_app.config.get("DECISION_OUTCOMES_READ_CAP")
+        or os.environ.get("DECISION_OUTCOMES_READ_CAP")
+        or 50000
+    )
+    try:
+        read_cap = max(1, int(raw_read_cap))
+    except (TypeError, ValueError):
+        read_cap = 50000
+    history_cache = OutcomeHistoryCache(download=yf.download)
+    legacy_lookup_cache: dict[tuple[str, int, int], float | None] = {}
+    legacy_lookup_hits = 0
+    legacy_lookup_misses = 0
 
     # Read progressively wider windows so the endpoint can still find older evaluated rows
     # when very recent logs are mostly too fresh for 1D / 5D outcomes.
-    read_cap = 5000
     read_limit = min(max(limit * 10, 200), read_cap)
+    events_read = 0
+    all_available_events_read = False
+    scan_cap_reached = False
+    oldest_event_ts_scanned = None
+    newest_event_ts_scanned = None
     rows: list[dict[str, Any]] = []
     evaluated_rows: list[dict[str, Any]] = []
     evaluated_rows_1d: list[dict[str, Any]] = []
     evaluated_rows_5d: list[dict[str, Any]] = []
     while True:
         events = read_decision_events(str(output_path), limit=read_limit)
+        events_read = len(events)
+        all_available_events_read = events_read < read_limit
+        event_ts_values = [
+            int(event["ts"])
+            for event in events
+            if isinstance(event, dict) and isinstance(event.get("ts"), int)
+        ]
+        oldest_event_ts_scanned = min(event_ts_values) if event_ts_values else None
+        newest_event_ts_scanned = max(event_ts_values) if event_ts_values else None
+        def future_return_lookup(symbol: str, ts: int, days: int) -> float | None:
+            nonlocal legacy_lookup_hits, legacy_lookup_misses
+            key = (str(symbol).upper(), int(ts), int(days))
+            if key in legacy_lookup_cache:
+                legacy_lookup_hits += 1
+                return legacy_lookup_cache[key]
+            legacy_lookup_misses += 1
+            try:
+                value = _future_return_for_outcomes(symbol, ts, days, history_cache)
+            except TypeError:
+                value = _future_return_for_outcomes(symbol, ts, days)
+            legacy_lookup_cache[key] = value
+            return value
+
+        def price_path_lookup(symbol: str, ts: int, days: int) -> list[float]:
+            try:
+                return _price_path_for_outcomes(symbol, ts, days, history_cache)
+            except TypeError:
+                return _price_path_for_outcomes(symbol, ts, days)
+
+        def benchmark_return_lookup(ts: int, days: int) -> float | None:
+            return future_return_lookup("SPY", ts, days)
+
         rows = evaluate_decision_events(
             events,
-            future_return_lookup=cached_future_return_lookup,
-            price_path_lookup=cached_price_path_lookup,
-            benchmark_return_lookup=cached_benchmark_return_lookup,
+            future_return_lookup=future_return_lookup,
+            price_path_lookup=price_path_lookup,
+            benchmark_return_lookup=benchmark_return_lookup,
         )
         evaluated_rows_1d = rows_with_horizon_return(rows, "1d")
         evaluated_rows_5d = rows_with_horizon_return(rows, "5d")
@@ -3279,7 +3295,8 @@ def decision_outcomes():
             evaluated_rows = rows_with_any_horizon_return(rows)
         # Keep widening until we either have enough 5D-evaluable rows or hit the cap.
         # Do not stop early just because 1D rows are available; that can hide older 5D rows.
-        if include_skipped or len(evaluated_rows_5d) >= limit or read_limit >= read_cap:
+        scan_cap_reached = read_limit >= read_cap
+        if include_skipped or len(evaluated_rows_5d) >= limit or scan_cap_reached or all_available_events_read:
             break
         read_limit = min(read_limit * 2, read_cap)
     used_unevaluated_fallback = False
@@ -3297,6 +3314,13 @@ def decision_outcomes():
         visible_rows = rows[-limit:]
         used_unevaluated_fallback = True
 
+    visible_pnl_rows = merge_recent_rows(
+        visible_rows_1d,
+        visible_rows_5d,
+        limit=max(1, len(visible_rows_1d) + len(visible_rows_5d)),
+    )
+    if not visible_pnl_rows:
+        visible_pnl_rows = visible_rows
     summary_1d = summarize_outcome_rows(visible_rows_1d)
     summary_5d = summarize_outcome_rows([{**row, "return_1d": row.get("return_5d")} for row in visible_rows_5d])
 
@@ -3311,19 +3335,26 @@ def decision_outcomes():
                 "summary_5d": summary_5d,
                 "paper_pnl_by_recommendation": summarize_paper_pnl_by_action(rows),
                 "visible_paper_pnl_by_recommendation": summarize_paper_pnl_by_action(
-                    visible_rows
+                    visible_pnl_rows
                 ),
                 "include_skipped": include_skipped,
                 "decision_source_filter": decision_source_filter or None,
+                "events_read": events_read,
                 "rows_scanned": len(rows),
                 "evaluated_rows_available": len(evaluated_rows),
                 "evaluated_rows_1d_available": len(evaluated_rows_1d),
                 "evaluated_rows_5d_available": len(evaluated_rows_5d),
                 "used_unevaluated_fallback": used_unevaluated_fallback,
-                "lookup_cache_hits": cache_hits,
-                "lookup_cache_misses": cache_misses,
-                "lookup_cache_size": len(lookup_cache),
-                "lookup_errors": lookup_errors,
+                "oldest_event_ts_scanned": oldest_event_ts_scanned,
+                "newest_event_ts_scanned": newest_event_ts_scanned,
+                "read_cap": read_cap,
+                "scan_cap_reached": scan_cap_reached,
+                "all_available_events_read": all_available_events_read,
+                **history_cache.diagnostics_payload(),
+                "lookup_cache_hits": history_cache.diagnostics.history_cache_hits + legacy_lookup_hits,
+                "lookup_cache_misses": history_cache.diagnostics.history_cache_misses + legacy_lookup_misses,
+                "lookup_cache_size": history_cache.cache_size + len(legacy_lookup_cache),
+                "lookup_errors": history_cache.diagnostics.history_download_errors,
                 "snapshot_source": "live",
                 "snapshot_computed_at_utc": None,
                 "snapshot_age_seconds": None,
@@ -3339,7 +3370,14 @@ def wells_picks():
     return jsonify({"items": svc.get_wells_picks(), "request_id": g.request_id})
 
 
-def _price_path_for_outcomes(symbol: str, start_ts: int, days: int) -> list[float]:
+def _price_path_for_outcomes(
+    symbol: str,
+    start_ts: int,
+    days: int,
+    history_cache: OutcomeHistoryCache | None = None,
+) -> list[float]:
+    if history_cache is not None:
+        return history_cache.price_path(symbol, start_ts, days)
     start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
     now_utc = datetime.now(timezone.utc)
     if start_dt >= now_utc:
@@ -3363,7 +3401,14 @@ def _price_path_for_outcomes(symbol: str, start_ts: int, days: int) -> list[floa
     return close_values(history)
 
 
-def _future_return_for_outcomes(symbol: str, start_ts: int, days: int) -> float | None:
+def _future_return_for_outcomes(
+    symbol: str,
+    start_ts: int,
+    days: int,
+    history_cache: OutcomeHistoryCache | None = None,
+) -> float | None:
+    if history_cache is not None:
+        return history_cache.future_return(symbol, start_ts, days)
     start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
     now_utc = datetime.now(timezone.utc)
     # Skip network calls when event time is too recent (or future) to have realized horizon returns.

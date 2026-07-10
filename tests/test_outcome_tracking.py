@@ -138,7 +138,106 @@ def test_summarize_paper_pnl_by_action_groups_recommendations():
     summary = summarize_paper_pnl_by_action(rows)
 
     assert summary["BUY"]["rows"] == 1
+    assert summary["BUY"]["evaluated_rows_1d"] == 1
+    assert summary["BUY"]["evaluated_rows_5d"] == 1
     assert summary["BUY"]["avg_paper_return_20d"] == 0.10
+    assert summary["SELL"]["evaluated_rows_1d"] == 1
+    assert summary["SELL"]["evaluated_rows_5d"] == 1
     assert summary["SELL"]["avg_paper_return_20d"] == 0.08
     assert summary["SELL"]["avg_benchmark_relative_return_20d"] == 0.04
     assert summary["HOLD"]["rows"] == 0
+
+
+def _history_frame(closes, start="2026-01-02"):
+    dates = pd.bdate_range(start=start, periods=len(closes))
+    return pd.DataFrame({"Close": closes}, index=dates)
+
+
+def test_history_cache_calculates_5d_from_six_trading_closes_across_holiday():
+    from datetime import datetime, timezone
+
+    from moneybot.services.outcome_tracking import OutcomeHistoryCache
+
+    calls = []
+
+    def fake_download(symbol, **kwargs):
+        calls.append((symbol, kwargs))
+        dates = pd.to_datetime(
+            [
+                "2026-01-02",
+                "2026-01-05",
+                "2026-01-06",
+                "2026-01-07",
+                "2026-01-09",
+                "2026-01-12",
+            ]
+        )
+        return pd.DataFrame({"Close": [100, 101, 102, 103, 104, 110]}, index=dates)
+
+    cache = OutcomeHistoryCache(
+        download=fake_download,
+        now=datetime(2026, 1, 13, tzinfo=timezone.utc),
+    )
+
+    assert cache.future_return("AAPL", int(datetime(2026, 1, 2, tzinfo=timezone.utc).timestamp()), 5) == 0.1
+    assert len(calls) == 1
+
+
+def test_history_cache_includes_yahoo_exclusive_end_date_padding():
+    from datetime import datetime, timezone
+
+    from moneybot.services.outcome_tracking import OutcomeHistoryCache
+
+    seen = {}
+
+    def fake_download(symbol, **kwargs):
+        seen.update(kwargs)
+        return _history_frame([100, 101, 102, 103, 104, 105], start="2026-02-02")
+
+    cache = OutcomeHistoryCache(
+        download=fake_download,
+        now=datetime(2026, 2, 20, tzinfo=timezone.utc),
+    )
+
+    assert cache.future_return("AAPL", int(datetime(2026, 2, 2, tzinfo=timezone.utc).timestamp()), 5) == 0.05
+    assert seen["end"] > "2026-02-09"
+
+
+def test_history_cache_returns_none_for_insufficient_closes():
+    from datetime import datetime, timezone
+
+    from moneybot.services.outcome_tracking import OutcomeHistoryCache
+
+    cache = OutcomeHistoryCache(
+        download=lambda symbol, **kwargs: _history_frame([100, 101, 102], start="2026-03-02"),
+        now=datetime(2026, 3, 20, tzinfo=timezone.utc),
+    )
+
+    assert cache.future_return("AAPL", int(datetime(2026, 3, 2, tzinfo=timezone.utc).timestamp()), 5) is None
+    assert cache.diagnostics.insufficient_history_5d == 1
+
+
+def test_history_cache_reuses_symbol_date_download_for_all_horizons_and_events():
+    from datetime import datetime, timezone
+
+    from moneybot.services.outcome_tracking import OutcomeHistoryCache
+
+    calls = []
+
+    def fake_download(symbol, **kwargs):
+        calls.append((symbol, kwargs["start"]))
+        return _history_frame([100 + idx for idx in range(30)], start="2026-04-01")
+
+    cache = OutcomeHistoryCache(
+        download=fake_download,
+        now=datetime(2026, 5, 15, tzinfo=timezone.utc),
+    )
+    ts1 = int(datetime(2026, 4, 1, 14, tzinfo=timezone.utc).timestamp())
+    ts2 = int(datetime(2026, 4, 1, 18, tzinfo=timezone.utc).timestamp())
+
+    assert cache.future_return("AAPL", ts1, 1) == 0.01
+    assert cache.future_return("AAPL", ts1, 5) == 0.05
+    assert cache.price_path("AAPL", ts2, 20)[0] == 100
+    assert len(calls) == 1
+    assert cache.diagnostics.history_cache_misses == 1
+    assert cache.diagnostics.history_cache_hits == 2

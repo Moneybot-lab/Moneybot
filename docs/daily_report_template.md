@@ -84,7 +84,7 @@
 
 - **Command:**
   ```bash
-  python3 scripts/day12_materialize_outcomes.py --input data/decision_events.jsonl --output data/decision_outcomes_snapshot.json --limit 2000 --rows-limit 20
+  python3 scripts/day12_materialize_outcomes.py --input data/decision_events.jsonl --output data/decision_outcomes_snapshot.json --limit 50000 --rows-limit 20
   ```
 - **Output path:** `data/decision_outcomes_snapshot.json`
 - **Rows materialized (if reported):** `____`
