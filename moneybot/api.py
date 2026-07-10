@@ -3192,7 +3192,13 @@ def decision_outcomes():
         if snapshot is not None:
             snapshot_data = dict(snapshot["data"] or {})
             if "paper_pnl_by_recommendation" not in snapshot_data:
-                snapshot_data["paper_pnl_by_recommendation"] = summarize_paper_pnl_by_action(snapshot_data.get("rows") or [])
+                snapshot_data["paper_pnl_by_recommendation"] = summarize_paper_pnl_by_action(
+                    snapshot_data.get("rows") or []
+                )
+            if "visible_paper_pnl_by_recommendation" not in snapshot_data:
+                snapshot_data["visible_paper_pnl_by_recommendation"] = summarize_paper_pnl_by_action(
+                    snapshot_data.get("rows") or []
+                )
             return jsonify(
                 {
                     "data": {
@@ -3304,6 +3310,9 @@ def decision_outcomes():
                 "summary_1d": summary_1d,
                 "summary_5d": summary_5d,
                 "paper_pnl_by_recommendation": summarize_paper_pnl_by_action(rows),
+                "visible_paper_pnl_by_recommendation": summarize_paper_pnl_by_action(
+                    visible_rows
+                ),
                 "include_skipped": include_skipped,
                 "decision_source_filter": decision_source_filter or None,
                 "rows_scanned": len(rows),
