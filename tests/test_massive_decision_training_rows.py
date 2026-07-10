@@ -57,6 +57,8 @@ def test_build_training_rows_adds_phase_1_technical_features(tmp_path):
     assert row["feature_sma_50"] == 131.5
     assert row["feature_sma_10_over_20"] == round(151.5 / 146.5, 6)
     assert row["feature_sma_20_over_50"] == round(146.5 / 131.5, 6)
+    assert row["feature_trend_slope_10d"] == round(1.0 / 147.0, 6)
+    assert row["feature_trend_slope_20d"] == round(1.0 / 137.0, 6)
     assert row["feature_ema_10"] is not None
     assert row["feature_ema_20"] is not None
     assert row["feature_price_vs_sma_20"] == round(156 / 146.5 - 1, 6)
@@ -66,6 +68,11 @@ def test_build_training_rows_adds_phase_1_technical_features(tmp_path):
     assert row["feature_macd_signal"] is not None
     assert row["feature_macd_hist"] is not None
     assert row["feature_atr_14"] == 3.0
+    assert row["feature_return_10d_lagged"] == round(156 / 146 - 1, 6)
+    assert row["feature_return_20d_lagged"] == round(156 / 136 - 1, 6)
+    assert row["feature_momentum_5d_vs_20d"] == round(
+        row["feature_return_5d_lagged"] - row["feature_return_20d_lagged"], 6
+    )
     assert row["feature_volume"] == 1056.0
     assert row["feature_dollar_volume"] == 156.0 * 1056.0
 

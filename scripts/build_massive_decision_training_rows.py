@@ -240,6 +240,23 @@ def _atr_at(rows: list[dict[str, Any]], idx: int, window: int = 14) -> float | N
     return round(atr, 6) if atr is not None else None
 
 
+
+def _trend_slope(rows: list[dict[str, Any]], idx: int, window: int) -> float | None:
+    if idx + 1 < window:
+        return None
+    closes = [_coerce_float(row.get("close")) for row in rows[idx - window + 1 : idx + 1]]
+    if any(value is None for value in closes):
+        return None
+    y = [float(value) for value in closes]
+    x_mean = (window - 1) / 2.0
+    y_mean = sum(y) / window
+    denom = sum((pos - x_mean) ** 2 for pos in range(window))
+    if denom == 0.0 or y[0] == 0.0:
+        return None
+    slope = sum((pos - x_mean) * (value - y_mean) for pos, value in enumerate(y)) / denom
+    return round(slope / y[0], 6)
+
+
 def _ratio(numerator: float | None, denominator: float | None) -> float | None:
     if numerator is None or denominator in {None, 0}:
         return None
@@ -276,6 +293,8 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         asof = history[idx]
         prev1 = history[idx - 1]
         prev5 = history[idx - 5]
+        prev10 = history[idx - 10] if idx >= 10 else {}
+        prev20 = history[idx - 20] if idx >= 20 else {}
         future = history[label_idx]
         close = float(asof["close"])
         return_fwd = _pct(float(future["close"]), close)
@@ -286,6 +305,8 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         sma_50 = _rolling_close_mean(history, idx, 50)
         macd_line, macd_signal, macd_hist = _macd_components_at(history, idx)
         volume = _coerce_float(asof.get("volume"))
+        return_5d_lagged = _pct(close, prev5.get("close"))
+        return_20d_lagged = _pct(close, prev20.get("close"))
         row = {
             "ts": ts,
             "event_date": event_day,
@@ -303,6 +324,8 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_sma_50": sma_50,
             "feature_sma_10_over_20": _ratio(sma_10, sma_20),
             "feature_sma_20_over_50": _ratio(sma_20, sma_50),
+            "feature_trend_slope_10d": _trend_slope(history, idx, 10),
+            "feature_trend_slope_20d": _trend_slope(history, idx, 20),
             "feature_ema_10": _ema_at(history, idx, 10),
             "feature_ema_20": _ema_at(history, idx, 20),
             "feature_price_vs_sma_20": _pct(close, sma_20),
@@ -313,7 +336,14 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_macd_hist": macd_hist,
             "feature_atr_14": _atr_at(history, idx, 14),
             "feature_return_1d_lagged": _pct(close, prev1.get("close")),
-            "feature_return_5d_lagged": _pct(close, prev5.get("close")),
+            "feature_return_5d_lagged": return_5d_lagged,
+            "feature_return_10d_lagged": _pct(close, prev10.get("close")),
+            "feature_return_20d_lagged": return_20d_lagged,
+            "feature_momentum_5d_vs_20d": (
+                round(return_5d_lagged - return_20d_lagged, 6)
+                if return_5d_lagged is not None and return_20d_lagged is not None
+                else None
+            ),
             "feature_volume": asof.get("volume"),
             "feature_dollar_volume": round(close * volume, 6) if volume is not None else None,
             f"return_{horizon_days}d": return_fwd,
