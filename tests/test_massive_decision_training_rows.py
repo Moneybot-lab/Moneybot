@@ -59,6 +59,11 @@ def test_build_training_rows_adds_phase_1_technical_features(tmp_path):
     assert row["feature_sma_20_over_50"] == round(146.5 / 131.5, 6)
     assert row["feature_trend_slope_10d"] == round(1.0 / 147.0, 6)
     assert row["feature_trend_slope_20d"] == round(1.0 / 137.0, 6)
+    assert row["feature_volatility_5d"] is not None
+    assert row["feature_volatility_20d"] is not None
+    assert row["feature_drawdown_from_20d_high"] == round(156 / 157 - 1, 6)
+    assert row["feature_distance_from_20d_low"] == round(156 / 135 - 1, 6)
+    assert row["feature_gap_percent"] == 0.0
     assert row["feature_ema_10"] is not None
     assert row["feature_ema_20"] is not None
     assert row["feature_price_vs_sma_20"] == round(156 / 146.5 - 1, 6)

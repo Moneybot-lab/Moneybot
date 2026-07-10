@@ -240,6 +240,30 @@ def _atr_at(rows: list[dict[str, Any]], idx: int, window: int = 14) -> float | N
     return round(atr, 6) if atr is not None else None
 
 
+def _rolling_extreme(rows: list[dict[str, Any]], idx: int, window: int, column: str, *, high: bool) -> float | None:
+    if idx + 1 < window:
+        return None
+    values = [_coerce_float(row.get(column)) for row in rows[idx - window + 1 : idx + 1]]
+    if any(value is None for value in values):
+        return None
+    return round(max(values) if high else min(values), 6)
+
+
+def _return_volatility(rows: list[dict[str, Any]], idx: int, window: int) -> float | None:
+    if idx < window:
+        return None
+    returns: list[float] = []
+    for pos in range(idx - window + 1, idx + 1):
+        close = _coerce_float(rows[pos].get("close"))
+        prev_close = _coerce_float(rows[pos - 1].get("close"))
+        ret = _pct(float(close), prev_close) if close is not None else None
+        if ret is None:
+            return None
+        returns.append(ret)
+    avg = sum(returns) / len(returns)
+    variance = sum((ret - avg) ** 2 for ret in returns) / len(returns)
+    return round(variance ** 0.5, 6)
+
 
 def _trend_slope(rows: list[dict[str, Any]], idx: int, window: int) -> float | None:
     if idx + 1 < window:
@@ -303,8 +327,11 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         sma_10 = _rolling_close_mean(history, idx, 10)
         sma_20 = _rolling_close_mean(history, idx, 20)
         sma_50 = _rolling_close_mean(history, idx, 50)
+        high_20 = _rolling_extreme(history, idx, 20, "high", high=True)
+        low_20 = _rolling_extreme(history, idx, 20, "low", high=False)
         macd_line, macd_signal, macd_hist = _macd_components_at(history, idx)
         volume = _coerce_float(asof.get("volume"))
+        open_price = _coerce_float(asof.get("open"))
         return_5d_lagged = _pct(close, prev5.get("close"))
         return_20d_lagged = _pct(close, prev20.get("close"))
         row = {
@@ -326,6 +353,11 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_sma_20_over_50": _ratio(sma_20, sma_50),
             "feature_trend_slope_10d": _trend_slope(history, idx, 10),
             "feature_trend_slope_20d": _trend_slope(history, idx, 20),
+            "feature_volatility_5d": _return_volatility(history, idx, 5),
+            "feature_volatility_20d": _return_volatility(history, idx, 20),
+            "feature_drawdown_from_20d_high": _pct(close, high_20),
+            "feature_distance_from_20d_low": _pct(close, low_20),
+            "feature_gap_percent": _pct(open_price, prev1.get("close")),
             "feature_ema_10": _ema_at(history, idx, 10),
             "feature_ema_20": _ema_at(history, idx, 20),
             "feature_price_vs_sma_20": _pct(close, sma_20),
