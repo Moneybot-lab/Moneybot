@@ -79,6 +79,9 @@ def test_build_training_rows_adds_phase_1_technical_features(tmp_path):
         row["feature_return_5d_lagged"] - row["feature_return_20d_lagged"], 6
     )
     assert row["feature_volume"] == 1056.0
+    assert row["feature_volume_ratio_20d"] == round(1056.0 / 1046.5, 6)
+    assert row["feature_relative_volume_5d"] == round(1056.0 / 1054.0, 6)
+    assert row["feature_volume_zscore_20d"] == 1.647509
     assert row["feature_dollar_volume"] == 156.0 * 1056.0
 
 

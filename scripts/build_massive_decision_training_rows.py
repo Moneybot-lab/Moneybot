@@ -240,6 +240,31 @@ def _atr_at(rows: list[dict[str, Any]], idx: int, window: int = 14) -> float | N
     return round(atr, 6) if atr is not None else None
 
 
+def _rolling_numeric_mean(rows: list[dict[str, Any]], idx: int, window: int, column: str) -> float | None:
+    if idx + 1 < window:
+        return None
+    values = [_coerce_float(row.get(column)) for row in rows[idx - window + 1 : idx + 1]]
+    if any(value is None for value in values):
+        return None
+    return round(sum(float(value) for value in values) / window, 6)
+
+
+def _rolling_zscore(rows: list[dict[str, Any]], idx: int, window: int, column: str) -> float | None:
+    current = _coerce_float(rows[idx].get(column)) if idx < len(rows) else None
+    if current is None or idx + 1 < window:
+        return None
+    values = [_coerce_float(row.get(column)) for row in rows[idx - window + 1 : idx + 1]]
+    if any(value is None for value in values):
+        return None
+    clean = [float(value) for value in values]
+    avg = sum(clean) / window
+    variance = sum((value - avg) ** 2 for value in clean) / window
+    std = variance ** 0.5
+    if std == 0.0:
+        return 0.0
+    return round((float(current) - avg) / std, 6)
+
+
 def _rolling_extreme(rows: list[dict[str, Any]], idx: int, window: int, column: str, *, high: bool) -> float | None:
     if idx + 1 < window:
         return None
@@ -331,6 +356,8 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         low_20 = _rolling_extreme(history, idx, 20, "low", high=False)
         macd_line, macd_signal, macd_hist = _macd_components_at(history, idx)
         volume = _coerce_float(asof.get("volume"))
+        volume_avg_5 = _rolling_numeric_mean(history, idx, 5, "volume")
+        volume_avg_20 = _rolling_numeric_mean(history, idx, 20, "volume")
         open_price = _coerce_float(asof.get("open"))
         return_5d_lagged = _pct(close, prev5.get("close"))
         return_20d_lagged = _pct(close, prev20.get("close"))
@@ -377,6 +404,9 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
                 else None
             ),
             "feature_volume": asof.get("volume"),
+            "feature_volume_ratio_20d": _ratio(volume, volume_avg_20),
+            "feature_relative_volume_5d": _ratio(volume, volume_avg_5),
+            "feature_volume_zscore_20d": _rolling_zscore(history, idx, 20, "volume"),
             "feature_dollar_volume": round(close * volume, 6) if volume is not None else None,
             f"return_{horizon_days}d": return_fwd,
             f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
