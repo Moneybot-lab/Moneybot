@@ -173,6 +173,55 @@ def test_quick_ask_returns_shopping_friendly_recommendation_scale():
     assert data["quote_diagnostics"]["provider"] == "finnhub"
 
 
+
+def test_quick_ask_does_not_show_internal_feature_names_in_rationale():
+    client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = None
+    from moneybot.services.deterministic_advisor import DeterministicQuickAdvisor
+
+    advisor = DeterministicQuickAdvisor(enabled=True, artifact_path="/tmp/missing-moneybot-artifact.json")
+    advisor.artifact.feature_columns = [
+        "feature_change_percent",
+        "feature_endpoint_hot_momentum_buys",
+        "feature_endpoint_quick_ask",
+        "feature_endpoint_user_watchlist",
+        "feature_macd_histogram",
+        "feature_price",
+        "feature_probability_up",
+        "feature_rec_buy",
+        "feature_rec_hold",
+        "feature_rec_hold_off_for_now",
+        "feature_rec_negative",
+        "feature_rec_positive",
+        "feature_rec_sell",
+        "feature_rec_strong_buy",
+        "feature_return_1d",
+        "feature_return_5d",
+        "feature_rsi",
+        "feature_source_ai_enhanced",
+        "feature_source_deterministic_model",
+        "feature_source_rule_based",
+        "feature_volume_ratio",
+    ]
+    feature_count = len(advisor.artifact.feature_columns)
+    advisor.artifact.means = [0.0] * feature_count
+    advisor.artifact.stds = [1.0] * feature_count
+    advisor.artifact.weights = [0.0] * feature_count
+    client.application.extensions["deterministic_quick_advisor"] = advisor
+    client.application.extensions["ai_advisor_service"] = None
+
+    res = client.get("/api/quick-ask?symbol=AAPL")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    visible_text = " ".join(str(data.get(key) or "") for key in ("rationale", "advice_reason"))
+    if isinstance(data.get("ai"), dict):
+        visible_text += " " + str(data["ai"].get("narrative") or "")
+    for feature_name in advisor.artifact.feature_columns:
+        assert feature_name not in visible_text
+    assert "safe defaults" in data["rationale"]
+
+
 def test_quick_ask_normalizes_symbol_from_url_like_input():
     client = _client()
     res = client.get('/api/quick-ask?symbol=%2Fapi%2Fquote%3Fsymbol%3DTSLA')
@@ -954,6 +1003,88 @@ def test_decision_outcomes_allows_stale_snapshot_only_when_requested(tmp_path, m
     assert stale.get_json()["data"]["snapshot_source"] == "materialized_stale"
     assert stale.get_json()["data"]["snapshot_stale"] is True
     assert forced.get_json()["data"]["snapshot_source"] == "live"
+
+
+def test_decision_outcomes_includes_visible_paper_pnl_summary(tmp_path, monkeypatch):
+    events_path = tmp_path / "decision_events.jsonl"
+    base_event = {
+        "ts": 1700000000,
+        "endpoint": "quick_ask",
+        "decision_source": "deterministic_model",
+        "payload": {"recommendation": "BUY"},
+    }
+    events_path.write_text(
+        "\n".join(
+            json.dumps({**base_event, "symbol": symbol})
+            for symbol in ["AAPL", "MSFT"]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DECISION_LOG_PATH", str(events_path))
+    client = _client()
+
+    monkeypatch.setattr(
+        api_module,
+        "_future_return_for_outcomes",
+        lambda symbol, ts, days: {"AAPL": 0.01, "MSFT": 0.02}[symbol],
+    )
+
+    res = client.get("/api/decision-outcomes?limit=1&force_live=true")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert len(data["rows"]) == 1
+    assert data["rows"][0]["symbol"] == "MSFT"
+    assert data["paper_pnl_by_recommendation"]["BUY"]["rows"] == 2
+    assert data["paper_pnl_by_recommendation"]["BUY"]["avg_paper_return_1d"] == 0.015
+    assert data["visible_paper_pnl_by_recommendation"]["BUY"]["rows"] == 1
+    assert data["visible_paper_pnl_by_recommendation"]["BUY"]["avg_paper_return_1d"] == 0.02
+
+
+def test_decision_outcomes_snapshot_keeps_aggregate_and_visible_paper_pnl(tmp_path, monkeypatch):
+    snapshot_path = tmp_path / "decision_outcomes_snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "computed_at_utc": datetime.now(timezone.utc).isoformat(),
+                "data": {
+                    "rows": [
+                        {"symbol": "AAPL", "action": "BUY", "return_1d": 0.01, "paper_return_1d": 0.01},
+                        {"symbol": "MSFT", "action": "BUY", "return_1d": 0.02, "paper_return_1d": 0.02},
+                    ],
+                    "rows_1d": [
+                        {"symbol": "AAPL", "action": "BUY", "return_1d": 0.01, "paper_return_1d": 0.01},
+                        {"symbol": "MSFT", "action": "BUY", "return_1d": 0.02, "paper_return_1d": 0.02},
+                    ],
+                    "summary_1d": {"rows": 2},
+                    "summary_5d": {"rows": 0},
+                    "paper_pnl_by_recommendation": {
+                        "BUY": {"rows": 2, "avg_paper_return_1d": 0.015}
+                    },
+                    "visible_paper_pnl_by_recommendation": {
+                        "BUY": {"rows": 1, "avg_paper_return_1d": 0.02}
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_PATH", str(snapshot_path))
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")
+    client = _client()
+
+    res = client.get("/api/decision-outcomes?limit=1")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert len(data["rows"]) == 2
+    assert data["rows"][1]["symbol"] == "MSFT"
+    assert data["summary_1d"]["rows"] == 2
+    assert data["paper_pnl_by_recommendation"]["BUY"]["rows"] == 2
+    assert data["paper_pnl_by_recommendation"]["BUY"]["avg_paper_return_1d"] == 0.015
+    assert data["visible_paper_pnl_by_recommendation"]["BUY"]["rows"] == 1
+    assert data["visible_paper_pnl_by_recommendation"]["BUY"]["avg_paper_return_1d"] == 0.02
 
 
 def test_decision_outcomes_uses_materialized_snapshot_when_fresh(tmp_path, monkeypatch):
