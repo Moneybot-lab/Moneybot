@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yfinance as yf
@@ -15,7 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import (
-    close_values,
+    OutcomeHistoryCache,
     evaluate_decision_events,
     merge_recent_rows,
     rows_with_any_horizon_return,
@@ -37,79 +37,28 @@ def summarize_horizon(rows: list[dict], horizon: str) -> dict:
     return summarize_outcome_rows(rows)
 
 
-def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
-    start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
-    now_utc = datetime.now(timezone.utc)
-    if start_dt >= now_utc:
-        return None
-    if start_dt + timedelta(days=days) > now_utc:
-        return None
-
-    end_dt = start_dt + timedelta(days=max(days + 3, 7))
-    safe_end_dt = min(end_dt, now_utc + timedelta(days=1))
-    try:
-        history = yf.download(
-            symbol,
-            start=start_dt.strftime("%Y-%m-%d"),
-            end=safe_end_dt.strftime("%Y-%m-%d"),
-            interval="1d",
-            progress=False,
-            auto_adjust=False,
-        )
-    except Exception:  # noqa: BLE001
-        return None
-    closes = close_values(history)
-    if len(closes) <= days:
-        return None
-    start_price = float(closes[0])
-    end_price = float(closes[days])
-    if start_price == 0:
-        return None
-    return round((end_price - start_price) / start_price, 4)
-
-
-def _price_path(symbol: str, start_ts: int, days: int) -> list[float]:
-    start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
-    now_utc = datetime.now(timezone.utc)
-    if start_dt >= now_utc:
-        return []
-    if start_dt + timedelta(days=days) > now_utc:
-        return []
-    end_dt = start_dt + timedelta(days=max(days + 3, 7))
-    safe_end_dt = min(end_dt, now_utc + timedelta(days=1))
-    try:
-        history = yf.download(
-            symbol,
-            start=start_dt.strftime("%Y-%m-%d"),
-            end=safe_end_dt.strftime("%Y-%m-%d"),
-            interval="1d",
-            progress=False,
-            auto_adjust=False,
-        )
-    except Exception:  # noqa: BLE001
-        return []
-    return close_values(history)
-
-
-def _benchmark_return(start_ts: int, days: int) -> float | None:
-    return _future_return("SPY", start_ts, days)
-
 
 def main() -> None:
     base_dir = resolve_runtime_dir()
     parser = argparse.ArgumentParser(description="Materialize decision outcomes to a snapshot JSON file.")
     parser.add_argument("--input", default=str(base_dir / "decision_events.jsonl"))
     parser.add_argument("--output", default=str(base_dir / "decision_outcomes_snapshot.json"))
-    parser.add_argument("--limit", type=int, default=20000)
+    parser.add_argument("--limit", type=int, default=50000)
     parser.add_argument("--rows-limit", type=int, default=20)
     args = parser.parse_args()
 
     events = read_decision_events(args.input, limit=max(1, args.limit))
+    event_ts_values = [
+        int(event["ts"])
+        for event in events
+        if isinstance(event, dict) and isinstance(event.get("ts"), int)
+    ]
+    history_cache = OutcomeHistoryCache(download=yf.download)
     rows = evaluate_decision_events(
         events,
-        future_return_lookup=_future_return,
-        price_path_lookup=_price_path,
-        benchmark_return_lookup=_benchmark_return,
+        future_return_lookup=history_cache.future_return,
+        price_path_lookup=history_cache.price_path,
+        benchmark_return_lookup=history_cache.benchmark_return,
     )
     evaluated_rows_1d = rows_with_horizon_return(rows, "1d")
     evaluated_rows_5d = rows_with_horizon_return(rows, "5d")
@@ -119,6 +68,13 @@ def main() -> None:
     visible_rows = merge_recent_rows(visible_rows_1d, visible_rows_5d, limit=args.rows_limit)
     if not visible_rows and rows:
         visible_rows = select_visible_rows(rows, [], args.rows_limit)
+    visible_pnl_rows = merge_recent_rows(
+        visible_rows_1d,
+        visible_rows_5d,
+        limit=max(1, len(visible_rows_1d) + len(visible_rows_5d)),
+    )
+    if not visible_pnl_rows:
+        visible_pnl_rows = visible_rows
 
     payload = {
         "computed_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -129,16 +85,26 @@ def main() -> None:
             "summary_1d": summarize_horizon(visible_rows_1d, "1d"),
             "summary_5d": summarize_horizon(visible_rows_5d, "5d"),
             "paper_pnl_by_recommendation": summarize_paper_pnl_by_action(rows),
+            "visible_paper_pnl_by_recommendation": summarize_paper_pnl_by_action(
+                visible_pnl_rows
+            ),
             "include_skipped": False,
+            "events_read": len(events),
             "rows_scanned": len(rows),
             "evaluated_rows_available": len(evaluated_rows),
             "evaluated_rows_1d_available": len(evaluated_rows_1d),
             "evaluated_rows_5d_available": len(evaluated_rows_5d),
             "used_unevaluated_fallback": len(evaluated_rows) == 0 and bool(rows),
-            "lookup_cache_hits": 0,
-            "lookup_cache_misses": 0,
-            "lookup_cache_size": 0,
-            "lookup_errors": 0,
+            "oldest_event_ts_scanned": min(event_ts_values) if event_ts_values else None,
+            "newest_event_ts_scanned": max(event_ts_values) if event_ts_values else None,
+            "read_cap": max(1, args.limit),
+            "scan_cap_reached": len(events) >= max(1, args.limit),
+            "all_available_events_read": len(events) < max(1, args.limit),
+            **history_cache.diagnostics_payload(),
+            "lookup_cache_hits": history_cache.diagnostics.history_cache_hits,
+            "lookup_cache_misses": history_cache.diagnostics.history_cache_misses,
+            "lookup_cache_size": history_cache.cache_size,
+            "lookup_errors": history_cache.diagnostics.history_download_errors,
         },
     }
 
