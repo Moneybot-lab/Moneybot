@@ -90,6 +90,7 @@ class OutcomeHistoryCache:
     calendar_window_days: int = DEFAULT_HISTORY_CALENDAR_WINDOW_DAYS
     diagnostics: OutcomeHistoryDiagnostics = field(default_factory=OutcomeHistoryDiagnostics)
     _cache: dict[tuple[str, str], list[tuple[datetime.date, float]]] = field(default_factory=dict)
+    _symbol_cache: dict[str, list[tuple[datetime.date, float]]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.now is None:
@@ -101,7 +102,50 @@ class OutcomeHistoryCache:
 
     @property
     def cache_size(self) -> int:
-        return len(self._cache)
+        return len(self._cache) + len(self._symbol_cache)
+
+    def _download_symbol_range(self, symbol: str, start_date: datetime.date) -> list[tuple[datetime.date, float]]:
+        assert self.now is not None
+        safe_end_date = self.now.date() + timedelta(days=1)
+        if safe_end_date <= start_date:
+            return []
+        try:
+            history = self.download(
+                str(symbol).upper(),
+                start=start_date.isoformat(),
+                end=safe_end_date.isoformat(),
+                interval="1d",
+                progress=False,
+                auto_adjust=False,
+            )
+        except Exception:  # noqa: BLE001
+            self.diagnostics.history_download_errors += 1
+            return []
+        return [(date_value, close) for date_value, close in dated_close_values(history) if date_value >= start_date]
+
+    def preload_events(self, events: list[Dict[str, Any]], *, benchmark_symbol: str = "SPY") -> None:
+        symbol_dates: dict[str, list[datetime.date]] = {}
+        assert self.now is not None
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            symbol = str(event.get("symbol") or "").strip().upper()
+            ts = event.get("ts")
+            if not symbol or not isinstance(ts, int):
+                continue
+            event_date = event_market_date(ts)
+            if event_date >= self.now.date():
+                continue
+            symbol_dates.setdefault(symbol, []).append(event_date)
+        if symbol_dates:
+            earliest = min(min(dates) for dates in symbol_dates.values())
+            symbol_dates.setdefault(benchmark_symbol.upper(), []).append(earliest)
+        for symbol, dates in symbol_dates.items():
+            if symbol in self._symbol_cache:
+                self.diagnostics.history_cache_hits += 1
+                continue
+            self.diagnostics.history_cache_misses += 1
+            self._symbol_cache[symbol] = self._download_symbol_range(symbol, min(dates))
 
     def diagnostics_payload(self) -> dict[str, int]:
         payload = self.diagnostics.as_dict()
@@ -110,7 +154,13 @@ class OutcomeHistoryCache:
 
     def closes_for_event(self, symbol: str, ts: int) -> list[float]:
         event_date = event_market_date(ts)
-        key = (str(symbol).upper(), event_date.isoformat())
+        symbol_key = str(symbol).upper()
+        if self.now is not None and event_date >= self.now.date():
+            return []
+        if symbol_key in self._symbol_cache:
+            self.diagnostics.history_cache_hits += 1
+            return [close for date_value, close in self._symbol_cache[symbol_key] if date_value >= event_date]
+        key = (symbol_key, event_date.isoformat())
         if key in self._cache:
             self.diagnostics.history_cache_hits += 1
             return [close for _, close in self._cache[key]]
@@ -125,7 +175,7 @@ class OutcomeHistoryCache:
             return []
         try:
             history = self.download(
-                str(symbol).upper(),
+                symbol_key,
                 start=start_date.isoformat(),
                 end=safe_end_date.isoformat(),
                 interval="1d",
@@ -225,7 +275,10 @@ def paper_path_extremes(action: str | None, closes: list[float]) -> tuple[float 
     exposure = paper_exposure(action)
     if exposure == 0:
         return 0.0, 0.0
-    path_returns = [((float(price) - start_price) / start_price) * exposure for price in closes[1:]]
+    path_returns = [
+        0.0,
+        *[((float(price) - start_price) / start_price) * exposure for price in closes[1:]],
+    ]
     if not path_returns:
         return None, None
     return round(min(path_returns), 4), round(max(path_returns), 4)
@@ -404,7 +457,13 @@ def evaluate_decision_events(
                 closes = price_path_lookup(symbol, ts, max(PAPER_PNL_HORIZONS)) or []
             except Exception:  # noqa: BLE001
                 closes = []
-        row["max_drawdown"], row["max_favorable_excursion"] = paper_path_extremes(action, closes)
+        drawdown_to_date, favorable_to_date = paper_path_extremes(action, closes)
+        row["max_drawdown_to_date"] = drawdown_to_date
+        row["max_favorable_excursion_to_date"] = favorable_to_date
+        path_complete = len(closes) > max(PAPER_PNL_HORIZONS)
+        row["paper_path_complete_20d"] = path_complete
+        row["max_drawdown"] = drawdown_to_date if path_complete else None
+        row["max_favorable_excursion"] = favorable_to_date if path_complete else None
 
         benchmark_return = None
         if benchmark_return_lookup is not None:

@@ -3239,6 +3239,12 @@ def decision_outcomes():
     events_read = 0
     all_available_events_read = False
     scan_cap_reached = False
+    aggregate_events_available = None
+    try:
+        with open(output_path, "rb") as event_file:
+            aggregate_events_available = sum(1 for _ in event_file)
+    except OSError:
+        aggregate_events_available = None
     oldest_event_ts_scanned = None
     newest_event_ts_scanned = None
     rows: list[dict[str, Any]] = []
@@ -3279,6 +3285,12 @@ def decision_outcomes():
         def benchmark_return_lookup(ts: int, days: int) -> float | None:
             return future_return_lookup("SPY", ts, days)
 
+        use_history_preload = (
+            getattr(_future_return_for_outcomes, "__name__", "") == "_future_return_for_outcomes"
+            and getattr(_price_path_for_outcomes, "__name__", "") == "_price_path_for_outcomes"
+        )
+        if use_history_preload:
+            history_cache.preload_events(events)
         rows = evaluate_decision_events(
             events,
             future_return_lookup=future_return_lookup,
@@ -3296,7 +3308,7 @@ def decision_outcomes():
         # Keep widening until we either have enough 5D-evaluable rows or hit the cap.
         # Do not stop early just because 1D rows are available; that can hide older 5D rows.
         scan_cap_reached = read_limit >= read_cap
-        if include_skipped or len(evaluated_rows_5d) >= limit or scan_cap_reached or all_available_events_read:
+        if include_skipped or scan_cap_reached or all_available_events_read:
             break
         read_limit = min(read_limit * 2, read_cap)
     used_unevaluated_fallback = False
@@ -3321,6 +3333,11 @@ def decision_outcomes():
     )
     if not visible_pnl_rows:
         visible_pnl_rows = visible_rows
+    aggregate_complete = (
+        events_read >= aggregate_events_available
+        if aggregate_events_available is not None
+        else all_available_events_read
+    )
     summary_1d = summarize_outcome_rows(visible_rows_1d)
     summary_5d = summarize_outcome_rows([{**row, "return_1d": row.get("return_5d")} for row in visible_rows_5d])
 
@@ -3341,6 +3358,11 @@ def decision_outcomes():
                 "decision_source_filter": decision_source_filter or None,
                 "events_read": events_read,
                 "rows_scanned": len(rows),
+                "aggregate_complete": aggregate_complete,
+                "aggregate_events_available": aggregate_events_available,
+                "aggregate_events_scanned": events_read,
+                "aggregate_scan_cap_reached": scan_cap_reached,
+                "aggregate_oldest_event_ts": oldest_event_ts_scanned,
                 "evaluated_rows_available": len(evaluated_rows),
                 "evaluated_rows_1d_available": len(evaluated_rows_1d),
                 "evaluated_rows_5d_available": len(evaluated_rows_5d),

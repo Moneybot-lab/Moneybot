@@ -119,12 +119,14 @@ def test_evaluate_decision_events_tracks_live_paper_pnl_fields():
     assert rows[0]["return_10d"] == 0.08
     assert rows[0]["return_20d"] == 0.10
     assert rows[0]["paper_return_20d"] == 0.10
-    assert rows[0]["max_drawdown"] == -0.05
-    assert rows[0]["max_favorable_excursion"] == 0.10
+    assert rows[0]["max_drawdown_to_date"] == -0.05
+    assert rows[0]["max_favorable_excursion_to_date"] == 0.10
+    assert rows[0]["max_drawdown"] is None
+    assert rows[0]["max_favorable_excursion"] is None
     assert rows[0]["benchmark_relative_return_20d"] == 0.06
     assert rows[1]["paper_return_20d"] == 0.12
-    assert rows[1]["max_drawdown"] == -0.08
-    assert rows[1]["max_favorable_excursion"] == 0.12
+    assert rows[1]["max_drawdown_to_date"] == -0.08
+    assert rows[1]["max_favorable_excursion_to_date"] == 0.12
 
 
 def test_summarize_paper_pnl_by_action_groups_recommendations():
@@ -241,3 +243,59 @@ def test_history_cache_reuses_symbol_date_download_for_all_horizons_and_events()
     assert len(calls) == 1
     assert cache.diagnostics.history_cache_misses == 1
     assert cache.diagnostics.history_cache_hits == 2
+
+
+def test_paper_path_extremes_include_zero_baseline_for_long_and_inverse():
+    from moneybot.services.outcome_tracking import paper_path_extremes
+
+    long_drawdown, long_favorable = paper_path_extremes("BUY", [100, 95, 90])
+    short_drawdown, short_favorable = paper_path_extremes("SELL", [100, 105, 110])
+
+    assert long_drawdown <= 0
+    assert long_favorable == 0.0
+    assert short_drawdown <= 0
+    assert short_favorable == 0.0
+
+
+def test_symbol_level_preload_downloads_once_per_symbol_and_spy_once():
+    from datetime import datetime, timezone
+
+    from moneybot.services.outcome_tracking import OutcomeHistoryCache
+
+    calls = []
+
+    def fake_download(symbol, **kwargs):
+        calls.append(symbol)
+        return _history_frame([100 + idx for idx in range(30)], start="2026-04-01")
+
+    cache = OutcomeHistoryCache(
+        download=fake_download,
+        now=datetime(2026, 5, 15, tzinfo=timezone.utc),
+    )
+    events = [
+        {"symbol": "AAPL", "ts": int(datetime(2026, 4, day, tzinfo=timezone.utc).timestamp())}
+        for day in [1, 2, 3]
+    ]
+
+    cache.preload_events(events)
+    assert cache.future_return("AAPL", events[0]["ts"], 5) == 0.05
+    assert sorted(calls) == ["AAPL", "SPY"]
+
+
+def test_same_day_events_do_not_download_history():
+    from datetime import datetime, timezone
+
+    from moneybot.services.outcome_tracking import OutcomeHistoryCache
+
+    calls = []
+    now = datetime(2026, 6, 1, 12, tzinfo=timezone.utc)
+    ts = int(now.timestamp())
+    cache = OutcomeHistoryCache(
+        download=lambda symbol, **kwargs: calls.append(symbol) or _history_frame([100, 101]),
+        now=now,
+    )
+
+    cache.preload_events([{"symbol": "AAPL", "ts": ts}])
+    assert cache.future_return("AAPL", ts, 1) is None
+    assert calls == []
+    assert cache.diagnostics.insufficient_history_1d == 1

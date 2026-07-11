@@ -54,6 +54,7 @@ def main() -> None:
         if isinstance(event, dict) and isinstance(event.get("ts"), int)
     ]
     history_cache = OutcomeHistoryCache(download=yf.download)
+    history_cache.preload_events(events)
     rows = evaluate_decision_events(
         events,
         future_return_lookup=history_cache.future_return,
@@ -91,6 +92,11 @@ def main() -> None:
             "include_skipped": False,
             "events_read": len(events),
             "rows_scanned": len(rows),
+            "aggregate_complete": len(events) < max(1, args.limit),
+            "aggregate_events_available": None,
+            "aggregate_events_scanned": len(events),
+            "aggregate_scan_cap_reached": len(events) >= max(1, args.limit),
+            "aggregate_oldest_event_ts": min(event_ts_values) if event_ts_values else None,
             "evaluated_rows_available": len(evaluated_rows),
             "evaluated_rows_1d_available": len(evaluated_rows_1d),
             "evaluated_rows_5d_available": len(evaluated_rows_5d),
