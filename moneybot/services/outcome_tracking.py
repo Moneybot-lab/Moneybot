@@ -357,6 +357,21 @@ def rows_with_horizon_return(rows: list[Dict[str, Any]], horizon: str) -> list[D
     return [row for row in rows if _has_numeric_return(row, key)]
 
 
+def rows_with_horizon_accuracy_outcome(rows: list[Dict[str, Any]], horizon: str) -> list[Dict[str, Any]]:
+    """Return rows with a realized actionable correct/incorrect outcome for a horizon.
+
+    HOLD rows can have realized returns, but they are classified as neutral and do
+    not contribute to accuracy. Accuracy cards should prefer these actionable rows
+    so a recent block of HOLD decisions does not mask older BUY/SELL 5D outcomes.
+    """
+    outcome_key = f"outcome_{horizon}"
+    return [
+        row
+        for row in rows_with_horizon_return(rows, horizon)
+        if row.get(outcome_key) in {"correct", "incorrect"}
+    ]
+
+
 def rows_with_any_horizon_return(rows: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
     """Return rows that have at least one realized horizon return."""
     return [

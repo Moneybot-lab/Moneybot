@@ -62,6 +62,7 @@ from .services.outcome_tracking import (
     evaluate_decision_events,
     merge_recent_rows,
     rows_with_any_horizon_return,
+    rows_with_horizon_accuracy_outcome,
     rows_with_horizon_return,
     summarize_outcome_rows,
     summarize_paper_pnl_by_action,
@@ -3312,13 +3313,15 @@ def decision_outcomes():
             break
         read_limit = min(read_limit * 2, read_cap)
     used_unevaluated_fallback = False
+    actionable_rows_1d = rows_with_horizon_accuracy_outcome(rows, "1d")
+    actionable_rows_5d = rows_with_horizon_accuracy_outcome(rows, "5d")
     if include_skipped:
         visible_rows = rows[-limit:]
-        visible_rows_1d = rows_with_horizon_return(rows, "1d")[-limit:]
-        visible_rows_5d = rows_with_horizon_return(rows, "5d")[-limit:]
+        visible_rows_1d = (actionable_rows_1d or rows_with_horizon_return(rows, "1d"))[-limit:]
+        visible_rows_5d = (actionable_rows_5d or rows_with_horizon_return(rows, "5d"))[-limit:]
     else:
-        visible_rows_1d = evaluated_rows_1d[-limit:]
-        visible_rows_5d = evaluated_rows_5d[-limit:]
+        visible_rows_1d = (actionable_rows_1d or evaluated_rows_1d)[-limit:]
+        visible_rows_5d = (actionable_rows_5d or evaluated_rows_5d)[-limit:]
         visible_rows = merge_recent_rows(visible_rows_1d, visible_rows_5d, limit=limit)
     if not include_skipped and not visible_rows and rows:
         # If nothing is evaluable yet, return the most recent rows so the UI still shows

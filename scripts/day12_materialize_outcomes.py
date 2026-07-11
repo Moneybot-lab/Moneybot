@@ -19,6 +19,7 @@ from moneybot.services.outcome_tracking import (
     evaluate_decision_events,
     merge_recent_rows,
     rows_with_any_horizon_return,
+    rows_with_horizon_accuracy_outcome,
     rows_with_horizon_return,
     summarize_outcome_rows,
     summarize_paper_pnl_by_action,
@@ -64,8 +65,10 @@ def main() -> None:
     evaluated_rows_1d = rows_with_horizon_return(rows, "1d")
     evaluated_rows_5d = rows_with_horizon_return(rows, "5d")
     evaluated_rows = rows_with_any_horizon_return(rows)
-    visible_rows_1d = select_visible_rows(rows, evaluated_rows_1d, args.rows_limit) if evaluated_rows_1d else []
-    visible_rows_5d = select_visible_rows(rows, evaluated_rows_5d, args.rows_limit) if evaluated_rows_5d else []
+    actionable_rows_1d = rows_with_horizon_accuracy_outcome(rows, "1d")
+    actionable_rows_5d = rows_with_horizon_accuracy_outcome(rows, "5d")
+    visible_rows_1d = select_visible_rows(rows, actionable_rows_1d or evaluated_rows_1d, args.rows_limit) if evaluated_rows_1d else []
+    visible_rows_5d = select_visible_rows(rows, actionable_rows_5d or evaluated_rows_5d, args.rows_limit) if evaluated_rows_5d else []
     visible_rows = merge_recent_rows(visible_rows_1d, visible_rows_5d, limit=args.rows_limit)
     if not visible_rows and rows:
         visible_rows = select_visible_rows(rows, [], args.rows_limit)

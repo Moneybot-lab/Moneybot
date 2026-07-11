@@ -969,6 +969,47 @@ def test_decision_outcomes_visible_pnl_uses_union_of_1d_and_5d_tables(tmp_path, 
     assert visible["SELL"]["rows"] == 1
 
 
+def test_decision_outcomes_5d_visible_summary_prefers_actionable_rows_over_recent_holds(tmp_path, monkeypatch):
+    events_path = tmp_path / "decision_events.jsonl"
+    old_buy = {
+        "ts": 1700000000,
+        "endpoint": "quick_ask",
+        "symbol": "BUY5D",
+        "decision_source": "deterministic_model",
+        "payload": {"recommendation": "BUY"},
+    }
+    recent_holds = [
+        {
+            "ts": 1701000000 + idx,
+            "endpoint": "quick_ask",
+            "symbol": f"HOLD5D{idx}",
+            "decision_source": "deterministic_model",
+            "payload": {"recommendation": "HOLD"},
+        }
+        for idx in range(40)
+    ]
+    events_path.write_text("\n".join(json.dumps(event) for event in [old_buy, *recent_holds]) + "\n", encoding="utf-8")
+    monkeypatch.setenv("DECISION_LOG_PATH", str(events_path))
+    client = _client()
+
+    def fake_lookup(symbol, ts, days):
+        if days in {1, 5}:
+            return 0.05
+        return None
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", fake_lookup)
+    monkeypatch.setattr(api_module, "_price_path_for_outcomes", lambda *args, **kwargs: [])
+
+    res = client.get("/api/decision-outcomes?limit=20&force_live=true")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["evaluated_rows_5d_available"] == 41
+    assert data["summary_5d"]["evaluated_rows"] == 1
+    assert data["summary_5d"]["accuracy"] == 1.0
+    assert [row["symbol"] for row in data["rows_5d"]] == ["BUY5D"]
+
+
 def test_decision_outcomes_aggregate_scan_reaches_older_buy_after_recent_5d_hold_rows(tmp_path, monkeypatch):
     events_path = tmp_path / "decision_events.jsonl"
     old_buy_events = [
