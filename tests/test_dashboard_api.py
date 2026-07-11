@@ -173,6 +173,55 @@ def test_quick_ask_returns_shopping_friendly_recommendation_scale():
     assert data["quote_diagnostics"]["provider"] == "finnhub"
 
 
+
+def test_quick_ask_does_not_show_internal_feature_names_in_rationale():
+    client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = None
+    from moneybot.services.deterministic_advisor import DeterministicQuickAdvisor
+
+    advisor = DeterministicQuickAdvisor(enabled=True, artifact_path="/tmp/missing-moneybot-artifact.json")
+    advisor.artifact.feature_columns = [
+        "feature_change_percent",
+        "feature_endpoint_hot_momentum_buys",
+        "feature_endpoint_quick_ask",
+        "feature_endpoint_user_watchlist",
+        "feature_macd_histogram",
+        "feature_price",
+        "feature_probability_up",
+        "feature_rec_buy",
+        "feature_rec_hold",
+        "feature_rec_hold_off_for_now",
+        "feature_rec_negative",
+        "feature_rec_positive",
+        "feature_rec_sell",
+        "feature_rec_strong_buy",
+        "feature_return_1d",
+        "feature_return_5d",
+        "feature_rsi",
+        "feature_source_ai_enhanced",
+        "feature_source_deterministic_model",
+        "feature_source_rule_based",
+        "feature_volume_ratio",
+    ]
+    feature_count = len(advisor.artifact.feature_columns)
+    advisor.artifact.means = [0.0] * feature_count
+    advisor.artifact.stds = [1.0] * feature_count
+    advisor.artifact.weights = [0.0] * feature_count
+    client.application.extensions["deterministic_quick_advisor"] = advisor
+    client.application.extensions["ai_advisor_service"] = None
+
+    res = client.get("/api/quick-ask?symbol=AAPL")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    visible_text = " ".join(str(data.get(key) or "") for key in ("rationale", "advice_reason"))
+    if isinstance(data.get("ai"), dict):
+        visible_text += " " + str(data["ai"].get("narrative") or "")
+    for feature_name in advisor.artifact.feature_columns:
+        assert feature_name not in visible_text
+    assert "safe defaults" in data["rationale"]
+
+
 def test_quick_ask_normalizes_symbol_from_url_like_input():
     client = _client()
     res = client.get('/api/quick-ask?symbol=%2Fapi%2Fquote%3Fsymbol%3DTSLA')
