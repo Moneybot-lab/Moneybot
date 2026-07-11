@@ -1,6 +1,13 @@
 import pandas as pd
 
-from moneybot.services.outcome_tracking import classify_outcome, close_values, evaluate_decision_events, normalize_action, summarize_outcome_rows
+from moneybot.services.outcome_tracking import (
+    classify_outcome,
+    close_values,
+    evaluate_decision_events,
+    normalize_action,
+    select_recent_unique_rows,
+    summarize_outcome_rows,
+)
 
 
 def test_normalize_action_reads_recommendation_and_advice():
@@ -127,6 +134,39 @@ def test_evaluate_decision_events_tracks_live_paper_pnl_fields():
     assert rows[1]["paper_return_20d"] == 0.12
     assert rows[1]["max_drawdown_to_date"] == -0.08
     assert rows[1]["max_favorable_excursion_to_date"] == 0.12
+
+
+
+def test_select_recent_unique_rows_collapses_same_day_duplicate_visible_decisions():
+    rows = [
+        {
+            "ts": 1700000000 + idx,
+            "symbol": "NVDA",
+            "endpoint": "quick_ask",
+            "decision_source": "rule_based",
+            "action": "HOLD OFF FOR NOW",
+            "model_version": None,
+            "return_5d": 0.0263,
+            "outcome_5d": "incorrect",
+        }
+        for idx in range(5)
+    ]
+    rows.append(
+        {
+            "ts": 1700086400,
+            "symbol": "TSLA",
+            "endpoint": "quick_ask",
+            "decision_source": "rule_based",
+            "action": "SELL",
+            "model_version": None,
+            "return_5d": -0.04,
+            "outcome_5d": "correct",
+        }
+    )
+
+    selected = select_recent_unique_rows(rows, limit=20, horizon="5d")
+
+    assert [row["symbol"] for row in selected] == ["NVDA", "TSLA"]
 
 
 def test_summarize_paper_pnl_by_action_groups_recommendations():

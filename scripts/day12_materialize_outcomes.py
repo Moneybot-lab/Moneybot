@@ -21,15 +21,16 @@ from moneybot.services.outcome_tracking import (
     rows_with_any_horizon_return,
     rows_with_horizon_accuracy_outcome,
     rows_with_horizon_return,
+    select_recent_unique_rows,
     summarize_outcome_rows,
     summarize_paper_pnl_by_action,
 )
 from moneybot.services.runtime_paths import resolve_runtime_dir
 
 
-def select_visible_rows(rows: list[dict], evaluated_rows: list[dict], rows_limit: int) -> list[dict]:
-    limit = max(1, int(rows_limit))
-    return evaluated_rows[-limit:] if evaluated_rows else rows[-limit:]
+def select_visible_rows(rows: list[dict], evaluated_rows: list[dict], rows_limit: int, *, horizon: str | None = None) -> list[dict]:
+    source_rows = evaluated_rows if evaluated_rows else rows
+    return select_recent_unique_rows(source_rows, limit=rows_limit, horizon=horizon)
 
 
 def summarize_horizon(rows: list[dict], horizon: str) -> dict:
@@ -67,8 +68,8 @@ def main() -> None:
     evaluated_rows = rows_with_any_horizon_return(rows)
     actionable_rows_1d = rows_with_horizon_accuracy_outcome(rows, "1d")
     actionable_rows_5d = rows_with_horizon_accuracy_outcome(rows, "5d")
-    visible_rows_1d = select_visible_rows(rows, actionable_rows_1d or evaluated_rows_1d, args.rows_limit) if evaluated_rows_1d else []
-    visible_rows_5d = select_visible_rows(rows, actionable_rows_5d or evaluated_rows_5d, args.rows_limit) if evaluated_rows_5d else []
+    visible_rows_1d = select_visible_rows(rows, actionable_rows_1d or evaluated_rows_1d, args.rows_limit, horizon="1d") if evaluated_rows_1d else []
+    visible_rows_5d = select_visible_rows(rows, actionable_rows_5d or evaluated_rows_5d, args.rows_limit, horizon="5d") if evaluated_rows_5d else []
     visible_rows = merge_recent_rows(visible_rows_1d, visible_rows_5d, limit=args.rows_limit)
     if not visible_rows and rows:
         visible_rows = select_visible_rows(rows, [], args.rows_limit)

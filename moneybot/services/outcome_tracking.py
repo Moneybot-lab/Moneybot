@@ -381,6 +381,45 @@ def rows_with_any_horizon_return(rows: list[Dict[str, Any]]) -> list[Dict[str, A
     ]
 
 
+def _visible_row_identity(row: Dict[str, Any], horizon: str | None) -> tuple[Any, ...]:
+    ts = normalize_unix_ts(row.get("ts"))
+    market_date = event_market_date(ts).isoformat() if ts is not None else None
+    return_key = f"return_{horizon}" if horizon else None
+    outcome_key = f"outcome_{horizon}" if horizon else None
+    return (
+        market_date,
+        row.get("symbol"),
+        row.get("endpoint"),
+        row.get("decision_source"),
+        row.get("action"),
+        row.get("model_version"),
+        row.get(return_key) if return_key else tuple(row.get(f"return_{days}d") for days in PAPER_PNL_HORIZONS),
+        row.get(outcome_key) if outcome_key else None,
+    )
+
+
+def select_recent_unique_rows(rows: list[Dict[str, Any]], *, limit: int, horizon: str | None = None) -> list[Dict[str, Any]]:
+    """Return recent rows without repeating identical same-day visible decisions.
+
+    Decision logs can contain many repeated same-symbol checks during a day. The
+    visible UI tables should not spend all rows on identical symbol/action/return
+    entries, while aggregate P&L continues to use every logged decision.
+    """
+    max_rows = max(1, int(limit))
+    selected: list[Dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for row in reversed(rows):
+        key = _visible_row_identity(row, horizon)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(row)
+        if len(selected) >= max_rows:
+            break
+    selected.reverse()
+    return selected
+
+
 def merge_recent_rows(*row_groups: list[Dict[str, Any]], limit: int) -> list[Dict[str, Any]]:
     """Merge row groups without duplicates while preserving chronological order."""
     max_rows = max(1, int(limit))
