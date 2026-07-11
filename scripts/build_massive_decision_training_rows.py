@@ -13,6 +13,20 @@ from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import normalize_action, normalize_unix_ts
 
 SCHEMA_VERSION = "massive-decision-training-rows.v1"
+SECTOR_BENCHMARK_SYMBOLS = {
+    "communication services": "XLC",
+    "consumer discretionary": "XLY",
+    "consumer staples": "XLP",
+    "energy": "XLE",
+    "financials": "XLF",
+    "health care": "XLV",
+    "healthcare": "XLV",
+    "industrials": "XLI",
+    "materials": "XLB",
+    "real estate": "XLRE",
+    "technology": "XLK",
+    "utilities": "XLU",
+}
 
 
 def _iter_text(path: Path):
@@ -125,6 +139,7 @@ def _market_load_window(events: list[dict[str, Any]], *, horizon_days: int, hist
             event_days.append(datetime.fromtimestamp(ts, tz=timezone.utc).date())
     if event_days:
         symbols.add("SPY")
+        symbols.update(SECTOR_BENCHMARK_SYMBOLS.values())
     if not event_days:
         return symbols, None, None
     start = min(event_days) - timedelta(days=max(0, history_lag_days))
@@ -287,6 +302,29 @@ def _beta_to_benchmark(
     return round(covariance / benchmark_variance, 6)
 
 
+
+def _sector_benchmark_symbol(event: dict[str, Any], payload: dict[str, Any], snapshot: dict[str, Any]) -> str:
+    for source in (snapshot, payload, event):
+        for key in ("sector_etf", "sector_benchmark", "sector_benchmark_symbol"):
+            value = str(source.get(key) or "").strip().upper()
+            if value:
+                return value
+        sector = str(source.get("sector") or "").strip().lower()
+        if sector in SECTOR_BENCHMARK_SYMBOLS:
+            return SECTOR_BENCHMARK_SYMBOLS[sector]
+    return "SPY"
+
+
+def _market_regime_risk_on(spy_history: list[dict[str, Any]] | None, spy_idx: int | None) -> int | None:
+    if spy_history is None or spy_idx is None:
+        return None
+    spy_return_5d = _lagged_return(spy_history, spy_idx, 5)
+    spy_close = _coerce_float(spy_history[spy_idx].get("close"))
+    spy_sma_20 = _rolling_close_mean(spy_history, spy_idx, 20)
+    if spy_return_5d is None or spy_close is None or spy_sma_20 is None:
+        return None
+    return int(spy_return_5d > 0.0 and spy_close >= spy_sma_20)
+
 def _rolling_vwap(rows: list[dict[str, Any]], idx: int, window: int = 20) -> float | None:
     if idx + 1 < window:
         return None
@@ -354,8 +392,8 @@ def _rolling_extreme(rows: list[dict[str, Any]], idx: int, window: int, column: 
     return round(max(values) if high else min(values), 6)
 
 
-def _return_volatility(rows: list[dict[str, Any]], idx: int, window: int) -> float | None:
-    if idx < window:
+def _return_volatility(rows: list[dict[str, Any]] | None, idx: int | None, window: int) -> float | None:
+    if rows is None or idx is None or idx < window:
         return None
     returns: list[float] = []
     for pos in range(idx - window + 1, idx + 1):
@@ -445,6 +483,10 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         return_5d_lagged = _pct(close, prev5.get("close"))
         return_20d_lagged = _pct(close, prev20.get("close"))
         spy_return_5d = _lagged_return(spy_history, spy_idx, 5)
+        sector_benchmark_symbol = _sector_benchmark_symbol(event, payload, snapshot)
+        sector_history = market.get(sector_benchmark_symbol)
+        sector_idx = _row_before_or_on(sector_history, event_day) if sector_history else None
+        sector_return_5d = _lagged_return(sector_history, sector_idx, 5)
         row = {
             "ts": ts,
             "event_date": event_day,
@@ -486,6 +528,13 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
                 else None
             ),
             "feature_symbol_beta_20d": _beta_to_benchmark(history, spy_history, idx, spy_idx, 20),
+            "feature_sector_relative_return_5d": (
+                round(return_5d_lagged - sector_return_5d, 6)
+                if return_5d_lagged is not None and sector_return_5d is not None
+                else None
+            ),
+            "feature_market_regime_risk_on": _market_regime_risk_on(spy_history, spy_idx),
+            "feature_market_volatility_proxy": _return_volatility(spy_history, spy_idx, 20),
             "feature_return_1d_lagged": _pct(close, prev1.get("close")),
             "feature_return_5d_lagged": return_5d_lagged,
             "feature_return_10d_lagged": _pct(close, prev10.get("close")),

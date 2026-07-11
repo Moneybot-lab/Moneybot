@@ -57,8 +57,20 @@ def test_build_training_rows_adds_phase_1_technical_features(tmp_path):
             }
             for idx in range(1, 61)
         ],
+        "XLK": [
+            {
+                "symbol": "XLK",
+                "date": (date(2026, 1, 1) + timedelta(days=idx - 1)).isoformat(),
+                "open": float(299 + (idx * 0.75)),
+                "high": float(301 + (idx * 0.75)),
+                "low": float(298 + (idx * 0.75)),
+                "close": float(300 + (idx * 0.75)),
+                "volume": float(3000 + idx),
+            }
+            for idx in range(1, 61)
+        ],
     }
-    events = [{"ts": _ts("2026-02-25"), "symbol": "AAPL", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}}]
+    events = [{"ts": _ts("2026-02-25"), "symbol": "AAPL", "endpoint": "quick_ask", "payload": {"recommendation": "BUY", "sector_etf": "XLK"}}]
 
     rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=3)
 
@@ -90,6 +102,10 @@ def test_build_training_rows_adds_phase_1_technical_features(tmp_path):
     assert row["feature_spy_return_5d"] == expected_spy_return_5d
     assert row["feature_symbol_minus_spy_5d"] == round(row["feature_return_5d_lagged"] - expected_spy_return_5d, 6)
     assert row["feature_symbol_beta_20d"] is not None
+    expected_sector_return_5d = round(342.0 / 338.25 - 1, 6)
+    assert row["feature_sector_relative_return_5d"] == round(row["feature_return_5d_lagged"] - expected_sector_return_5d, 6)
+    assert row["feature_market_regime_risk_on"] == 1
+    assert row["feature_market_volatility_proxy"] is not None
     assert row["feature_return_10d_lagged"] == round(156 / 146 - 1, 6)
     assert row["feature_return_20d_lagged"] == round(156 / 136 - 1, 6)
     assert row["feature_momentum_5d_vs_20d"] == round(
