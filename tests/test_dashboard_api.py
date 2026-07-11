@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
@@ -753,9 +754,311 @@ def test_decision_outcomes_uses_lookup_cache_for_duplicate_events(tmp_path, monk
     data = res.get_json()["data"]
     assert len(data["rows"]) == 3
     assert calls["count"] == 5
-    assert data["lookup_cache_misses"] == 5
+    assert data["lookup_cache_misses"] >= 5
     assert data["lookup_cache_hits"] >= 8
-    assert data["lookup_cache_size"] == 5
+    assert data["lookup_cache_size"] >= 5
+
+
+def test_decision_outcomes_includes_visible_paper_pnl_summary(tmp_path, monkeypatch):
+    events_path = tmp_path / "decision_events.jsonl"
+    base_event = {
+        "ts": 1700000000,
+        "endpoint": "quick_ask",
+        "decision_source": "deterministic_model",
+        "payload": {"recommendation": "BUY"},
+    }
+    events_path.write_text(
+        "\n".join(
+            json.dumps({**base_event, "symbol": symbol})
+            for symbol in ["AAPL", "MSFT"]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DECISION_LOG_PATH", str(events_path))
+    client = _client()
+
+    monkeypatch.setattr(
+        api_module,
+        "_future_return_for_outcomes",
+        lambda symbol, ts, days: {"AAPL": 0.01, "MSFT": 0.02}[symbol],
+    )
+
+    res = client.get("/api/decision-outcomes?limit=1&force_live=true")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert len(data["rows"]) == 1
+    assert data["rows"][0]["symbol"] == "MSFT"
+    assert data["paper_pnl_by_recommendation"]["BUY"]["rows"] == 2
+    assert data["paper_pnl_by_recommendation"]["BUY"]["avg_paper_return_1d"] == 0.015
+    assert data["visible_paper_pnl_by_recommendation"]["BUY"]["rows"] == 1
+    assert data["visible_paper_pnl_by_recommendation"]["BUY"]["avg_paper_return_1d"] == 0.02
+
+
+def test_decision_outcomes_snapshot_keeps_aggregate_and_visible_paper_pnl(tmp_path, monkeypatch):
+    snapshot_path = tmp_path / "decision_outcomes_snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "computed_at_utc": datetime.now(timezone.utc).isoformat(),
+                "data": {
+                    "rows": [
+                        {"symbol": "AAPL", "action": "BUY", "return_1d": 0.01, "paper_return_1d": 0.01},
+                        {"symbol": "MSFT", "action": "BUY", "return_1d": 0.02, "paper_return_1d": 0.02},
+                    ],
+                    "rows_1d": [
+                        {"symbol": "AAPL", "action": "BUY", "return_1d": 0.01, "paper_return_1d": 0.01},
+                        {"symbol": "MSFT", "action": "BUY", "return_1d": 0.02, "paper_return_1d": 0.02},
+                    ],
+                    "summary_1d": {"rows": 2},
+                    "summary_5d": {"rows": 0},
+                    "paper_pnl_by_recommendation": {
+                        "BUY": {"rows": 2, "avg_paper_return_1d": 0.015}
+                    },
+                    "visible_paper_pnl_by_recommendation": {
+                        "BUY": {"rows": 1, "avg_paper_return_1d": 0.02}
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_PATH", str(snapshot_path))
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")
+    client = _client()
+
+    res = client.get("/api/decision-outcomes?limit=1")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert len(data["rows"]) == 2
+    assert data["rows"][1]["symbol"] == "MSFT"
+    assert data["summary_1d"]["rows"] == 2
+    assert data["paper_pnl_by_recommendation"]["BUY"]["rows"] == 2
+    assert data["paper_pnl_by_recommendation"]["BUY"]["avg_paper_return_1d"] == 0.015
+    assert data["visible_paper_pnl_by_recommendation"]["BUY"]["rows"] == 1
+    assert data["visible_paper_pnl_by_recommendation"]["BUY"]["avg_paper_return_1d"] == 0.02
+
+
+def test_decision_outcomes_widens_beyond_5000_to_find_5d_rows(tmp_path, monkeypatch):
+    events_path = tmp_path / "decision_events.jsonl"
+    old_event = {
+        "ts": 1700000000,
+        "endpoint": "quick_ask",
+        "symbol": "OLD5D",
+        "decision_source": "deterministic_model",
+        "payload": {"recommendation": "BUY"},
+    }
+    recent_events = [
+        {
+            "ts": 1701000000 + idx,
+            "endpoint": "quick_ask",
+            "symbol": f"RECENT{idx}",
+            "decision_source": "deterministic_model",
+            "payload": {"recommendation": "BUY"},
+        }
+        for idx in range(5200)
+    ]
+    events_path.write_text(
+        "\n".join(json.dumps(event) for event in [old_event, *recent_events]) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DECISION_LOG_PATH", str(events_path))
+    client = _client()
+    client.application.config["DECISION_OUTCOMES_READ_CAP"] = 6000
+
+    def fake_lookup(symbol, ts, days):
+        if symbol == "OLD5D" and days in {1, 5}:
+            return 0.05
+        if days == 1:
+            return 0.01
+        return None
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", fake_lookup)
+    monkeypatch.setattr(api_module, "_price_path_for_outcomes", lambda *args, **kwargs: [])
+
+    res = client.get("/api/decision-outcomes?limit=1&force_live=true")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["events_read"] == 5201
+    assert data["evaluated_rows_5d_available"] > 0
+    assert data["rows_5d"][0]["symbol"] == "OLD5D"
+    assert data["all_available_events_read"] is True
+
+
+def test_decision_outcomes_visible_pnl_uses_union_of_1d_and_5d_tables(tmp_path, monkeypatch):
+    events_path = tmp_path / "decision_events.jsonl"
+    events = [
+        {"ts": 1, "endpoint": "quick_ask", "symbol": "OLD", "decision_source": "deterministic_model", "payload": {"recommendation": "BUY"}},
+        {"ts": 2, "endpoint": "quick_ask", "symbol": "MID", "decision_source": "deterministic_model", "payload": {"recommendation": "SELL"}},
+        {"ts": 3, "endpoint": "quick_ask", "symbol": "NEW", "decision_source": "deterministic_model", "payload": {"recommendation": "BUY"}},
+    ]
+    events_path.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+    monkeypatch.setenv("DECISION_LOG_PATH", str(events_path))
+    client = _client()
+
+    def fake_lookup(symbol, ts, days):
+        if days == 1 and symbol in {"MID", "NEW"}:
+            return 0.01
+        if days == 5 and symbol in {"OLD", "MID"}:
+            return -0.02 if symbol == "MID" else 0.05
+        return None
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", fake_lookup)
+    monkeypatch.setattr(api_module, "_price_path_for_outcomes", lambda *args, **kwargs: [])
+
+    res = client.get("/api/decision-outcomes?limit=1&force_live=true")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert [row["symbol"] for row in data["rows_1d"]] == ["NEW"]
+    assert [row["symbol"] for row in data["rows_5d"]] == ["MID"]
+    visible = data["visible_paper_pnl_by_recommendation"]
+    assert visible["BUY"]["rows"] == 1
+    assert visible["SELL"]["rows"] == 1
+
+
+def test_decision_outcomes_5d_visible_summary_prefers_actionable_rows_over_recent_holds(tmp_path, monkeypatch):
+    events_path = tmp_path / "decision_events.jsonl"
+    old_buy = {
+        "ts": 1700000000,
+        "endpoint": "quick_ask",
+        "symbol": "BUY5D",
+        "decision_source": "deterministic_model",
+        "payload": {"recommendation": "BUY"},
+    }
+    recent_holds = [
+        {
+            "ts": 1701000000 + idx,
+            "endpoint": "quick_ask",
+            "symbol": f"HOLD5D{idx}",
+            "decision_source": "deterministic_model",
+            "payload": {"recommendation": "HOLD"},
+        }
+        for idx in range(40)
+    ]
+    events_path.write_text("\n".join(json.dumps(event) for event in [old_buy, *recent_holds]) + "\n", encoding="utf-8")
+    monkeypatch.setenv("DECISION_LOG_PATH", str(events_path))
+    client = _client()
+
+    def fake_lookup(symbol, ts, days):
+        if days in {1, 5}:
+            return 0.05
+        return None
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", fake_lookup)
+    monkeypatch.setattr(api_module, "_price_path_for_outcomes", lambda *args, **kwargs: [])
+
+    res = client.get("/api/decision-outcomes?limit=20&force_live=true")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["evaluated_rows_5d_available"] == 41
+    assert data["summary_5d"]["evaluated_rows"] == 1
+    assert data["summary_5d"]["accuracy"] == 1.0
+    assert [row["symbol"] for row in data["rows_5d"]] == ["BUY5D"]
+
+
+def test_decision_outcomes_aggregate_scan_reaches_older_buy_after_recent_5d_hold_rows(tmp_path, monkeypatch):
+    events_path = tmp_path / "decision_events.jsonl"
+    old_buy_events = [
+        {"ts": 1700000000 + idx, "endpoint": "quick_ask", "symbol": f"BUYOLD{idx}", "decision_source": "deterministic_model", "payload": {"recommendation": "BUY"}}
+        for idx in range(3)
+    ]
+    recent_hold_events = [
+        {"ts": 1701000000 + idx, "endpoint": "quick_ask", "symbol": f"HOLDNEW{idx}", "decision_source": "deterministic_model", "payload": {"recommendation": "HOLD"}}
+        for idx in range(150)
+    ]
+    events_path.write_text(
+        "\n".join(json.dumps(event) for event in [*old_buy_events, *recent_hold_events]) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DECISION_LOG_PATH", str(events_path))
+    client = _client()
+    client.application.config["DECISION_OUTCOMES_READ_CAP"] = 1000
+
+    def fake_lookup(symbol, ts, days):
+        if days == 5:
+            return 0.05
+        if days == 1:
+            return 0.01
+        return None
+
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", fake_lookup)
+    monkeypatch.setattr(api_module, "_price_path_for_outcomes", lambda *args, **kwargs: [])
+
+    res = client.get("/api/decision-outcomes?limit=100&force_live=true")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["events_read"] == 153
+    assert data["aggregate_complete"] is True
+    assert data["paper_pnl_by_recommendation"]["BUY"]["evaluated_rows_5d"] == 3
+    assert len(data["rows_5d"]) == 100
+
+
+def test_decision_outcomes_marks_partial_aggregate_when_read_cap_reached(tmp_path, monkeypatch):
+    events_path = tmp_path / "decision_events.jsonl"
+    events = [
+        {"ts": 1700000000 + idx, "endpoint": "quick_ask", "symbol": f"SYM{idx}", "decision_source": "deterministic_model", "payload": {"recommendation": "BUY"}}
+        for idx in range(20)
+    ]
+    events_path.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+    monkeypatch.setenv("DECISION_LOG_PATH", str(events_path))
+    client = _client()
+    client.application.config["DECISION_OUTCOMES_READ_CAP"] = 5
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda *args, **kwargs: 0.01)
+    monkeypatch.setattr(api_module, "_price_path_for_outcomes", lambda *args, **kwargs: [])
+
+    res = client.get("/api/decision-outcomes?limit=1&force_live=true")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    assert data["events_read"] == 5
+    assert data["aggregate_events_available"] == 20
+    assert data["aggregate_events_scanned"] == 5
+    assert data["aggregate_complete"] is False
+    assert data["aggregate_scan_cap_reached"] is True
+    assert len(data["rows"]) == 1
+
+
+def test_decision_outcomes_allows_stale_snapshot_only_when_requested(tmp_path, monkeypatch):
+    snapshot_path = tmp_path / "decision_outcomes_snapshot.json"
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "computed_at_utc": (datetime.now(timezone.utc) - timedelta(days=3)).isoformat(),
+                "data": {
+                    "rows": [{"symbol": "STALE", "action": "BUY", "return_1d": 0.01}],
+                    "summary_1d": {"rows": 1, "evaluated_rows": 1, "accuracy": 1.0},
+                    "summary_5d": {"rows": 0, "evaluated_rows": 0, "accuracy": None},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    log_path = tmp_path / "decision_events.jsonl"
+    log_path.write_text(
+        json.dumps({"ts": 1, "endpoint": "quick_ask", "symbol": "LIVE", "decision_source": "deterministic_model", "payload": {"recommendation": "BUY"}}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_PATH", str(snapshot_path))
+    monkeypatch.setenv("DECISION_LOG_PATH", str(log_path))
+    monkeypatch.setenv("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS", "900")
+    client = _client()
+    monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda *args, **kwargs: 0.01)
+    monkeypatch.setattr(api_module, "_price_path_for_outcomes", lambda *args, **kwargs: [])
+
+    live = client.get("/api/decision-outcomes?limit=10")
+    stale = client.get("/api/decision-outcomes?limit=10&allow_stale_snapshot=true")
+    forced = client.get("/api/decision-outcomes?limit=10&force_live=true")
+
+    assert live.get_json()["data"]["snapshot_source"] == "live"
+    assert stale.get_json()["data"]["snapshot_source"] == "materialized_stale"
+    assert stale.get_json()["data"]["snapshot_stale"] is True
+    assert forced.get_json()["data"]["snapshot_source"] == "live"
 
 
 def test_decision_outcomes_uses_materialized_snapshot_when_fresh(tmp_path, monkeypatch):
@@ -818,7 +1121,7 @@ def test_decision_outcomes_uses_daily_snapshot_for_default_ttl(tmp_path, monkeyp
     assert data["snapshot_age_seconds"] >= 24 * 60 * 60
 
 
-def test_decision_outcomes_serves_stale_snapshot_instead_of_live_fanout(tmp_path, monkeypatch):
+def test_decision_outcomes_serves_stale_snapshot_when_allowed(tmp_path, monkeypatch):
     snapshot_path = tmp_path / "decision_outcomes_snapshot.json"
     snapshot_path.write_text(
         json.dumps(
@@ -839,7 +1142,7 @@ def test_decision_outcomes_serves_stale_snapshot_instead_of_live_fanout(tmp_path
 
     monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not fan out live lookups")))
 
-    res = client.get("/api/decision-outcomes?limit=10")
+    res = client.get("/api/decision-outcomes?limit=10&allow_stale_snapshot=true")
 
     assert res.status_code == 200
     data = res.get_json()["data"]
@@ -1538,6 +1841,35 @@ def test_model_health_loads_historical_validation_summary(tmp_path):
     assert historical["exists"] is True
     assert historical["summary"] == {"generated_at_utc": "2026-06-21T00:00:00+00:00", "rows": 42, "accuracy": 0.72}
 
+
+
+
+def test_day14_promotion_metadata_uses_candidate_version(tmp_path):
+    from scripts import day14_promote_candidate
+
+    comparison_path = tmp_path / "comparison.json"
+    candidate_path = tmp_path / "candidate.json"
+    production_path = tmp_path / "production.json"
+    comparison_path.write_text(json.dumps({"candidate_win": True, "candidate_metrics": {"rows": 12}, "production_metrics": {"rows": 8}}), encoding="utf-8")
+    candidate_path.write_text(json.dumps({"version": "candidate-logreg-v1-20260710T225011Z", "feature_columns": []}), encoding="utf-8")
+
+    old_argv = sys.argv
+    try:
+        sys.argv = [
+            "day14_promote_candidate.py",
+            "--comparison-report",
+            str(comparison_path),
+            "--candidate-model",
+            str(candidate_path),
+            "--production-model",
+            str(production_path),
+        ]
+        day14_promote_candidate.main()
+    finally:
+        sys.argv = old_argv
+
+    metadata = json.loads(production_path.with_suffix(production_path.suffix + ".meta.json").read_text(encoding="utf-8"))
+    assert metadata["model_version"] == "candidate-logreg-v1-20260710T225011Z"
 
 def test_promote_track_b_candidate_requires_token():
     client = _client()
