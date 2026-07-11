@@ -44,7 +44,19 @@ def test_build_training_rows_adds_phase_1_technical_features(tmp_path):
                 "volume": float(1000 + idx),
             }
             for idx in range(1, 61)
-        ]
+        ],
+        "SPY": [
+            {
+                "symbol": "SPY",
+                "date": (date(2026, 1, 1) + timedelta(days=idx - 1)).isoformat(),
+                "open": float(199 + (idx * 0.5)),
+                "high": float(201 + (idx * 0.5)),
+                "low": float(198 + (idx * 0.5)),
+                "close": float(200 + (idx * 0.5)),
+                "volume": float(2000 + idx),
+            }
+            for idx in range(1, 61)
+        ],
     }
     events = [{"ts": _ts("2026-02-25"), "symbol": "AAPL", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}}]
 
@@ -73,6 +85,11 @@ def test_build_training_rows_adds_phase_1_technical_features(tmp_path):
     assert row["feature_macd_signal"] is not None
     assert row["feature_macd_hist"] is not None
     assert row["feature_atr_14"] == 3.0
+    expected_spy_return_5d = round(228.0 / 225.5 - 1, 6)
+    assert row["feature_spy_return_1d"] == round(228.0 / 227.5 - 1, 6)
+    assert row["feature_spy_return_5d"] == expected_spy_return_5d
+    assert row["feature_symbol_minus_spy_5d"] == round(row["feature_return_5d_lagged"] - expected_spy_return_5d, 6)
+    assert row["feature_symbol_beta_20d"] is not None
     assert row["feature_return_10d_lagged"] == round(156 / 146 - 1, 6)
     assert row["feature_return_20d_lagged"] == round(156 / 136 - 1, 6)
     assert row["feature_momentum_5d_vs_20d"] == round(

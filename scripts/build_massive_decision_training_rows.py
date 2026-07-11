@@ -123,6 +123,8 @@ def _market_load_window(events: list[dict[str, Any]], *, horizon_days: int, hist
         ts = normalize_unix_ts(event.get("ts"))
         if ts is not None:
             event_days.append(datetime.fromtimestamp(ts, tz=timezone.utc).date())
+    if event_days:
+        symbols.add("SPY")
     if not event_days:
         return symbols, None, None
     start = min(event_days) - timedelta(days=max(0, history_lag_days))
@@ -238,6 +240,51 @@ def _atr_at(rows: list[dict[str, Any]], idx: int, window: int = 14) -> float | N
         true_ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
     atr = _mean(true_ranges)
     return round(atr, 6) if atr is not None else None
+
+
+def _lagged_return(rows: list[dict[str, Any]] | None, idx: int | None, days: int) -> float | None:
+    if rows is None or idx is None or idx < days:
+        return None
+    close = _coerce_float(rows[idx].get("close"))
+    previous = _coerce_float(rows[idx - days].get("close"))
+    if close is None:
+        return None
+    return _pct(close, previous)
+
+
+def _beta_to_benchmark(
+    symbol_rows: list[dict[str, Any]],
+    benchmark_rows: list[dict[str, Any]] | None,
+    symbol_idx: int,
+    benchmark_idx: int | None,
+    window: int = 20,
+) -> float | None:
+    if benchmark_rows is None or benchmark_idx is None or symbol_idx < window or benchmark_idx < window:
+        return None
+    symbol_returns: list[float] = []
+    benchmark_returns: list[float] = []
+    for offset in range(window - 1, -1, -1):
+        symbol_pos = symbol_idx - offset
+        benchmark_pos = benchmark_idx - offset
+        symbol_return = _lagged_return(symbol_rows, symbol_pos, 1)
+        benchmark_return = _lagged_return(benchmark_rows, benchmark_pos, 1)
+        if symbol_return is None or benchmark_return is None:
+            return None
+        symbol_returns.append(symbol_return)
+        benchmark_returns.append(benchmark_return)
+    symbol_mean = sum(symbol_returns) / window
+    benchmark_mean = sum(benchmark_returns) / window
+    benchmark_variance = sum((ret - benchmark_mean) ** 2 for ret in benchmark_returns) / window
+    if benchmark_variance == 0.0:
+        return None
+    covariance = (
+        sum(
+            (symbol_return - symbol_mean) * (benchmark_return - benchmark_mean)
+            for symbol_return, benchmark_return in zip(symbol_returns, benchmark_returns)
+        )
+        / window
+    )
+    return round(covariance / benchmark_variance, 6)
 
 
 def _rolling_vwap(rows: list[dict[str, Any]], idx: int, window: int = 20) -> float | None:
@@ -363,6 +410,8 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             continue
         event_day = _event_day(ts)
         history = market[symbol]
+        spy_history = market.get("SPY")
+        spy_idx = _row_before_or_on(spy_history, event_day) if spy_history else None
         idx = _row_before_or_on(history, event_day)
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
@@ -395,6 +444,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         open_price = _coerce_float(asof.get("open"))
         return_5d_lagged = _pct(close, prev5.get("close"))
         return_20d_lagged = _pct(close, prev20.get("close"))
+        spy_return_5d = _lagged_return(spy_history, spy_idx, 5)
         row = {
             "ts": ts,
             "event_date": event_day,
@@ -428,6 +478,14 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_macd_signal": macd_signal,
             "feature_macd_hist": macd_hist,
             "feature_atr_14": _atr_at(history, idx, 14),
+            "feature_spy_return_1d": _lagged_return(spy_history, spy_idx, 1),
+            "feature_spy_return_5d": spy_return_5d,
+            "feature_symbol_minus_spy_5d": (
+                round(return_5d_lagged - spy_return_5d, 6)
+                if return_5d_lagged is not None and spy_return_5d is not None
+                else None
+            ),
+            "feature_symbol_beta_20d": _beta_to_benchmark(history, spy_history, idx, spy_idx, 20),
             "feature_return_1d_lagged": _pct(close, prev1.get("close")),
             "feature_return_5d_lagged": return_5d_lagged,
             "feature_return_10d_lagged": _pct(close, prev10.get("close")),
