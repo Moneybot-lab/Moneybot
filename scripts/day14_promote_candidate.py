@@ -61,7 +61,7 @@ def main() -> None:
     metadata = {
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),
         "model_path": str(production_path),
-        "model_version": "candidate-promoted-v1",
+        "model_version": candidate_version or "unknown",
         "input_path": str(args.comparison_report),
         "train_rows": int((report.get("candidate_metrics") or {}).get("rows") or 0),
         "test_rows": int((report.get("production_metrics") or {}).get("rows") or 0),

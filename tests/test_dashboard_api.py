@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
@@ -1848,6 +1849,35 @@ def test_model_health_loads_historical_validation_summary(tmp_path):
     assert historical["exists"] is True
     assert historical["summary"] == {"generated_at_utc": "2026-06-21T00:00:00+00:00", "rows": 42, "accuracy": 0.72}
 
+
+
+
+def test_day14_promotion_metadata_uses_candidate_version(tmp_path):
+    from scripts import day14_promote_candidate
+
+    comparison_path = tmp_path / "comparison.json"
+    candidate_path = tmp_path / "candidate.json"
+    production_path = tmp_path / "production.json"
+    comparison_path.write_text(json.dumps({"candidate_win": True, "candidate_metrics": {"rows": 12}, "production_metrics": {"rows": 8}}), encoding="utf-8")
+    candidate_path.write_text(json.dumps({"version": "candidate-logreg-v1-20260710T225011Z", "feature_columns": []}), encoding="utf-8")
+
+    old_argv = sys.argv
+    try:
+        sys.argv = [
+            "day14_promote_candidate.py",
+            "--comparison-report",
+            str(comparison_path),
+            "--candidate-model",
+            str(candidate_path),
+            "--production-model",
+            str(production_path),
+        ]
+        day14_promote_candidate.main()
+    finally:
+        sys.argv = old_argv
+
+    metadata = json.loads(production_path.with_suffix(production_path.suffix + ".meta.json").read_text(encoding="utf-8"))
+    assert metadata["model_version"] == "candidate-logreg-v1-20260710T225011Z"
 
 def test_promote_track_b_candidate_requires_token():
     client = _client()
