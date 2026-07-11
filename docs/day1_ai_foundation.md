@@ -219,7 +219,7 @@ The table is designed to show:
 To reduce live API work, you can precompute outcomes to a snapshot file:
 
 ```bash
-python3 scripts/day12_materialize_outcomes.py --input data/decision_events.jsonl --output data/decision_outcomes_snapshot.json --limit 2000 --rows-limit 20
+python3 scripts/day12_materialize_outcomes.py --input data/decision_events.jsonl --output data/decision_outcomes_snapshot.json --limit 50000 --rows-limit 20
 ```
 
 Then `/api/decision-outcomes` will serve that materialized snapshot when it is fresh enough.
@@ -508,3 +508,7 @@ python3 scripts/run_track_b_offline.py --input-log data/decision_events.jsonl --
 Notes:
 - Seeded logs are for workflow/testing validation only (not production quality training data).
 - Increase `--min-rows` back to `200` once real decision traffic is available.
+
+### Decision outcome scan depth
+
+`/api/decision-outcomes` uses `DECISION_OUTCOMES_READ_CAP` to cap live event scans. The default is `50000` so mature 5D outcomes can be found in large production decision logs without stopping at the newest 5,000 rows. Use `force_live=true` to bypass snapshots and `allow_stale_snapshot=true` only when intentionally inspecting an expired materialized snapshot.
