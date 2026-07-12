@@ -127,6 +127,38 @@ def test_build_training_rows_adds_phase_1_technical_features(tmp_path):
     assert row["feature_dollar_volume"] == 156.0 * 1056.0
 
 
+def test_build_training_rows_adds_symbol_signal_history_counts():
+    market = {
+        "AAPL": [
+            {
+                "symbol": "AAPL",
+                "date": (date(2026, 1, 1) + timedelta(days=idx - 1)).isoformat(),
+                "open": float(99 + idx),
+                "high": float(101 + idx),
+                "low": float(98 + idx),
+                "close": float(100 + idx),
+                "volume": float(1000 + idx),
+            }
+            for idx in range(1, 61)
+        ]
+    }
+    events = [
+        {"ts": _ts("2026-02-25"), "symbol": "AAPL", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}},
+        {"ts": _ts("2026-02-24"), "symbol": "AAPL", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}},
+        {"ts": _ts("2026-02-20"), "symbol": "AAPL", "endpoint": "quick_ask", "payload": {"recommendation": "SELL"}},
+        {"ts": _ts("2026-02-10"), "symbol": "AAPL", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}},
+        {"ts": _ts("2026-02-24"), "symbol": "MSFT", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}},
+    ]
+
+    rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=3)
+
+    assert summary["rows_joined"] == 4
+    row = next(item for item in rows if item["event_date"] == "2026-02-25")
+    assert row["feature_symbol_signal_count_7d"] == 2
+    assert row["feature_symbol_buy_count_7d"] == 1
+    assert row["feature_symbol_sell_count_7d"] == 1
+
+
 def test_write_rows_creates_reproducible_join_manifest(tmp_path):
     out = tmp_path / "training.jsonl"
     manifest = write_rows(

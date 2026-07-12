@@ -147,6 +147,23 @@ def _market_load_window(events: list[dict[str, Any]], *, horizon_days: int, hist
     return symbols, start.isoformat(), end.isoformat()
 
 
+def _symbol_signal_counts(events: list[dict[str, Any]], symbol: str, ts: int, *, window_days: int = 7) -> dict[str, int]:
+    window_start = ts - (max(1, window_days) * 86_400)
+    counts = {"signals": 0, "buys": 0, "sells": 0}
+    for event in events:
+        event_symbol = str(event.get("symbol") or "").strip().upper()
+        event_ts = normalize_unix_ts(event.get("ts"))
+        if event_symbol != symbol or event_ts is None or not (window_start <= event_ts < ts):
+            continue
+        action = normalize_action(event)
+        counts["signals"] += 1
+        if action in {"BUY", "STRONG BUY"}:
+            counts["buys"] += 1
+        elif action == "SELL":
+            counts["sells"] += 1
+    return counts
+
+
 def _event_day(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
 
@@ -446,6 +463,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         if not symbol or ts is None or symbol not in market:
             summary["missing_symbol_history"] += 1
             continue
+        signal_counts_7d = _symbol_signal_counts(events, symbol, ts, window_days=7)
         event_day = _event_day(ts)
         history = market[symbol]
         spy_history = market.get("SPY")
@@ -499,6 +517,9 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "probability_up": snapshot.get("probability_up", payload.get("probability_up")),
             "model_version": snapshot.get("model_version", payload.get("model_version")),
             "feature_close": close,
+            "feature_symbol_signal_count_7d": signal_counts_7d["signals"],
+            "feature_symbol_buy_count_7d": signal_counts_7d["buys"],
+            "feature_symbol_sell_count_7d": signal_counts_7d["sells"],
             "feature_sma_10": sma_10,
             "feature_sma_20": sma_20,
             "feature_sma_50": sma_50,
