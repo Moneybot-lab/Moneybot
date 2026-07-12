@@ -116,7 +116,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run daily Moneybot ops scripts in one command.")
     parser.add_argument("--input-log", default=str(base_dir / "decision_events.jsonl"))
     parser.add_argument("--summary-limit", type=int, default=200)
-    parser.add_argument("--outcomes-limit", type=int, default=2000)
+    parser.add_argument("--outcomes-limit", type=int, default=50000)
     parser.add_argument("--outcomes-rows-limit", type=int, default=20)
     parser.add_argument("--calibration-limit", type=int, default=5000)
     parser.add_argument("--horizon-days", type=int, default=5)
