@@ -164,6 +164,30 @@ def _symbol_signal_counts(events: list[dict[str, Any]], symbol: str, ts: int, *,
     return counts
 
 
+def _event_probability_up(event: dict[str, Any]) -> float | None:
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
+    for source in (snapshot, payload, event):
+        value = _coerce_float(source.get("probability_up"))
+        if value is not None:
+            return value
+    return None
+
+
+def _previous_symbol_signal(events: list[dict[str, Any]], symbol: str, ts: int) -> dict[str, Any] | None:
+    previous: dict[str, Any] | None = None
+    previous_ts: int | None = None
+    for event in events:
+        event_symbol = str(event.get("symbol") or "").strip().upper()
+        event_ts = normalize_unix_ts(event.get("ts"))
+        if event_symbol != symbol or event_ts is None or event_ts >= ts:
+            continue
+        if previous_ts is None or event_ts > previous_ts:
+            previous = event
+            previous_ts = event_ts
+    return previous
+
+
 def _event_day(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
 
@@ -487,6 +511,12 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         return_fwd = _pct(float(future["close"]), close)
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
+        previous_signal = _previous_symbol_signal(events, symbol, ts)
+        previous_signal_ts = normalize_unix_ts(previous_signal.get("ts")) if previous_signal else None
+        previous_action = normalize_action(previous_signal) if previous_signal else None
+        current_action = normalize_action(event)
+        current_probability = _event_probability_up(event)
+        previous_probability = _event_probability_up(previous_signal) if previous_signal else None
         sma_10 = _rolling_close_mean(history, idx, 10)
         sma_20 = _rolling_close_mean(history, idx, 20)
         sma_50 = _rolling_close_mean(history, idx, 50)
@@ -520,6 +550,26 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_symbol_signal_count_7d": signal_counts_7d["signals"],
             "feature_symbol_buy_count_7d": signal_counts_7d["buys"],
             "feature_symbol_sell_count_7d": signal_counts_7d["sells"],
+            "feature_days_since_last_signal": (
+                round((ts - previous_signal_ts) / 86_400, 6)
+                if previous_signal_ts is not None
+                else None
+            ),
+            "feature_previous_recommendation_buy": (
+                int(previous_action in {"BUY", "STRONG BUY"})
+                if previous_action is not None
+                else 0
+            ),
+            "feature_recommendation_changed": (
+                int(previous_action != current_action)
+                if previous_action is not None
+                else 0
+            ),
+            "feature_probability_up_delta_from_last_signal": (
+                round(current_probability - previous_probability, 6)
+                if current_probability is not None and previous_probability is not None
+                else None
+            ),
             "feature_sma_10": sma_10,
             "feature_sma_20": sma_20,
             "feature_sma_50": sma_50,

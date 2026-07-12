@@ -143,8 +143,18 @@ def test_build_training_rows_adds_symbol_signal_history_counts():
         ]
     }
     events = [
-        {"ts": _ts("2026-02-25"), "symbol": "AAPL", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}},
-        {"ts": _ts("2026-02-24"), "symbol": "AAPL", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}},
+        {
+            "ts": _ts("2026-02-25"),
+            "symbol": "AAPL",
+            "endpoint": "quick_ask",
+            "payload": {"recommendation": "BUY", "probability_up": 0.70},
+        },
+        {
+            "ts": _ts("2026-02-24"),
+            "symbol": "AAPL",
+            "endpoint": "quick_ask",
+            "payload": {"recommendation": "BUY", "probability_up": 0.60},
+        },
         {"ts": _ts("2026-02-20"), "symbol": "AAPL", "endpoint": "quick_ask", "payload": {"recommendation": "SELL"}},
         {"ts": _ts("2026-02-10"), "symbol": "AAPL", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}},
         {"ts": _ts("2026-02-24"), "symbol": "MSFT", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}},
@@ -157,6 +167,10 @@ def test_build_training_rows_adds_symbol_signal_history_counts():
     assert row["feature_symbol_signal_count_7d"] == 2
     assert row["feature_symbol_buy_count_7d"] == 1
     assert row["feature_symbol_sell_count_7d"] == 1
+    assert row["feature_days_since_last_signal"] == 1.0
+    assert row["feature_previous_recommendation_buy"] == 1
+    assert row["feature_recommendation_changed"] == 0
+    assert row["feature_probability_up_delta_from_last_signal"] == 0.1
 
 
 def test_write_rows_creates_reproducible_join_manifest(tmp_path):
