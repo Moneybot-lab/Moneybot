@@ -77,6 +77,106 @@ def _ranking_metrics(scores: np.ndarray, labels: np.ndarray, returns: np.ndarray
     }
 
 
+def _walk_forward_splits(df: pd.DataFrame, *, max_windows: int = 3) -> list[tuple[int, int, int]]:
+    """Return rolling/expanding chronological folds as (train_start, train_end, test_end)."""
+    n = int(len(df))
+    if n < 6:
+        return []
+    test_size = max(1, n // 6)
+    window_count = min(max_windows, max(1, n // test_size - 2))
+    first_test_start = n - (window_count * test_size)
+    if first_test_start < test_size * 2:
+        first_test_start = test_size * 2
+    folds: list[tuple[int, int, int]] = []
+    for idx in range(window_count):
+        train_end = first_test_start + (idx * test_size)
+        test_end = min(n, train_end + test_size)
+        if test_end <= train_end or train_end < test_size * 2:
+            continue
+        train_start = 0 if idx < 2 else max(0, train_end - (test_size * 3))
+        if train_end - train_start < 2:
+            continue
+        folds.append((train_start, train_end, test_end))
+    return folds
+
+
+def _average_metric_dicts(metric_dicts: list[dict[str, Any]]) -> dict[str, Any]:
+    if not metric_dicts:
+        return {}
+    keys = sorted({key for metrics in metric_dicts for key in metrics if isinstance(metrics.get(key), (int, float))})
+    averaged = {key: round(float(np.mean([float(metrics.get(key, 0.0)) for metrics in metric_dicts])), 6) for key in keys}
+    averaged["window_count"] = len(metric_dicts)
+    return averaged
+
+
+def _apply_walk_forward_metrics(
+    challengers: list[dict[str, Any]],
+    *,
+    clean: pd.DataFrame,
+    folds: list[tuple[int, int, int]],
+    feature_columns: list[str],
+    target_col: str,
+    return_col: str | None,
+) -> None:
+    if not folds:
+        return
+    for challenger in challengers:
+        fold_metrics: list[dict[str, Any]] = []
+        for train_start, train_end, test_end in folds:
+            fold_train = clean.iloc[train_start:train_end]
+            fold_test = clean.iloc[train_end:test_end]
+            X_train = fold_train[feature_columns].to_numpy(dtype=float)
+            y_train = fold_train[target_col].to_numpy(dtype=float)
+            X_test = fold_test[feature_columns].to_numpy(dtype=float)
+            y_test = fold_test[target_col].to_numpy(dtype=float)
+            fold_returns = fold_test[return_col].to_numpy(dtype=float) if return_col else None
+            model_type = challenger.get("model_type")
+            spec = challenger.get("spec", {})
+            if model_type == "logistic_regression":
+                artifact = train_logistic_baseline(
+                    X_train,
+                    y_train,
+                    learning_rate=float(spec.get("lr", 0.08)),
+                    l2=float(spec.get("l2", 0.001)),
+                    decision_threshold=float(spec.get("threshold", 0.5)),
+                    epochs=int(spec.get("epochs", 550)),
+                )
+                scores = predict_proba(artifact, X_test)
+                preds = (scores >= artifact.decision_threshold).astype(int)
+            elif model_type == "decision_stump":
+                feature = str(spec.get("feature", ""))
+                if feature not in fold_train.columns or feature not in fold_test.columns:
+                    continue
+                threshold = float(np.median(fold_train[feature].to_numpy(dtype=float)))
+                direction = str(spec.get("direction", "gte_positive"))
+                scores = fold_test[feature].to_numpy(dtype=float)
+                preds = _stump_predictions(scores, threshold, direction)
+            elif model_type == "baseline_classifier":
+                majority_class = int(float(y_train.mean()) >= 0.5)
+                if challenger.get("model_version") == "challenger-baseline-always-up-v1":
+                    preds = np.ones_like(y_test, dtype=int)
+                elif challenger.get("model_version") == "challenger-baseline-always-down-v1":
+                    preds = np.zeros_like(y_test, dtype=int)
+                else:
+                    preds = np.full_like(y_test, majority_class, dtype=int)
+                scores = preds.astype(float)
+            else:
+                continue
+            metrics = summarize_binary_predictions(y_test, preds)
+            metrics.update(_ranking_metrics(scores, y_test, fold_returns))
+            fold_metrics.append(metrics)
+        walk_forward = _average_metric_dicts(fold_metrics)
+        if walk_forward:
+            positive_windows = sum(1 for metrics in fold_metrics if float(metrics.get("ranking_objective", 0.0)) > 0.0)
+            min_positive_windows = min(len(fold_metrics), max(2, int(np.ceil(len(fold_metrics) / 2))))
+            walk_forward["positive_ranking_windows"] = positive_windows
+            walk_forward["min_positive_windows_required"] = min_positive_windows
+            walk_forward["passed"] = positive_windows >= min_positive_windows
+            challenger["metrics"]["walk_forward"] = walk_forward
+            challenger["metrics"]["walk_forward_passed"] = walk_forward["passed"]
+            challenger["metrics"]["walk_forward_ranking_objective"] = walk_forward.get("ranking_objective", 0.0)
+
+
 def _load_jsonl(path: Path) -> pd.DataFrame:
     rows = []
     with path.open("r", encoding="utf-8") as fh:
@@ -235,8 +335,27 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
     _add_logistic_challengers(challengers, output_dir=output_dir, X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test, feature_columns=feature_columns, test_returns=test_returns)
     _add_stump_challengers(challengers, output_dir=output_dir, train_df=train_df, test_df=test_df, y_train=y_train, y_test=y_test, feature_columns=feature_columns, test_returns=test_returns)
     _add_baseline_challengers(challengers, output_dir=output_dir, y_train=y_train, y_test=y_test, test_returns=test_returns)
+    walk_forward_folds = _walk_forward_splits(clean)
+    _apply_walk_forward_metrics(
+        challengers,
+        clean=clean,
+        folds=walk_forward_folds,
+        feature_columns=feature_columns,
+        target_col=target_col,
+        return_col=return_col,
+    )
 
-    ranked = sorted(challengers, key=lambda item: (item["metrics"].get("ranking_objective", 0), item["metrics"].get("top_k_avg_return", 0), item["metrics"].get("accuracy", 0)), reverse=True)
+    ranked = sorted(
+        challengers,
+        key=lambda item: (
+            bool(item["metrics"].get("walk_forward_passed", False)),
+            item["metrics"].get("walk_forward_ranking_objective", item["metrics"].get("ranking_objective", 0)),
+            item["metrics"].get("ranking_objective", 0),
+            item["metrics"].get("top_k_avg_return", 0),
+            item["metrics"].get("accuracy", 0),
+        ),
+        reverse=True,
+    )
     model_type_counts = {model_type: sum(1 for item in challengers if item["model_type"] == model_type) for model_type in sorted({item["model_type"] for item in challengers})}
     manifest = {
         "schema_version": SUITE_SCHEMA_VERSION,
@@ -246,9 +365,14 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         "rows": len(clean),
         "train_rows": len(train_df),
         "test_rows": len(test_df),
+        "walk_forward_windows": [
+            {"train_start_row": start, "train_end_row": train_end, "test_start_row": train_end, "test_end_row": test_end}
+            for start, train_end, test_end in walk_forward_folds
+        ],
         "target_column": target_col,
-        "ranking_selection_policy": "rank by top-K capped-exposure ranking_objective, then top-K average return, then accuracy",
-        "ranking_metric_names": ["top_k_precision", "top_k_avg_return", "pairwise_ranking_loss", "big_gain_capture", "big_loss_demotion", "ranking_objective"],
+        "ranking_selection_policy": "rank by walk-forward pass status across multiple windows, then walk-forward top-K capped-exposure ranking_objective, holdout ranking objective, top-K average return, then accuracy",
+        "promotion_policy": "prefer candidates with positive ranking_objective in at least two walk-forward windows before promotion",
+        "ranking_metric_names": ["top_k_precision", "top_k_avg_return", "pairwise_ranking_loss", "big_gain_capture", "big_loss_demotion", "ranking_objective", "walk_forward_ranking_objective", "walk_forward_passed"],
         "feature_columns": feature_columns,
         "feature_fill_values": fill_values,
         "model_type_counts": model_type_counts,
