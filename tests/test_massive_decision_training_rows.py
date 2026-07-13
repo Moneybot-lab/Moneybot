@@ -223,3 +223,23 @@ def test_load_market_history_filters_to_decision_symbols_and_date_window(tmp_pat
     assert list(market) == ["AAPL"]
     assert len(market["AAPL"]) == 1
     assert market["AAPL"][0]["date"] == "2026-01-02"
+
+
+def test_load_market_history_skips_out_of_window_dated_paths(tmp_path):
+    raw = tmp_path / "raw" / "2026-07-03" / "us_stocks_sip" / "day_aggs_v1"
+    old_dir = raw / "2025" / "12"
+    wanted_dir = raw / "2026" / "01"
+    old_dir.mkdir(parents=True)
+    wanted_dir.mkdir(parents=True)
+    (old_dir / "2025-12-31.csv").write_text(
+        "ticker,date,open,high,low,close,volume\nAAPL,2025-12-31,9,9,9,9,90\n",
+        encoding="utf-8",
+    )
+    (wanted_dir / "2026-01-02.csv").write_text(
+        "ticker,date,open,high,low,close,volume\nAAPL,2026-01-02,10,10,10,10,100\n",
+        encoding="utf-8",
+    )
+
+    market = load_market_history(tmp_path / "raw", symbols={"AAPL"}, start_date="2026-01-01", end_date="2026-01-31")
+
+    assert [row["date"] for row in market["AAPL"]] == ["2026-01-02"]

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import csv
 import gzip
 import json
+import re
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -80,6 +82,20 @@ def _normalize_market_row(row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+_PATH_DATE_RE = re.compile(r"(20\d{2})[-/](\d{2})[-/](\d{2})")
+
+
+def _path_market_date(path: Path) -> str | None:
+    text = path.as_posix()
+    matches = list(_PATH_DATE_RE.finditer(text))
+    if not matches:
+        return None
+    if len(matches) == 1 and not _PATH_DATE_RE.search(path.name):
+        return None
+    match = matches[-1]
+    return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+
+
 def _read_market_file(path: Path) -> Iterable[dict[str, Any]]:
     with _iter_text(path) as fh:
         if path.name.endswith(".jsonl") or path.name.endswith(".jsonl.gz"):
@@ -113,6 +129,11 @@ def load_market_history(
         if not path.is_file() or path.name.startswith("_"):
             continue
         if not (path.name.endswith(".csv") or path.name.endswith(".csv.gz") or path.name.endswith(".jsonl") or path.name.endswith(".jsonl.gz")):
+            continue
+        path_day = _path_market_date(path)
+        if path_day and start_date and path_day < start_date:
+            continue
+        if path_day and end_date and path_day > end_date:
             continue
         for row in _read_market_file(path):
             symbol = str(row["symbol"]).upper()
@@ -186,6 +207,73 @@ def _previous_symbol_signal(events: list[dict[str, Any]], symbol: str, ts: int) 
             previous = event
             previous_ts = event_ts
     return previous
+
+
+def _signal_history_index(events: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, list[tuple[int, str, float | None, dict[str, Any]]]] = {}
+    for event in events:
+        symbol = str(event.get("symbol") or "").strip().upper()
+        event_ts = normalize_unix_ts(event.get("ts"))
+        if not symbol or event_ts is None:
+            continue
+        grouped.setdefault(symbol, []).append((event_ts, normalize_action(event), _event_probability_up(event), event))
+    signal_index: dict[str, dict[str, Any]] = {}
+    for symbol, entries in grouped.items():
+        entries.sort(key=lambda item: item[0])
+        signal_prefix = [0]
+        buy_prefix = [0]
+        sell_prefix = [0]
+        for _, action, _, _ in entries:
+            signal_prefix.append(signal_prefix[-1] + 1)
+            buy_prefix.append(buy_prefix[-1] + int(action in {"BUY", "STRONG BUY"}))
+            sell_prefix.append(sell_prefix[-1] + int(action == "SELL"))
+        signal_index[symbol] = {
+            "entries": entries,
+            "timestamps": [entry[0] for entry in entries],
+            "signal_prefix": signal_prefix,
+            "buy_prefix": buy_prefix,
+            "sell_prefix": sell_prefix,
+        }
+    return signal_index
+
+
+def _indexed_signal_context(
+    signal_index: dict[str, dict[str, Any]],
+    symbol: str,
+    ts: int,
+    *,
+    window_days: int = 7,
+) -> tuple[dict[str, int], dict[str, Any] | None, int | None, str | None, float | None]:
+    symbol_index = signal_index.get(symbol, {})
+    entries = symbol_index.get("entries", [])
+    event_ts_values = symbol_index.get("timestamps", [])
+    current_pos = bisect.bisect_left(event_ts_values, ts)
+    window_start = ts - (max(1, window_days) * 86_400)
+    window_pos = bisect.bisect_left(event_ts_values, window_start)
+    signal_prefix = symbol_index.get("signal_prefix", [0])
+    buy_prefix = symbol_index.get("buy_prefix", [0])
+    sell_prefix = symbol_index.get("sell_prefix", [0])
+    counts = {
+        "signals": signal_prefix[current_pos] - signal_prefix[window_pos],
+        "buys": buy_prefix[current_pos] - buy_prefix[window_pos],
+        "sells": sell_prefix[current_pos] - sell_prefix[window_pos],
+    }
+    if current_pos <= 0:
+        return counts, None, None, None, None
+    previous_ts, previous_action, previous_probability, previous_event = entries[current_pos - 1]
+    return counts, previous_event, previous_ts, previous_action, previous_probability
+
+
+def _market_date_index(market: dict[str, list[dict[str, Any]]]) -> dict[str, list[str]]:
+    return {symbol: [str(row["date"]) for row in rows] for symbol, rows in market.items()}
+
+
+def _row_before_or_on_indexed(date_index: dict[str, list[str]], symbol: str, day: str) -> int | None:
+    dates = date_index.get(symbol)
+    if not dates:
+        return None
+    pos = bisect.bisect_right(dates, day) - 1
+    return pos if pos >= 0 else None
 
 
 def _event_day(ts: int) -> str:
@@ -480,6 +568,9 @@ def _pct(newer: float, older: float | None) -> float | None:
 def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: dict[str, list[dict[str, Any]]], *, horizon_days: int = 5) -> tuple[list[dict[str, Any]], dict[str, int]]:
     rows: list[dict[str, Any]] = []
     summary = {"events_scanned": 0, "rows_joined": 0, "missing_symbol_history": 0, "insufficient_history": 0, "insufficient_forward_window": 0}
+    signal_index = _signal_history_index(events)
+    date_index = _market_date_index(market)
+    feature_cache: dict[tuple[str, int], dict[str, Any]] = {}
     for event in events:
         summary["events_scanned"] += 1
         symbol = str(event.get("symbol") or "").strip().upper()
@@ -487,12 +578,17 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         if not symbol or ts is None or symbol not in market:
             summary["missing_symbol_history"] += 1
             continue
-        signal_counts_7d = _symbol_signal_counts(events, symbol, ts, window_days=7)
+        signal_counts_7d, previous_signal, previous_signal_ts, previous_action, previous_probability = _indexed_signal_context(
+            signal_index,
+            symbol,
+            ts,
+            window_days=7,
+        )
         event_day = _event_day(ts)
         history = market[symbol]
         spy_history = market.get("SPY")
-        spy_idx = _row_before_or_on(spy_history, event_day) if spy_history else None
-        idx = _row_before_or_on(history, event_day)
+        spy_idx = _row_before_or_on_indexed(date_index, "SPY", event_day) if spy_history else None
+        idx = _row_before_or_on_indexed(date_index, symbol, event_day)
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
@@ -511,29 +607,70 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         return_fwd = _pct(float(future["close"]), close)
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
-        previous_signal = _previous_symbol_signal(events, symbol, ts)
-        previous_signal_ts = normalize_unix_ts(previous_signal.get("ts")) if previous_signal else None
-        previous_action = normalize_action(previous_signal) if previous_signal else None
         current_action = normalize_action(event)
         current_probability = _event_probability_up(event)
-        previous_probability = _event_probability_up(previous_signal) if previous_signal else None
-        sma_10 = _rolling_close_mean(history, idx, 10)
-        sma_20 = _rolling_close_mean(history, idx, 20)
-        sma_50 = _rolling_close_mean(history, idx, 50)
-        high_20 = _rolling_extreme(history, idx, 20, "high", high=True)
-        low_20 = _rolling_extreme(history, idx, 20, "low", high=False)
-        macd_line, macd_signal, macd_hist = _macd_components_at(history, idx)
-        volume = _coerce_float(asof.get("volume"))
-        volume_avg_5 = _rolling_numeric_mean(history, idx, 5, "volume")
-        volume_avg_20 = _rolling_numeric_mean(history, idx, 20, "volume")
-        vwap = _rolling_vwap(history, idx, 20)
-        open_price = _coerce_float(asof.get("open"))
-        return_5d_lagged = _pct(close, prev5.get("close"))
-        return_20d_lagged = _pct(close, prev20.get("close"))
+        cache_key = (symbol, idx)
+        cached_features = feature_cache.get(cache_key)
+        if cached_features is None:
+            sma_10_cached = _rolling_close_mean(history, idx, 10)
+            sma_20_cached = _rolling_close_mean(history, idx, 20)
+            sma_50_cached = _rolling_close_mean(history, idx, 50)
+            high_20_cached = _rolling_extreme(history, idx, 20, "high", high=True)
+            low_20_cached = _rolling_extreme(history, idx, 20, "low", high=False)
+            macd_line_cached, macd_signal_cached, macd_hist_cached = _macd_components_at(history, idx)
+            volume_cached = _coerce_float(asof.get("volume"))
+            volume_avg_5_cached = _rolling_numeric_mean(history, idx, 5, "volume")
+            volume_avg_20_cached = _rolling_numeric_mean(history, idx, 20, "volume")
+            vwap_cached = _rolling_vwap(history, idx, 20)
+            cached_features = {
+                "sma_10": sma_10_cached,
+                "sma_20": sma_20_cached,
+                "sma_50": sma_50_cached,
+                "high_20": high_20_cached,
+                "low_20": low_20_cached,
+                "macd_line": macd_line_cached,
+                "macd_signal": macd_signal_cached,
+                "macd_hist": macd_hist_cached,
+                "volume": volume_cached,
+                "volume_avg_5": volume_avg_5_cached,
+                "volume_avg_20": volume_avg_20_cached,
+                "vwap": vwap_cached,
+                "open_price": _coerce_float(asof.get("open")),
+                "return_5d_lagged": _pct(close, prev5.get("close")),
+                "return_20d_lagged": _pct(close, prev20.get("close")),
+                "trend_slope_10d": _trend_slope(history, idx, 10),
+                "trend_slope_20d": _trend_slope(history, idx, 20),
+                "volatility_5d": _return_volatility(history, idx, 5),
+                "volatility_20d": _return_volatility(history, idx, 20),
+                "ema_10": _ema_at(history, idx, 10),
+                "ema_20": _ema_at(history, idx, 20),
+                "rsi_14": _rsi_at(history, idx, 14),
+                "atr_14": _atr_at(history, idx, 14),
+                "return_1d_lagged": _pct(close, prev1.get("close")),
+                "return_10d_lagged": _pct(close, prev10.get("close")),
+                "volume_zscore_20d": _rolling_zscore(history, idx, 20, "volume"),
+                "vwap_slope": _vwap_slope(history, idx, 10, 20),
+            }
+            feature_cache[cache_key] = cached_features
+        sma_10 = cached_features["sma_10"]
+        sma_20 = cached_features["sma_20"]
+        sma_50 = cached_features["sma_50"]
+        high_20 = cached_features["high_20"]
+        low_20 = cached_features["low_20"]
+        macd_line = cached_features["macd_line"]
+        macd_signal = cached_features["macd_signal"]
+        macd_hist = cached_features["macd_hist"]
+        volume = cached_features["volume"]
+        volume_avg_5 = cached_features["volume_avg_5"]
+        volume_avg_20 = cached_features["volume_avg_20"]
+        vwap = cached_features["vwap"]
+        open_price = cached_features["open_price"]
+        return_5d_lagged = cached_features["return_5d_lagged"]
+        return_20d_lagged = cached_features["return_20d_lagged"]
         spy_return_5d = _lagged_return(spy_history, spy_idx, 5)
         sector_benchmark_symbol = _sector_benchmark_symbol(event, payload, snapshot)
         sector_history = market.get(sector_benchmark_symbol)
-        sector_idx = _row_before_or_on(sector_history, event_day) if sector_history else None
+        sector_idx = _row_before_or_on_indexed(date_index, sector_benchmark_symbol, event_day) if sector_history else None
         sector_return_5d = _lagged_return(sector_history, sector_idx, 5)
         row = {
             "ts": ts,
@@ -575,22 +712,22 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_sma_50": sma_50,
             "feature_sma_10_over_20": _ratio(sma_10, sma_20),
             "feature_sma_20_over_50": _ratio(sma_20, sma_50),
-            "feature_trend_slope_10d": _trend_slope(history, idx, 10),
-            "feature_trend_slope_20d": _trend_slope(history, idx, 20),
-            "feature_volatility_5d": _return_volatility(history, idx, 5),
-            "feature_volatility_20d": _return_volatility(history, idx, 20),
+            "feature_trend_slope_10d": cached_features["trend_slope_10d"],
+            "feature_trend_slope_20d": cached_features["trend_slope_20d"],
+            "feature_volatility_5d": cached_features["volatility_5d"],
+            "feature_volatility_20d": cached_features["volatility_20d"],
             "feature_drawdown_from_20d_high": _pct(close, high_20),
             "feature_distance_from_20d_low": _pct(close, low_20),
             "feature_gap_percent": _pct(open_price, prev1.get("close")),
-            "feature_ema_10": _ema_at(history, idx, 10),
-            "feature_ema_20": _ema_at(history, idx, 20),
+            "feature_ema_10": cached_features["ema_10"],
+            "feature_ema_20": cached_features["ema_20"],
             "feature_price_vs_sma_20": _pct(close, sma_20),
             "feature_price_vs_sma_50": _pct(close, sma_50),
-            "feature_rsi_14": _rsi_at(history, idx, 14),
+            "feature_rsi_14": cached_features["rsi_14"],
             "feature_macd": macd_line,
             "feature_macd_signal": macd_signal,
             "feature_macd_hist": macd_hist,
-            "feature_atr_14": _atr_at(history, idx, 14),
+            "feature_atr_14": cached_features["atr_14"],
             "feature_spy_return_1d": _lagged_return(spy_history, spy_idx, 1),
             "feature_spy_return_5d": spy_return_5d,
             "feature_symbol_minus_spy_5d": (
@@ -606,9 +743,9 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             ),
             "feature_market_regime_risk_on": _market_regime_risk_on(spy_history, spy_idx),
             "feature_market_volatility_proxy": _return_volatility(spy_history, spy_idx, 20),
-            "feature_return_1d_lagged": _pct(close, prev1.get("close")),
+            "feature_return_1d_lagged": cached_features["return_1d_lagged"],
             "feature_return_5d_lagged": return_5d_lagged,
-            "feature_return_10d_lagged": _pct(close, prev10.get("close")),
+            "feature_return_10d_lagged": cached_features["return_10d_lagged"],
             "feature_return_20d_lagged": return_20d_lagged,
             "feature_momentum_5d_vs_20d": (
                 round(return_5d_lagged - return_20d_lagged, 6)
@@ -618,10 +755,10 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_volume": asof.get("volume"),
             "feature_volume_ratio_20d": _ratio(volume, volume_avg_20),
             "feature_relative_volume_5d": _ratio(volume, volume_avg_5),
-            "feature_volume_zscore_20d": _rolling_zscore(history, idx, 20, "volume"),
+            "feature_volume_zscore_20d": cached_features["volume_zscore_20d"],
             "feature_vwap": vwap,
             "feature_price_vs_vwap": _pct(close, vwap),
-            "feature_vwap_slope": _vwap_slope(history, idx, 10, 20),
+            "feature_vwap_slope": cached_features["vwap_slope"],
             "feature_above_vwap": int(close > vwap) if vwap is not None else None,
             "feature_dollar_volume": round(close * volume, 6) if volume is not None else None,
             f"return_{horizon_days}d": return_fwd,
