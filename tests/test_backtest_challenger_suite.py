@@ -31,12 +31,15 @@ def test_backtest_challenger_suite_scores_every_model_with_gates_and_benchmarks(
 
     assert report["schema_version"] == "moneybot-challenger-backtest.v1"
     assert report["routing_policy"].startswith("shadow-log first")
+    assert report["ranking_policy"].startswith("rank promotion-ready")
     assert "buy_and_hold_return" in report["benchmark"]
     assert len(report["challengers"]) == suite["challenger_count"]
     first = report["challengers"][0]
     assert "total_return_net" in first["backtest_metrics"]
     assert "max_drawdown" in first["backtest_metrics"]
     assert "calibration" in first["backtest_metrics"]
+    assert "top_k_ranking" in first["backtest_metrics"]
+    assert "ranking_objective" in first["backtest_metrics"]["top_k_ranking"]
     assert "drift" in first["backtest_metrics"]
     assert first["promotion_gates"]["objective_gates"]["min_rows"] == 10
     assert first["routing_allowed"] is False

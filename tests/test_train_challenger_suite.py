@@ -27,9 +27,13 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
     assert manifest["model_type_counts"]["decision_stump"] >= 3
     assert manifest["model_type_counts"]["baseline_classifier"] == 3
     assert len(manifest["ranked_model_versions"]) == manifest["challenger_count"]
+    assert "top_k_avg_return" in manifest["ranking_metric_names"]
     for challenger in manifest["challengers"]:
         assert (tmp_path / "models" / f"{challenger['model_version']}.json").exists()
         assert challenger["metrics"]["rows"] > 0
+        assert "top_k_precision" in challenger["metrics"]
+        assert "pairwise_ranking_loss" in challenger["metrics"]
+        assert "ranking_objective" in challenger["metrics"]
 
 
 def test_train_challenger_suite_excludes_unpersisted_derived_app_signal_features(tmp_path):
