@@ -621,9 +621,47 @@ def _load_notification_trigger_state() -> dict[str, Any]:
         "portfolio_advice": payload.get("portfolio_advice") if isinstance(payload.get("portfolio_advice"), dict) else {},
         "momentum_scores": payload.get("momentum_scores") if isinstance(payload.get("momentum_scores"), dict) else {},
         "breakout_symbols": payload.get("breakout_symbols") if isinstance(payload.get("breakout_symbols"), list) else [],
+        "breakout_scores": payload.get("breakout_scores") if isinstance(payload.get("breakout_scores"), dict) else {},
         "wells_snapshot": payload.get("wells_snapshot") if isinstance(payload.get("wells_snapshot"), dict) else {},
         "clearview_advice": payload.get("clearview_advice") if isinstance(payload.get("clearview_advice"), dict) else {},
     }
+
+
+def _recent_breakout_seed_scores(default_score: float = 8.0) -> dict[str, float]:
+    state = _load_notification_trigger_state()
+    saved_scores = state.get("breakout_scores") if isinstance(state.get("breakout_scores"), dict) else {}
+    seeds: dict[str, float] = {}
+    for symbol in state.get("breakout_symbols") or []:
+        normalized_symbol = str(symbol or "").strip().upper()
+        if not normalized_symbol:
+            continue
+        try:
+            score = float(saved_scores.get(normalized_symbol, default_score))
+        except (TypeError, ValueError):
+            score = default_score
+        seeds[normalized_symbol] = score
+    return seeds
+
+
+def _get_breakout_radar_items(svc: Any, seed_symbols: dict[str, float] | None = None) -> list[dict[str, Any]]:
+    try:
+        items = svc.get_breakout_radar(seed_symbols=seed_symbols or {})
+    except TypeError:
+        items = svc.get_breakout_radar()
+    return [item for item in (items or []) if isinstance(item, dict)]
+
+
+def _breakout_scores_from_rows(rows: list[dict[str, Any]]) -> dict[str, float]:
+    scores: dict[str, float] = {}
+    for row in rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        try:
+            scores[symbol] = float(row.get("score") or 8.0)
+        except (TypeError, ValueError):
+            scores[symbol] = 8.0
+    return scores
 
 
 def _save_notification_trigger_state(state: dict[str, Any]) -> None:
@@ -2545,11 +2583,6 @@ def run_notification_triggers():
         momentum_items = svc.get_hot_momentum_buys() or []
     except Exception:  # noqa: BLE001
         momentum_items = []
-    try:
-        breakout_items = svc.get_breakout_radar() or []
-    except Exception:  # noqa: BLE001
-        breakout_items = []
-    momentum_items = list(momentum_items) + [item for item in breakout_items if isinstance(item, dict)]
     for row in momentum_items:
         if not isinstance(row, dict):
             continue
@@ -2580,7 +2613,7 @@ def run_notification_triggers():
     breakout_items = []
     if hasattr(svc, "get_breakout_radar"):
         try:
-            breakout_items = svc.get_breakout_radar() or []
+            breakout_items = _get_breakout_radar_items(svc, seed_symbols=_recent_breakout_seed_scores())
         except Exception:  # noqa: BLE001
             breakout_items = []
     current_breakouts: set[str] = set()
@@ -2701,6 +2734,7 @@ def run_notification_triggers():
             "portfolio_advice": portfolio_state,
             "momentum_scores": momentum_scores,
             "breakout_symbols": sorted(current_breakouts),
+            "breakout_scores": _breakout_scores_from_rows(breakout_items),
             "wells_snapshot": wells_now,
             "clearview_advice": clearview_state,
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -2815,6 +2849,23 @@ def hot_momentum_buys():
             )
     return jsonify({"items": items, "request_id": g.request_id})
 
+
+
+@api_bp.get("/breakout-radar")
+def breakout_radar():
+    svc = current_app.extensions["market_data_service"]
+    seed_scores = _recent_breakout_seed_scores()
+    items = _get_breakout_radar_items(svc, seed_symbols=seed_scores)
+    decision_logger = current_app.extensions.get("decision_logger")
+    if decision_logger is not None:
+        for item in items:
+            decision_logger.log(
+                endpoint="breakout_radar",
+                symbol=item.get("symbol"),
+                decision_source=item.get("decision_source") or item.get("candidate_source") or "scanner",
+                payload={"score": item.get("score"), "score_basis": item.get("score_basis")},
+            )
+    return jsonify({"items": items, "request_id": g.request_id})
 
 
 @api_bp.post("/promote-track-b-candidate")

@@ -162,6 +162,37 @@ def test_tab_data_endpoints_return_items():
     assert wells.get_json()["items"][0]["stocks"][0]["ticker"] == "AAPL"
 
 
+def test_breakout_radar_endpoint_seeds_recent_notification_symbols(monkeypatch, tmp_path):
+    client = _client()
+    state_path = tmp_path / "notification-state.json"
+    state_path.write_text(json.dumps({"breakout_symbols": ["XYZ"], "breakout_scores": {"XYZ": 8.7}}), encoding="utf-8")
+    monkeypatch.setattr(api_module, "_notification_trigger_state_path", lambda: str(state_path))
+
+    class EmptyBreakoutSvc(StubMarketService):
+        def get_breakout_radar(self, **kwargs):
+            seeds = kwargs.get("seed_symbols") or {}
+            return [
+                {
+                    "symbol": symbol,
+                    "price": 0.0,
+                    "score": score,
+                    "decision_source": "recent_breakout_alert",
+                    "rationale": "Recent breakout notification candidate; keeping it on radar.",
+                }
+                for symbol, score in seeds.items()
+            ]
+
+    client.application.extensions["market_data_service"] = EmptyBreakoutSvc()
+
+    res = client.get("/api/breakout-radar")
+
+    assert res.status_code == 200
+    items = res.get_json()["items"]
+    assert items[0]["symbol"] == "XYZ"
+    assert items[0]["score"] == 8.7
+    assert items[0]["decision_source"] == "recent_breakout_alert"
+
+
 def test_quick_ask_returns_shopping_friendly_recommendation_scale():
     client = _client()
     client.application.extensions["deterministic_quick_advisor"] = None
