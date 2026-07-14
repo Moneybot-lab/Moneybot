@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -203,9 +204,9 @@ def _chronological_split(df: pd.DataFrame, train_ratio: float) -> tuple[pd.DataF
     return df.iloc[:pivot].copy(), df.iloc[pivot:].copy()
 
 
-def _build_artifact_with_features(base: BaselineModelArtifact, feature_columns: list[str]) -> BaselineModelArtifact:
+def _build_artifact_with_features(base: BaselineModelArtifact, feature_columns: list[str], *, version: str) -> BaselineModelArtifact:
     return BaselineModelArtifact(
-        version="candidate-logreg-v1",
+        version=version,
         feature_columns=list(feature_columns),
         means=base.means,
         stds=base.stds,
@@ -266,7 +267,8 @@ def main() -> None:
     y_train = train_df[target_column].to_numpy(dtype=float)
     sample_weight = _bucket_sample_weights(train_df).to_numpy(dtype=float)
     base_artifact = train_logistic_baseline(X_train, y_train, sample_weight=sample_weight)
-    artifact = _build_artifact_with_features(base_artifact, feature_columns)
+    candidate_version = f"candidate-logreg-v1-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    artifact = _build_artifact_with_features(base_artifact, feature_columns, version=candidate_version)
 
     X_test = test_df[feature_columns].to_numpy(dtype=float)
     y_test = test_df[target_column].to_numpy(dtype=float)
