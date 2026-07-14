@@ -162,6 +162,37 @@ def test_tab_data_endpoints_return_items():
     assert wells.get_json()["items"][0]["stocks"][0]["ticker"] == "AAPL"
 
 
+def test_breakout_radar_endpoint_seeds_recent_notification_symbols(monkeypatch, tmp_path):
+    client = _client()
+    state_path = tmp_path / "notification-state.json"
+    state_path.write_text(json.dumps({"breakout_symbols": ["XYZ"], "breakout_scores": {"XYZ": 8.7}}), encoding="utf-8")
+    monkeypatch.setattr(api_module, "_notification_trigger_state_path", lambda: str(state_path))
+
+    class EmptyBreakoutSvc(StubMarketService):
+        def get_breakout_radar(self, **kwargs):
+            seeds = kwargs.get("seed_symbols") or {}
+            return [
+                {
+                    "symbol": symbol,
+                    "price": 0.0,
+                    "score": score,
+                    "decision_source": "recent_breakout_alert",
+                    "rationale": "Recent breakout notification candidate; keeping it on radar.",
+                }
+                for symbol, score in seeds.items()
+            ]
+
+    client.application.extensions["market_data_service"] = EmptyBreakoutSvc()
+
+    res = client.get("/api/breakout-radar")
+
+    assert res.status_code == 200
+    items = res.get_json()["items"]
+    assert items[0]["symbol"] == "XYZ"
+    assert items[0]["score"] == 8.7
+    assert items[0]["decision_source"] == "recent_breakout_alert"
+
+
 def test_quick_ask_returns_shopping_friendly_recommendation_scale():
     client = _client()
     client.application.extensions["deterministic_quick_advisor"] = None
@@ -172,6 +203,55 @@ def test_quick_ask_returns_shopping_friendly_recommendation_scale():
     assert "momentum" in data["rationale"].lower() or "signal" in data["rationale"].lower()
     assert data["quote_source"] == "finnhub"
     assert data["quote_diagnostics"]["provider"] == "finnhub"
+
+
+
+def test_quick_ask_does_not_show_internal_feature_names_in_rationale():
+    client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = None
+    from moneybot.services.deterministic_advisor import DeterministicQuickAdvisor
+
+    advisor = DeterministicQuickAdvisor(enabled=True, artifact_path="/tmp/missing-moneybot-artifact.json")
+    advisor.artifact.feature_columns = [
+        "feature_change_percent",
+        "feature_endpoint_hot_momentum_buys",
+        "feature_endpoint_quick_ask",
+        "feature_endpoint_user_watchlist",
+        "feature_macd_histogram",
+        "feature_price",
+        "feature_probability_up",
+        "feature_rec_buy",
+        "feature_rec_hold",
+        "feature_rec_hold_off_for_now",
+        "feature_rec_negative",
+        "feature_rec_positive",
+        "feature_rec_sell",
+        "feature_rec_strong_buy",
+        "feature_return_1d",
+        "feature_return_5d",
+        "feature_rsi",
+        "feature_source_ai_enhanced",
+        "feature_source_deterministic_model",
+        "feature_source_rule_based",
+        "feature_volume_ratio",
+    ]
+    feature_count = len(advisor.artifact.feature_columns)
+    advisor.artifact.means = [0.0] * feature_count
+    advisor.artifact.stds = [1.0] * feature_count
+    advisor.artifact.weights = [0.0] * feature_count
+    client.application.extensions["deterministic_quick_advisor"] = advisor
+    client.application.extensions["ai_advisor_service"] = None
+
+    res = client.get("/api/quick-ask?symbol=AAPL")
+
+    assert res.status_code == 200
+    data = res.get_json()["data"]
+    visible_text = " ".join(str(data.get(key) or "") for key in ("rationale", "advice_reason"))
+    if isinstance(data.get("ai"), dict):
+        visible_text += " " + str(data["ai"].get("narrative") or "")
+    for feature_name in advisor.artifact.feature_columns:
+        assert feature_name not in visible_text
+    assert "safe defaults" in data["rationale"]
 
 
 def test_quick_ask_normalizes_symbol_from_url_like_input():

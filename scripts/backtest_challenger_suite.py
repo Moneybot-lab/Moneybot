@@ -35,7 +35,6 @@ def _load_json(path: Path) -> dict[str, Any]:
 def _sigmoid(values: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-np.clip(values, -35.0, 35.0)))
 
-
 def _return_column(df: pd.DataFrame, horizon_days: int) -> str:
     preferred = f"return_{horizon_days}d"
     if preferred in df.columns:
@@ -108,6 +107,56 @@ def _predict(artifact: dict[str, Any], frame: pd.DataFrame, feature_columns: lis
         preds = np.full(len(frame), pred, dtype=int)
         return preds.astype(float), preds
     raise ValueError(f"Unsupported challenger model_type={model_type}")
+
+
+
+def _ranking_metrics(scores: np.ndarray, labels: np.ndarray, returns: np.ndarray, *, top_fraction: float = 0.20) -> dict[str, Any]:
+    returns = np.nan_to_num(np.asarray(returns, dtype=float), nan=0.0)
+    n = int(len(scores))
+    if n == 0:
+        return {
+            "top_k": 0,
+            "top_k_precision": 0.0,
+            "top_k_avg_return": 0.0,
+            "pairwise_ranking_loss": 0.0,
+            "big_gain_capture": 0.0,
+            "big_loss_demotion": 0.0,
+            "ranking_objective": 0.0,
+        }
+    top_k = max(1, int(np.ceil(n * top_fraction)))
+    order = np.argsort(-scores)
+    top = order[:top_k]
+    positives = scores[labels >= 0.5]
+    negatives = scores[labels < 0.5]
+    pairwise_loss = (
+        float(np.mean(positives[:, None] <= negatives[None, :]))
+        if len(positives) and len(negatives)
+        else 0.0
+    )
+    gain_cutoff = max(0.0, float(np.quantile(returns, 0.80)))
+    loss_cutoff = min(0.0, float(np.quantile(returns, 0.20)))
+    big_gain = returns >= gain_cutoff
+    big_loss = returns <= loss_cutoff
+    big_gain_capture = float(big_gain[top].sum() / big_gain.sum()) if big_gain.any() else 0.0
+    big_loss_demotion = 1.0 - float(big_loss[top].sum() / big_loss.sum()) if big_loss.any() else 1.0
+    top_precision = float(labels[top].mean()) if len(top) else 0.0
+    top_avg_return = float(returns[top].mean()) if len(top) else 0.0
+    objective = (
+        top_avg_return
+        + (0.10 * top_precision)
+        + (0.10 * big_gain_capture)
+        + (0.05 * big_loss_demotion)
+        - (0.10 * pairwise_loss)
+    )
+    return {
+        "top_k": int(top_k),
+        "top_k_precision": round(top_precision, 6),
+        "top_k_avg_return": round(top_avg_return, 6),
+        "pairwise_ranking_loss": round(pairwise_loss, 6),
+        "big_gain_capture": round(big_gain_capture, 6),
+        "big_loss_demotion": round(big_loss_demotion, 6),
+        "ranking_objective": round(float(objective), 6),
+    }
 
 
 def _max_drawdown(equity: np.ndarray) -> float:
@@ -215,12 +264,23 @@ def backtest_challenger_suite(
             "transaction_cost_bps": transaction_cost_bps,
             "slippage_bps": slippage_bps,
             "max_drawdown": _max_drawdown(equity),
+            "top_k_ranking": _ranking_metrics(probs, labels, returns),
             "calibration": _calibration(probs, labels),
             "drift": _drift(frame, features),
         }
         gates = _promotion_gates(metrics, benchmark, min_rows=min_rows, max_drawdown=max_drawdown, max_ece=max_ece, min_excess_return=min_excess_return, max_drift_shift=max_drift_shift)
         challengers.append({**challenger, "backtest_metrics": metrics, "promotion_gates": gates, "shadow_logging_recommended": gates["promotion_ready"], "routing_allowed": False})
-    ranked = sorted(challengers, key=lambda item: (item["promotion_gates"]["promotion_ready"], item["backtest_metrics"]["total_return_net"], -item["backtest_metrics"]["calibration"].get("ece", 1.0)), reverse=True)
+    ranked = sorted(
+        challengers,
+        key=lambda item: (
+            item["promotion_gates"]["promotion_ready"],
+            item["backtest_metrics"].get("top_k_ranking", {}).get("ranking_objective", 0),
+            item["backtest_metrics"].get("top_k_ranking", {}).get("top_k_avg_return", 0),
+            item["backtest_metrics"]["total_return_net"],
+            -item["backtest_metrics"]["calibration"].get("ece", 1.0),
+        ),
+        reverse=True,
+    )
     report = {
         "schema_version": BACKTEST_SCHEMA_VERSION,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -232,6 +292,7 @@ def backtest_challenger_suite(
         "challengers": challengers,
         "ranked_model_versions": [item["model_version"] for item in ranked],
         "shadow_candidates": [item["model_version"] for item in ranked if item["shadow_logging_recommended"]],
+        "ranking_policy": "rank promotion-ready models by top-K capped-exposure objective before total return",
         "routing_policy": "shadow-log first; user-facing routing remains disabled until gates pass and human promotion occurs",
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
