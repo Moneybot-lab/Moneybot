@@ -1964,7 +1964,7 @@ def test_model_health_loads_historical_validation_summary(tmp_path):
 
 
 
-def test_day14_promotion_metadata_uses_candidate_version(tmp_path):
+def test_day14_promotion_metadata_uses_alpha_atlas_promotion_version(tmp_path):
     from scripts import day14_promote_candidate
 
     comparison_path = tmp_path / "comparison.json"
@@ -1989,7 +1989,11 @@ def test_day14_promotion_metadata_uses_candidate_version(tmp_path):
         sys.argv = old_argv
 
     metadata = json.loads(production_path.with_suffix(production_path.suffix + ".meta.json").read_text(encoding="utf-8"))
-    assert metadata["model_version"] == "candidate-logreg-v1-20260710T225011Z"
+    promoted = json.loads(production_path.read_text(encoding="utf-8"))
+    assert metadata["model_version"] == "alpha-atlas-v2"
+    assert metadata["source_candidate_version"] == "candidate-logreg-v1-20260710T225011Z"
+    assert promoted["version"] == "alpha-atlas-v2"
+    assert promoted["source_candidate_version"] == "candidate-logreg-v1-20260710T225011Z"
 
 def test_promote_track_b_candidate_requires_token():
     client = _client()

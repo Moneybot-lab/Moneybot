@@ -38,3 +38,4 @@ def test_existing_model_version_reads_candidate_version(tmp_path):
     assert version == "candidate-logreg-v1-20260714T120000Z"
     assert is_promoted_model_version(version) is True
     assert is_promoted_model_version("alpha-atlas-v1") is False
+    assert is_promoted_model_version("alpha-atlas-v2") is True

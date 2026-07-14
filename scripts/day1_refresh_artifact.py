@@ -32,7 +32,12 @@ def is_promoted_model_version(version: str | None) -> bool:
     if not version:
         return False
     normalized = str(version).strip().lower()
-    return normalized.startswith("candidate-") or normalized.startswith("challenger-")
+    if normalized.startswith("candidate-") or normalized.startswith("challenger-"):
+        return True
+    if normalized.startswith("alpha-atlas-v"):
+        suffix = normalized.removeprefix("alpha-atlas-v")
+        return suffix.isdigit() and int(suffix) > 1
+    return False
 
 
 def build_day1_commands(
