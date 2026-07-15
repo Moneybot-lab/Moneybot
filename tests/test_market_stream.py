@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -76,6 +76,63 @@ def test_parser_normalizes_all_subscribed_event_types():
     assert events[2].payload["midpoint"] == pytest.approx(200.22)
     assert events[3].provider_event_id == "trade-101"
     assert all(event.source_mode == "websocket" for event in events)
+
+
+def test_parser_normalizes_quote_and_trade_scalar_conditions():
+    parser = MassiveStreamParser()
+    events = parser.parse_message(
+        json.dumps([
+            {"ev": "Q", "sym": "AAPL", "bp": 200.2, "ap": 200.4, "bs": 1, "as": 2, "t": 1780929000000000000, "c": 1},
+            {"ev": "T", "sym": "MSFT", "p": 300.1, "s": 5, "t": 1780929000000000000, "c": 1},
+        ]),
+        received_at=NOW,
+    )
+
+    assert [event.payload["conditions"] for event in events] == [[1], [1]]
+
+
+def test_parser_preserves_quote_and_trade_list_conditions():
+    parser = MassiveStreamParser()
+    events = parser.parse_message(
+        json.dumps([
+            {"ev": "Q", "sym": "AAPL", "bp": 200.2, "ap": 200.4, "bs": 1, "as": 2, "t": 1780929000000000000, "c": [1, 2]},
+            {"ev": "T", "sym": "MSFT", "p": 300.1, "s": 5, "t": 1780929000000000000, "c": [1, 2]},
+        ]),
+        received_at=NOW,
+    )
+
+    assert [event.payload["conditions"] for event in events] == [[1, 2], [1, 2]]
+
+
+def test_parser_defaults_missing_quote_and_trade_conditions_to_empty_lists():
+    parser = MassiveStreamParser()
+    events = parser.parse_message(
+        json.dumps([
+            {"ev": "Q", "sym": "AAPL", "bp": 200.2, "ap": 200.4, "bs": 1, "as": 2, "t": 1780929000000000000},
+            {"ev": "T", "sym": "MSFT", "p": 300.1, "s": 5, "t": 1780929000000000000},
+        ]),
+        received_at=NOW,
+    )
+
+    assert [event.payload["conditions"] for event in events] == [[], []]
+
+
+def test_worker_does_not_raise_type_error_for_scalar_conditions():
+    async def scenario():
+        state = InMemoryMarketStreamState()
+        instance = worker(state=state)
+        await instance.process_raw_message(
+            json.dumps([
+                {"ev": "Q", "sym": "AAPL", "bp": 200.2, "ap": 200.4, "bs": 1, "as": 2, "t": 1780929000000000000, "c": 1},
+                {"ev": "T", "sym": "MSFT", "p": 300.1, "s": 5, "t": 1780929000000000000, "c": 1},
+            ])
+        )
+
+        assert instance.metrics.parse_failures == 0
+        assert state.get_latest("AAPL", "Q")["payload"]["conditions"] == [1]
+        assert state.get_latest("MSFT", "T")["payload"]["conditions"] == [1]
+
+    asyncio.run(scenario())
 
 
 def test_parser_rejects_malformed_unknown_and_wildcard_events():
