@@ -4,9 +4,9 @@ from moneybot.services.deterministic_advisor import DeterministicQuickAdvisor
 from moneybot.services.deterministic_model import BaselineModelArtifact, save_artifact
 
 
-def _write_artifact(tmp_path: Path) -> Path:
+def _write_artifact(tmp_path: Path, version: str = "alpha-atlas-v1") -> Path:
     artifact = BaselineModelArtifact(
-        version="alpha-atlas-v1",
+        version=version,
         feature_columns=["return_1d", "return_5d", "rsi_14", "macd_hist", "vol_ratio_20d"],
         means=[0.0, 0.0, 50.0, 0.0, 1.0],
         stds=[1.0, 1.0, 10.0, 1.0, 1.0],
@@ -49,6 +49,21 @@ def test_predict_quick_decision_returns_structured_payload(tmp_path: Path):
     assert 0.0 <= out["probability_up"] <= 1.0
     assert out["quote_source"] == "finnhub"
 
+
+
+
+def test_predict_quick_decision_rationale_uses_loaded_alpha_atlas_version(tmp_path: Path):
+    artifact_path = _write_artifact(tmp_path, version="alpha-atlas-v2")
+    svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(artifact_path))
+
+    out = svc.predict_quick_decision(
+        signal_data={"technical": {"rsi": 45.0, "macd_histogram": 0.2}, "volume_ratio": 1.4},
+        quote_data={"price": 101.2, "change_percent": 1.6, "quote_source": "test", "diagnostics": {}},
+    )
+
+    assert out is not None
+    assert out["model_version"] == "alpha-atlas-v2"
+    assert out["rationale"].startswith("Alpha Atlas v2 probability-up=")
 
 def test_predict_quick_decision_imputes_missing_features(tmp_path: Path):
     artifact_path = _write_artifact(tmp_path)
