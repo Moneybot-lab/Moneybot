@@ -491,7 +491,7 @@ python3 scripts/run_track_b_offline.py --input-log data/decision_events.jsonl --
 What it does:
 - builds an offline decision training dataset (`day8_build_decision_training_dataset.py`)
 - trains a challenger candidate artifact in `data/track_b/candidate_model_track_b.json`
-- compares challenger vs production on holdout and writes `data/track_b/model_comparison_track_b.json`
+- compares challenger vs the exported current production artifact (`data/track_b/production_model.json` in GitHub Actions) on holdout and writes `data/track_b/model_comparison_track_b.json`
 - writes a run summary to `data/track_b/track_b_summary.json`
 
 Safety guarantees:

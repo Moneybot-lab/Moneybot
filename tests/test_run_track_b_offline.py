@@ -11,6 +11,7 @@ def test_build_track_b_commands_uses_offline_artifacts_only():
         train_ratio=0.8,
         min_rows=200,
         output_dir=Path("/tmp/Moneybot/data/track_b"),
+        production_model="data/track_b/production_model.json",
     )
 
     assert commands[0][:2] == ["python3", "/tmp/Moneybot/scripts/day8_build_decision_training_dataset.py"]
@@ -20,7 +21,8 @@ def test_build_track_b_commands_uses_offline_artifacts_only():
 
     flat = " ".join(" ".join(cmd) for cmd in commands)
     assert "day14_promote_candidate.py" not in flat
-    assert "data/day1_baseline_model.json" in flat
+    assert "data/track_b/production_model.json" in flat
+    assert "data/day1_baseline_model.json" not in flat
     assert "candidate_model_track_b.json" in flat
     assert "model_comparison_track_b.json" in flat
 
