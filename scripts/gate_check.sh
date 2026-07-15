@@ -4,15 +4,17 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
+  BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate 10_to_25
+  BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate 25_to_50
   BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate 50_to_75
   BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate 75_to_100
-  BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_20_to_35
-  BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_35_to_50
+  BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_10_to_25
+  BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_25_to_50
   BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_50_to_75
   BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_75_to_100
 
 Options:
-  --gate <50_to_75|75_to_100|portfolio_20_to_35|portfolio_35_to_50|portfolio_50_to_75|portfolio_75_to_100>
+  --gate <10_to_25|25_to_50|50_to_75|75_to_100|portfolio_10_to_25|portfolio_25_to_50|portfolio_50_to_75|portfolio_75_to_100>
                                  Promotion gate profile (required)
   --limit <n>                   decision-outcomes limit (default: 100)
 
@@ -58,11 +60,15 @@ if [[ -z "${BASE_URL:-}" ]]; then
   exit 2
 fi
 
-if [[ "$gate" != "50_to_75" && "$gate" != "75_to_100" && "$gate" != "portfolio_20_to_35" && "$gate" != "portfolio_35_to_50" && "$gate" != "portfolio_50_to_75" && "$gate" != "portfolio_75_to_100" ]]; then
-  echo "--gate must be one of: 50_to_75, 75_to_100, portfolio_20_to_35, portfolio_35_to_50, portfolio_50_to_75, portfolio_75_to_100" >&2
-  usage
-  exit 2
-fi
+case "$gate" in
+  10_to_25|25_to_50|50_to_75|75_to_100|portfolio_10_to_25|portfolio_25_to_50|portfolio_50_to_75|portfolio_75_to_100|portfolio_20_to_35|portfolio_35_to_50)
+    ;;
+  *)
+    echo "--gate must be one of: 10_to_25, 25_to_50, 50_to_75, 75_to_100, portfolio_10_to_25, portfolio_25_to_50, portfolio_50_to_75, portfolio_75_to_100" >&2
+    usage
+    exit 2
+    ;;
+esac
 
 require_cmd curl
 require_cmd jq
@@ -124,18 +130,36 @@ five_day_evidence_expr() {
   printf '((.outcomes.summary_5d.evaluated_rows // .outcomes.evaluated_rows_5d_available // 0) >= %s) or ((.model.calibration_report.rows // 0) >= %s)' "$min_rows" "$min_rows"
 }
 
-if [[ "$gate" == "50_to_75" ]]; then
-  check_bool_with_json "5d evidence rows >= 20" "$(five_day_evidence_expr 20)" "$combined_json"
-  check_bool_with_json "evaluated_rows_available >= 40" '(.data.evaluated_rows_available // (.data.summary_1d.evaluated_rows // 0)) >= 40' "$outcomes_json"
-  check_bool_with_json "summary_1d.accuracy >= 0.48" '(.data.summary_1d.accuracy // 0) >= 0.48' "$outcomes_json"
-  check_bool_with_json "calibration_report.rows >= 30" '(.data.calibration_report.rows // 0) >= 30' "$model_json"
-  check_bool_with_json "calibration_report.effective_brier_score <= 0.26" '((.data.calibration_report.effective_brier_score // .data.calibration_report.calibrated_brier_score // .data.calibration_report.brier_score // 999) <= 0.26)' "$model_json"
-elif [[ "$gate" == "75_to_100" ]]; then
-  check_bool_with_json "5d evidence rows >= 60" "$(five_day_evidence_expr 60)" "$combined_json"
-  check_bool_with_json "evaluated_rows_available >= 100" '(.data.evaluated_rows_available // (.data.summary_1d.evaluated_rows // 0)) >= 100' "$outcomes_json"
-  check_bool_with_json "summary_1d.accuracy >= 0.50" '(.data.summary_1d.accuracy // 0) >= 0.50' "$outcomes_json"
-  check_bool_with_json "calibration_report.effective_brier_score <= 0.24" '((.data.calibration_report.effective_brier_score // .data.calibration_report.calibrated_brier_score // .data.calibration_report.brier_score // 999) <= 0.24)' "$model_json"
-fi
+run_quick_gate() {
+  local current_pct="$1"
+  local min_5d_rows="$2"
+  local min_evaluated_rows="$3"
+  local min_accuracy="$4"
+  local min_calibration_rows="$5"
+  local max_brier="$6"
+
+  check_bool_with_json "rollout_percentage == ${current_pct}" "(.data.rollout_percentage // -1) == ${current_pct}" "$model_json"
+  check_bool_with_json "5d evidence rows >= ${min_5d_rows}" "$(five_day_evidence_expr "$min_5d_rows")" "$combined_json"
+  check_bool_with_json "evaluated_rows_available >= ${min_evaluated_rows}" "(.data.evaluated_rows_available // (.data.summary_1d.evaluated_rows // 0)) >= ${min_evaluated_rows}" "$outcomes_json"
+  check_bool_with_json "summary_1d.accuracy >= ${min_accuracy}" "(.data.summary_1d.accuracy // 0) >= ${min_accuracy}" "$outcomes_json"
+  check_bool_with_json "calibration_report.rows >= ${min_calibration_rows}" "(.data.calibration_report.rows // 0) >= ${min_calibration_rows}" "$model_json"
+  check_bool_with_json "calibration_report.effective_brier_score <= ${max_brier}" "((.data.calibration_report.effective_brier_score // .data.calibration_report.calibrated_brier_score // .data.calibration_report.brier_score // 999) <= ${max_brier})" "$model_json"
+}
+
+case "$gate" in
+  10_to_25)
+    run_quick_gate 10 10 20 0.46 20 0.28
+    ;;
+  25_to_50)
+    run_quick_gate 25 20 40 0.48 30 0.26
+    ;;
+  50_to_75)
+    run_quick_gate 50 40 75 0.49 45 0.25
+    ;;
+  75_to_100)
+    run_quick_gate 75 60 100 0.50 60 0.24
+    ;;
+esac
 
 if [[ "$gate" == portfolio_* ]]; then
   check_bool_with_json "rollout_dry_run == false" '.data.rollout_dry_run == false' "$model_json"
@@ -143,19 +167,32 @@ if [[ "$gate" == portfolio_* ]]; then
   check_bool_with_json "calibration_report.rows >= 30" '(.data.calibration_report.rows // 0) >= 30' "$model_json"
   check_bool_with_json "calibration_report.effective_brier_score <= 0.26" '((.data.calibration_report.effective_brier_score // .data.calibration_report.calibrated_brier_score // .data.calibration_report.brier_score // 999) <= 0.26)' "$model_json"
 
-  if [[ "$gate" == "portfolio_20_to_35" ]]; then
-    check_bool_with_json "portfolio_rollout_percentage == 20" '(.data.portfolio_rollout_percentage // -1) == 20' "$model_json"
-    check_bool_with_json "5d evidence rows >= 20" "$(five_day_evidence_expr 20)" "$combined_json"
-  elif [[ "$gate" == "portfolio_35_to_50" ]]; then
-    check_bool_with_json "portfolio_rollout_percentage == 35" '(.data.portfolio_rollout_percentage // -1) == 35' "$model_json"
-    check_bool_with_json "5d evidence rows >= 30" "$(five_day_evidence_expr 30)" "$combined_json"
-  elif [[ "$gate" == "portfolio_50_to_75" ]]; then
-    check_bool_with_json "portfolio_rollout_percentage == 50" '(.data.portfolio_rollout_percentage // -1) == 50' "$model_json"
-    check_bool_with_json "5d evidence rows >= 40" "$(five_day_evidence_expr 40)" "$combined_json"
-  else
-    check_bool_with_json "portfolio_rollout_percentage == 75" '(.data.portfolio_rollout_percentage // -1) == 75' "$model_json"
-    check_bool_with_json "5d evidence rows >= 60" "$(five_day_evidence_expr 60)" "$combined_json"
-  fi
+  case "$gate" in
+    portfolio_10_to_25)
+      check_bool_with_json "portfolio_rollout_percentage == 10" '(.data.portfolio_rollout_percentage // -1) == 10' "$model_json"
+      check_bool_with_json "5d evidence rows >= 10" "$(five_day_evidence_expr 10)" "$combined_json"
+      ;;
+    portfolio_25_to_50)
+      check_bool_with_json "portfolio_rollout_percentage == 25" '(.data.portfolio_rollout_percentage // -1) == 25' "$model_json"
+      check_bool_with_json "5d evidence rows >= 20" "$(five_day_evidence_expr 20)" "$combined_json"
+      ;;
+    portfolio_20_to_35)
+      check_bool_with_json "portfolio_rollout_percentage == 20" '(.data.portfolio_rollout_percentage // -1) == 20' "$model_json"
+      check_bool_with_json "5d evidence rows >= 20" "$(five_day_evidence_expr 20)" "$combined_json"
+      ;;
+    portfolio_35_to_50)
+      check_bool_with_json "portfolio_rollout_percentage == 35" '(.data.portfolio_rollout_percentage // -1) == 35' "$model_json"
+      check_bool_with_json "5d evidence rows >= 30" "$(five_day_evidence_expr 30)" "$combined_json"
+      ;;
+    portfolio_50_to_75)
+      check_bool_with_json "portfolio_rollout_percentage == 50" '(.data.portfolio_rollout_percentage // -1) == 50' "$model_json"
+      check_bool_with_json "5d evidence rows >= 40" "$(five_day_evidence_expr 40)" "$combined_json"
+      ;;
+    portfolio_75_to_100)
+      check_bool_with_json "portfolio_rollout_percentage == 75" '(.data.portfolio_rollout_percentage // -1) == 75' "$model_json"
+      check_bool_with_json "5d evidence rows >= 60" "$(five_day_evidence_expr 60)" "$combined_json"
+      ;;
+  esac
 fi
 
 echo

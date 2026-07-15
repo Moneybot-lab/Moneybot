@@ -44,8 +44,8 @@ DETERMINISTIC_CALIBRATION_AUTO_APPLY_PLAN=true
 # Conservative rollout controls for initial rollout
 DETERMINISTIC_QUICK_ENABLED=true
 DETERMINISTIC_MOMENTUM_ENABLED=true
-DETERMINISTIC_ROLLOUT_PERCENTAGE=100
-DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE=100
+DETERMINISTIC_ROLLOUT_PERCENTAGE=10
+DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE=10
 DETERMINISTIC_ROLLOUT_SEED=moneybot
 DETERMINISTIC_ROLLOUT_DRY_RUN=false
 ```
@@ -58,6 +58,25 @@ DETERMINISTIC_ROLLOUT_BLOCKLIST=
 ```
 
 Use `DETERMINISTIC_ROLLOUT_BLOCKLIST` for symbols that repeatedly create bad external-market-data lookups or should not receive deterministic routing.
+
+
+## Rollout gate plan
+
+Start both Quick Ask and Portfolio at 10%, then promote one surface at a time through 25%, 50%, 75%, and 100% after the matching gate passes. Keep `DETERMINISTIC_ROLLOUT_SEED` stable between stages.
+
+```bash
+# Quick Ask
+BASE_URL="$MONEYBOT_BASE_URL" ./scripts/gate_check.sh --gate 10_to_25
+BASE_URL="$MONEYBOT_BASE_URL" ./scripts/gate_check.sh --gate 25_to_50
+BASE_URL="$MONEYBOT_BASE_URL" ./scripts/gate_check.sh --gate 50_to_75
+BASE_URL="$MONEYBOT_BASE_URL" ./scripts/gate_check.sh --gate 75_to_100
+
+# Portfolio
+BASE_URL="$MONEYBOT_BASE_URL" ./scripts/gate_check.sh --gate portfolio_10_to_25
+BASE_URL="$MONEYBOT_BASE_URL" ./scripts/gate_check.sh --gate portfolio_25_to_50
+BASE_URL="$MONEYBOT_BASE_URL" ./scripts/gate_check.sh --gate portfolio_50_to_75
+BASE_URL="$MONEYBOT_BASE_URL" ./scripts/gate_check.sh --gate portfolio_75_to_100
+```
 
 ## Render disk / deploy checks
 

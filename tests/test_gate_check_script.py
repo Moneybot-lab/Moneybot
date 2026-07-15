@@ -97,3 +97,55 @@ def test_quick_75_to_100_gate_accepts_calibration_rows_as_5d_evidence(tmp_path: 
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "PASS  5d evidence rows >= 60" in result.stdout
+
+
+def test_quick_10_to_25_gate_requires_current_10_percent(tmp_path: Path):
+    result = _run_gate_with_payloads(
+        tmp_path,
+        gate="10_to_25",
+        model_payload=_base_model_payload(calibration_rows=30, rollout=25, portfolio_rollout=10),
+        outcomes_payload=_base_outcomes_payload(evaluated_available=24, rows_5d=10, accuracy_1d=0.50),
+    )
+
+    assert result.returncode == 1
+    assert "FAIL  rollout_percentage == 10" in result.stdout
+    assert "PASS  5d evidence rows >= 10" in result.stdout
+
+
+def test_quick_25_to_50_gate_passes_with_current_25_percent(tmp_path: Path):
+    result = _run_gate_with_payloads(
+        tmp_path,
+        gate="25_to_50",
+        model_payload=_base_model_payload(calibration_rows=30, rollout=25, portfolio_rollout=10),
+        outcomes_payload=_base_outcomes_payload(evaluated_available=44, rows_5d=20, accuracy_1d=0.50),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS  rollout_percentage == 25" in result.stdout
+    assert "PASS  5d evidence rows >= 20" in result.stdout
+
+
+def test_portfolio_10_to_25_gate_passes_with_current_10_percent(tmp_path: Path):
+    result = _run_gate_with_payloads(
+        tmp_path,
+        gate="portfolio_10_to_25",
+        model_payload=_base_model_payload(calibration_rows=30, rollout=10, portfolio_rollout=10),
+        outcomes_payload=_base_outcomes_payload(evaluated_available=24, rows_5d=10, accuracy_1d=0.50),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS  portfolio_rollout_percentage == 10" in result.stdout
+    assert "PASS  5d evidence rows >= 10" in result.stdout
+
+
+def test_portfolio_25_to_50_gate_requires_current_25_percent(tmp_path: Path):
+    result = _run_gate_with_payloads(
+        tmp_path,
+        gate="portfolio_25_to_50",
+        model_payload=_base_model_payload(calibration_rows=30, rollout=10, portfolio_rollout=10),
+        outcomes_payload=_base_outcomes_payload(evaluated_available=44, rows_5d=20, accuracy_1d=0.50),
+    )
+
+    assert result.returncode == 1
+    assert "FAIL  portfolio_rollout_percentage == 25" in result.stdout
+    assert "PASS  5d evidence rows >= 20" in result.stdout
