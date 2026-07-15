@@ -39,6 +39,14 @@ def _integer(value: Any) -> int | None:
     return int(number) if number is not None else None
 
 
+def _condition_values(value: Any) -> list[Any]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return list(value)
+    return [value]
+
+
 def _event_time(value: Any) -> datetime | None:
     return MassiveRestClient.normalize_timestamp(value)
 
@@ -132,7 +140,7 @@ class MassiveStreamParser:
             normalized = {
                 "bid": bid, "ask": ask, "bid_size": _number(item.get("bs")), "ask_size": _number(item.get("as")),
                 "midpoint": (bid + ask) / 2 if bid and ask and ask >= bid else None,
-                "bid_exchange": item.get("bx"), "ask_exchange": item.get("ax"), "conditions": list(item.get("c") or []),
+                "bid_exchange": item.get("bx"), "ask_exchange": item.get("ax"), "conditions": _condition_values(item.get("c")),
             }
             if bid is not None and ask is not None and ask < bid:
                 flags.append("crossed_market")
@@ -141,7 +149,7 @@ class MassiveStreamParser:
         else:
             normalized = {
                 "price": _number(item.get("p")), "size": _number(item.get("s")), "exchange": item.get("x"),
-                "conditions": list(item.get("c") or []), "tape": item.get("z"),
+                "conditions": _condition_values(item.get("c")), "tape": item.get("z"),
             }
             if normalized["price"] is None:
                 flags.append("missing_trade_price")

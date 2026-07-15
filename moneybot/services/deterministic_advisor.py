@@ -3,12 +3,21 @@ from __future__ import annotations
 import logging
 import math
 import hashlib
-from pathlib import Path
 from typing import Any, Dict
 
 import numpy as np
 
 from .deterministic_model import BaselineModelArtifact, default_baseline_artifact, load_artifact, predict_proba
+
+
+def display_model_name(version: str | None) -> str:
+    raw = str(version or "").strip()
+    prefix = "alpha-atlas-v"
+    if raw.lower().startswith(prefix):
+        return f"Alpha Atlas v{raw[len(prefix):]}"
+    if raw:
+        return raw
+    return "Alpha Atlas"
 
 
 class DeterministicQuickAdvisor:
@@ -189,8 +198,9 @@ class DeterministicQuickAdvisor:
             recommendation = "HOLD OFF FOR NOW"
 
         confidence = round(max(prob_up, 1.0 - prob_up) * 100.0, 1)
+        model_name = display_model_name(self.artifact.version if self.artifact else None)
         rationale = (
-            f"Alpha Atlas v1 probability-up={prob_up:.2f} vs threshold={threshold:.2f}."
+            f"{model_name} probability-up={prob_up:.2f} vs threshold={threshold:.2f}."
         )
         if self.calibration_enabled:
             rationale += (
@@ -270,10 +280,10 @@ class DeterministicQuickAdvisor:
                 advice = "SELL"
 
         reason = (
-            f"Alpha Atlas v1 portfolio rule using probability_up={prob_up:.2f}"
+            f"{display_model_name(quick.get('model_version'))} portfolio rule using probability_up={prob_up:.2f}"
             f" and pnl_percent={pnl_percent:.2f}."
             if pnl_percent is not None
-            else "Alpha Atlas v1 portfolio rule holding due to missing entry/current price context."
+            else f"{display_model_name(quick.get('model_version'))} portfolio rule holding due to missing entry/current price context."
         )
 
         return {

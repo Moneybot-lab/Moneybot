@@ -219,7 +219,7 @@ The table is designed to show:
 To reduce live API work, you can precompute outcomes to a snapshot file:
 
 ```bash
-python3 scripts/day12_materialize_outcomes.py --input data/decision_events.jsonl --output data/decision_outcomes_snapshot.json --limit 2000 --rows-limit 20
+python3 scripts/day12_materialize_outcomes.py --input data/decision_events.jsonl --output data/decision_outcomes_snapshot.json --limit 50000 --rows-limit 20
 ```
 
 Then `/api/decision-outcomes` will serve that materialized snapshot when it is fresh enough.
@@ -291,27 +291,27 @@ DETERMINISTIC_ROLLOUT_PERCENTAGE=0
 
 In this mode, `/api/quick-ask` continues to serve the existing rule-based response, while logging deterministic shadow decisions under `quick_ask_shadow` for comparison.
 
-### 5.2 rollout promotion plan (starting from `DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE=20`)
+### 5.2 rollout promotion plan (starting from 10%)
 
-Use a staged promotion schedule so you can validate quality and safety at each step before broadening exposure.
+Use the same staged promotion schedule for both deterministic Quick Ask (`DETERMINISTIC_ROLLOUT_PERCENTAGE`) and deterministic Portfolio (`DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE`). Keep `DETERMINISTIC_ROLLOUT_SEED` unchanged between stages so the existing cohort expands instead of reshuffling users/symbols.
 
-Suggested progression:
+Suggested progression for each surface:
 
-1. **20% (current baseline, 24-48h)**
+1. **10% → 25% (initial expansion, 24-48h)**
    - keep `DETERMINISTIC_ROLLOUT_DRY_RUN=false` (live traffic)
-   - monitor `/api/model-health`, `quick_ask` latency, and decision outcome drift vs baseline
-2. **35% (next step, 24-48h)**
-   - increase only `DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE=35`
-   - keep the same `DETERMINISTIC_ROLLOUT_SEED` to avoid cohort churn
-3. **50% (confidence gate, 2-3 days)**
-   - promote if error/complaint rates remain flat and deterministic outcomes are not materially worse
-4. **75% (broad exposure, 2-3 days)**
+   - promote only if model health is clean, decision logging is enabled, no lookup errors are present, and there is at least minimal 5D/calibration evidence
+2. **25% → 50% (confidence expansion, 24-48h)**
+   - increase only the surface you are promoting (`DETERMINISTIC_ROLLOUT_PERCENTAGE=50` for Quick Ask or `DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE=50` for Portfolio)
+   - confirm 1D accuracy remains above gate and that 5D outcomes/calibration evidence continue to mature
+3. **50% → 75% (broad exposure, 2-3 days)**
+   - require stronger 5D evidence, higher evaluated-row counts, and stable calibration before widening
    - verify no concentration risk by symbol/sector in the deterministic cohort
-5. **100% (full rollout)**
+4. **75% → 100% (full rollout)**
    - promote only after stable metrics across at least one full market cycle for your strategy horizon
+   - require the strictest Brier/evidence checks before removing the remaining cohort holdback
 
 Rollback rule:
-- if quality/safety metrics regress at any stage, revert to the previous percentage immediately and investigate before retrying.
+- if quality/safety metrics regress at any stage, revert the affected surface to the previous percentage immediately and investigate before retrying.
 
 Allowlist/blocklist guidance when switching dry-run to false:
 - **No mandatory change is required** just because `DETERMINISTIC_ROLLOUT_DRY_RUN` moved to `false`.
@@ -319,15 +319,31 @@ Allowlist/blocklist guidance when switching dry-run to false:
 - Keep blocklist for known-problem symbols you want to suppress regardless of percentage.
 - Avoid putting the same symbol in both lists; if that happens, blocklist takes precedence in rollout gating logic.
 
-### 5.3 terminal test runbook (example: promote quick-ask from 50% to 75%)
+Gate command map:
+
+```bash
+# Quick Ask rollout gates
+BASE_URL=https://moneybotlabs.com ./scripts/gate_check.sh --gate 10_to_25
+BASE_URL=https://moneybotlabs.com ./scripts/gate_check.sh --gate 25_to_50
+BASE_URL=https://moneybotlabs.com ./scripts/gate_check.sh --gate 50_to_75
+BASE_URL=https://moneybotlabs.com ./scripts/gate_check.sh --gate 75_to_100
+
+# Portfolio rollout gates
+BASE_URL=https://moneybotlabs.com ./scripts/gate_check.sh --gate portfolio_10_to_25
+BASE_URL=https://moneybotlabs.com ./scripts/gate_check.sh --gate portfolio_25_to_50
+BASE_URL=https://moneybotlabs.com ./scripts/gate_check.sh --gate portfolio_50_to_75
+BASE_URL=https://moneybotlabs.com ./scripts/gate_check.sh --gate portfolio_75_to_100
+```
+
+### 5.3 terminal test runbook (example: promote Quick Ask from 10% to 25%)
 
 Yes — you can run a terminal validation loop before and after changing rollout percentage.
 
-1) Set rollout to 50% (baseline window):
+1) Confirm Quick Ask rollout is at 10% (baseline window):
 
 ```bash
 export DETERMINISTIC_ROLLOUT_DRY_RUN=false
-export DETERMINISTIC_ROLLOUT_PERCENTAGE=50
+export DETERMINISTIC_ROLLOUT_PERCENTAGE=10
 ```
 
 2) Verify runtime config is live:
@@ -344,10 +360,10 @@ for s in AAPL MSFT NVDA AMZN GOOGL META TSLA NFLX AMD CRM; do
 done
 ```
 
-4) Promote to 75%:
+4) Promote to 25% after the gate passes:
 
 ```bash
-export DETERMINISTIC_ROLLOUT_PERCENTAGE=75
+export DETERMINISTIC_ROLLOUT_PERCENTAGE=25
 ```
 
 5) Re-run the same checks (steps 2-3) and compare deterministic share + latency/error metrics.
@@ -355,24 +371,24 @@ export DETERMINISTIC_ROLLOUT_PERCENTAGE=75
 Optional automated guardrail check:
 
 ```bash
-BASE_URL=http://localhost:5000 bash scripts/gate_check.sh
+BASE_URL=http://localhost:5000 bash scripts/gate_check.sh --gate 10_to_25
 ```
 
-Portfolio rollout promotion gates (same style as quick-ask):
+Portfolio rollout promotion gates (same style as Quick Ask):
 
 ```bash
-BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_20_to_35
-BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_35_to_50
+BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_10_to_25
+BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_25_to_50
 BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_50_to_75
 BASE_URL="https://moneybotlabs.com" ./scripts/gate_check.sh --gate portfolio_75_to_100
 ```
 
 Use the gate that matches your **current** portfolio rollout percentage. Promote only when the gate passes.
 
-If `portfolio_35_to_50` passes, promote with:
+If `portfolio_10_to_25` passes, promote with:
 
 ```bash
-export DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE=50
+export DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE=25
 ```
 
 Then validate the new live value:
@@ -508,3 +524,7 @@ python3 scripts/run_track_b_offline.py --input-log data/decision_events.jsonl --
 Notes:
 - Seeded logs are for workflow/testing validation only (not production quality training data).
 - Increase `--min-rows` back to `200` once real decision traffic is available.
+
+### Decision outcome scan depth
+
+`/api/decision-outcomes` uses `DECISION_OUTCOMES_READ_CAP` to cap live event scans. The default is `50000` so mature 5D outcomes can be found in large production decision logs without stopping at the newest 5,000 rows. Use `force_live=true` to bypass snapshots and `allow_stale_snapshot=true` only when intentionally inspecting an expired materialized snapshot.
