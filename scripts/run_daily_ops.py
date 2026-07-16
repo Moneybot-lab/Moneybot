@@ -5,6 +5,7 @@ import argparse
 import logging
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +22,44 @@ from moneybot.services.runtime_paths import (
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOGGER = logging.getLogger(__name__)
+
+
+def _tail_text(path: Path, *, max_bytes: int = 12000) -> str:
+    if not path.exists():
+        return ""
+    size = path.stat().st_size
+    with path.open("rb") as fh:
+        if size > max_bytes:
+            fh.seek(max(0, size - max_bytes))
+        data = fh.read(max_bytes)
+    text = data.decode("utf-8", errors="replace").strip()
+    if size > max_bytes and text:
+        return f"... <truncated to last {max_bytes} bytes>\n{text}"
+    return text
+
+
+def _run_daily_ops_command(command: list[str], *, script_name: str, log_dir: Path) -> subprocess.CompletedProcess[str]:
+    stdout_path = log_dir / f"{script_name}.stdout.log"
+    stderr_path = log_dir / f"{script_name}.stderr.log"
+    with stdout_path.open("w", encoding="utf-8") as stdout_fh, stderr_path.open("w", encoding="utf-8") as stderr_fh:
+        completed = subprocess.run(command, stdout=stdout_fh, stderr=stderr_fh, text=True, check=False)
+
+    stdout_tail = _tail_text(stdout_path)
+    stderr_tail = _tail_text(stderr_path)
+    if stdout_tail:
+        LOGGER.info("Script stdout tail (%s): %s", script_name, stdout_tail)
+    if completed.returncode != 0:
+        if stderr_tail:
+            LOGGER.error("Script stderr tail (%s): %s", script_name, stderr_tail)
+        raise subprocess.CalledProcessError(
+            returncode=completed.returncode,
+            cmd=command,
+            output=stdout_tail,
+            stderr=stderr_tail,
+        )
+    if stderr_tail:
+        LOGGER.warning("Script stderr tail (%s): %s", script_name, stderr_tail)
+    return completed
 
 
 def build_daily_ops_commands(
@@ -116,7 +155,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run daily Moneybot ops scripts in one command.")
     parser.add_argument("--input-log", default=str(base_dir / "decision_events.jsonl"))
     parser.add_argument("--summary-limit", type=int, default=200)
-    parser.add_argument("--outcomes-limit", type=int, default=50000)
+    parser.add_argument("--outcomes-limit", type=int, default=5000)
     parser.add_argument("--outcomes-rows-limit", type=int, default=20)
     parser.add_argument("--calibration-limit", type=int, default=5000)
     parser.add_argument("--horizon-days", type=int, default=5)
@@ -147,29 +186,20 @@ def main() -> None:
     LOGGER.info("Resolved Day 13 calibration_report_path=%s", calibration_report)
     LOGGER.info("Resolved Day 13 recalibration_plan_path=%s", recalibration_plan)
 
-    for command in commands:
-        script_name = Path(command[1]).name if len(command) > 1 else "unknown"
-        LOGGER.info("Running daily ops script=%s command=%s", script_name, " ".join(command))
-        completed = subprocess.run(command, capture_output=True, text=True, check=False)
-        if completed.stdout:
-            LOGGER.info("Script stdout (%s): %s", script_name, completed.stdout.strip())
-        if completed.returncode != 0:
-            if completed.stderr:
-                LOGGER.error("Script stderr (%s): %s", script_name, completed.stderr.strip())
-            raise subprocess.CalledProcessError(
-                returncode=completed.returncode,
-                cmd=command,
-                output=completed.stdout,
-                stderr=completed.stderr,
-            )
-        if completed.stderr:
-            LOGGER.warning("Script stderr (%s): %s", script_name, completed.stderr.strip())
+    log_dir = base_dir / "daily_ops_logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="daily-ops-", dir=str(log_dir)) as tmp_log_dir:
+        command_log_dir = Path(tmp_log_dir)
+        for command in commands:
+            script_name = Path(command[1]).name if len(command) > 1 else "unknown"
+            LOGGER.info("Running daily ops script=%s command=%s", script_name, " ".join(command))
+            _run_daily_ops_command(command, script_name=script_name, log_dir=command_log_dir)
 
-        if script_name == "day13_calibration_report.py":
-            _log_file_state("After day13_calibration_report", calibration_report)
-        if script_name == "day13_recalibrate.py":
-            _log_file_state("After day13_recalibrate calibration_report", calibration_report)
-            _log_file_state("After day13_recalibrate recalibration_plan", recalibration_plan)
+            if script_name == "day13_calibration_report.py":
+                _log_file_state("After day13_calibration_report", calibration_report)
+            if script_name == "day13_recalibrate.py":
+                _log_file_state("After day13_recalibrate calibration_report", calibration_report)
+                _log_file_state("After day13_recalibrate recalibration_plan", recalibration_plan)
 
 
 if __name__ == "__main__":

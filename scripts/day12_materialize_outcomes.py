@@ -45,7 +45,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Materialize decision outcomes to a snapshot JSON file.")
     parser.add_argument("--input", default=str(base_dir / "decision_events.jsonl"))
     parser.add_argument("--output", default=str(base_dir / "decision_outcomes_snapshot.json"))
-    parser.add_argument("--limit", type=int, default=50000)
+    parser.add_argument("--limit", type=int, default=5000)
     parser.add_argument("--rows-limit", type=int, default=20)
     args = parser.parse_args()
 
