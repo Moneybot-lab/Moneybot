@@ -73,14 +73,20 @@ esac
 require_cmd curl
 require_cmd jq
 
-model_json="$(curl -fsS "${BASE_URL}/api/model-health")"
-outcomes_json="$(curl -fsS "${BASE_URL}/api/decision-outcomes?limit=${limit}&force_live=true")"
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+model_file="$tmp_dir/model-health.json"
+outcomes_file="$tmp_dir/decision-outcomes.json"
+combined_file="$tmp_dir/combined.json"
 
-if ! echo "$model_json" | jq -e '.data' >/dev/null; then
+curl -fsS "${BASE_URL}/api/model-health" > "$model_file"
+curl -fsS "${BASE_URL}/api/decision-outcomes?limit=${limit}&force_live=true" > "$outcomes_file"
+
+if ! jq -e '.data' "$model_file" >/dev/null; then
   echo "model-health response missing .data" >&2
   exit 2
 fi
-if ! echo "$outcomes_json" | jq -e '.data' >/dev/null; then
+if ! jq -e '.data' "$outcomes_file" >/dev/null; then
   echo "decision-outcomes response missing .data" >&2
   exit 2
 fi
@@ -100,11 +106,11 @@ check_bool() {
   fi
 }
 
-check_bool_with_json() {
+check_bool_with_file() {
   local label="$1"
   local expr="$2"
-  local json="$3"
-  if echo "$json" | jq -e "$expr" >/dev/null 2>&1; then
+  local file="$3"
+  if jq -e "$expr" "$file" >/dev/null 2>&1; then
     printf "PASS  %s\n" "$label"
     pass_count=$((pass_count + 1))
   else
@@ -118,13 +124,13 @@ echo "BASE_URL: $BASE_URL"
 echo
 
 # Common checks
-check_bool_with_json "model_loaded == true" '.data.model_loaded == true' "$model_json"
-check_bool_with_json "model_load_error is empty" '((.data.model_load_error // "") | tostring | length) == 0' "$model_json"
-check_bool_with_json "decision_logging.enabled == true" '.data.decision_logging.enabled == true' "$model_json"
-check_bool_with_json "used_unevaluated_fallback == false" '.data.used_unevaluated_fallback == false' "$outcomes_json"
-check_bool_with_json "lookup_errors == 0" '(.data.lookup_errors // 0) == 0' "$outcomes_json"
+check_bool_with_file "model_loaded == true" '.data.model_loaded == true' "$model_file"
+check_bool_with_file "model_load_error is empty" '((.data.model_load_error // "") | tostring | length) == 0' "$model_file"
+check_bool_with_file "decision_logging.enabled == true" '.data.decision_logging.enabled == true' "$model_file"
+check_bool_with_file "used_unevaluated_fallback == false" '.data.used_unevaluated_fallback == false' "$outcomes_file"
+check_bool_with_file "lookup_errors == 0" '(.data.lookup_errors // 0) == 0' "$outcomes_file"
 
-combined_json="$(jq -n --argjson outcomes "$outcomes_json" --argjson model "$model_json" '{outcomes: $outcomes.data, model: $model.data}')"
+jq -n --slurpfile outcomes "$outcomes_file" --slurpfile model "$model_file" '{outcomes: $outcomes[0].data, model: $model[0].data}' > "$combined_file"
 five_day_evidence_expr() {
   local min_rows="$1"
   printf '((.outcomes.summary_5d.evaluated_rows // .outcomes.evaluated_rows_5d_available // 0) >= %s) or ((.model.calibration_report.rows // 0) >= %s)' "$min_rows" "$min_rows"
@@ -138,12 +144,12 @@ run_quick_gate() {
   local min_calibration_rows="$5"
   local max_brier="$6"
 
-  check_bool_with_json "rollout_percentage == ${current_pct}" "(.data.rollout_percentage // -1) == ${current_pct}" "$model_json"
-  check_bool_with_json "5d evidence rows >= ${min_5d_rows}" "$(five_day_evidence_expr "$min_5d_rows")" "$combined_json"
-  check_bool_with_json "evaluated_rows_available >= ${min_evaluated_rows}" "(.data.evaluated_rows_available // (.data.summary_1d.evaluated_rows // 0)) >= ${min_evaluated_rows}" "$outcomes_json"
-  check_bool_with_json "summary_1d.accuracy >= ${min_accuracy}" "(.data.summary_1d.accuracy // 0) >= ${min_accuracy}" "$outcomes_json"
-  check_bool_with_json "calibration_report.rows >= ${min_calibration_rows}" "(.data.calibration_report.rows // 0) >= ${min_calibration_rows}" "$model_json"
-  check_bool_with_json "calibration_report.effective_brier_score <= ${max_brier}" "((.data.calibration_report.effective_brier_score // .data.calibration_report.calibrated_brier_score // .data.calibration_report.brier_score // 999) <= ${max_brier})" "$model_json"
+  check_bool_with_file "rollout_percentage == ${current_pct}" "(.data.rollout_percentage // -1) == ${current_pct}" "$model_file"
+  check_bool_with_file "5d evidence rows >= ${min_5d_rows}" "$(five_day_evidence_expr "$min_5d_rows")" "$combined_file"
+  check_bool_with_file "evaluated_rows_available >= ${min_evaluated_rows}" "(.data.evaluated_rows_available // (.data.summary_1d.evaluated_rows // 0)) >= ${min_evaluated_rows}" "$outcomes_file"
+  check_bool_with_file "summary_1d.accuracy >= ${min_accuracy}" "(.data.summary_1d.accuracy // 0) >= ${min_accuracy}" "$outcomes_file"
+  check_bool_with_file "calibration_report.rows >= ${min_calibration_rows}" "(.data.calibration_report.rows // 0) >= ${min_calibration_rows}" "$model_file"
+  check_bool_with_file "calibration_report.effective_brier_score <= ${max_brier}" "((.data.calibration_report.effective_brier_score // .data.calibration_report.calibrated_brier_score // .data.calibration_report.brier_score // 999) <= ${max_brier})" "$model_file"
 }
 
 case "$gate" in
@@ -162,35 +168,35 @@ case "$gate" in
 esac
 
 if [[ "$gate" == portfolio_* ]]; then
-  check_bool_with_json "rollout_dry_run == false" '.data.rollout_dry_run == false' "$model_json"
-  check_bool_with_json "portfolio_rollout_percentage is present" '(.data.portfolio_rollout_percentage // null) != null' "$model_json"
-  check_bool_with_json "calibration_report.rows >= 30" '(.data.calibration_report.rows // 0) >= 30' "$model_json"
-  check_bool_with_json "calibration_report.effective_brier_score <= 0.26" '((.data.calibration_report.effective_brier_score // .data.calibration_report.calibrated_brier_score // .data.calibration_report.brier_score // 999) <= 0.26)' "$model_json"
+  check_bool_with_file "rollout_dry_run == false" '.data.rollout_dry_run == false' "$model_file"
+  check_bool_with_file "portfolio_rollout_percentage is present" '(.data.portfolio_rollout_percentage // null) != null' "$model_file"
+  check_bool_with_file "calibration_report.rows >= 30" '(.data.calibration_report.rows // 0) >= 30' "$model_file"
+  check_bool_with_file "calibration_report.effective_brier_score <= 0.26" '((.data.calibration_report.effective_brier_score // .data.calibration_report.calibrated_brier_score // .data.calibration_report.brier_score // 999) <= 0.26)' "$model_file"
 
   case "$gate" in
     portfolio_10_to_25)
-      check_bool_with_json "portfolio_rollout_percentage == 10" '(.data.portfolio_rollout_percentage // -1) == 10' "$model_json"
-      check_bool_with_json "5d evidence rows >= 10" "$(five_day_evidence_expr 10)" "$combined_json"
+      check_bool_with_file "portfolio_rollout_percentage == 10" '(.data.portfolio_rollout_percentage // -1) == 10' "$model_file"
+      check_bool_with_file "5d evidence rows >= 10" "$(five_day_evidence_expr 10)" "$combined_file"
       ;;
     portfolio_25_to_50)
-      check_bool_with_json "portfolio_rollout_percentage == 25" '(.data.portfolio_rollout_percentage // -1) == 25' "$model_json"
-      check_bool_with_json "5d evidence rows >= 20" "$(five_day_evidence_expr 20)" "$combined_json"
+      check_bool_with_file "portfolio_rollout_percentage == 25" '(.data.portfolio_rollout_percentage // -1) == 25' "$model_file"
+      check_bool_with_file "5d evidence rows >= 20" "$(five_day_evidence_expr 20)" "$combined_file"
       ;;
     portfolio_20_to_35)
-      check_bool_with_json "portfolio_rollout_percentage == 20" '(.data.portfolio_rollout_percentage // -1) == 20' "$model_json"
-      check_bool_with_json "5d evidence rows >= 20" "$(five_day_evidence_expr 20)" "$combined_json"
+      check_bool_with_file "portfolio_rollout_percentage == 20" '(.data.portfolio_rollout_percentage // -1) == 20' "$model_file"
+      check_bool_with_file "5d evidence rows >= 20" "$(five_day_evidence_expr 20)" "$combined_file"
       ;;
     portfolio_35_to_50)
-      check_bool_with_json "portfolio_rollout_percentage == 35" '(.data.portfolio_rollout_percentage // -1) == 35' "$model_json"
-      check_bool_with_json "5d evidence rows >= 30" "$(five_day_evidence_expr 30)" "$combined_json"
+      check_bool_with_file "portfolio_rollout_percentage == 35" '(.data.portfolio_rollout_percentage // -1) == 35' "$model_file"
+      check_bool_with_file "5d evidence rows >= 30" "$(five_day_evidence_expr 30)" "$combined_file"
       ;;
     portfolio_50_to_75)
-      check_bool_with_json "portfolio_rollout_percentage == 50" '(.data.portfolio_rollout_percentage // -1) == 50' "$model_json"
-      check_bool_with_json "5d evidence rows >= 40" "$(five_day_evidence_expr 40)" "$combined_json"
+      check_bool_with_file "portfolio_rollout_percentage == 50" '(.data.portfolio_rollout_percentage // -1) == 50' "$model_file"
+      check_bool_with_file "5d evidence rows >= 40" "$(five_day_evidence_expr 40)" "$combined_file"
       ;;
     portfolio_75_to_100)
-      check_bool_with_json "portfolio_rollout_percentage == 75" '(.data.portfolio_rollout_percentage // -1) == 75' "$model_json"
-      check_bool_with_json "5d evidence rows >= 60" "$(five_day_evidence_expr 60)" "$combined_json"
+      check_bool_with_file "portfolio_rollout_percentage == 75" '(.data.portfolio_rollout_percentage // -1) == 75' "$model_file"
+      check_bool_with_file "5d evidence rows >= 60" "$(five_day_evidence_expr 60)" "$combined_file"
       ;;
   esac
 fi
@@ -199,8 +205,8 @@ echo
 echo "Summary: PASS=$pass_count FAIL=$fail_count"
 echo
 echo "Observed metrics:"
-echo "$outcomes_json" | jq '.data | {summary_1d, summary_5d, used_unevaluated_fallback, lookup_errors}'
-echo "$model_json" | jq '.data | {model_loaded, model_load_error, rollout_percentage, portfolio_rollout_percentage, decision_logging, calibration_report: (.calibration_report // {rows:0,brier_score:null})}'
+jq '.data | {summary_1d, summary_5d, used_unevaluated_fallback, lookup_errors}' "$outcomes_file"
+jq '.data | {model_loaded, model_load_error, rollout_percentage, portfolio_rollout_percentage, decision_logging, calibration_report: (.calibration_report // {rows:0,brier_score:null})}' "$model_file"
 
 if [[ $fail_count -gt 0 ]]; then
   exit 1

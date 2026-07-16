@@ -41,6 +41,7 @@ def test_day12_materializer_uses_history_cache_for_repeated_symbol_date(tmp_path
 
     def fake_download(symbol, **kwargs):
         calls.append((symbol, kwargs["start"]))
+        assert kwargs.get("threads") is False
         dates = pd.bdate_range(start="2026-01-02", periods=30)
         return pd.DataFrame({"Close": [100 + idx for idx in range(30)]}, index=dates)
 
