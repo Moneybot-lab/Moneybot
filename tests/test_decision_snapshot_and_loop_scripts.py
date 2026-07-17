@@ -395,6 +395,28 @@ def test_day10_trains_when_feature_columns_exist(tmp_path, monkeypatch):
     assert "feature_source_ai_enhanced" not in artifact["feature_columns"]
 
 
+
+def test_day10_selects_profit_utility_threshold_above_default():
+    frame = day10._ensure_return_bucket_labels(
+        day10.pd.DataFrame(
+            [
+                {"return_5d": 0.16},
+                {"return_5d": 0.12},
+                {"return_5d": 0.04},
+                {"return_5d": -0.02},
+                {"return_5d": -0.08},
+            ]
+        )
+    )
+    probs = day10.np.array([0.69, 0.66, 0.58, 0.56, 0.52])
+
+    selected = day10._select_profit_threshold(frame, probs)
+
+    assert selected["threshold"] == 0.6
+    assert selected["positive_predictions"] == 2
+    assert selected["utility_score"] > next(item["utility_score"] for item in selected["search"] if item["threshold"] == 0.55)
+
+
 def test_day10_trains_with_sparse_feature_columns_no_complete_raw_rows(tmp_path, monkeypatch):
     rows = [
         {"ts": 1, "feature_alpha": 0.10, "label_up_5d": 1, "return_1d": 0.01, "return_5d": 0.02},

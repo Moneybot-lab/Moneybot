@@ -21,6 +21,7 @@ def build_track_b_commands(
     train_ratio: float,
     min_rows: int,
     output_dir: Path,
+    production_model: str = "data/day1_baseline_model.json",
     dataset_limit: int | None = 50000,
 ) -> list[list[str]]:
     scripts_dir = project_root / "scripts"
@@ -41,7 +42,7 @@ def build_track_b_commands(
     return [
         build_dataset_command,
         [python_executable, str(scripts_dir / "day10_train_candidate_model.py"), "--input", str(dataset_path), "--output-model", str(candidate_model_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
-        [python_executable, str(scripts_dir / "day11_compare_candidate_vs_production.py"), "--input", str(dataset_path), "--candidate-model", str(candidate_model_path), "--production-model", "data/day1_baseline_model.json", "--output", str(comparison_report_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
+        [python_executable, str(scripts_dir / "day11_compare_candidate_vs_production.py"), "--input", str(dataset_path), "--candidate-model", str(candidate_model_path), "--production-model", str(production_model), "--output", str(comparison_report_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
     ]
 
 
@@ -51,6 +52,7 @@ def main() -> None:
     parser.add_argument("--output-dir", default="data/track_b")
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--min-rows", type=int, default=200)
+    parser.add_argument("--production-model", default="data/day1_baseline_model.json")
     parser.add_argument(
         "--dataset-limit",
         type=int,
@@ -70,6 +72,7 @@ def main() -> None:
         train_ratio=max(0.1, min(0.95, float(args.train_ratio))),
         min_rows=max(1, int(args.min_rows)),
         output_dir=output_dir,
+        production_model=args.production_model,
         dataset_limit=max(1, int(args.dataset_limit)),
     )
 

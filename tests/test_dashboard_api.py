@@ -1926,6 +1926,33 @@ def test_export_decision_log_returns_ndjson_with_token(tmp_path):
     assert payload['symbol'] == 'TSLA'
 
 
+
+def test_export_production_model_requires_token(tmp_path):
+    client = _client()
+    client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
+    client.application.config["DETERMINISTIC_MODEL_PATH"] = str(tmp_path / "production.json")
+
+    res = client.get("/api/export-production-model")
+
+    assert res.status_code == 401
+    assert res.get_json()["error"] == "unauthorized"
+
+
+def test_export_production_model_returns_current_artifact_with_token(tmp_path):
+    client = _client()
+    production_path = tmp_path / "production.json"
+    production_path.write_text(json.dumps({"version": "alpha-atlas-v7", "feature_columns": []}), encoding="utf-8")
+    client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
+    client.application.config["DETERMINISTIC_MODEL_PATH"] = str(production_path)
+
+    res = client.get("/api/export-production-model", headers={"X-Daily-Ops-Token": "secret-token"})
+
+    assert res.status_code == 200
+    assert "application/json" in (res.headers.get("Content-Type") or "")
+    assert res.headers.get("X-Production-Model-Path") == str(production_path)
+    assert res.headers.get("X-Production-Model-Version") == "alpha-atlas-v7"
+    assert res.get_json()["version"] == "alpha-atlas-v7"
+
 def test_model_health_includes_safe_historical_validation_when_default_missing(tmp_path, monkeypatch):
     monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
     client = _client()

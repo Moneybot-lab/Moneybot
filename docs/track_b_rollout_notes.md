@@ -106,6 +106,7 @@ BASE_URL="$MONEYBOT_BASE_URL" ./scripts/gate_check.sh --gate portfolio_75_to_100
 ```text
 data/track_b/track_b_summary.json
 data/track_b/decision_training_snapshot_track_b.jsonl
+data/track_b/production_model.json
 data/track_b/candidate_model_track_b.json
 data/track_b/model_comparison_track_b.json
 ```
@@ -132,13 +133,14 @@ Workflow input:
 track_b_run_id=<successful Track B Offline Challenger run id>
 ```
 
-The workflow downloads the `track-b-offline-output` artifact for that run, verifies `model_comparison_track_b.json` and `candidate_model_track_b.json`, blocks by default unless `candidate_win=true`, then posts both JSON files to `/api/promote-track-b-candidate`. The protected Render endpoint stores them under the persistent runtime `track_b/` directory and runs `scripts/day14_promote_candidate.py` against the configured production model path.
+The Track B workflow exports the current production model from `/api/export-production-model` into `data/track_b/production_model.json` before challenger comparison, so a candidate promoted by this workflow becomes the baseline for the next Track B comparison. The promotion workflow downloads the `track-b-offline-output` artifact for that run, verifies `model_comparison_track_b.json` and `candidate_model_track_b.json`, blocks by default unless `candidate_win=true`, then posts both JSON files to `/api/promote-track-b-candidate`. The protected Render endpoint stores them under the persistent runtime `track_b/` directory and runs `scripts/day14_promote_candidate.py` against the configured production model path.
 
 Leave `force=false` unless a human has separately approved overriding the comparison report.
 
 ## Expected Track B run signals
 
-A healthy Track B challenger run should show:
+A healthy Track B challenger run should show. Day10 also prints `selected_decision_threshold` and `threshold_selection`; inspect those fields when the model probabilities improve but `candidate_win` remains false, because threshold selection is now optimized for the same profit-aware utility used by the promotion gate.
+
 
 ```text
 day8 labeled_rows >= 200

@@ -3196,6 +3196,38 @@ def export_decision_log():
         "X-Decision-Log-Lines": str(len(events)),
     }
     return Response(body, status=200, headers=headers)
+
+@api_bp.get("/export-production-model")
+def export_production_model():
+    expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
+    provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
+    if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
+
+    model_path = Path(
+        str(current_app.config.get("DETERMINISTIC_MODEL_PATH") or (resolve_runtime_dir() / "day1_baseline_model.json"))
+    )
+    if not model_path.exists() or not model_path.is_file():
+        return jsonify({"error": "production model not found", "path": str(model_path), "request_id": g.request_id}), 404
+
+    try:
+        body = model_path.read_text(encoding="utf-8")
+        parsed = json.loads(body)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        logging.exception("Failed to export production model artifact from %s", model_path)
+        return jsonify({"error": "production model is not readable JSON", "path": str(model_path), "request_id": g.request_id}), 500
+
+    if not isinstance(parsed, dict):
+        return jsonify({"error": "production model must be a JSON object", "path": str(model_path), "request_id": g.request_id}), 500
+
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Production-Model-Path": str(model_path),
+        "X-Production-Model-Version": str(parsed.get("version") or parsed.get("model_version") or ""),
+    }
+    return Response(body if body.endswith("\n") else body + "\n", status=200, headers=headers)
+
 @api_bp.get("/decision-log-summary")
 def decision_log_summary():
     decision_logger = current_app.extensions.get("decision_logger")

@@ -125,6 +125,27 @@ jobs:
           echo "Response headers (first 100 lines):"
           sed -n '1,100p' data/_response_headers.txt || true
 
+      - name: Fetch current production model artifact
+        env:
+          MONEYBOT_BASE_URL: ${{ secrets.MONEYBOT_BASE_URL }}
+          DAILY_OPS_TOKEN: ${{ secrets.DAILY_OPS_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$MONEYBOT_BASE_URL" || (echo "Missing secret: MONEYBOT_BASE_URL" && exit 1)
+          test -n "$DAILY_OPS_TOKEN" || (echo "Missing secret: DAILY_OPS_TOKEN" && exit 1)
+          mkdir -p data/track_b
+          URL="$MONEYBOT_BASE_URL/api/export-production-model"
+          echo "Fetching production model artifact from: $URL"
+          timeout 60 curl --fail --show-error --silent --retry 3 --retry-delay 3 --retry-all-errors --location \
+            --output data/track_b/production_model.json \
+            --dump-header data/track_b/_production_model_headers.txt \
+            -H "X-Daily-Ops-Token: $DAILY_OPS_TOKEN" \
+            "$URL"
+          test -s data/track_b/production_model.json || (echo "Exported production model is empty" && exit 1)
+          python3 -m json.tool data/track_b/production_model.json >/dev/null
+          echo "Production model response headers:"
+          sed -n '1,100p' data/track_b/_production_model_headers.txt || true
+
       - name: Ingest Massive flat files into immutable dated folder
         env:
           MASSIVE_FLATFILES_ACCESS_KEY_ID: ${{ secrets.MASSIVE_FLATFILES_ACCESS_KEY_ID }}
@@ -188,6 +209,7 @@ jobs:
           python3 scripts/run_track_b_offline.py \
             --input-log data/decision_events.jsonl \
             --output-dir data/track_b \
+            --production-model data/track_b/production_model.json \
             --min-rows 200 \
             --dataset-limit 50000
 
@@ -200,5 +222,6 @@ jobs:
             data/track_b/**
             data/decision_events.jsonl
             data/_response_headers.txt
+            data/track_b/_production_model_headers.txt
             data/raw/**/_INGEST_MANIFEST.json
           if-no-files-found: warn
