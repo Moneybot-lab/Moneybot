@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from moneybot.services.deterministic_model import (
     BaselineModelArtifact,
     classify,
+    predict_proba,
     save_artifact,
     summarize_binary_predictions,
     train_logistic_baseline,
@@ -32,6 +33,10 @@ RETURN_BIN_SAMPLE_WEIGHTS = {
     "gain": 1.25,
     "big_gain": 4.0,
 }
+THRESHOLD_SEARCH_VALUES = (0.50, 0.525, 0.55, 0.575, 0.60, 0.625, 0.65, 0.675, 0.70)
+UTILITY_BIG_GAIN_WEIGHT = 0.10
+UTILITY_DOWNSIDE_WEIGHT = 1.0
+UTILITY_BIG_LOSS_WEIGHT = 1.0
 
 APP_SIGNAL_FEATURE_COLUMNS = {
     "feature_endpoint_hot_momentum_buys",
@@ -101,6 +106,63 @@ def _bucket_counts(df: pd.DataFrame) -> dict[str, int]:
         return {}
     counts = df["return_bin_5d"].fillna("unknown").astype(str).value_counts().to_dict()
     return {str(key): int(value) for key, value in sorted(counts.items())}
+
+
+def _profit_utility_score(frame: pd.DataFrame, preds: np.ndarray) -> float | None:
+    signal_returns = pd.to_numeric(frame.loc[preds == 1, "return_5d"], errors="coerce").dropna()
+    if signal_returns.empty:
+        return None
+
+    bins = frame["return_bin_5d"].fillna("").astype(str)
+    big_loss = bins == "big_loss"
+    big_gain = bins == "big_gain"
+    avg_return = float(signal_returns.mean())
+    negative_signal_returns = signal_returns[signal_returns < 0.0]
+    downside = 0.0 if negative_signal_returns.empty else float(abs(negative_signal_returns.mean()))
+    big_loss_rate = float((preds[big_loss.to_numpy()] == 1).sum() / int(big_loss.sum())) if int(big_loss.sum()) else 0.0
+    big_gain_rate = float((preds[big_gain.to_numpy()] == 1).sum() / int(big_gain.sum())) if int(big_gain.sum()) else 0.0
+    return (
+        avg_return
+        - (UTILITY_DOWNSIDE_WEIGHT * downside)
+        - (UTILITY_BIG_LOSS_WEIGHT * big_loss_rate)
+        + (UTILITY_BIG_GAIN_WEIGHT * big_gain_rate)
+    )
+
+
+def _threshold_selection_frame(train_df: pd.DataFrame) -> pd.DataFrame:
+    validation_rows = int(len(train_df) * 0.25)
+    if validation_rows >= 20 and validation_rows < len(train_df):
+        return train_df.tail(validation_rows).copy()
+    return train_df.copy()
+
+
+def _select_profit_threshold(frame: pd.DataFrame, probs: np.ndarray) -> dict[str, Any]:
+    scored: list[dict[str, float | int | None]] = []
+    for threshold in THRESHOLD_SEARCH_VALUES:
+        preds = (probs >= threshold).astype(int)
+        utility = _profit_utility_score(frame, preds)
+        signal_returns = pd.to_numeric(frame.loc[preds == 1, "return_5d"], errors="coerce").dropna()
+        scored.append(
+            {
+                "threshold": float(threshold),
+                "utility_score": round(float(utility), 6) if utility is not None else None,
+                "positive_predictions": int((preds == 1).sum()),
+                "avg_signal_return": round(float(signal_returns.mean()), 6) if not signal_returns.empty else None,
+            }
+        )
+
+    viable = [item for item in scored if isinstance(item.get("utility_score"), (int, float)) and int(item.get("positive_predictions") or 0) > 0]
+    if not viable:
+        return {"threshold": 0.55, "utility_score": None, "positive_predictions": 0, "avg_signal_return": None, "search": scored}
+    best = max(
+        viable,
+        key=lambda item: (
+            float(item["utility_score"] or 0.0),
+            float(item.get("avg_signal_return") or 0.0),
+            -abs(float(item["threshold"] or 0.55) - 0.55),
+        ),
+    )
+    return {**best, "search": scored}
 
 
 def _load_jsonl(path: str) -> pd.DataFrame:
@@ -267,6 +329,12 @@ def main() -> None:
     y_train = train_df[target_column].to_numpy(dtype=float)
     sample_weight = _bucket_sample_weights(train_df).to_numpy(dtype=float)
     base_artifact = train_logistic_baseline(X_train, y_train, sample_weight=sample_weight)
+    threshold_df = _threshold_selection_frame(train_df)
+    X_threshold = threshold_df[feature_columns].to_numpy(dtype=float)
+    train_probs = predict_proba(_build_artifact_with_features(base_artifact, feature_columns, version="threshold-search"), X_threshold)
+    threshold_selection = _select_profit_threshold(threshold_df, train_probs)
+    threshold_selection["selection_rows"] = int(len(threshold_df))
+    base_artifact.decision_threshold = float(threshold_selection.get("threshold") or base_artifact.decision_threshold)
     candidate_version = f"candidate-logreg-v1-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     artifact = _build_artifact_with_features(base_artifact, feature_columns, version=candidate_version)
 
@@ -280,6 +348,8 @@ def main() -> None:
             "avg_return_5d": round(float(test_df["return_5d"].dropna().mean()), 4) if test_df["return_5d"].notna().any() else None,
             "return_bin_counts": _bucket_counts(test_df),
             "return_bin_sample_weights": RETURN_BIN_SAMPLE_WEIGHTS,
+            "selected_decision_threshold": artifact.decision_threshold,
+            "threshold_selection": threshold_selection,
         }
     )
 
@@ -309,6 +379,8 @@ def main() -> None:
                 "target_column": target_column,
                 "return_bin_counts": _bucket_counts(clean),
                 "return_bin_sample_weights": RETURN_BIN_SAMPLE_WEIGHTS,
+                "selected_decision_threshold": artifact.decision_threshold,
+                "threshold_selection": threshold_selection,
             },
             sort_keys=True,
         )

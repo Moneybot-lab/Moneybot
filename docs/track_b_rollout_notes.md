@@ -139,7 +139,8 @@ Leave `force=false` unless a human has separately approved overriding the compar
 
 ## Expected Track B run signals
 
-A healthy Track B challenger run should show:
+A healthy Track B challenger run should show. Day10 also prints `selected_decision_threshold` and `threshold_selection`; inspect those fields when the model probabilities improve but `candidate_win` remains false, because threshold selection is now optimized for the same profit-aware utility used by the promotion gate.
+
 
 ```text
 day8 labeled_rows >= 200
