@@ -117,6 +117,7 @@ class OutcomeHistoryCache:
                 interval="1d",
                 progress=False,
                 auto_adjust=False,
+                threads=False,
             )
         except Exception:  # noqa: BLE001
             self.diagnostics.history_download_errors += 1
@@ -181,6 +182,7 @@ class OutcomeHistoryCache:
                 interval="1d",
                 progress=False,
                 auto_adjust=False,
+                threads=False,
             )
         except Exception:  # noqa: BLE001
             self.diagnostics.history_download_errors += 1

@@ -394,6 +394,9 @@ class StreamMetrics:
     rest_recovery_count: int = 0
     rest_recovery_failures: int = 0
     rest_recovery_duration_ms: float = 0.0
+    rest_recovery_queued: int = 0
+    rest_recovery_deduped: int = 0
+    rest_recovery_queue_drops: int = 0
     redis_write_latency_ms: deque[float] = field(default_factory=lambda: deque(maxlen=10000))
     event_lag_ms: deque[float] = field(default_factory=lambda: deque(maxlen=10000))
     shadow_comparisons: int = 0
@@ -420,6 +423,9 @@ class StreamMetrics:
             "dropped_events": self.dropped_events, "coalesced_events": self.coalesced_events,
             "rest_recovery_count": self.rest_recovery_count, "rest_recovery_failures": self.rest_recovery_failures,
             "rest_recovery_duration_ms": round(self.rest_recovery_duration_ms, 2),
+            "rest_recovery_queued": self.rest_recovery_queued,
+            "rest_recovery_deduped": self.rest_recovery_deduped,
+            "rest_recovery_queue_drops": self.rest_recovery_queue_drops,
             "event_to_redis_lag_ms": {"p50": self._percentile(self.event_lag_ms, .50), "p95": self._percentile(self.event_lag_ms, .95), "p99": self._percentile(self.event_lag_ms, .99)},
             "redis_write_latency_ms": {"p50": self._percentile(self.redis_write_latency_ms, .50), "p95": self._percentile(self.redis_write_latency_ms, .95), "p99": self._percentile(self.redis_write_latency_ms, .99)},
             "shadow_comparisons": self.shadow_comparisons, "shadow_discrepancies": self.shadow_discrepancies,
@@ -440,16 +446,18 @@ class WorkerConfig:
     health_ttl_seconds: int = 30
     demand_ttl_seconds: int = 90
     reconcile_seconds: float = 2.0
-    publish_coalesce_ms: int = 250
+    publish_coalesce_ms: int = 100
     heartbeat_timeout_seconds: float = 0.0
     reconnect_min_seconds: float = 1.0
     reconnect_max_seconds: float = 30.0
-    max_queue: int = 64
+    max_queue: int = 1024
     acknowledgement_timeout_seconds: float = 10.0
     rest_shadow_tolerance_bps: float = 50.0
     shadow_compare_seconds: float = 30.0
     slow_consumer_lag_ms: float = 2000.0
-    recovery_concurrency: int = 8
+    recovery_concurrency: int = 2
+    recovery_queue_max: int = 512
+    recovery_cooldown_seconds: float = 30.0
     server_symbols: tuple[str, ...] = ()
 
 
@@ -488,6 +496,10 @@ class MassiveWebSocketWorker:
         self._connected_at: datetime | None = None
         self._last_error: str | None = None
         self._stop = False
+        self._recovery_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue(maxsize=max(1, config.recovery_queue_max))
+        self._recovery_tasks: set[asyncio.Task[None]] = set()
+        self._recovery_inflight: set[str] = set()
+        self._last_recovery_monotonic: dict[str, float] = {}
 
     def _record_websocket_frame(self) -> None:
         self._last_message_at = self.clock()
@@ -601,6 +613,52 @@ class MassiveWebSocketWorker:
 
         await asyncio.gather(*(recover(symbol) for symbol in symbols))
 
+    def _ensure_recovery_workers(self) -> None:
+        live_tasks = {task for task in self._recovery_tasks if not task.done()}
+        self._recovery_tasks = live_tasks
+        target = max(1, self.config.recovery_concurrency)
+        for _ in range(max(0, target - len(live_tasks))):
+            task = asyncio.create_task(self._recovery_worker())
+            self._recovery_tasks.add(task)
+            task.add_done_callback(self._recovery_tasks.discard)
+
+    async def _recovery_worker(self) -> None:
+        while True:
+            symbol, reason = await self._recovery_queue.get()
+            try:
+                await self._recover_symbol(symbol, reason=reason)
+            finally:
+                self._recovery_inflight.discard(symbol)
+                self._recovery_queue.task_done()
+
+    def _queue_recovery(self, symbol: str, *, reason: str) -> None:
+        normalized = str(symbol or "").strip().upper()
+        if not normalized:
+            return
+        now = time.monotonic()
+        last = self._last_recovery_monotonic.get(normalized)
+        if normalized in self._recovery_inflight or (last is not None and now - last < self.config.recovery_cooldown_seconds):
+            self.metrics.rest_recovery_deduped += 1
+            return
+        self._ensure_recovery_workers()
+        try:
+            self._recovery_queue.put_nowait((normalized, reason))
+        except asyncio.QueueFull:
+            self.metrics.rest_recovery_queue_drops += 1
+            self.state.mark_symbols_stale([normalized], reason=reason, ttl_seconds=self.config.stale_ttl_seconds)
+            return
+        self._recovery_inflight.add(normalized)
+        self._last_recovery_monotonic[normalized] = now
+        self.metrics.rest_recovery_queued += 1
+
+    async def drain_recoveries(self) -> None:
+        await self._recovery_queue.join()
+
+    def _cancel_recovery_workers(self) -> None:
+        for task in list(self._recovery_tasks):
+            task.cancel()
+        self._recovery_tasks.clear()
+
     async def process_raw_message(self, raw: str | bytes) -> None:
         try:
             items = self.parser.parse_message(raw, received_at=self.clock())
@@ -625,7 +683,7 @@ class MassiveWebSocketWorker:
                 self.metrics.coalesced_events += 1
             self._pending_updates[key] = {"event_type": item.event_type, "symbol": item.symbol, "event_timestamp": item.event_timestamp.isoformat()}
             if gap:
-                await self._recover_symbol(item.symbol, reason="sequence_gap")
+                self._queue_recovery(item.symbol, reason="sequence_gap")
         await self.flush_updates_if_due()
 
     async def flush_updates_if_due(self, *, force: bool = False) -> None:
@@ -661,6 +719,9 @@ class MassiveWebSocketWorker:
     def health_payload(self, plan: SubscriptionPlan | None = None) -> dict[str, Any]:
         actual_counts = {event: len(symbols) for event, symbols in self.actual.items()}
         desired_counts = {event: len(symbols) for event, symbols in (plan.desired_by_event.items() if plan else [])}
+        metrics = self.metrics.snapshot()
+        metrics["rest_recovery_queue_depth"] = self._recovery_queue.qsize()
+        metrics["rest_recovery_inflight"] = len(self._recovery_inflight)
         return {
             "schema_version": STREAM_SCHEMA_VERSION, "enabled": self.config.enabled, "shadow_mode": self.config.shadow_mode,
             "connection_state": self._connection_state, "last_message_at": self._last_message_at.isoformat() if self._last_message_at else None,
@@ -671,7 +732,7 @@ class MassiveWebSocketWorker:
             "desired_symbols": sorted(plan.symbols) if plan else [],
             "desired_subscription_counts": desired_counts, "actual_subscription_counts": actual_counts,
             "symbol_budget": self.config.symbol_cap, "redis_memory_bytes": self.state.memory_usage_bytes(),
-            "metrics": self.metrics.snapshot(), "updated_at": self.clock().isoformat(),
+            "metrics": metrics, "updated_at": self.clock().isoformat(),
         }
 
     async def run_connection(self, websocket: Any) -> None:
@@ -758,6 +819,7 @@ class MassiveWebSocketWorker:
 
     def stop(self) -> None:
         self._stop = True
+        self._cancel_recovery_workers()
 
 
 def worker_config_from_env(env: Mapping[str, str]) -> WorkerConfig:
@@ -777,16 +839,18 @@ def worker_config_from_env(env: Mapping[str, str]) -> WorkerConfig:
         health_ttl_seconds=int(env.get("MASSIVE_STREAM_HEALTH_TTL_SECONDS", "30")),
         demand_ttl_seconds=int(env.get("MASSIVE_STREAM_DEMAND_TTL_SECONDS", "90")),
         reconcile_seconds=float(env.get("MASSIVE_STREAM_RECONCILE_SECONDS", "2")),
-        publish_coalesce_ms=int(env.get("MASSIVE_STREAM_PUBLISH_COALESCE_MS", "250")),
+        publish_coalesce_ms=int(env.get("MASSIVE_STREAM_PUBLISH_COALESCE_MS", "100")),
         heartbeat_timeout_seconds=float(env.get("MASSIVE_STREAM_HEARTBEAT_TIMEOUT_SECONDS", "0")),
         reconnect_min_seconds=float(env.get("MASSIVE_STREAM_RECONNECT_MIN_SECONDS", "1")),
         reconnect_max_seconds=float(env.get("MASSIVE_STREAM_RECONNECT_MAX_SECONDS", "30")),
-        max_queue=int(env.get("MASSIVE_STREAM_MAX_QUEUE", "64")),
+        max_queue=int(env.get("MASSIVE_STREAM_MAX_QUEUE", "1024")),
         acknowledgement_timeout_seconds=float(env.get("MASSIVE_STREAM_ACK_TIMEOUT_SECONDS", "10")),
         rest_shadow_tolerance_bps=float(env.get("MASSIVE_STREAM_REST_TOLERANCE_BPS", "50")),
         shadow_compare_seconds=float(env.get("MASSIVE_STREAM_SHADOW_COMPARE_SECONDS", "30")),
         slow_consumer_lag_ms=float(env.get("MASSIVE_STREAM_SLOW_CONSUMER_LAG_MS", "2000")),
-        recovery_concurrency=int(env.get("MASSIVE_STREAM_RECOVERY_CONCURRENCY", "8")),
+        recovery_concurrency=int(env.get("MASSIVE_STREAM_RECOVERY_CONCURRENCY", "2")),
+        recovery_queue_max=int(env.get("MASSIVE_STREAM_RECOVERY_QUEUE_MAX", "512")),
+        recovery_cooldown_seconds=float(env.get("MASSIVE_STREAM_RECOVERY_COOLDOWN_SECONDS", "30")),
         server_symbols=server_symbols,
     )
 

@@ -3,7 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from scripts.run_daily_ops import build_daily_ops_commands
+from scripts.run_daily_ops import _run_daily_ops_command, _tail_text, build_daily_ops_commands
 
 
 def test_build_daily_ops_commands_includes_autofill_and_expected_scripts():
@@ -42,6 +42,23 @@ def test_build_daily_ops_commands_can_skip_day1_refresh():
     )
 
     assert commands[0][:2] == ["python3", "/tmp/Moneybot/scripts/day7_decision_log_summary.py"]
+
+
+def test_run_daily_ops_command_streams_large_output_to_disk(tmp_path):
+    script = tmp_path / "noisy.py"
+    script.write_text(
+        "import sys\n"
+        "print('x' * 20000)\n"
+        "print('e' * 20000, file=sys.stderr)\n",
+        encoding="utf-8",
+    )
+
+    completed = _run_daily_ops_command([sys.executable, str(script)], script_name="noisy.py", log_dir=tmp_path)
+
+    assert completed.returncode == 0
+    assert (tmp_path / "noisy.py.stdout.log").stat().st_size > 12000
+    assert _tail_text(tmp_path / "noisy.py.stdout.log").startswith("... <truncated")
+    assert _tail_text(tmp_path / "noisy.py.stderr.log").startswith("... <truncated")
 
 
 def test_day13_scripts_bootstrap_project_root_for_imports(tmp_path):

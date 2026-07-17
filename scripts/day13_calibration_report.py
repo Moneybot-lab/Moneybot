@@ -35,6 +35,7 @@ def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
             interval="1d",
             progress=False,
             auto_adjust=False,
+            threads=False,
         )
     closes = close_values(history)
     if len(closes) <= days:
