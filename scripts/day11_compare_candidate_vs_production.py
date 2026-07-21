@@ -23,6 +23,7 @@ UTILITY_BIG_GAIN_WEIGHT = 0.10
 UTILITY_DOWNSIDE_WEIGHT = 1.0
 UTILITY_BIG_LOSS_WEIGHT = 1.0
 MIN_UTILITY_IMPROVEMENT = 0.0
+HARD_BIG_LOSS_FALSE_POSITIVE_PENALTY = 1.0
 THRESHOLD_SEARCH_VALUES = (0.55, 0.575, 0.60, 0.625, 0.65, 0.675, 0.70)
 RANKING_TOP_K_VALUES = (1, 3, 5)
 RANKING_MAX_EXPOSURE_PER_SIGNAL = 0.10
@@ -352,6 +353,8 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
 
     c_big_loss_rate = _numeric_metric(candidate, "big_loss_prediction_rate")
     p_big_loss_rate = _numeric_metric(production, "big_loss_prediction_rate")
+    c_big_loss_predictions = _numeric_metric(candidate, "big_loss_predictions") or 0.0
+    p_big_loss_predictions = _numeric_metric(production, "big_loss_predictions") or 0.0
     c_big_gain_rate = _numeric_metric(candidate, "big_gain_capture_rate")
     c_utility = _utility_score(candidate)
     p_utility = _utility_score(production)
@@ -359,13 +362,19 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
         reasons.append("insufficient comparable utility metrics")
         return False, reasons
 
+    hard_big_loss_false_positive = p_big_loss_predictions == 0.0 and c_big_loss_predictions > 0.0
+    big_loss_false_positive_penalty = HARD_BIG_LOSS_FALSE_POSITIVE_PENALTY if hard_big_loss_false_positive else 0.0
+    c_utility_after_penalty = c_utility - big_loss_false_positive_penalty
+    candidate["big_loss_false_positive_penalty"] = round(big_loss_false_positive_penalty, 4)
+    candidate["utility_score_after_big_loss_penalty"] = round(c_utility_after_penalty, 4)
+
     accuracy_ok = c_acc > p_acc
     brier_ok = c_brier < p_brier
     return_ok = c_return >= p_return
     downside_ok = c_downside <= p_downside
     big_loss_ok = True if c_big_loss_rate is None or p_big_loss_rate is None else c_big_loss_rate <= p_big_loss_rate
     big_gain_floor_ok = (c_big_gain_rate or 0.0) >= MIN_BIG_GAIN_CAPTURE_RATE
-    utility_ok = c_utility > (p_utility + MIN_UTILITY_IMPROVEMENT)
+    utility_ok = c_utility_after_penalty > (p_utility + MIN_UTILITY_IMPROVEMENT)
 
     if not accuracy_ok:
         reasons.append("candidate accuracy is below production, but accuracy is informational when profit utility improves")
@@ -373,12 +382,14 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
         reasons.append("candidate brier score does not improve production")
     if not (return_ok or downside_ok):
         reasons.append("candidate avg_return is lower and downside_risk is higher than production")
+    if hard_big_loss_false_positive:
+        reasons.append("candidate predicts big-loss rows while production predicts zero; hard false-positive penalty applied")
     if not big_loss_ok:
-        reasons.append("candidate signals too many big-loss rows versus production")
+        reasons.append("candidate big_loss_prediction_rate exceeds production")
     if not big_gain_floor_ok:
         reasons.append(f"candidate big-gain capture is below minimum ({c_big_gain_rate or 0.0:.4f} < {MIN_BIG_GAIN_CAPTURE_RATE:.4f})")
     if not utility_ok:
-        reasons.append("candidate profit utility does not exceed production")
+        reasons.append("candidate profit utility after big-loss penalty does not exceed production")
 
     if brier_ok and (return_ok or downside_ok) and big_loss_ok and big_gain_floor_ok and utility_ok:
         reasons.append("candidate improves profit utility with acceptable brier, return/downside, big-loss avoidance, and minimum big-gain capture")
