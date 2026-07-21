@@ -398,6 +398,46 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
     reasons.append("candidate did not satisfy profit-aware promotion thresholds")
     return False, reasons
 
+
+def _ranking_lane_decide(candidate: dict[str, Any], production: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    reasons: list[str] = []
+    candidate_best = candidate.get("best_ranking_backtest") if isinstance(candidate.get("best_ranking_backtest"), dict) else None
+    production_best = production.get("best_ranking_backtest") if isinstance(production.get("best_ranking_backtest"), dict) else None
+    if not candidate_best or not production_best:
+        return False, ["insufficient comparable ranking backtests"], {"candidate": candidate_best, "production": production_best}
+
+    c_total_return = _numeric_metric(candidate_best, "total_return")
+    p_total_return = _numeric_metric(production_best, "total_return")
+    c_objective = _numeric_metric(candidate_best, "objective_score")
+    p_objective = _numeric_metric(production_best, "objective_score")
+    c_drawdown = _numeric_metric(candidate_best, "max_drawdown")
+    p_drawdown = _numeric_metric(production_best, "max_drawdown")
+    c_big_loss_selection_rate = _numeric_metric(candidate_best, "big_loss_selection_rate")
+    p_big_loss_selection_rate = _numeric_metric(production_best, "big_loss_selection_rate")
+    if None in {c_total_return, p_total_return, c_objective, p_objective, c_drawdown, p_drawdown}:
+        return False, ["insufficient comparable ranking return, objective, or drawdown metrics"], {"candidate": candidate_best, "production": production_best}
+
+    total_return_ok = c_total_return >= p_total_return
+    objective_ok = c_objective > p_objective
+    drawdown_ok = c_drawdown <= p_drawdown
+    big_loss_selection_ok = True if c_big_loss_selection_rate is None or p_big_loss_selection_rate is None else c_big_loss_selection_rate <= p_big_loss_selection_rate
+
+    if not total_return_ok:
+        reasons.append("ranking challenger top-k total_return is below production")
+    if not objective_ok:
+        reasons.append("ranking challenger objective_score does not exceed production")
+    if not drawdown_ok:
+        reasons.append("ranking challenger max_drawdown exceeds production")
+    if not big_loss_selection_ok:
+        reasons.append("ranking challenger big_loss_selection_rate exceeds production")
+
+    if total_return_ok and objective_ok and drawdown_ok and big_loss_selection_ok:
+        reasons.append("ranking challenger improves objective with acceptable top-k return, drawdown, and big-loss selection rate")
+        return True, reasons, {"candidate": candidate_best, "production": production_best}
+
+    reasons.append("ranking challenger did not satisfy top-k promotion thresholds")
+    return False, reasons, {"candidate": candidate_best, "production": production_best}
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare candidate model against production model on same holdout.")
     parser.add_argument("--input", default="data/decision_training_snapshot.jsonl")
@@ -416,11 +456,30 @@ def main() -> None:
     candidate_metrics = _evaluate(args.candidate_model, test_df.copy())
     production_metrics = _evaluate(args.production_model, test_df.copy())
 
-    candidate_win, reasons = _decide(candidate_metrics, production_metrics, min_rows=max(1, args.min_rows))
+    decision_win, decision_reasons = _decide(candidate_metrics, production_metrics, min_rows=max(1, args.min_rows))
+    ranking_win, ranking_reasons, ranking_metrics = _ranking_lane_decide(candidate_metrics, production_metrics)
+    candidate_win = decision_win and ranking_win
+    reasons = [
+        *(f"decision lane: {reason}" for reason in decision_reasons),
+        *(f"ranking lane: {reason}" for reason in ranking_reasons),
+    ]
 
     report = {
         "candidate_metrics": candidate_metrics,
         "production_metrics": production_metrics,
+        "challenger_scoring_lanes": {
+            "decision_model": {
+                "candidate_win": decision_win,
+                "metrics": ["utility_score_after_big_loss_penalty", "avg_return", "brier_score", "downside_risk", "big_loss_prediction_rate"],
+                "reasons": decision_reasons,
+            },
+            "ranking": {
+                "candidate_win": ranking_win,
+                "metrics": ["total_return", "objective_score", "max_drawdown", "big_loss_selection_rate"],
+                "best_ranking_backtests": ranking_metrics,
+                "reasons": ranking_reasons,
+            },
+        },
         "candidate_win": candidate_win,
         "reasons": reasons,
     }
