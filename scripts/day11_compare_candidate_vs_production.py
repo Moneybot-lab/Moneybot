@@ -582,7 +582,8 @@ def _walk_forward_consistency(window_results: list[dict[str, Any]]) -> dict[str,
 def _walk_forward_validation(candidate_model_path: str, production_model_path: str, test_df: pd.DataFrame, *, min_rows: int) -> dict[str, Any]:
     if "ts" in test_df.columns:
         test_df = test_df.sort_values("ts").reset_index(drop=True)
-    chunks = [chunk.copy() for chunk in np.array_split(test_df, WALK_FORWARD_WINDOWS) if len(chunk)]
+    split_indices = np.array_split(np.arange(len(test_df)), WALK_FORWARD_WINDOWS)
+    chunks = [test_df.iloc[indexes].copy() for indexes in split_indices if len(indexes)]
     window_results: list[dict[str, Any]] = []
     window_min_rows = max(1, int(min_rows) // max(1, len(chunks)))
     for index, window_df in enumerate(chunks, start=1):
