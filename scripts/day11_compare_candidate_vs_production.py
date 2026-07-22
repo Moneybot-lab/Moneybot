@@ -489,6 +489,85 @@ def _ranking_lane_decide(candidate: dict[str, Any], production: dict[str, Any]) 
     return False, reasons, {"candidate": candidate_best, "production": production_best}
 
 
+
+def _compact_error_row(row: pd.Series) -> dict[str, Any]:
+    return {
+        "symbol": str(row.get("symbol", "unknown")),
+        "event_date": str(row.get("_event_date", "unknown")),
+        "return_5d": round(float(row.get("return_5d", 0.0)), 6) if pd.notna(row.get("return_5d")) else None,
+        "candidate_probability": round(float(row.get("_candidate_prob", 0.0)), 6),
+        "candidate_prediction": int(row.get("_candidate_pred", 0)),
+        "production_probability": round(float(row.get("_production_prob", 0.0)), 6),
+        "production_prediction": int(row.get("_production_pred", 0)),
+    }
+
+
+def _artifact_scored_frame(artifact_path: str, test_df: pd.DataFrame, *, prefix: str) -> pd.DataFrame:
+    if not Path(artifact_path).exists():
+        return pd.DataFrame(index=test_df.index)
+    artifact = load_artifact(artifact_path)
+    usable = test_df.copy()
+    for idx, col in enumerate(artifact.feature_columns):
+        if col not in usable.columns:
+            usable[col] = np.nan
+        numeric = pd.to_numeric(usable[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        fallback = float(artifact.means[idx]) if idx < len(artifact.means) else 0.0
+        usable[col] = numeric.fillna(fallback).astype(float)
+    usable["return_5d"] = pd.to_numeric(usable.get("return_5d"), errors="coerce")
+    usable = usable.dropna(subset=["return_5d"]).copy()
+    usable = _ensure_return_bins(usable)
+    if usable.empty:
+        return usable
+    probs = predict_proba(artifact, usable[artifact.feature_columns].to_numpy(dtype=float))
+    usable[f"_{prefix}_prob"] = probs
+    usable[f"_{prefix}_pred"] = (probs >= artifact.decision_threshold).astype(int)
+    usable[f"_{prefix}_threshold"] = float(artifact.decision_threshold)
+    return usable
+
+
+def _prediction_error_examples(candidate_model_path: str, production_model_path: str, test_df: pd.DataFrame, *, limit: int = 100) -> dict[str, Any]:
+    candidate = _artifact_scored_frame(candidate_model_path, test_df, prefix="candidate")
+    production = _artifact_scored_frame(production_model_path, test_df, prefix="production")
+    if candidate.empty or production.empty:
+        return {"chosen_threshold": None, "prediction_overlap": {"rows": 0}, "big_loss_false_positives": [], "missed_big_gain_rows": []}
+    joined = candidate.join(production[["_production_prob", "_production_pred", "_production_threshold"]], how="inner")
+    joined["_event_date"] = _event_date_series(joined)
+    rows = int(len(joined))
+    agreement = float((joined["_candidate_pred"] == joined["_production_pred"]).mean()) if rows else 0.0
+    both_positive = int(((joined["_candidate_pred"] == 1) & (joined["_production_pred"] == 1)).sum())
+    candidate_positive = int((joined["_candidate_pred"] == 1).sum())
+    production_positive = int((joined["_production_pred"] == 1).sum())
+    union_positive = int(((joined["_candidate_pred"] == 1) | (joined["_production_pred"] == 1)).sum())
+    bins = joined["return_bin_5d"].fillna("").astype(str)
+    big_loss_fp = joined[(bins == "big_loss") & (joined["_candidate_pred"] == 1) & (joined["_production_pred"] == 0)]
+    missed_big_gain = joined[(bins == "big_gain") & (joined["_candidate_pred"] == 0)]
+    return {
+        "chosen_threshold": round(float(joined["_candidate_threshold"].iloc[0]), 6) if rows else None,
+        "production_threshold": round(float(joined["_production_threshold"].iloc[0]), 6) if rows else None,
+        "prediction_overlap": {
+            "rows": rows,
+            "prediction_agreement": round(agreement, 4),
+            "candidate_positive_predictions": candidate_positive,
+            "production_positive_predictions": production_positive,
+            "shared_positive_predictions": both_positive,
+            "positive_prediction_jaccard": round(both_positive / union_positive, 4) if union_positive else None,
+        },
+        "big_loss_false_positives": [_compact_error_row(row) for _, row in big_loss_fp.head(limit).iterrows()],
+        "big_loss_false_positive_count": int(len(big_loss_fp)),
+        "missed_big_gain_rows": [_compact_error_row(row) for _, row in missed_big_gain.head(limit).iterrows()],
+        "missed_big_gain_count": int(len(missed_big_gain)),
+    }
+
+
+def _promotion_decision(candidate_win: bool, no_op_clone: bool, decision_win: bool, ranking_win: bool, walk_forward_consistent: bool) -> str:
+    if no_op_clone:
+        return "NO_OP_CLONE"
+    if candidate_win:
+        return "PROMOTE"
+    if decision_win and ranking_win and not walk_forward_consistent:
+        return "WATCH"
+    return "HOLD"
+
 def _walk_forward_consistency(window_results: list[dict[str, Any]]) -> dict[str, Any]:
     evaluated = [item for item in window_results if item.get("evaluated")]
     consistent = len(evaluated) >= 2 and all(item.get("candidate_win") for item in evaluated)
@@ -549,7 +628,9 @@ def main() -> None:
     walk_forward = _walk_forward_validation(args.candidate_model, args.production_model, test_df.copy(), min_rows=max(1, args.min_rows))
     no_op_clone = bool(clone_detection.get("no_op_clone"))
     walk_forward_consistent = bool(walk_forward.get("consistent"))
+    report_examples = _prediction_error_examples(args.candidate_model, args.production_model, test_df.copy())
     candidate_win = decision_win and ranking_win and not no_op_clone and walk_forward_consistent
+    promotion_decision = _promotion_decision(candidate_win, no_op_clone, decision_win, ranking_win, walk_forward_consistent)
     reasons = [
         *(f"decision lane: {reason}" for reason in decision_reasons),
         *(f"ranking lane: {reason}" for reason in ranking_reasons),
@@ -562,6 +643,13 @@ def main() -> None:
     report = {
         "candidate_metrics": candidate_metrics,
         "production_metrics": production_metrics,
+        "chosen_threshold": report_examples.get("chosen_threshold"),
+        "prediction_overlap": report_examples.get("prediction_overlap"),
+        "big_loss_false_positives": report_examples.get("big_loss_false_positives"),
+        "big_loss_false_positive_count": report_examples.get("big_loss_false_positive_count"),
+        "missed_big_gain_rows": report_examples.get("missed_big_gain_rows"),
+        "missed_big_gain_count": report_examples.get("missed_big_gain_count"),
+        "promotion_decision": promotion_decision,
         "clone_detection": clone_detection,
         "walk_forward_validation": walk_forward,
         "challenger_scoring_lanes": {
