@@ -30,6 +30,9 @@ RANKING_MAX_EXPOSURE_PER_SIGNAL = 0.10
 NO_OP_CLONE_PREDICTION_AGREEMENT = 0.98
 NO_OP_CLONE_PROBABILITY_MAE = 0.02
 WALK_FORWARD_WINDOWS = 3
+MIN_THRESHOLD_BIG_GAIN_CAPTURE_RATE = 0.10
+MIN_THRESHOLD_POSITIVE_PREDICTIONS = 10
+MIN_THRESHOLD_POSITIVE_FRACTION_OF_CURRENT = 0.25
 
 
 def _load_jsonl(path: str) -> pd.DataFrame:
@@ -525,6 +528,40 @@ def _artifact_scored_frame(artifact_path: str, test_df: pd.DataFrame, *, prefix:
     return usable
 
 
+
+def _feature_contributions(artifact_path: str, row: pd.Series) -> list[dict[str, Any]]:
+    if not Path(artifact_path).exists():
+        return []
+    artifact = load_artifact(artifact_path)
+    contributions: list[dict[str, Any]] = []
+    for idx, feature in enumerate(artifact.feature_columns):
+        value = row.get(feature, np.nan)
+        value = float(pd.to_numeric(pd.Series([value]), errors="coerce").fillna(artifact.means[idx] if idx < len(artifact.means) else 0.0).iloc[0])
+        mean = float(artifact.means[idx]) if idx < len(artifact.means) else 0.0
+        std = float(artifact.stds[idx]) if idx < len(artifact.stds) and float(artifact.stds[idx]) != 0.0 else 1.0
+        weight = float(artifact.weights[idx]) if idx < len(artifact.weights) else 0.0
+        contribution = ((value - mean) / std) * weight
+        contributions.append({"feature": feature, "value": round(value, 6), "weight": round(weight, 6), "contribution": round(float(contribution), 6)})
+    return sorted(contributions, key=lambda item: abs(float(item["contribution"])), reverse=True)
+
+
+def _cmi_false_positive_diagnostic(candidate_model_path: str, production_model_path: str, false_positives: pd.DataFrame) -> dict[str, Any] | None:
+    if false_positives.empty or "symbol" not in false_positives.columns:
+        return None
+    cmi_rows = false_positives[false_positives["symbol"].fillna("").astype(str).str.upper() == "CMI"]
+    if cmi_rows.empty:
+        return None
+    row = cmi_rows.iloc[0]
+    candidate_contributions = _feature_contributions(candidate_model_path, row)
+    production_contributions = _feature_contributions(production_model_path, row)
+    return {
+        **_compact_error_row(row),
+        "diagnostic": "CMI big-loss false positive added to bad-buy mining rows; top positive candidate contributions show which features pushed the candidate above threshold.",
+        "top_candidate_positive_features": [item for item in candidate_contributions if float(item["contribution"]) > 0.0][:10],
+        "top_candidate_absolute_features": candidate_contributions[:10],
+        "top_production_absolute_features": production_contributions[:10],
+    }
+
 def _prediction_error_examples(candidate_model_path: str, production_model_path: str, test_df: pd.DataFrame, *, limit: int = 100) -> dict[str, Any]:
     candidate = _artifact_scored_frame(candidate_model_path, test_df, prefix="candidate")
     production = _artifact_scored_frame(production_model_path, test_df, prefix="production")
@@ -541,6 +578,7 @@ def _prediction_error_examples(candidate_model_path: str, production_model_path:
     bins = joined["return_bin_5d"].fillna("").astype(str)
     big_loss_fp = joined[(bins == "big_loss") & (joined["_candidate_pred"] == 1) & (joined["_production_pred"] == 0)]
     missed_big_gain = joined[(bins == "big_gain") & (joined["_candidate_pred"] == 0)]
+    cmi_diagnostic = _cmi_false_positive_diagnostic(candidate_model_path, production_model_path, big_loss_fp)
     return {
         "chosen_threshold": round(float(joined["_candidate_threshold"].iloc[0]), 6) if rows else None,
         "production_threshold": round(float(joined["_production_threshold"].iloc[0]), 6) if rows else None,
@@ -556,6 +594,7 @@ def _prediction_error_examples(candidate_model_path: str, production_model_path:
         "big_loss_false_positive_count": int(len(big_loss_fp)),
         "missed_big_gain_rows": [_compact_error_row(row) for _, row in missed_big_gain.head(limit).iterrows()],
         "missed_big_gain_count": int(len(missed_big_gain)),
+        "cmi_false_positive_diagnostic": cmi_diagnostic,
     }
 
 
@@ -567,6 +606,64 @@ def _promotion_decision(candidate_win: bool, no_op_clone: bool, decision_win: bo
     if decision_win and ranking_win and not walk_forward_consistent:
         return "WATCH"
     return "HOLD"
+
+
+def _threshold_item_at(metrics: dict[str, Any], threshold: float) -> dict[str, Any] | None:
+    for item in metrics.get("threshold_search") or []:
+        if abs(float(item.get("threshold", -1.0)) - float(threshold)) < 1e-9:
+            return item
+    return None
+
+
+def _threshold_guardrails_pass(item: dict[str, Any], current: dict[str, Any]) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    item_big_loss_predictions = _numeric_metric(item, "big_loss_predictions") or 0.0
+    current_big_loss_predictions = _numeric_metric(current, "big_loss_predictions") or 0.0
+    item_big_loss_rate = _numeric_metric(item, "big_loss_prediction_rate")
+    current_big_loss_rate = _numeric_metric(current, "big_loss_prediction_rate")
+    item_big_gain_capture = _numeric_metric(item, "big_gain_capture_rate") or 0.0
+    item_positive = _numeric_metric(item, "positive_predictions") or 0.0
+    current_positive = _numeric_metric(current, "positive_predictions") or 0.0
+    min_positive = max(MIN_THRESHOLD_POSITIVE_PREDICTIONS, current_positive * MIN_THRESHOLD_POSITIVE_FRACTION_OF_CURRENT)
+
+    if not (item_big_loss_predictions == 0.0 or item_big_loss_predictions <= current_big_loss_predictions):
+        reasons.append("big_loss_predictions would increase versus current threshold")
+    if item_big_loss_rate is not None and current_big_loss_rate is not None and item_big_loss_rate > current_big_loss_rate:
+        reasons.append("big_loss_prediction_rate would exceed current threshold")
+    if item_big_gain_capture < MIN_THRESHOLD_BIG_GAIN_CAPTURE_RATE:
+        reasons.append(f"big_gain_capture_rate below minimum ({item_big_gain_capture:.4f} < {MIN_THRESHOLD_BIG_GAIN_CAPTURE_RATE:.4f})")
+    if item_positive < min_positive:
+        reasons.append(f"positive_predictions below minimum ({int(item_positive)} < {min_positive:.1f})")
+    return not reasons, reasons
+
+
+def _select_threshold_from_search(metrics: dict[str, Any], current_threshold: float) -> dict[str, Any]:
+    current = _threshold_item_at(metrics, current_threshold) or {
+        "threshold": current_threshold,
+        "utility_score": metrics.get("utility_score"),
+        "positive_predictions": metrics.get("positive_predictions"),
+        "big_loss_predictions": metrics.get("big_loss_predictions"),
+        "big_loss_prediction_rate": metrics.get("big_loss_prediction_rate"),
+        "big_gain_capture_rate": metrics.get("big_gain_capture_rate"),
+    }
+    candidates: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for item in metrics.get("threshold_search") or []:
+        if not isinstance(item.get("utility_score"), (int, float)):
+            continue
+        passed, guardrail_reasons = _threshold_guardrails_pass(item, current)
+        if passed:
+            candidates.append(item)
+        else:
+            rejected.append({"threshold": item.get("threshold"), "reasons": guardrail_reasons})
+    if not candidates:
+        return {"recommended_threshold": float(current_threshold), "selected": current, "rejected": rejected, "reason": "no threshold passed guardrails"}
+    best = max(candidates, key=lambda item: (float(item.get("utility_score") or -999.0), -float(item.get("big_loss_prediction_rate") or 0.0), float(item.get("big_gain_capture_rate") or 0.0)))
+    current_utility = _numeric_metric(current, "utility_score")
+    best_utility = _numeric_metric(best, "utility_score")
+    if current_utility is not None and best_utility is not None and best_utility <= current_utility:
+        return {"recommended_threshold": float(current_threshold), "selected": current, "rejected": rejected, "reason": "current threshold utility is already best after guardrails"}
+    return {"recommended_threshold": float(best["threshold"]), "selected": best, "rejected": rejected, "reason": "higher utility threshold passed guardrails"}
 
 def _walk_forward_consistency(window_results: list[dict[str, Any]]) -> dict[str, Any]:
     evaluated = [item for item in window_results if item.get("evaluated")]
@@ -605,6 +702,87 @@ def _walk_forward_validation(candidate_model_path: str, production_model_path: s
         })
     return _walk_forward_consistency(window_results)
 
+
+def _evaluate_artifact_threshold(artifact_path: str, frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
+    if not Path(artifact_path).exists():
+        return {"rows": 0}
+    artifact = load_artifact(artifact_path)
+    usable = frame.copy()
+    for idx, col in enumerate(artifact.feature_columns):
+        if col not in usable.columns:
+            usable[col] = np.nan
+        numeric = pd.to_numeric(usable[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        fallback = float(artifact.means[idx]) if idx < len(artifact.means) else 0.0
+        usable[col] = numeric.fillna(fallback).astype(float)
+    usable["return_5d"] = pd.to_numeric(usable.get("return_5d"), errors="coerce")
+    usable = _ensure_return_bins(usable.dropna(subset=["return_5d"]).copy())
+    if usable.empty:
+        return {"rows": 0}
+    probs = predict_proba(artifact, usable[artifact.feature_columns].to_numpy(dtype=float))
+    preds = (probs >= float(threshold)).astype(int)
+    return {**_prediction_return_metrics(usable, preds, probs), "threshold": float(threshold), "rows": int(len(usable))}
+
+
+def _threshold_walk_forward_results(artifact_path: str, test_df: pd.DataFrame, current_threshold: float, recommended_threshold: float, *, min_rows: int) -> dict[str, Any]:
+    if abs(float(current_threshold) - float(recommended_threshold)) < 1e-9:
+        return {"consistent": False, "windows": [], "reason": "recommended threshold equals current threshold"}
+    if "ts" in test_df.columns:
+        test_df = test_df.sort_values("ts").reset_index(drop=True)
+    split_indices = np.array_split(np.arange(len(test_df)), WALK_FORWARD_WINDOWS)
+    chunks = [test_df.iloc[indexes].copy() for indexes in split_indices if len(indexes)]
+    window_min_rows = max(1, int(min_rows) // max(1, len(chunks)))
+    windows: list[dict[str, Any]] = []
+    for index, window_df in enumerate(chunks, start=1):
+        if len(window_df) < window_min_rows:
+            windows.append({"window": index, "rows": int(len(window_df)), "passed": False, "reason": "window below minimum rows"})
+            continue
+        current = _evaluate_artifact_threshold(artifact_path, window_df, current_threshold)
+        proposed = _evaluate_artifact_threshold(artifact_path, window_df, recommended_threshold)
+        guardrails_ok, guardrail_reasons = _threshold_guardrails_pass(proposed, current)
+        current_utility = _numeric_metric(current, "utility_score")
+        proposed_utility = _numeric_metric(proposed, "utility_score")
+        utility_ok = current_utility is not None and proposed_utility is not None and proposed_utility > current_utility
+        windows.append({
+            "window": index,
+            "rows": int(len(window_df)),
+            "current": current,
+            "proposed": proposed,
+            "passed": bool(guardrails_ok and utility_ok),
+            "reasons": [*guardrail_reasons, *([] if utility_ok else ["proposed threshold utility did not beat current threshold"])],
+        })
+    evaluated = [item for item in windows if item.get("current", {}).get("rows", 0)]
+    consistent = len(evaluated) >= 2 and all(item.get("passed") for item in evaluated)
+    return {"consistent": bool(consistent), "windows_evaluated": len(evaluated), "windows": windows}
+
+
+def _threshold_optimizer_report(artifact_path: str, metrics: dict[str, Any], test_df: pd.DataFrame, *, min_rows: int) -> dict[str, Any]:
+    current_threshold = None
+    if Path(artifact_path).exists():
+        current_threshold = float(load_artifact(artifact_path).decision_threshold)
+    if current_threshold is None:
+        return {"current_threshold": None, "recommended_threshold": None, "threshold_change_recommended": False, "threshold_change_reason": "artifact unavailable", "threshold_walk_forward_results": {}}
+    selection = _select_threshold_from_search(metrics, current_threshold)
+    recommended = float(selection["recommended_threshold"])
+    walk_forward = _threshold_walk_forward_results(artifact_path, test_df, current_threshold, recommended, min_rows=min_rows)
+    change_recommended = abs(recommended - current_threshold) > 1e-9 and bool(walk_forward.get("consistent"))
+    if change_recommended:
+        reason = f"{selection['reason']}; walk-forward consistent"
+    elif abs(recommended - current_threshold) <= 1e-9:
+        reason = str(selection["reason"])
+    else:
+        reason = f"{selection['reason']}; walk-forward consistency required before changing live threshold"
+    return {
+        "current_threshold": round(current_threshold, 6),
+        "recommended_threshold": round(recommended if change_recommended else current_threshold, 6),
+        "best_guardrail_threshold": round(recommended, 6),
+        "threshold_change_recommended": bool(change_recommended),
+        "threshold_change_reason": reason,
+        "selected_threshold_metrics": selection.get("selected"),
+        "rejected_thresholds": selection.get("rejected"),
+        "threshold_walk_forward_results": walk_forward,
+        "deployable_model_config": {"model_path": artifact_path, "decision_threshold": round(recommended if change_recommended else current_threshold, 6)},
+    }
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare candidate model against production model on same holdout.")
     parser.add_argument("--input", default="data/decision_training_snapshot.jsonl")
@@ -630,6 +808,8 @@ def main() -> None:
     no_op_clone = bool(clone_detection.get("no_op_clone"))
     walk_forward_consistent = bool(walk_forward.get("consistent"))
     report_examples = _prediction_error_examples(args.candidate_model, args.production_model, test_df.copy())
+    production_threshold_optimizer = _threshold_optimizer_report(args.production_model, production_metrics, test_df.copy(), min_rows=max(1, args.min_rows))
+    candidate_threshold_optimizer = _threshold_optimizer_report(args.candidate_model, candidate_metrics, test_df.copy(), min_rows=max(1, args.min_rows))
     candidate_win = decision_win and ranking_win and not no_op_clone and walk_forward_consistent
     promotion_decision = _promotion_decision(candidate_win, no_op_clone, decision_win, ranking_win, walk_forward_consistent)
     reasons = [
@@ -644,12 +824,20 @@ def main() -> None:
     report = {
         "candidate_metrics": candidate_metrics,
         "production_metrics": production_metrics,
+        "recommended_threshold": production_threshold_optimizer.get("recommended_threshold"),
+        "current_threshold": production_threshold_optimizer.get("current_threshold"),
+        "threshold_change_recommended": production_threshold_optimizer.get("threshold_change_recommended"),
+        "threshold_change_reason": production_threshold_optimizer.get("threshold_change_reason"),
+        "threshold_walk_forward_results": production_threshold_optimizer.get("threshold_walk_forward_results"),
+        "threshold_optimizer": {"production": production_threshold_optimizer, "candidate": candidate_threshold_optimizer},
         "chosen_threshold": report_examples.get("chosen_threshold"),
         "prediction_overlap": report_examples.get("prediction_overlap"),
         "big_loss_false_positives": report_examples.get("big_loss_false_positives"),
         "big_loss_false_positive_count": report_examples.get("big_loss_false_positive_count"),
         "missed_big_gain_rows": report_examples.get("missed_big_gain_rows"),
         "missed_big_gain_count": report_examples.get("missed_big_gain_count"),
+        "bad_buy_mining_rows": report_examples.get("big_loss_false_positives"),
+        "cmi_false_positive_diagnostic": report_examples.get("cmi_false_positive_diagnostic"),
         "promotion_decision": promotion_decision,
         "clone_detection": clone_detection,
         "walk_forward_validation": walk_forward,
