@@ -17,6 +17,7 @@ SUITE_SCHEMA_VERSION = "moneybot-challenger-suite.v2"
 LOGISTIC_L2_GRID = (5e-4, 1e-3, 5e-3)
 LOGISTIC_THRESHOLD_GRID = (0.45, 0.50, 0.55, 0.60)
 MAX_STUMP_CHALLENGERS = 8
+SPECIALIZED_CHALLENGER_FAMILIES = ("big_loss_avoider", "big_gain_hunter", "recent_window_model", "ranking_top5_model")
 
 
 def _return_column(df: pd.DataFrame, horizon_days: int) -> str | None:
@@ -177,6 +178,69 @@ def _apply_walk_forward_metrics(
             challenger["metrics"]["walk_forward_ranking_objective"] = walk_forward.get("ranking_objective", 0.0)
 
 
+
+def _event_date_values(df: pd.DataFrame) -> pd.Series:
+    if "event_date" in df.columns:
+        dates = df["event_date"].fillna("").astype(str)
+        if dates.str.strip().any():
+            return dates.replace("", "unknown")
+    if "ts" in df.columns:
+        parsed = pd.to_datetime(pd.to_numeric(df["ts"], errors="coerce"), unit="s", utc=True, errors="coerce")
+        return parsed.dt.strftime("%Y-%m-%d").fillna("unknown")
+    return pd.Series("unknown", index=df.index)
+
+
+def _return_bucket_series(df: pd.DataFrame, return_col: str | None) -> pd.Series:
+    if "return_bin_5d" in df.columns:
+        return df["return_bin_5d"].fillna("").astype(str)
+    if return_col and return_col in df.columns:
+        returns = pd.to_numeric(df[return_col], errors="coerce")
+        buckets = pd.Series(
+            np.select(
+                [returns < -0.03, returns < -0.005, returns <= 0.005, returns <= 0.03],
+                ["big_loss", "loss", "flat", "gain"],
+                default="big_gain",
+            ),
+            index=df.index,
+        )
+        buckets.loc[returns.isna()] = ""
+        return buckets
+    return pd.Series("", index=df.index)
+
+
+def _mistake_slice_masks(df: pd.DataFrame, return_col: str | None) -> dict[str, pd.Series]:
+    buckets = _return_bucket_series(df, return_col)
+    rec_positive = df.get("feature_rec_positive", pd.Series(0.0, index=df.index)).astype(float) >= 0.5
+    prob = pd.to_numeric(df.get("feature_probability_up", pd.Series(np.nan, index=df.index)), errors="coerce")
+    missed_big_gain = (buckets == "big_gain") & (~rec_positive | (prob < 0.55))
+    bad_buy_big_loss = (buckets == "big_loss") & (rec_positive | (prob >= 0.55))
+    return {
+        "missed_big_gain_winners": missed_big_gain.fillna(False),
+        "bad_buy_big_loss_false_positives": bad_buy_big_loss.fillna(False),
+    }
+
+
+def _write_daily_mistake_slices(df: pd.DataFrame, output_dir: Path, return_col: str | None) -> dict[str, Any]:
+    slice_root = output_dir / "mistake_slices"
+    slice_root.mkdir(parents=True, exist_ok=True)
+    dates = _event_date_values(df)
+    masks = _mistake_slice_masks(df, return_col)
+    manifest: dict[str, Any] = {"slice_root": str(slice_root), "slices": {}}
+    for slice_name, mask in masks.items():
+        slice_dir = slice_root / slice_name
+        slice_dir.mkdir(parents=True, exist_ok=True)
+        selected = df.loc[mask].copy()
+        manifest["slices"][slice_name] = {"rows": int(len(selected)), "daily_files": []}
+        if selected.empty:
+            continue
+        selected_dates = dates.loc[selected.index]
+        for day, group in selected.groupby(selected_dates):
+            safe_day = str(day or "unknown").replace("/", "-")
+            path = slice_dir / f"{safe_day}.jsonl"
+            path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in group.to_dict(orient="records")), encoding="utf-8")
+            manifest["slices"][slice_name]["daily_files"].append({"date": safe_day, "path": str(path), "rows": int(len(group))})
+    return manifest
+
 def _load_jsonl(path: Path) -> pd.DataFrame:
     rows = []
     with path.open("r", encoding="utf-8") as fh:
@@ -290,6 +354,87 @@ def _add_stump_challengers(
         challengers.append({"model_version": model_version, "model_type": "decision_stump", "model_path": str(model_path), "metrics": metrics, "spec": spec})
 
 
+
+def _ranking_top5_labels(train_df: pd.DataFrame, return_col: str | None) -> np.ndarray:
+    if not return_col or return_col not in train_df.columns:
+        return np.zeros(len(train_df), dtype=float)
+    work = train_df.copy()
+    work["_return"] = pd.to_numeric(work[return_col], errors="coerce").fillna(0.0)
+    work["_event_date"] = _event_date_values(work)
+    labels = pd.Series(0.0, index=work.index)
+    for _, group in work.groupby("_event_date"):
+        top_n = min(5, len(group))
+        if top_n <= 0:
+            continue
+        labels.loc[group.sort_values("_return", ascending=False).head(top_n).index] = 1.0
+    return labels.loc[train_df.index].to_numpy(dtype=float)
+
+
+def _specialized_sample_weight(train_df: pd.DataFrame, return_col: str | None, family: str) -> np.ndarray:
+    buckets = _return_bucket_series(train_df, return_col)
+    weights = np.ones(len(train_df), dtype=float)
+    if family == "big_loss_avoider":
+        weights[buckets.to_numpy() == "big_loss"] = 6.0
+        weights[buckets.to_numpy() == "loss"] = 2.0
+    elif family == "big_gain_hunter":
+        weights[buckets.to_numpy() == "big_gain"] = 6.0
+        weights[buckets.to_numpy() == "gain"] = 2.0
+    elif family == "recent_window_model":
+        ramp = np.linspace(0.5, 2.5, num=len(train_df)) if len(train_df) else np.array([], dtype=float)
+        weights = ramp.astype(float)
+    elif family == "ranking_top5_model":
+        weights[buckets.to_numpy() == "big_gain"] = 4.0
+        weights[buckets.to_numpy() == "big_loss"] = 3.0
+    return weights
+
+
+def _add_specialized_challengers(
+    challengers: list[dict[str, Any]],
+    *,
+    output_dir: Path,
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+    feature_columns: list[str],
+    return_col: str | None,
+    test_returns: np.ndarray | None,
+) -> None:
+    for family in SPECIALIZED_CHALLENGER_FAMILIES:
+        family_train_df = train_df
+        family_y_train = y_train
+        if family == "recent_window_model" and len(train_df) >= 10:
+            recent_rows = max(5, len(train_df) // 2)
+            family_train_df = train_df.tail(recent_rows)
+            family_y_train = family_train_df.index.map(dict(zip(train_df.index, y_train))).to_numpy(dtype=float)
+        elif family == "ranking_top5_model":
+            family_y_train = _ranking_top5_labels(train_df, return_col)
+            if family_y_train.sum() <= 0:
+                family_y_train = y_train
+
+        X_family = family_train_df[feature_columns].to_numpy(dtype=float)
+        weights = _specialized_sample_weight(family_train_df, return_col, family)
+        artifact = train_logistic_baseline(
+            X_family,
+            family_y_train,
+            learning_rate=0.06,
+            l2=0.002,
+            decision_threshold=0.60 if family in {"big_loss_avoider", "ranking_top5_model"} else 0.55,
+            epochs=650,
+            sample_weight=weights,
+        )
+        artifact.version = f"challenger-{family.replace('_', '-')}-v1"
+        artifact.feature_columns = list(feature_columns)
+        model_path = output_dir / f"{artifact.version}.json"
+        spec = {"family": family, "lr": 0.06, "l2": 0.002, "epochs": 650, "sample_weight_policy": family}
+        _write_artifact(model_path, {"model_type": "logistic_regression", "specialized_family": family, **artifact.to_dict(), "training_spec": spec})
+        probs = predict_proba(artifact, test_df[feature_columns].to_numpy(dtype=float))
+        preds = (probs >= artifact.decision_threshold).astype(int)
+        metrics = summarize_binary_predictions(y_test, preds)
+        metrics.update(_ranking_metrics(probs, y_test, test_returns))
+        metrics["specialized_family"] = family
+        challengers.append({"model_version": artifact.version, "model_type": "logistic_regression", "specialized_family": family, "model_path": str(model_path), "metrics": metrics, "spec": spec})
+
 def _add_baseline_challengers(challengers: list[dict[str, Any]], *, output_dir: Path, y_train: np.ndarray, y_test: np.ndarray, test_returns: np.ndarray | None) -> None:
     majority_class = int(float(y_train.mean()) >= 0.5)
     baselines = [
@@ -331,9 +476,11 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
     test_returns = test_df[return_col].to_numpy(dtype=float) if return_col else None
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    mistake_slices = _write_daily_mistake_slices(clean, output_dir, return_col)
     challengers: list[dict[str, Any]] = []
     _add_logistic_challengers(challengers, output_dir=output_dir, X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test, feature_columns=feature_columns, test_returns=test_returns)
     _add_stump_challengers(challengers, output_dir=output_dir, train_df=train_df, test_df=test_df, y_train=y_train, y_test=y_test, feature_columns=feature_columns, test_returns=test_returns)
+    _add_specialized_challengers(challengers, output_dir=output_dir, train_df=train_df, test_df=test_df, y_train=y_train, y_test=y_test, feature_columns=feature_columns, return_col=return_col, test_returns=test_returns)
     _add_baseline_challengers(challengers, output_dir=output_dir, y_train=y_train, y_test=y_test, test_returns=test_returns)
     walk_forward_folds = _walk_forward_splits(clean)
     _apply_walk_forward_metrics(
@@ -376,6 +523,8 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         "feature_columns": feature_columns,
         "feature_fill_values": fill_values,
         "model_type_counts": model_type_counts,
+        "specialized_challenger_families": list(SPECIALIZED_CHALLENGER_FAMILIES),
+        "mistake_mining": mistake_slices,
         "challenger_count": len(challengers),
         "challengers": challengers,
         "ranked_model_versions": [item["model_version"] for item in ranked],

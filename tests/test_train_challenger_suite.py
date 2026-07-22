@@ -24,7 +24,12 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
     assert manifest["schema_version"] == "moneybot-challenger-suite.v2"
     assert manifest["live_routing"] is False
     assert manifest["challenger_count"] >= 20
-    assert manifest["model_type_counts"]["logistic_regression"] == 12
+    assert manifest["model_type_counts"]["logistic_regression"] == 16
+    assert manifest["specialized_challenger_families"] == ["big_loss_avoider", "big_gain_hunter", "recent_window_model", "ranking_top5_model"]
+    assert {item.get("specialized_family") for item in manifest["challengers"] if item.get("specialized_family")} == set(manifest["specialized_challenger_families"])
+    assert "mistake_mining" in manifest
+    assert "missed_big_gain_winners" in manifest["mistake_mining"]["slices"]
+    assert "bad_buy_big_loss_false_positives" in manifest["mistake_mining"]["slices"]
     assert manifest["model_type_counts"]["decision_stump"] >= 3
     assert manifest["model_type_counts"]["baseline_classifier"] == 3
     assert len(manifest["ranked_model_versions"]) == manifest["challenger_count"]
