@@ -39,7 +39,7 @@ python scripts/train_challenger_suite.py \
   --min-rows 200
 ```
 
-The challenger suite trains many offline competitors in one run: a logistic-regression grid across thresholds and regularization values, the strongest single-feature decision stumps, and simple majority/always-up/always-down baselines. It writes one model artifact per challenger and `challenger_suite_manifest.json` with model-type counts, metrics, ranking, selected features, fill values, and `live_routing: false`.
+The challenger suite trains many offline competitors in one run: a logistic-regression grid across thresholds and regularization values, mistake-mined specialized challengers (`big_loss_avoider`, `big_gain_hunter`, `recent_window_model`, and `ranking_top5_model`), the strongest single-feature decision stumps, and simple majority/always-up/always-down baselines. It also writes daily mistake slices for missed big-gain winners and bad-buy / big-loss false positives under the suite output directory. It writes one model artifact per challenger and `challenger_suite_manifest.json` with model-type counts, metrics, ranking, selected features, fill values, and `live_routing: false`.
 
 ## 4. Backtest, gate, and shadow-log before promotion
 

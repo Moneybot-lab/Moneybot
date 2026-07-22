@@ -23,9 +23,13 @@ UTILITY_BIG_GAIN_WEIGHT = 0.10
 UTILITY_DOWNSIDE_WEIGHT = 1.0
 UTILITY_BIG_LOSS_WEIGHT = 1.0
 MIN_UTILITY_IMPROVEMENT = 0.0
-THRESHOLD_SEARCH_VALUES = (0.50, 0.525, 0.55, 0.575, 0.60, 0.625, 0.65, 0.675, 0.70)
+HARD_BIG_LOSS_FALSE_POSITIVE_PENALTY = 1.0
+THRESHOLD_SEARCH_VALUES = (0.55, 0.575, 0.60, 0.625, 0.65, 0.675, 0.70)
 RANKING_TOP_K_VALUES = (1, 3, 5)
 RANKING_MAX_EXPOSURE_PER_SIGNAL = 0.10
+NO_OP_CLONE_PREDICTION_AGREEMENT = 0.98
+NO_OP_CLONE_PROBABILITY_MAE = 0.02
+WALK_FORWARD_WINDOWS = 3
 
 
 def _load_jsonl(path: str) -> pd.DataFrame:
@@ -302,6 +306,53 @@ def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
     return metrics
 
 
+
+def _no_op_clone_summary(candidate_preds: np.ndarray, production_preds: np.ndarray, candidate_probs: np.ndarray, production_probs: np.ndarray) -> dict[str, Any]:
+    rows = int(min(len(candidate_preds), len(production_preds), len(candidate_probs), len(production_probs)))
+    if rows <= 0:
+        return {"rows": 0, "prediction_agreement": None, "probability_mae": None, "no_op_clone": False}
+    c_preds = candidate_preds[:rows]
+    p_preds = production_preds[:rows]
+    c_probs = candidate_probs[:rows]
+    p_probs = production_probs[:rows]
+    prediction_agreement = float((c_preds == p_preds).mean())
+    probability_mae = float(np.mean(np.abs(c_probs - p_probs)))
+    no_op_clone = prediction_agreement >= NO_OP_CLONE_PREDICTION_AGREEMENT and probability_mae <= NO_OP_CLONE_PROBABILITY_MAE
+    return {
+        "rows": rows,
+        "prediction_agreement": round(prediction_agreement, 4),
+        "probability_mae": round(probability_mae, 4),
+        "no_op_clone": bool(no_op_clone),
+        "prediction_agreement_threshold": NO_OP_CLONE_PREDICTION_AGREEMENT,
+        "probability_mae_threshold": NO_OP_CLONE_PROBABILITY_MAE,
+    }
+
+
+def _artifact_predictions(artifact_path: str, test_df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    if not Path(artifact_path).exists():
+        return np.array([], dtype=int), np.array([], dtype=float)
+    artifact = load_artifact(artifact_path)
+    usable = test_df.copy()
+    for idx, col in enumerate(artifact.feature_columns):
+        if col not in usable.columns:
+            usable[col] = np.nan
+        numeric = pd.to_numeric(usable[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        fallback = float(artifact.means[idx]) if idx < len(artifact.means) else 0.0
+        usable[col] = numeric.fillna(fallback).astype(float)
+    usable["return_5d"] = pd.to_numeric(usable.get("return_5d"), errors="coerce")
+    usable = usable.dropna(subset=["return_5d"]).copy()
+    if usable.empty:
+        return np.array([], dtype=int), np.array([], dtype=float)
+    probs = predict_proba(artifact, usable[artifact.feature_columns].to_numpy(dtype=float))
+    preds = (probs >= artifact.decision_threshold).astype(int)
+    return preds, probs
+
+
+def _clone_detection(candidate_model_path: str, production_model_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
+    candidate_preds, candidate_probs = _artifact_predictions(candidate_model_path, test_df)
+    production_preds, production_probs = _artifact_predictions(production_model_path, test_df)
+    return _no_op_clone_summary(candidate_preds, production_preds, candidate_probs, production_probs)
+
 def _numeric_metric(metrics: dict[str, Any], key: str) -> float | None:
     value = metrics.get(key)
     if value is None:
@@ -352,6 +403,8 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
 
     c_big_loss_rate = _numeric_metric(candidate, "big_loss_prediction_rate")
     p_big_loss_rate = _numeric_metric(production, "big_loss_prediction_rate")
+    c_big_loss_predictions = _numeric_metric(candidate, "big_loss_predictions") or 0.0
+    p_big_loss_predictions = _numeric_metric(production, "big_loss_predictions") or 0.0
     c_big_gain_rate = _numeric_metric(candidate, "big_gain_capture_rate")
     c_utility = _utility_score(candidate)
     p_utility = _utility_score(production)
@@ -359,13 +412,19 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
         reasons.append("insufficient comparable utility metrics")
         return False, reasons
 
+    hard_big_loss_false_positive = p_big_loss_predictions == 0.0 and c_big_loss_predictions > 0.0
+    big_loss_false_positive_penalty = HARD_BIG_LOSS_FALSE_POSITIVE_PENALTY if hard_big_loss_false_positive else 0.0
+    c_utility_after_penalty = c_utility - big_loss_false_positive_penalty
+    candidate["big_loss_false_positive_penalty"] = round(big_loss_false_positive_penalty, 4)
+    candidate["utility_score_after_big_loss_penalty"] = round(c_utility_after_penalty, 4)
+
     accuracy_ok = c_acc > p_acc
     brier_ok = c_brier < p_brier
     return_ok = c_return >= p_return
     downside_ok = c_downside <= p_downside
     big_loss_ok = True if c_big_loss_rate is None or p_big_loss_rate is None else c_big_loss_rate <= p_big_loss_rate
     big_gain_floor_ok = (c_big_gain_rate or 0.0) >= MIN_BIG_GAIN_CAPTURE_RATE
-    utility_ok = c_utility > (p_utility + MIN_UTILITY_IMPROVEMENT)
+    utility_ok = c_utility_after_penalty > (p_utility + MIN_UTILITY_IMPROVEMENT)
 
     if not accuracy_ok:
         reasons.append("candidate accuracy is below production, but accuracy is informational when profit utility improves")
@@ -373,12 +432,14 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
         reasons.append("candidate brier score does not improve production")
     if not (return_ok or downside_ok):
         reasons.append("candidate avg_return is lower and downside_risk is higher than production")
+    if hard_big_loss_false_positive:
+        reasons.append("candidate predicts big-loss rows while production predicts zero; hard false-positive penalty applied")
     if not big_loss_ok:
-        reasons.append("candidate signals too many big-loss rows versus production")
+        reasons.append("candidate big_loss_prediction_rate exceeds production")
     if not big_gain_floor_ok:
         reasons.append(f"candidate big-gain capture is below minimum ({c_big_gain_rate or 0.0:.4f} < {MIN_BIG_GAIN_CAPTURE_RATE:.4f})")
     if not utility_ok:
-        reasons.append("candidate profit utility does not exceed production")
+        reasons.append("candidate profit utility after big-loss penalty does not exceed production")
 
     if brier_ok and (return_ok or downside_ok) and big_loss_ok and big_gain_floor_ok and utility_ok:
         reasons.append("candidate improves profit utility with acceptable brier, return/downside, big-loss avoidance, and minimum big-gain capture")
@@ -386,6 +447,83 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
 
     reasons.append("candidate did not satisfy profit-aware promotion thresholds")
     return False, reasons
+
+
+def _ranking_lane_decide(candidate: dict[str, Any], production: dict[str, Any]) -> tuple[bool, list[str], dict[str, Any]]:
+    reasons: list[str] = []
+    candidate_best = candidate.get("best_ranking_backtest") if isinstance(candidate.get("best_ranking_backtest"), dict) else None
+    production_best = production.get("best_ranking_backtest") if isinstance(production.get("best_ranking_backtest"), dict) else None
+    if not candidate_best or not production_best:
+        return False, ["insufficient comparable ranking backtests"], {"candidate": candidate_best, "production": production_best}
+
+    c_total_return = _numeric_metric(candidate_best, "total_return")
+    p_total_return = _numeric_metric(production_best, "total_return")
+    c_objective = _numeric_metric(candidate_best, "objective_score")
+    p_objective = _numeric_metric(production_best, "objective_score")
+    c_drawdown = _numeric_metric(candidate_best, "max_drawdown")
+    p_drawdown = _numeric_metric(production_best, "max_drawdown")
+    c_big_loss_selection_rate = _numeric_metric(candidate_best, "big_loss_selection_rate")
+    p_big_loss_selection_rate = _numeric_metric(production_best, "big_loss_selection_rate")
+    if None in {c_total_return, p_total_return, c_objective, p_objective, c_drawdown, p_drawdown}:
+        return False, ["insufficient comparable ranking return, objective, or drawdown metrics"], {"candidate": candidate_best, "production": production_best}
+
+    total_return_ok = c_total_return >= p_total_return
+    objective_ok = c_objective > p_objective
+    drawdown_ok = c_drawdown <= p_drawdown
+    big_loss_selection_ok = True if c_big_loss_selection_rate is None or p_big_loss_selection_rate is None else c_big_loss_selection_rate <= p_big_loss_selection_rate
+
+    if not total_return_ok:
+        reasons.append("ranking challenger top-k total_return is below production")
+    if not objective_ok:
+        reasons.append("ranking challenger objective_score does not exceed production")
+    if not drawdown_ok:
+        reasons.append("ranking challenger max_drawdown exceeds production")
+    if not big_loss_selection_ok:
+        reasons.append("ranking challenger big_loss_selection_rate exceeds production")
+
+    if total_return_ok and objective_ok and drawdown_ok and big_loss_selection_ok:
+        reasons.append("ranking challenger improves objective with acceptable top-k return, drawdown, and big-loss selection rate")
+        return True, reasons, {"candidate": candidate_best, "production": production_best}
+
+    reasons.append("ranking challenger did not satisfy top-k promotion thresholds")
+    return False, reasons, {"candidate": candidate_best, "production": production_best}
+
+
+def _walk_forward_consistency(window_results: list[dict[str, Any]]) -> dict[str, Any]:
+    evaluated = [item for item in window_results if item.get("evaluated")]
+    consistent = len(evaluated) >= 2 and all(item.get("candidate_win") for item in evaluated)
+    return {
+        "windows_requested": WALK_FORWARD_WINDOWS,
+        "windows_evaluated": len(evaluated),
+        "consistent": bool(consistent),
+        "windows": window_results,
+    }
+
+
+def _walk_forward_validation(candidate_model_path: str, production_model_path: str, test_df: pd.DataFrame, *, min_rows: int) -> dict[str, Any]:
+    if "ts" in test_df.columns:
+        test_df = test_df.sort_values("ts").reset_index(drop=True)
+    chunks = [chunk.copy() for chunk in np.array_split(test_df, WALK_FORWARD_WINDOWS) if len(chunk)]
+    window_results: list[dict[str, Any]] = []
+    window_min_rows = max(1, int(min_rows) // max(1, len(chunks)))
+    for index, window_df in enumerate(chunks, start=1):
+        if len(window_df) < window_min_rows:
+            window_results.append({"window": index, "rows": int(len(window_df)), "evaluated": False, "candidate_win": False, "reasons": [f"window rows below minimum ({len(window_df)} < {window_min_rows})"]})
+            continue
+        candidate_metrics = _evaluate(candidate_model_path, window_df)
+        production_metrics = _evaluate(production_model_path, window_df)
+        decision_win, decision_reasons = _decide(candidate_metrics, production_metrics, min_rows=window_min_rows)
+        ranking_win, ranking_reasons, _ = _ranking_lane_decide(candidate_metrics, production_metrics)
+        window_results.append({
+            "window": index,
+            "rows": int(len(window_df)),
+            "evaluated": True,
+            "candidate_win": bool(decision_win and ranking_win),
+            "decision_model_win": bool(decision_win),
+            "ranking_win": bool(ranking_win),
+            "reasons": [*(f"decision lane: {reason}" for reason in decision_reasons), *(f"ranking lane: {reason}" for reason in ranking_reasons)],
+        })
+    return _walk_forward_consistency(window_results)
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare candidate model against production model on same holdout.")
@@ -405,11 +543,40 @@ def main() -> None:
     candidate_metrics = _evaluate(args.candidate_model, test_df.copy())
     production_metrics = _evaluate(args.production_model, test_df.copy())
 
-    candidate_win, reasons = _decide(candidate_metrics, production_metrics, min_rows=max(1, args.min_rows))
+    decision_win, decision_reasons = _decide(candidate_metrics, production_metrics, min_rows=max(1, args.min_rows))
+    ranking_win, ranking_reasons, ranking_metrics = _ranking_lane_decide(candidate_metrics, production_metrics)
+    clone_detection = _clone_detection(args.candidate_model, args.production_model, test_df.copy())
+    walk_forward = _walk_forward_validation(args.candidate_model, args.production_model, test_df.copy(), min_rows=max(1, args.min_rows))
+    no_op_clone = bool(clone_detection.get("no_op_clone"))
+    walk_forward_consistent = bool(walk_forward.get("consistent"))
+    candidate_win = decision_win and ranking_win and not no_op_clone and walk_forward_consistent
+    reasons = [
+        *(f"decision lane: {reason}" for reason in decision_reasons),
+        *(f"ranking lane: {reason}" for reason in ranking_reasons),
+    ]
+    if no_op_clone:
+        reasons.append("clone detection: candidate predictions are nearly identical to production; no_op_clone cannot be promoted")
+    if not walk_forward_consistent:
+        reasons.append("walk-forward validation: candidate is not consistently better across rolling windows")
 
     report = {
         "candidate_metrics": candidate_metrics,
         "production_metrics": production_metrics,
+        "clone_detection": clone_detection,
+        "walk_forward_validation": walk_forward,
+        "challenger_scoring_lanes": {
+            "decision_model": {
+                "candidate_win": decision_win,
+                "metrics": ["utility_score_after_big_loss_penalty", "avg_return", "brier_score", "downside_risk", "big_loss_prediction_rate"],
+                "reasons": decision_reasons,
+            },
+            "ranking": {
+                "candidate_win": ranking_win,
+                "metrics": ["total_return", "objective_score", "max_drawdown", "big_loss_selection_rate"],
+                "best_ranking_backtests": ranking_metrics,
+                "reasons": ranking_reasons,
+            },
+        },
         "candidate_win": candidate_win,
         "reasons": reasons,
     }
