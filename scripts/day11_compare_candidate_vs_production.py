@@ -1115,7 +1115,15 @@ def _phase_1_certification(
     )
     symbol_concentration = _numeric_metric(candidate_metrics, "symbol_utility_concentration")
     date_concentration = _numeric_metric(candidate_metrics, "date_utility_concentration")
-    concentration_ok = (symbol_concentration is None or symbol_concentration <= MAX_SYMBOL_UTILITY_CONCENTRATION) and (date_concentration is None or date_concentration <= MAX_DATE_UTILITY_CONCENTRATION)
+    concentration_exceeded = (symbol_concentration is not None and symbol_concentration > MAX_SYMBOL_UTILITY_CONCENTRATION) or (date_concentration is not None and date_concentration > MAX_DATE_UTILITY_CONCENTRATION)
+    if concentration_exceeded:
+        concentration_candidate = _evaluate(candidate_model_path, test_df.copy())
+        concentration_candidate["feature_risk_audit"] = _feature_risk_audit(candidate_model_path, test_df.copy())
+        concentration_production = _evaluate(production_model_path, test_df.copy())
+        concentration_win, concentration_reasons = _decide(concentration_candidate, concentration_production, min_rows=min_rows)
+        concentration_ok = not concentration_win and any("concentrated" in reason for reason in concentration_reasons)
+    else:
+        concentration_ok = True
     checks = {
         "reproducible": reproducible,
         "recipe_reproduction_passed": recipe_reproduction,
@@ -1144,6 +1152,83 @@ def _phase_1_certification(
             "rerun_threshold_recommendation": rerun_threshold.get("recommended_threshold"),
             "future_feature_leakage_audit": leakage_audit,
         },
+    }
+
+
+def _phase_1_gate(
+    *,
+    candidate_model_path: str,
+    production_model_path: str,
+    detailed_certification: dict[str, Any],
+    walk_forward: dict[str, Any],
+    clone_detection: dict[str, Any],
+    threshold_optimizer: dict[str, Any],
+    report_examples: dict[str, Any],
+    temporal_split: dict[str, Any],
+) -> dict[str, Any]:
+    candidate_lineage = load_artifact(candidate_model_path).lineage if Path(candidate_model_path).exists() else None
+    recipe_lineage_passed = bool(
+        candidate_lineage
+        and candidate_lineage.get("schema_version") == "moneybot-challenger-lineage.v1"
+        and candidate_lineage.get("lineage_id")
+        and len(str(candidate_lineage.get("recipe_hash") or "")) == 64
+        and isinstance(candidate_lineage.get("recipe"), dict)
+    )
+    no_op_detected_correctly = not clone_detection.get("no_op_clone") or bool(clone_detection.get("candidate_prediction_fingerprint"))
+    threshold_change = bool(threshold_optimizer.get("threshold_change_recommended"))
+    threshold_results = threshold_optimizer.get("threshold_walk_forward_results") or {}
+    threshold_guardrails_passed = not threshold_change or bool(
+        threshold_results.get("consistent")
+        and threshold_results.get("threshold_stable")
+        and threshold_results.get("windows")
+        and all(item.get("passed") for item in threshold_results.get("windows", []) if item.get("current"))
+    )
+    report_traceability_passed = bool(
+        Path(candidate_model_path).exists()
+        and Path(production_model_path).exists()
+        and clone_detection.get("candidate_prediction_fingerprint")
+        and clone_detection.get("production_prediction_fingerprint")
+        and report_examples.get("chosen_threshold") is not None
+        and report_examples.get("mistake_scoring_method") == "artifact_predictions"
+        and temporal_split.get("train_rows_before") is not None
+        and temporal_split.get("test_rows_before") is not None
+    )
+    gate_results = {
+        "reproducibility_passed": bool(detailed_certification.get("reproducible")),
+        "recipe_lineage_passed": recipe_lineage_passed,
+        "walk_forward_recipe_reproduction_passed": bool(detailed_certification.get("recipe_reproduction_passed")) and bool(walk_forward.get("recipe_reproduction_passed")),
+        "split_hygiene_passed": bool(detailed_certification.get("split_hygiene_passed")),
+        "purge_embargo_passed": bool(detailed_certification.get("purge_embargo_passed")),
+        "future_feature_leakage_passed": bool(detailed_certification.get("future_feature_leakage_passed")),
+        "artifact_scored_mistake_mining_passed": bool(detailed_certification.get("artifact_scored_mistake_mining_passed")),
+        "cmi_regression_detection_passed": bool(detailed_certification.get("cmi_regression_test_passed")),
+        "clone_detection_passed": bool(detailed_certification.get("clone_detection_passed")) and no_op_detected_correctly,
+        "threshold_guardrails_passed": bool(detailed_certification.get("threshold_walk_forward_guardrails_passed")) and threshold_guardrails_passed,
+        "symbol_date_concentration_passed": bool(detailed_certification.get("symbol_date_concentration_passed")),
+        "report_traceability_passed": report_traceability_passed,
+    }
+    issue_messages = {
+        "reproducibility_passed": "candidate recipe rerun did not reproduce metrics, folds, threshold recommendation, fingerprint, and decision",
+        "recipe_lineage_passed": "candidate artifact is missing valid recipe lineage",
+        "walk_forward_recipe_reproduction_passed": "walk-forward folds did not preserve the exact candidate recipe fingerprint",
+        "split_hygiene_passed": "fit, calibration, threshold-selection, and test windows are not separate and chronological",
+        "purge_embargo_passed": "purge/embargo evidence does not prove a clean label-horizon and symbol/date boundary",
+        "future_feature_leakage_passed": "candidate or production features contain labels, outcomes, future/forward returns, or realized returns",
+        "artifact_scored_mistake_mining_passed": "mistake mining is not proven to use scored artifact predictions",
+        "cmi_regression_detection_passed": "stored CMI 2026-07-10 regression detection is missing or did not trigger",
+        "clone_detection_passed": "clone detection did not produce traceable fingerprints or correctly identify a near-duplicate",
+        "threshold_guardrails_passed": "threshold changes are not proven to be blocked unless all walk-forward guardrails pass",
+        "symbol_date_concentration_passed": "symbol/date concentration is neither within limits nor correctly flagged as a promotion block",
+        "report_traceability_passed": "report is missing artifact, fingerprint, threshold, mistake-scoring, or split traceability",
+    }
+    blocking_issues = [issue_messages[name] for name, passed in gate_results.items() if not passed]
+    certified = all(gate_results.values())
+    return {
+        "phase_1_certified": certified,
+        "ready_for_phase_2": certified,
+        "blocking_issues": blocking_issues,
+        "warnings": [],
+        "gate_results": gate_results,
     }
 
 def main() -> None:
@@ -1202,7 +1287,7 @@ def main() -> None:
     candidate_threshold_optimizer = _threshold_optimizer_report(args.candidate_model, candidate_metrics, test_df.copy(), min_rows=max(1, args.min_rows))
     candidate_win = decision_win and ranking_win and not no_op_clone and walk_forward_consistent
     promotion_decision = _promotion_decision(candidate_win, no_op_clone, decision_win, ranking_win, walk_forward_consistent)
-    phase_1_certification = _phase_1_certification(
+    detailed_phase_1_certification = _phase_1_certification(
         candidate_model_path=args.candidate_model,
         production_model_path=args.production_model,
         test_df=test_df.copy(),
@@ -1214,7 +1299,17 @@ def main() -> None:
         promotion_decision=promotion_decision,
         report_examples=report_examples,
     )
-    if not phase_1_certification["phase_1_certified"]:
+    phase_1_gate = _phase_1_gate(
+        candidate_model_path=args.candidate_model,
+        production_model_path=args.production_model,
+        detailed_certification=detailed_phase_1_certification,
+        walk_forward=walk_forward,
+        clone_detection=clone_detection,
+        threshold_optimizer=candidate_threshold_optimizer,
+        report_examples=report_examples,
+        temporal_split=temporal_split,
+    )
+    if not phase_1_gate["phase_1_certified"]:
         candidate_win = False
         if promotion_decision == "PROMOTE":
             promotion_decision = "HOLD"
@@ -1226,12 +1321,12 @@ def main() -> None:
         reasons.append("clone detection: candidate predictions are nearly identical to production; no_op_clone cannot be promoted")
     if not walk_forward_consistent:
         reasons.append("walk-forward validation: candidate is not consistently better across rolling windows")
-    if not phase_1_certification["phase_1_certified"]:
+    if not phase_1_gate["phase_1_certified"]:
         reasons.append("phase 1 certification failed; promotion remains blocked")
 
     report = {
         "temporal_split": temporal_split,
-        "phase_1_certification": phase_1_certification,
+        "phase_1_gate": phase_1_gate,
         "candidate_metrics": candidate_metrics,
         "production_metrics": production_metrics,
         "recommended_threshold": production_threshold_optimizer.get("recommended_threshold"),

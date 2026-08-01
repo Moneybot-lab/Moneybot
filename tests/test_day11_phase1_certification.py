@@ -16,6 +16,14 @@ def _artifact(path, *, weight, threshold=0.55, feature="feature_signal"):
             weights=[weight],
             bias=0.0,
             decision_threshold=threshold,
+            lineage={
+                "schema_version": "moneybot-challenger-lineage.v1",
+                "lineage_id": f"recipe-{path.stem}",
+                "recipe_hash": "a" * 64,
+                "generation": 1,
+                "parent_lineage_ids": [],
+                "recipe": {"model_family": "logistic_regression", "feature_subset": [feature], "decision_threshold": threshold},
+            },
         ),
         path,
     )
@@ -112,3 +120,32 @@ def test_phase_1_certification_reports_all_required_checks(tmp_path):
     assert certification["purge_embargo_passed"] is True
     assert certification["future_feature_leakage_passed"] is True
     assert certification["artifact_scored_mistake_mining_passed"] is True
+
+    temporal_split = {"train_rows_before": 40, "test_rows_before": 12}
+    gate = compare._phase_1_gate(
+        candidate_model_path=str(candidate_path),
+        production_model_path=str(production_path),
+        detailed_certification=certification,
+        walk_forward=walk_forward,
+        clone_detection=clone,
+        threshold_optimizer=threshold,
+        report_examples=examples,
+        temporal_split=temporal_split,
+    )
+    assert set(gate) == {"phase_1_certified", "ready_for_phase_2", "blocking_issues", "warnings", "gate_results"}
+    assert set(gate["gate_results"]) == {
+        "reproducibility_passed",
+        "recipe_lineage_passed",
+        "walk_forward_recipe_reproduction_passed",
+        "split_hygiene_passed",
+        "purge_embargo_passed",
+        "future_feature_leakage_passed",
+        "artifact_scored_mistake_mining_passed",
+        "cmi_regression_detection_passed",
+        "clone_detection_passed",
+        "threshold_guardrails_passed",
+        "symbol_date_concentration_passed",
+        "report_traceability_passed",
+    }
+    assert gate["ready_for_phase_2"] == gate["phase_1_certified"]
+    assert gate["warnings"] == []

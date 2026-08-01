@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime, timezone
@@ -350,7 +351,28 @@ def _build_artifact_with_features(base: BaselineModelArtifact, feature_columns: 
         decision_threshold=base.decision_threshold,
         calibration_slope=base.calibration_slope,
         calibration_intercept=base.calibration_intercept,
+        lineage=base.lineage,
     )
+
+
+def _candidate_lineage(artifact: BaselineModelArtifact, feature_columns: list[str]) -> dict[str, Any]:
+    recipe = {
+        "model_family": "logistic_regression",
+        "feature_subset": list(feature_columns),
+        "sample_weight_policy": RETURN_BIN_SAMPLE_WEIGHTS,
+        "calibration": {"method": "identity" if artifact.calibration_slope == 1.0 and artifact.calibration_intercept == 0.0 else "platt", "slope": artifact.calibration_slope, "intercept": artifact.calibration_intercept},
+        "decision_threshold": artifact.decision_threshold,
+        "abstention": {"enabled": False, "margin": 0.0},
+    }
+    recipe_hash = hashlib.sha256(json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return {
+        "schema_version": "moneybot-challenger-lineage.v1",
+        "lineage_id": f"recipe-{recipe_hash[:16]}",
+        "recipe_hash": recipe_hash,
+        "generation": 1,
+        "parent_lineage_ids": [],
+        "recipe": recipe,
+    }
 
 
 def _artifact_parameter_delta(left: BaselineModelArtifact, right: BaselineModelArtifact) -> float:
@@ -434,6 +456,26 @@ def main() -> None:
     base_artifact.decision_threshold = float(threshold_selection.get("threshold") or base_artifact.decision_threshold)
     candidate_version = f"candidate-logreg-v1-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     artifact = _build_artifact_with_features(base_artifact, feature_columns, version=candidate_version)
+    artifact.lineage = _candidate_lineage(artifact, feature_columns)
+
+    replica = train_logistic_baseline(X_fit, y_fit, sample_weight=sample_weight)
+    replica_calibration_artifact = _build_artifact_with_features(replica, feature_columns, version="calibration-reproduction")
+    replica_raw_probs = predict_proba(replica_calibration_artifact, calibration_df[feature_columns].to_numpy(dtype=float))
+    replica_calibration = fit_probability_calibration(replica_raw_probs, calibration_df[target_column].to_numpy(dtype=float))
+    replica.calibration_slope = float(replica_calibration["slope"])
+    replica.calibration_intercept = float(replica_calibration["intercept"])
+    replica_threshold_probs = predict_proba(_build_artifact_with_features(replica, feature_columns, version="threshold-reproduction"), X_threshold)
+    replica_threshold = _select_profit_threshold(threshold_df, replica_threshold_probs)
+    replica.decision_threshold = float(replica_threshold.get("threshold") or replica.decision_threshold)
+    recipe_parameter_delta = _artifact_parameter_delta(base_artifact, replica)
+    recipe_reproduction = {
+        "passed": recipe_parameter_delta <= 1e-12,
+        "maximum_parameter_delta": recipe_parameter_delta,
+        "first_threshold": float(base_artifact.decision_threshold),
+        "rerun_threshold": float(replica.decision_threshold),
+        "first_calibration": calibration,
+        "rerun_calibration": replica_calibration,
+    }
 
     replica = train_logistic_baseline(X_fit, y_fit, sample_weight=sample_weight)
     replica_calibration_artifact = _build_artifact_with_features(replica, feature_columns, version="calibration-reproduction")

@@ -34,6 +34,7 @@ class BaselineModelArtifact:
     decision_threshold: float
     calibration_slope: float = 1.0
     calibration_intercept: float = 0.0
+    lineage: Dict[str, Any] | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -46,6 +47,7 @@ class BaselineModelArtifact:
             "decision_threshold": self.decision_threshold,
             "calibration_slope": self.calibration_slope,
             "calibration_intercept": self.calibration_intercept,
+            "lineage": self.lineage,
         }
 
 
@@ -273,6 +275,7 @@ def load_artifact(path: str | Path) -> BaselineModelArtifact:
         decision_threshold=float(payload.get("decision_threshold", 0.55)),
         calibration_slope=float(payload.get("calibration_slope", 1.0)),
         calibration_intercept=float(payload.get("calibration_intercept", 0.0)),
+        lineage=payload.get("lineage") if isinstance(payload.get("lineage"), dict) else None,
     )
 
 
