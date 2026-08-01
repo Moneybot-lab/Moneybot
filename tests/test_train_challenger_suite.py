@@ -56,6 +56,29 @@ def test_mistake_mining_uses_artifact_probabilities_and_threshold(tmp_path):
     assert bad_buy_row["artifact_prediction"] == 1
     assert bad_buy_row["mistake_type"] == "bad_buy_big_loss_false_positive"
 
+    compatibility_model = tmp_path / "compatibility-suite" / "scoring-model.json"
+    compatibility_model.parent.mkdir(parents=True)
+    save_artifact(
+        BaselineModelArtifact(
+            version="compatibility-scoring-artifact-v1",
+            feature_columns=["feature_signal"],
+            means=[0.0],
+            stds=[1.0],
+            weights=[10.0],
+            bias=0.0,
+            decision_threshold=0.55,
+        ),
+        compatibility_model,
+    )
+    compatibility_payload = json.loads(compatibility_model.read_text(encoding="utf-8"))
+    compatibility_payload["model_type"] = "logistic_regression"
+    compatibility_model.write_text(json.dumps(compatibility_payload), encoding="utf-8")
+
+    compatibility_manifest = _write_daily_mistake_slices(frame, compatibility_model.parent, "return_5d")
+
+    assert compatibility_manifest["scoring_method"] == "artifact_predictions"
+    assert compatibility_manifest["model_path"] == str(compatibility_model)
+
 
 @pytest.mark.parametrize(
     ("family", "expected_rows", "expected_weighted_bucket"),
