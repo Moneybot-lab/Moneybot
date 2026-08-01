@@ -1,0 +1,23 @@
+{
+  "schema_version": "moneybot-track-b-regression-example.v1",
+  "regression_example_id": "track-b-cmi-2026-07-10-big-loss-false-positive",
+  "symbol": "CMI",
+  "event_date": "2026-07-10",
+  "return_5d": -0.0406,
+  "return_bin_5d": "big_loss",
+  "observed_comparison": {
+    "candidate_probability": 0.557726,
+    "candidate_threshold": 0.55,
+    "candidate_prediction": 1,
+    "production_probability": 0.47549,
+    "production_prediction": 0
+  },
+  "expected_guardrails": {
+    "must_be_bad_buy_mining_row": true,
+    "must_trigger_big_loss_false_positive_penalty": true,
+    "must_not_support_promotion": true,
+    "prediction_at_threshold_0_60": 0
+  },
+  "feature_snapshot_status": "not_available_in_source_comparison_report",
+  "source": "Track B comparison report supplied for the 2026-07-10 CMI false positive"
+}
