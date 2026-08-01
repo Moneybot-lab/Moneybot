@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from scripts.day10_train_candidate_model import THRESHOLD_SEARCH_VALUES, _chronological_training_periods, _select_profit_threshold
+from scripts.day10_train_candidate_model import THRESHOLD_SEARCH_VALUES, _chronological_training_periods, _future_safe_feature_columns, _select_profit_threshold
 
 
 def test_chronological_training_periods_are_disjoint_and_leave_final_test_untouched():
@@ -16,6 +16,12 @@ def test_chronological_training_periods_are_disjoint_and_leave_final_test_untouc
     assert final_test["row"].tolist() == list(range(81, 100))
     later_indexes = set(calibration.index) | set(threshold.index) | set(final_test.index)
     assert set(fit.index).isdisjoint(later_indexes)
+
+
+def test_future_labels_outcomes_and_realized_returns_are_never_features():
+    columns = ["feature_price", "feature_return_5d", "feature_forward_return_5d", "feature_future_return", "feature_realized_return", "feature_outcome_5d", "feature_label_gain_5d"]
+
+    assert _future_safe_feature_columns(columns) == ["feature_price", "feature_return_5d"]
 
 
 def test_threshold_search_uses_track_b_profit_grid_and_records_big_loss_guardrail():

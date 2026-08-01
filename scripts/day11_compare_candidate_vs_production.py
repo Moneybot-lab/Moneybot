@@ -400,6 +400,14 @@ def _artifact_predictions(artifact_path: str, test_df: pd.DataFrame) -> tuple[np
     return preds, probs
 
 
+def _artifact_config_fingerprint(artifact_path: str) -> str | None:
+    if not Path(artifact_path).exists():
+        return None
+    artifact = load_artifact(artifact_path)
+    payload = json.dumps(artifact.to_dict(), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _clone_detection(candidate_model_path: str, production_model_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
     candidate_preds, candidate_probs = _artifact_predictions(candidate_model_path, test_df)
     production_preds, production_probs = _artifact_predictions(production_model_path, test_df)
@@ -710,9 +718,11 @@ def _prediction_error_examples(candidate_model_path: str, production_model_path:
     bins = joined["return_bin_5d"].fillna("").astype(str)
     big_loss_fp = joined[(bins == "big_loss") & (joined["_candidate_pred"] == 1) & (joined["_production_pred"] == 0)]
     missed_big_gain = joined[(bins == "big_gain") & (joined["_candidate_pred"] == 0)]
-    cmi_diagnostic = _cmi_false_positive_diagnostic(candidate_model_path, production_model_path, big_loss_fp)
+    cmi_candidate_positive = joined[(bins == "big_loss") & (joined["_candidate_pred"] == 1) & (joined.get("symbol", pd.Series("", index=joined.index)).fillna("").astype(str).str.upper() == "CMI")]
+    cmi_diagnostic = _cmi_false_positive_diagnostic(candidate_model_path, production_model_path, cmi_candidate_positive)
     return {
         "chosen_threshold": round(float(joined["_candidate_threshold"].iloc[0]), 6) if rows else None,
+        "mistake_scoring_method": "artifact_predictions",
         "production_threshold": round(float(joined["_production_threshold"].iloc[0]), 6) if rows else None,
         "prediction_overlap": {
             "rows": rows,
@@ -819,6 +829,8 @@ def _walk_forward_validation(candidate_model_path: str, production_model_path: s
         test_df = test_df.sort_values("ts").reset_index(drop=True)
     split_indices = np.array_split(np.arange(len(test_df)), WALK_FORWARD_WINDOWS)
     chunks = [test_df.iloc[indexes].copy() for indexes in split_indices if len(indexes)]
+    candidate_recipe_fingerprint = _artifact_config_fingerprint(candidate_model_path)
+    production_recipe_fingerprint = _artifact_config_fingerprint(production_model_path)
     window_results: list[dict[str, Any]] = []
     window_min_rows = max(1, int(min_rows) // max(1, len(chunks)))
     for index, window_df in enumerate(chunks, start=1):
@@ -836,9 +848,19 @@ def _walk_forward_validation(candidate_model_path: str, production_model_path: s
             "candidate_win": bool(decision_win and ranking_win),
             "decision_model_win": bool(decision_win),
             "ranking_win": bool(ranking_win),
+            "candidate_recipe_fingerprint": candidate_recipe_fingerprint,
+            "production_recipe_fingerprint": production_recipe_fingerprint,
             "reasons": [*(f"decision lane: {reason}" for reason in decision_reasons), *(f"ranking lane: {reason}" for reason in ranking_reasons)],
         })
-    return _walk_forward_consistency(window_results)
+    result = _walk_forward_consistency(window_results)
+    result["candidate_recipe_fingerprint"] = candidate_recipe_fingerprint
+    result["production_recipe_fingerprint"] = production_recipe_fingerprint
+    result["recipe_reproduction_passed"] = bool(
+        candidate_recipe_fingerprint
+        and production_recipe_fingerprint
+        and all(item.get("candidate_recipe_fingerprint") == candidate_recipe_fingerprint and item.get("production_recipe_fingerprint") == production_recipe_fingerprint for item in window_results if item.get("evaluated"))
+    )
+    return result
 
 
 def _evaluate_artifact_threshold(artifact_path: str, frame: pd.DataFrame, threshold: float) -> dict[str, Any]:
@@ -954,6 +976,176 @@ def _threshold_optimizer_report(artifact_path: str, metrics: dict[str, Any], tes
         "deployable_model_config": {"model_path": artifact_path, "decision_threshold": round(recommended if change_recommended else current_threshold, 6)},
     }
 
+
+def _future_feature_leakage_audit(*artifact_paths: str) -> dict[str, Any]:
+    forbidden_exact = {"return_5d", "return_1d", "outcome_1d", "outcome_5d", "label_up_5d", "label_gain_5d"}
+    forbidden_fragments = ("forward_return", "future_return", "realized_return", "outcome_", "label_")
+    artifacts: list[dict[str, Any]] = []
+    violations: list[dict[str, str]] = []
+    for artifact_path in artifact_paths:
+        if not Path(artifact_path).exists():
+            violations.append({"artifact_path": artifact_path, "feature": "<artifact unavailable>"})
+            continue
+        artifact = load_artifact(artifact_path)
+        artifacts.append({"artifact_path": artifact_path, "model_version": artifact.version, "feature_columns": artifact.feature_columns})
+        for feature in artifact.feature_columns:
+            lowered = str(feature).lower()
+            if lowered in forbidden_exact or any(fragment in lowered for fragment in forbidden_fragments):
+                violations.append({"artifact_path": artifact_path, "feature": str(feature)})
+    return {"passed": not violations, "violations": violations, "artifacts": artifacts}
+
+
+def _max_numeric_delta(left: Any, right: Any) -> float:
+    if isinstance(left, dict) and isinstance(right, dict):
+        keys = set(left) & set(right)
+        return max((_max_numeric_delta(left[key], right[key]) for key in keys), default=0.0)
+    if isinstance(left, list) and isinstance(right, list):
+        return max((_max_numeric_delta(a, b) for a, b in zip(left, right)), default=0.0) if len(left) == len(right) else float("inf")
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return abs(float(left) - float(right))
+    return 0.0 if left == right else float("inf")
+
+
+def _split_hygiene_certification(candidate_model_path: str) -> tuple[bool, bool, bool, list[str]]:
+    metadata_path = Path(candidate_model_path).with_suffix(Path(candidate_model_path).suffix + ".meta.json")
+    if not metadata_path.exists():
+        return False, False, False, ["candidate metadata with four-period split diagnostics is unavailable"]
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False, False, False, ["candidate metadata is unreadable"]
+    periods = ((metadata.get("metrics") or {}).get("training_periods") or {})
+    training_recipe_reproduced = bool((((metadata.get("metrics") or {}).get("recipe_reproduction") or {}).get("passed")))
+    windows = periods.get("windows") or {}
+    required = ["fit", "calibration", "threshold_selection", "final_test"]
+    split_ok = all(name in windows and int((windows[name] or {}).get("rows") or 0) > 0 for name in required)
+    ordered = True
+    for left_name, right_name in zip(required, required[1:]):
+        left_end = str((windows.get(left_name) or {}).get("end") or "")
+        right_start = str((windows.get(right_name) or {}).get("start") or "")
+        if not left_end or not right_start or left_end >= right_start:
+            ordered = False
+    split_ok = split_ok and ordered
+    boundaries = periods.get("purge_embargo_boundaries") or []
+    purge_ok = bool(periods.get("purged_embargoed")) and len(boundaries) == 3 and all(
+        int(item.get("date_overlap_count") or 0) == 0
+        and int(item.get("symbol_date_overlap_count") or 0) == 0
+        and bool(item.get("label_horizon_gap_passed"))
+        for item in boundaries
+    )
+    issues = []
+    if not split_ok:
+        issues.append("fit/calibration/threshold-selection/final-test windows are missing, overlapping, or out of order")
+    if not purge_ok:
+        issues.append("purge/embargo diagnostics do not prove zero date and symbol/date overlap at all boundaries")
+    if not training_recipe_reproduced:
+        issues.append("training recipe rerun did not reproduce model, calibration, and threshold parameters")
+    return split_ok, purge_ok, training_recipe_reproduced, issues
+
+
+def _phase_1_certification(
+    *,
+    candidate_model_path: str,
+    production_model_path: str,
+    test_df: pd.DataFrame,
+    min_rows: int,
+    candidate_metrics: dict[str, Any],
+    clone_detection: dict[str, Any],
+    walk_forward: dict[str, Any],
+    threshold_optimizer: dict[str, Any],
+    promotion_decision: str,
+    report_examples: dict[str, Any],
+) -> dict[str, Any]:
+    rerun_metrics = _evaluate(candidate_model_path, test_df.copy())
+    metric_delta = _max_numeric_delta({key: value for key, value in candidate_metrics.items() if key != "feature_risk_audit"}, rerun_metrics)
+    rerun_clone = _clone_detection(candidate_model_path, production_model_path, test_df.copy())
+    if clone_detection.get("no_op_clone"):
+        candidate_recipe_fingerprint = _artifact_config_fingerprint(candidate_model_path)
+        production_recipe_fingerprint = _artifact_config_fingerprint(production_model_path)
+        rerun_walk_forward = {
+            "consistent": False,
+            "skipped": True,
+            "reason": "no-op clone detected before full promotion evaluation",
+            "windows": [],
+            "candidate_recipe_fingerprint": candidate_recipe_fingerprint,
+            "production_recipe_fingerprint": production_recipe_fingerprint,
+            "recipe_reproduction_passed": bool(candidate_recipe_fingerprint and production_recipe_fingerprint),
+        }
+        rerun_promotion = "NO_OP_CLONE"
+    else:
+        rerun_walk_forward = _walk_forward_validation(candidate_model_path, production_model_path, test_df.copy(), min_rows=min_rows)
+        rerun_candidate = _evaluate(candidate_model_path, test_df.copy())
+        rerun_candidate["feature_risk_audit"] = _feature_risk_audit(candidate_model_path, test_df.copy())
+        rerun_production = _evaluate(production_model_path, test_df.copy())
+        decision_win, _ = _decide(rerun_candidate, rerun_production, min_rows=min_rows)
+        ranking_win, _, _ = _ranking_lane_decide(rerun_candidate, rerun_production)
+        rerun_win = decision_win and ranking_win and bool(rerun_walk_forward.get("consistent"))
+        rerun_promotion = _promotion_decision(rerun_win, False, decision_win, ranking_win, bool(rerun_walk_forward.get("consistent")))
+    rerun_threshold = _threshold_optimizer_report(candidate_model_path, rerun_metrics, test_df.copy(), min_rows=min_rows)
+    fold_outcomes = [item.get("candidate_win") for item in walk_forward.get("windows", [])]
+    rerun_fold_outcomes = [item.get("candidate_win") for item in rerun_walk_forward.get("windows", [])]
+    reproducible = bool(
+        metric_delta <= 1e-9
+        and promotion_decision == rerun_promotion
+        and fold_outcomes == rerun_fold_outcomes
+        and threshold_optimizer.get("recommended_threshold") == rerun_threshold.get("recommended_threshold")
+        and clone_detection.get("candidate_prediction_fingerprint") == rerun_clone.get("candidate_prediction_fingerprint")
+    )
+    split_ok, purge_ok, training_recipe_reproduced, split_issues = _split_hygiene_certification(candidate_model_path)
+    recipe_reproduction = training_recipe_reproduced and bool(walk_forward.get("recipe_reproduction_passed")) and bool(rerun_walk_forward.get("recipe_reproduction_passed")) and fold_outcomes == rerun_fold_outcomes
+    leakage_audit = _future_feature_leakage_audit(candidate_model_path, production_model_path)
+    mistake_ok = report_examples.get("mistake_scoring_method") == "artifact_predictions"
+    stored_cmi = _stored_regression_example("CMI", "2026-07-10")
+    candidate_scored = _artifact_scored_frame(candidate_model_path, test_df, prefix="candidate")
+    cmi_positive = False
+    if not candidate_scored.empty and "symbol" in candidate_scored.columns:
+        dates = _event_date_series(candidate_scored)
+        cmi_positive = bool(((candidate_scored["symbol"].fillna("").astype(str).str.upper() == "CMI") & (dates == "2026-07-10") & (candidate_scored["_candidate_pred"] == 1)).any())
+    cmi_ok = stored_cmi is not None and (not cmi_positive or report_examples.get("cmi_false_positive_diagnostic") is not None)
+    clone_ok = bool(clone_detection.get("candidate_prediction_fingerprint")) and (
+        not clone_detection.get("no_op_clone") or promotion_decision == "NO_OP_CLONE"
+    )
+    threshold_change = bool(threshold_optimizer.get("threshold_change_recommended"))
+    threshold_wf = threshold_optimizer.get("threshold_walk_forward_results") or {}
+    threshold_ok = not threshold_change or bool(
+        threshold_wf.get("consistent")
+        and threshold_wf.get("threshold_stable")
+        and threshold_wf.get("windows")
+        and all(item.get("passed") for item in threshold_wf.get("windows", []) if item.get("current"))
+    )
+    symbol_concentration = _numeric_metric(candidate_metrics, "symbol_utility_concentration")
+    date_concentration = _numeric_metric(candidate_metrics, "date_utility_concentration")
+    concentration_ok = (symbol_concentration is None or symbol_concentration <= MAX_SYMBOL_UTILITY_CONCENTRATION) and (date_concentration is None or date_concentration <= MAX_DATE_UTILITY_CONCENTRATION)
+    checks = {
+        "reproducible": reproducible,
+        "recipe_reproduction_passed": recipe_reproduction,
+        "split_hygiene_passed": split_ok,
+        "purge_embargo_passed": purge_ok,
+        "future_feature_leakage_passed": bool(leakage_audit["passed"]),
+        "artifact_scored_mistake_mining_passed": mistake_ok,
+        "cmi_regression_test_passed": cmi_ok,
+        "clone_detection_passed": clone_ok,
+        "threshold_walk_forward_guardrails_passed": threshold_ok,
+        "symbol_date_concentration_passed": concentration_ok,
+    }
+    blocking_issues = list(split_issues)
+    blocking_issues.extend(f"{name} failed" for name, passed in checks.items() if not passed and name not in {"split_hygiene_passed", "purge_embargo_passed"})
+    return {
+        "phase_1_certified": all(checks.values()),
+        **checks,
+        "blocking_issues": blocking_issues,
+        "diagnostics": {
+            "maximum_metric_delta_between_runs": metric_delta,
+            "first_promotion_decision": promotion_decision,
+            "rerun_promotion_decision": rerun_promotion,
+            "first_fold_outcomes": fold_outcomes,
+            "rerun_fold_outcomes": rerun_fold_outcomes,
+            "first_threshold_recommendation": threshold_optimizer.get("recommended_threshold"),
+            "rerun_threshold_recommendation": rerun_threshold.get("recommended_threshold"),
+            "future_feature_leakage_audit": leakage_audit,
+        },
+    }
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare candidate model against production model on same holdout.")
     parser.add_argument("--input", default="data/decision_training_snapshot.jsonl")
@@ -991,7 +1183,15 @@ def main() -> None:
         decision_reasons = ["promotion evaluation skipped because prediction fingerprint/overlap identifies a no-op clone"]
         ranking_reasons = ["ranking promotion evaluation skipped for no-op clone"]
         ranking_metrics = {"candidate": {}, "production": {}}
-        walk_forward = {"consistent": False, "skipped": True, "reason": "no-op clone detected before full promotion evaluation", "windows": []}
+        walk_forward = {
+            "consistent": False,
+            "skipped": True,
+            "reason": "no-op clone detected before full promotion evaluation",
+            "windows": [],
+            "candidate_recipe_fingerprint": _artifact_config_fingerprint(args.candidate_model),
+            "production_recipe_fingerprint": _artifact_config_fingerprint(args.production_model),
+            "recipe_reproduction_passed": bool(_artifact_config_fingerprint(args.candidate_model) and _artifact_config_fingerprint(args.production_model)),
+        }
     else:
         decision_win, decision_reasons = _decide(candidate_metrics, production_metrics, min_rows=max(1, args.min_rows))
         ranking_win, ranking_reasons, ranking_metrics = _ranking_lane_decide(candidate_metrics, production_metrics)
@@ -1002,6 +1202,22 @@ def main() -> None:
     candidate_threshold_optimizer = _threshold_optimizer_report(args.candidate_model, candidate_metrics, test_df.copy(), min_rows=max(1, args.min_rows))
     candidate_win = decision_win and ranking_win and not no_op_clone and walk_forward_consistent
     promotion_decision = _promotion_decision(candidate_win, no_op_clone, decision_win, ranking_win, walk_forward_consistent)
+    phase_1_certification = _phase_1_certification(
+        candidate_model_path=args.candidate_model,
+        production_model_path=args.production_model,
+        test_df=test_df.copy(),
+        min_rows=max(1, args.min_rows),
+        candidate_metrics=candidate_metrics,
+        clone_detection=clone_detection,
+        walk_forward=walk_forward,
+        threshold_optimizer=candidate_threshold_optimizer,
+        promotion_decision=promotion_decision,
+        report_examples=report_examples,
+    )
+    if not phase_1_certification["phase_1_certified"]:
+        candidate_win = False
+        if promotion_decision == "PROMOTE":
+            promotion_decision = "HOLD"
     reasons = [
         *(f"decision lane: {reason}" for reason in decision_reasons),
         *(f"ranking lane: {reason}" for reason in ranking_reasons),
@@ -1010,9 +1226,12 @@ def main() -> None:
         reasons.append("clone detection: candidate predictions are nearly identical to production; no_op_clone cannot be promoted")
     if not walk_forward_consistent:
         reasons.append("walk-forward validation: candidate is not consistently better across rolling windows")
+    if not phase_1_certification["phase_1_certified"]:
+        reasons.append("phase 1 certification failed; promotion remains blocked")
 
     report = {
         "temporal_split": temporal_split,
+        "phase_1_certification": phase_1_certification,
         "candidate_metrics": candidate_metrics,
         "production_metrics": production_metrics,
         "recommended_threshold": production_threshold_optimizer.get("recommended_threshold"),

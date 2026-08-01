@@ -14,6 +14,8 @@ def test_purged_embargoed_split_uses_event_time_horizon_and_embargo():
     assert diagnostics["method"] == "event_time"
     assert diagnostics["purged_train_rows"] == 5
     assert diagnostics["embargoed_test_rows"] == 1
+    assert diagnostics["label_horizon_gap_passed"] is True
+    assert diagnostics["symbol_date_overlap_count"] == 0
 
 
 def test_purged_embargoed_split_has_deterministic_row_fallback():

@@ -136,8 +136,8 @@ def _profit_utility_score(frame: pd.DataFrame, preds: np.ndarray) -> float | Non
     )
 
 
-def _chronological_training_periods(df: pd.DataFrame, train_ratio: float) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Split chronologically into disjoint fit, calibration, threshold, and test periods."""
+def _chronological_training_periods_with_diagnostics(df: pd.DataFrame, train_ratio: float) -> tuple[list[pd.DataFrame], list[dict[str, Any]]]:
+    """Split chronologically and return purged/embargoed periods plus diagnostics."""
     development, final_test = _chronological_split(df, train_ratio)
     calibration_rows = max(1, int(len(development) * CALIBRATION_FRACTION_OF_DEVELOPMENT))
     threshold_rows = max(1, int(len(development) * THRESHOLD_FRACTION_OF_DEVELOPMENT))
@@ -147,14 +147,33 @@ def _chronological_training_periods(df: pd.DataFrame, train_ratio: float) -> tup
     fit = development.iloc[:fit_rows].copy()
     calibration = development.iloc[fit_rows:fit_rows + calibration_rows].copy()
     threshold = development.iloc[fit_rows + calibration_rows:].copy()
-    periods, _ = purge_embargo_periods(
+    periods, boundaries = purge_embargo_periods(
         [fit, calibration, threshold, final_test],
         horizon_days=LABEL_HORIZON_DAYS,
         embargo_days=EMBARGO_DAYS,
     )
     if any(period.empty for period in periods):
         raise ValueError("purging/embargo leaves an empty fit, calibration, threshold, or final-test period")
+    return periods, boundaries
+
+
+def _chronological_training_periods(df: pd.DataFrame, train_ratio: float) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Split chronologically into disjoint fit, calibration, threshold, and test periods."""
+    periods, _ = _chronological_training_periods_with_diagnostics(df, train_ratio)
     return periods[0], periods[1], periods[2], periods[3]
+
+
+def _period_window(frame: pd.DataFrame) -> dict[str, Any]:
+    if frame.empty:
+        return {"rows": 0, "start": None, "end": None}
+    if "event_date" in frame.columns:
+        values = frame["event_date"].fillna("").astype(str)
+    elif "ts" in frame.columns:
+        numeric = pd.to_numeric(frame["ts"], errors="coerce")
+        values = pd.to_datetime(numeric, unit="s", utc=True, errors="coerce").astype(str)
+    else:
+        values = pd.Series(frame.index.astype(str), index=frame.index)
+    return {"rows": int(len(frame)), "start": str(values.iloc[0]), "end": str(values.iloc[-1])}
 
 
 def _select_profit_threshold(frame: pd.DataFrame, probs: np.ndarray) -> dict[str, Any]:
@@ -231,6 +250,12 @@ def _select_feature_columns(df: pd.DataFrame) -> list[str]:
         if numeric.notna().any():
             cols.append(str(col))
     return sorted(cols)
+
+
+def _future_safe_feature_columns(feature_columns: list[str]) -> list[str]:
+    """Reject labels, outcomes, and realized/future returns from model inputs."""
+    forbidden_fragments = ("forward_return", "future_return", "realized_return", "outcome_", "label_")
+    return [column for column in feature_columns if not any(fragment in column.lower() for fragment in forbidden_fragments)]
 
 
 def _backtest_compatible_feature_columns(feature_columns: list[str], persisted_feature_columns: set[str]) -> list[str]:
@@ -328,6 +353,18 @@ def _build_artifact_with_features(base: BaselineModelArtifact, feature_columns: 
     )
 
 
+def _artifact_parameter_delta(left: BaselineModelArtifact, right: BaselineModelArtifact) -> float:
+    values = [
+        abs(float(left.bias) - float(right.bias)),
+        abs(float(left.decision_threshold) - float(right.decision_threshold)),
+        abs(float(left.calibration_slope) - float(right.calibration_slope)),
+        abs(float(left.calibration_intercept) - float(right.calibration_intercept)),
+    ]
+    for left_values, right_values in ((left.means, right.means), (left.stds, right.stds), (left.weights, right.weights)):
+        values.extend(abs(float(a) - float(b)) for a, b in zip(left_values, right_values))
+    return max(values, default=0.0)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train a candidate model from logged decision outcomes.")
     parser.add_argument("--input", default="data/decision_training_snapshot.jsonl")
@@ -361,13 +398,14 @@ def main() -> None:
     rows_after_target_filter = len(filtered_target)
 
     feature_columns = _backtest_compatible_feature_columns(
-        _select_feature_columns(filtered_target),
+        _future_safe_feature_columns(_select_feature_columns(filtered_target)),
         persisted_feature_columns,
     )
     if not feature_columns:
         raise SystemExit("No numeric feature columns found in decision dataset")
 
-    fit_raw, calibration_raw, threshold_raw, test_raw = _chronological_training_periods(filtered_target, args.train_ratio)
+    periods, purge_embargo_boundaries = _chronological_training_periods_with_diagnostics(filtered_target, args.train_ratio)
+    fit_raw, calibration_raw, threshold_raw, test_raw = periods
     fit_df, feature_fill_values = _fill_feature_gaps(fit_raw, feature_columns)
     calibration_df = _apply_feature_fill_values(calibration_raw, feature_columns, feature_fill_values)
     threshold_df = _apply_feature_fill_values(threshold_raw, feature_columns, feature_fill_values)
@@ -397,6 +435,25 @@ def main() -> None:
     candidate_version = f"candidate-logreg-v1-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     artifact = _build_artifact_with_features(base_artifact, feature_columns, version=candidate_version)
 
+    replica = train_logistic_baseline(X_fit, y_fit, sample_weight=sample_weight)
+    replica_calibration_artifact = _build_artifact_with_features(replica, feature_columns, version="calibration-reproduction")
+    replica_raw_probs = predict_proba(replica_calibration_artifact, calibration_df[feature_columns].to_numpy(dtype=float))
+    replica_calibration = fit_probability_calibration(replica_raw_probs, calibration_df[target_column].to_numpy(dtype=float))
+    replica.calibration_slope = float(replica_calibration["slope"])
+    replica.calibration_intercept = float(replica_calibration["intercept"])
+    replica_threshold_probs = predict_proba(_build_artifact_with_features(replica, feature_columns, version="threshold-reproduction"), X_threshold)
+    replica_threshold = _select_profit_threshold(threshold_df, replica_threshold_probs)
+    replica.decision_threshold = float(replica_threshold.get("threshold") or replica.decision_threshold)
+    recipe_parameter_delta = _artifact_parameter_delta(base_artifact, replica)
+    recipe_reproduction = {
+        "passed": recipe_parameter_delta <= 1e-12,
+        "maximum_parameter_delta": recipe_parameter_delta,
+        "first_threshold": float(base_artifact.decision_threshold),
+        "rerun_threshold": float(replica.decision_threshold),
+        "first_calibration": calibration,
+        "rerun_calibration": replica_calibration,
+    }
+
     X_test = test_df[feature_columns].to_numpy(dtype=float)
     y_test = test_df[target_column].to_numpy(dtype=float)
     y_pred = classify(artifact, X_test)
@@ -410,6 +467,7 @@ def main() -> None:
             "selected_decision_threshold": artifact.decision_threshold,
             "threshold_selection": threshold_selection,
             "calibration": calibration,
+            "recipe_reproduction": recipe_reproduction,
             "training_periods": {
                 "fit_rows": len(fit_df),
                 "calibration_rows": len(calibration_df),
@@ -418,6 +476,13 @@ def main() -> None:
                 "purged_embargoed": True,
                 "label_horizon_days": LABEL_HORIZON_DAYS,
                 "embargo_days": EMBARGO_DAYS,
+                "windows": {
+                    "fit": _period_window(fit_df),
+                    "calibration": _period_window(calibration_df),
+                    "threshold_selection": _period_window(threshold_df),
+                    "final_test": _period_window(test_df),
+                },
+                "purge_embargo_boundaries": purge_embargo_boundaries,
             },
         }
     )
@@ -451,6 +516,7 @@ def main() -> None:
                 "selected_decision_threshold": artifact.decision_threshold,
                 "threshold_selection": threshold_selection,
                 "calibration": calibration,
+                "recipe_reproduction": recipe_reproduction,
                 "training_periods": metrics["training_periods"],
             },
             sort_keys=True,

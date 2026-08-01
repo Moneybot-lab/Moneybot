@@ -62,6 +62,26 @@ def purged_embargoed_split(
         "test_rows_after": int(len(test)),
         "embargoed_test_rows": int(len(test_df) - len(test)),
     }
+    cleaned_train_times = _event_times(train)
+    cleaned_test_times = _event_times(test)
+    if cleaned_train_times is not None and cleaned_test_times is not None:
+        train_dates = set(cleaned_train_times.dt.strftime("%Y-%m-%d"))
+        test_dates = set(cleaned_test_times.dt.strftime("%Y-%m-%d"))
+        diagnostics["date_overlap_count"] = len(train_dates & test_dates)
+        minimum_gap_days = float((cleaned_test_times.min() - cleaned_train_times.max()).total_seconds() / 86400.0)
+        diagnostics["minimum_train_test_gap_days"] = minimum_gap_days
+        diagnostics["label_horizon_gap_passed"] = minimum_gap_days > float(horizon_days)
+        if "symbol" in train.columns and "symbol" in test.columns:
+            train_pairs = set(zip(train["symbol"].fillna("").astype(str), cleaned_train_times.dt.strftime("%Y-%m-%d")))
+            test_pairs = set(zip(test["symbol"].fillna("").astype(str), cleaned_test_times.dt.strftime("%Y-%m-%d")))
+            diagnostics["symbol_date_overlap_count"] = len(train_pairs & test_pairs)
+        else:
+            diagnostics["symbol_date_overlap_count"] = 0
+    else:
+        diagnostics["date_overlap_count"] = 0
+        diagnostics["symbol_date_overlap_count"] = 0
+        diagnostics["minimum_train_test_gap_days"] = None
+        diagnostics["label_horizon_gap_passed"] = True
     return train, test, diagnostics
 
 
