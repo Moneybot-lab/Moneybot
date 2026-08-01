@@ -2,10 +2,12 @@ import pandas as pd
 
 from moneybot.services.deterministic_model import BaselineModelArtifact, save_artifact
 from scripts.day11_compare_candidate_vs_production import (
+    _feature_risk_audit,
     _prediction_error_examples,
     _promotion_decision,
     _select_threshold_from_search,
     _threshold_guardrails_pass,
+    _threshold_stability_summary,
 )
 
 
@@ -85,3 +87,47 @@ def test_threshold_guardrails_reject_too_few_positive_predictions():
 
     assert passed is False
     assert any("positive_predictions below minimum" in reason for reason in reasons)
+
+
+def test_threshold_guardrails_reject_symbol_and_date_concentration():
+    proposed = {"positive_predictions": 50, "big_loss_predictions": 0, "big_loss_prediction_rate": 0.0, "big_gain_capture_rate": 0.3, "symbol_utility_concentration": 0.7, "date_utility_concentration": 0.8}
+    current = {"positive_predictions": 100, "big_loss_predictions": 0, "big_loss_prediction_rate": 0.0, "big_gain_capture_rate": 0.5}
+
+    passed, reasons = _threshold_guardrails_pass(proposed, current)
+
+    assert passed is False
+    assert any("symbol utility concentration exceeds maximum" in reason for reason in reasons)
+    assert any("date utility concentration exceeds maximum" in reason for reason in reasons)
+
+
+def test_threshold_stability_rejects_one_lucky_threshold_window():
+    unstable = _threshold_stability_summary([0.55, 0.70, 0.55], 0.70)
+    stable = _threshold_stability_summary([0.675, 0.70, 0.70], 0.70)
+
+    assert unstable["stable"] is False
+    assert unstable["observed_threshold_spread"] == 0.15
+    assert stable["stable"] is True
+
+
+def test_feature_risk_audit_flags_raw_price_dominating_positive_predictions(tmp_path):
+    artifact_path = tmp_path / "price-heavy.json"
+    save_artifact(
+        BaselineModelArtifact(
+            version="price-heavy-v1",
+            feature_columns=["feature_price", "feature_signal"],
+            means=[10.0, 0.0],
+            stds=[1.0, 1.0],
+            weights=[4.0, 0.1],
+            bias=0.0,
+            decision_threshold=0.55,
+        ),
+        artifact_path,
+    )
+    frame = pd.DataFrame({"symbol": ["CMI", "ABC"], "event_date": ["2026-07-10", "2026-07-11"], "feature_price": [12.0, 13.0], "feature_signal": [0.1, 0.1]})
+
+    audit = _feature_risk_audit(str(artifact_path), frame)
+
+    assert audit["raw_feature_price_present"] is True
+    assert audit["raw_price_top_positive_contributor_rate"] == 1.0
+    assert audit["requires_review"] is True
+    assert audit["examples"][0]["symbol"] == "CMI"

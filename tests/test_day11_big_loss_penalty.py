@@ -58,3 +58,30 @@ def test_stored_cmi_regression_example_remains_a_hard_promotion_block():
     assert candidate_win is False
     assert candidate["big_loss_false_positive_penalty"] == HARD_BIG_LOSS_FALSE_POSITIVE_PENALTY
     assert any("hard false-positive penalty applied" in reason for reason in reasons)
+
+
+def test_decide_blocks_symbol_or_date_concentrated_candidate_utility():
+    candidate = _metrics(
+        accuracy=0.8,
+        brier_score=0.05,
+        avg_return=0.2,
+        symbol_utility_concentration=0.75,
+        date_utility_concentration=0.80,
+    )
+    production = _metrics()
+
+    candidate_win, reasons = _decide(candidate, production, min_rows=200)
+
+    assert candidate_win is False
+    assert any("too concentrated in one symbol" in reason for reason in reasons)
+    assert any("too concentrated on one date" in reason for reason in reasons)
+
+
+def test_decide_blocks_candidate_requiring_feature_risk_review():
+    candidate = _metrics(accuracy=0.8, brier_score=0.05, avg_return=0.2, feature_risk_audit={"requires_review": True})
+    production = _metrics()
+
+    candidate_win, reasons = _decide(candidate, production, min_rows=200)
+
+    assert candidate_win is False
+    assert "candidate feature-risk audit requires review" in reasons

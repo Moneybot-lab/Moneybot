@@ -16,6 +16,9 @@ def test_no_op_clone_summary_marks_nearly_identical_predictions_as_clone():
     assert summary["no_op_clone"] is True
     assert summary["prediction_agreement"] == 1.0
     assert summary["probability_mae"] <= summary["probability_mae_threshold"]
+    assert len(summary["candidate_prediction_fingerprint"]) == 64
+    assert len(summary["production_prediction_fingerprint"]) == 64
+    assert summary["fingerprints_identical"] is False
 
 
 def test_no_op_clone_summary_allows_materially_different_predictions():
@@ -28,6 +31,7 @@ def test_no_op_clone_summary_allows_materially_different_predictions():
 
     assert summary["no_op_clone"] is False
     assert summary["prediction_agreement"] < summary["prediction_agreement_threshold"]
+    assert summary["candidate_prediction_fingerprint"] != summary["production_prediction_fingerprint"]
 
 
 def test_walk_forward_consistency_requires_multiple_passing_windows():

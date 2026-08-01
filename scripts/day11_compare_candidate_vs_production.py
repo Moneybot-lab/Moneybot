@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -37,6 +38,10 @@ MIN_THRESHOLD_POSITIVE_FRACTION_OF_CURRENT = 0.25
 LABEL_HORIZON_DAYS = 5
 EMBARGO_DAYS = 1
 REGRESSION_EXAMPLES_DIR = PROJECT_ROOT / "regression_examples"
+MAX_SYMBOL_UTILITY_CONCENTRATION = 0.50
+MAX_DATE_UTILITY_CONCENTRATION = 0.50
+MAX_STABLE_THRESHOLD_SPREAD = 0.05
+RAW_PRICE_TOP_CONTRIBUTOR_RATE_LIMIT = 0.25
 
 
 def _load_jsonl(path: str) -> pd.DataFrame:
@@ -125,6 +130,40 @@ def _bucket_metrics(usable: pd.DataFrame, preds: np.ndarray, probs: np.ndarray) 
     return dict(sorted(out.items()))
 
 
+def _selected_concentration_metrics(usable: pd.DataFrame, preds: np.ndarray) -> dict[str, float | None]:
+    selected = usable.loc[preds == 1].copy()
+    if selected.empty:
+        return {
+            "symbol_selection_concentration": None,
+            "date_selection_concentration": None,
+            "symbol_utility_concentration": None,
+            "date_utility_concentration": None,
+        }
+    selected["_absolute_return"] = pd.to_numeric(selected["return_5d"], errors="coerce").abs().fillna(0.0)
+
+    def concentration(group: pd.Series | None) -> tuple[float | None, float | None]:
+        if group is None:
+            return None, None
+        values = group.fillna("unknown").astype(str)
+        selection_concentration = float(values.value_counts(normalize=True).max())
+        absolute_total = float(selected["_absolute_return"].sum())
+        if absolute_total <= 0.0:
+            return selection_concentration, selection_concentration
+        grouped_return = selected.groupby(values)["_absolute_return"].sum()
+        return selection_concentration, float(grouped_return.max() / absolute_total)
+
+    symbol_group = selected["symbol"] if "symbol" in selected.columns else None
+    date_group = _event_date_series(selected) if "event_date" in selected.columns or "ts" in selected.columns else None
+    symbol_selection, symbol_utility = concentration(symbol_group)
+    date_selection, date_utility = concentration(date_group)
+    return {
+        "symbol_selection_concentration": round(symbol_selection, 4) if symbol_selection is not None else None,
+        "date_selection_concentration": round(date_selection, 4) if date_selection is not None else None,
+        "symbol_utility_concentration": round(symbol_utility, 4) if symbol_utility is not None else None,
+        "date_utility_concentration": round(date_utility, 4) if date_utility is not None else None,
+    }
+
+
 def _prediction_return_metrics(usable: pd.DataFrame, preds: np.ndarray, probs: np.ndarray) -> dict[str, Any]:
     y = usable["return_bin_5d"].fillna("").astype(str).isin(TARGET_GAIN_BUCKETS).astype(int).to_numpy()
     signal_returns = usable.loc[preds == 1, "return_5d"].astype(float)
@@ -142,6 +181,7 @@ def _prediction_return_metrics(usable: pd.DataFrame, preds: np.ndarray, probs: n
         "downside_risk": round(downside_risk, 4) if downside_risk is not None else None,
         "positive_predictions": int((preds == 1).sum()),
         **_bucket_signal_rates(usable, preds),
+        **_selected_concentration_metrics(usable, preds),
     }
     utility = _utility_score(metrics)
     metrics["utility_score"] = round(utility, 4) if utility is not None else None
@@ -317,11 +357,13 @@ def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
 def _no_op_clone_summary(candidate_preds: np.ndarray, production_preds: np.ndarray, candidate_probs: np.ndarray, production_probs: np.ndarray) -> dict[str, Any]:
     rows = int(min(len(candidate_preds), len(production_preds), len(candidate_probs), len(production_probs)))
     if rows <= 0:
-        return {"rows": 0, "prediction_agreement": None, "probability_mae": None, "no_op_clone": False}
+        return {"rows": 0, "prediction_agreement": None, "probability_mae": None, "no_op_clone": False, "candidate_prediction_fingerprint": None, "production_prediction_fingerprint": None, "fingerprints_identical": False}
     c_preds = candidate_preds[:rows]
     p_preds = production_preds[:rows]
     c_probs = candidate_probs[:rows]
     p_probs = production_probs[:rows]
+    candidate_fingerprint = hashlib.sha256(c_preds.astype(np.int8).tobytes() + np.round(c_probs, 6).astype(np.float64).tobytes()).hexdigest()
+    production_fingerprint = hashlib.sha256(p_preds.astype(np.int8).tobytes() + np.round(p_probs, 6).astype(np.float64).tobytes()).hexdigest()
     prediction_agreement = float((c_preds == p_preds).mean())
     probability_mae = float(np.mean(np.abs(c_probs - p_probs)))
     no_op_clone = prediction_agreement >= NO_OP_CLONE_PREDICTION_AGREEMENT and probability_mae <= NO_OP_CLONE_PROBABILITY_MAE
@@ -330,6 +372,9 @@ def _no_op_clone_summary(candidate_preds: np.ndarray, production_preds: np.ndarr
         "prediction_agreement": round(prediction_agreement, 4),
         "probability_mae": round(probability_mae, 4),
         "no_op_clone": bool(no_op_clone),
+        "candidate_prediction_fingerprint": candidate_fingerprint,
+        "production_prediction_fingerprint": production_fingerprint,
+        "fingerprints_identical": candidate_fingerprint == production_fingerprint,
         "prediction_agreement_threshold": NO_OP_CLONE_PREDICTION_AGREEMENT,
         "probability_mae_threshold": NO_OP_CLONE_PROBABILITY_MAE,
     }
@@ -359,6 +404,62 @@ def _clone_detection(candidate_model_path: str, production_model_path: str, test
     candidate_preds, candidate_probs = _artifact_predictions(candidate_model_path, test_df)
     production_preds, production_probs = _artifact_predictions(production_model_path, test_df)
     return _no_op_clone_summary(candidate_preds, production_preds, candidate_probs, production_probs)
+
+
+def _feature_risk_audit(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
+    if not Path(artifact_path).exists():
+        return {"available": False, "requires_review": True, "reasons": ["artifact unavailable for feature-risk audit"]}
+    artifact = load_artifact(artifact_path)
+    if "feature_price" not in artifact.feature_columns:
+        return {"available": True, "raw_feature_price_present": False, "requires_review": False, "reasons": []}
+    usable = test_df.copy()
+    for idx, feature in enumerate(artifact.feature_columns):
+        fallback = float(artifact.means[idx]) if idx < len(artifact.means) else 0.0
+        numeric = pd.to_numeric(usable.get(feature, pd.Series(np.nan, index=usable.index)), errors="coerce").replace([np.inf, -np.inf], np.nan)
+        usable[feature] = numeric.fillna(fallback).astype(float)
+    X = usable[artifact.feature_columns].to_numpy(dtype=float)
+    probs = predict_proba(artifact, X)
+    positive_mask = probs >= artifact.decision_threshold
+    means = np.asarray(artifact.means, dtype=float)
+    stds = np.asarray(artifact.stds, dtype=float)
+    stds = np.where(stds == 0.0, 1.0, stds)
+    weights = np.asarray(artifact.weights, dtype=float)
+    contributions = ((X - means) / stds) * weights
+    price_idx = artifact.feature_columns.index("feature_price")
+    price_weight = float(weights[price_idx])
+    positive_rows = np.flatnonzero(positive_mask)
+    top_positive_count = 0
+    examples: list[dict[str, Any]] = []
+    for row_idx in positive_rows:
+        positive_contributions = np.maximum(contributions[row_idx], 0.0)
+        top_idx = int(np.argmax(positive_contributions)) if positive_contributions.size else -1
+        if top_idx == price_idx and positive_contributions[price_idx] > 0.0:
+            top_positive_count += 1
+            row = usable.iloc[row_idx]
+            examples.append({
+                "symbol": row.get("symbol"),
+                "event_date": str(_event_date_series(usable.iloc[[row_idx]]).iloc[0]),
+                "probability": round(float(probs[row_idx]), 6),
+                "feature_price": round(float(X[row_idx, price_idx]), 6),
+                "price_contribution": round(float(contributions[row_idx, price_idx]), 6),
+            })
+    top_rate = float(top_positive_count / len(positive_rows)) if len(positive_rows) else 0.0
+    requires_review = price_weight > 0.0 and top_rate > RAW_PRICE_TOP_CONTRIBUTOR_RATE_LIMIT
+    reasons = []
+    if requires_review:
+        reasons.append(f"raw feature_price is the top positive contributor too often ({top_rate:.4f} > {RAW_PRICE_TOP_CONTRIBUTOR_RATE_LIMIT:.4f})")
+    return {
+        "available": True,
+        "raw_feature_price_present": True,
+        "raw_feature_price_weight": round(price_weight, 6),
+        "positive_predictions": int(len(positive_rows)),
+        "raw_price_top_positive_contributor_count": top_positive_count,
+        "raw_price_top_positive_contributor_rate": round(top_rate, 4),
+        "rate_limit": RAW_PRICE_TOP_CONTRIBUTOR_RATE_LIMIT,
+        "requires_review": requires_review,
+        "reasons": reasons,
+        "examples": examples[:20],
+    }
 
 def _numeric_metric(metrics: dict[str, Any], key: str) -> float | None:
     value = metrics.get(key)
@@ -432,6 +533,11 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
     big_loss_ok = True if c_big_loss_rate is None or p_big_loss_rate is None else c_big_loss_rate <= p_big_loss_rate
     big_gain_floor_ok = (c_big_gain_rate or 0.0) >= MIN_BIG_GAIN_CAPTURE_RATE
     utility_ok = c_utility_after_penalty > (p_utility + MIN_UTILITY_IMPROVEMENT)
+    symbol_concentration = _numeric_metric(candidate, "symbol_utility_concentration")
+    date_concentration = _numeric_metric(candidate, "date_utility_concentration")
+    symbol_concentration_ok = symbol_concentration is None or symbol_concentration <= MAX_SYMBOL_UTILITY_CONCENTRATION
+    date_concentration_ok = date_concentration is None or date_concentration <= MAX_DATE_UTILITY_CONCENTRATION
+    feature_risk_ok = not bool((candidate.get("feature_risk_audit") or {}).get("requires_review"))
 
     if not accuracy_ok:
         reasons.append("candidate accuracy is below production, but accuracy is informational when profit utility improves")
@@ -447,8 +553,14 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
         reasons.append(f"candidate big-gain capture is below minimum ({c_big_gain_rate or 0.0:.4f} < {MIN_BIG_GAIN_CAPTURE_RATE:.4f})")
     if not utility_ok:
         reasons.append("candidate profit utility after big-loss penalty does not exceed production")
+    if not symbol_concentration_ok:
+        reasons.append(f"candidate utility is too concentrated in one symbol ({symbol_concentration:.4f} > {MAX_SYMBOL_UTILITY_CONCENTRATION:.4f})")
+    if not date_concentration_ok:
+        reasons.append(f"candidate utility is too concentrated on one date ({date_concentration:.4f} > {MAX_DATE_UTILITY_CONCENTRATION:.4f})")
+    if not feature_risk_ok:
+        reasons.append("candidate feature-risk audit requires review")
 
-    if brier_ok and (return_ok or downside_ok) and big_loss_ok and big_gain_floor_ok and utility_ok:
+    if brier_ok and (return_ok or downside_ok) and big_loss_ok and big_gain_floor_ok and utility_ok and symbol_concentration_ok and date_concentration_ok and feature_risk_ok:
         reasons.append("candidate improves profit utility with acceptable brier, return/downside, big-loss avoidance, and minimum big-gain capture")
         return True, reasons
 
@@ -654,6 +766,12 @@ def _threshold_guardrails_pass(item: dict[str, Any], current: dict[str, Any]) ->
         reasons.append(f"big_gain_capture_rate below minimum ({item_big_gain_capture:.4f} < {MIN_THRESHOLD_BIG_GAIN_CAPTURE_RATE:.4f})")
     if item_positive < min_positive:
         reasons.append(f"positive_predictions below minimum ({int(item_positive)} < {min_positive:.1f})")
+    symbol_concentration = _numeric_metric(item, "symbol_utility_concentration")
+    date_concentration = _numeric_metric(item, "date_utility_concentration")
+    if symbol_concentration is not None and symbol_concentration > MAX_SYMBOL_UTILITY_CONCENTRATION:
+        reasons.append(f"symbol utility concentration exceeds maximum ({symbol_concentration:.4f} > {MAX_SYMBOL_UTILITY_CONCENTRATION:.4f})")
+    if date_concentration is not None and date_concentration > MAX_DATE_UTILITY_CONCENTRATION:
+        reasons.append(f"date utility concentration exceeds maximum ({date_concentration:.4f} > {MAX_DATE_UTILITY_CONCENTRATION:.4f})")
     return not reasons, reasons
 
 
@@ -743,6 +861,26 @@ def _evaluate_artifact_threshold(artifact_path: str, frame: pd.DataFrame, thresh
     return {**_prediction_return_metrics(usable, preds, probs), "threshold": float(threshold), "rows": int(len(usable))}
 
 
+def _threshold_stability_summary(best_thresholds: list[float], recommended_threshold: float) -> dict[str, Any]:
+    threshold_spread = max(best_thresholds) - min(best_thresholds) if best_thresholds else None
+    agreement_count = sum(abs(value - recommended_threshold) <= 0.025 for value in best_thresholds)
+    agreement_required = max(2, int(np.ceil(len(best_thresholds) * 2 / 3))) if best_thresholds else 0
+    stable = bool(
+        len(best_thresholds) >= 2
+        and threshold_spread is not None
+        and threshold_spread <= MAX_STABLE_THRESHOLD_SPREAD
+        and agreement_count >= agreement_required
+    )
+    return {
+        "stable": stable,
+        "window_best_thresholds": best_thresholds,
+        "max_threshold_spread": MAX_STABLE_THRESHOLD_SPREAD,
+        "observed_threshold_spread": round(threshold_spread, 6) if threshold_spread is not None else None,
+        "recommended_threshold_agreement_windows": agreement_count,
+        "recommended_threshold_agreement_required": agreement_required,
+    }
+
+
 def _threshold_walk_forward_results(artifact_path: str, test_df: pd.DataFrame, current_threshold: float, recommended_threshold: float, *, min_rows: int) -> dict[str, Any]:
     if abs(float(current_threshold) - float(recommended_threshold)) < 1e-9:
         return {"consistent": False, "windows": [], "reason": "recommended threshold equals current threshold"}
@@ -758,6 +896,9 @@ def _threshold_walk_forward_results(artifact_path: str, test_df: pd.DataFrame, c
             continue
         current = _evaluate_artifact_threshold(artifact_path, window_df, current_threshold)
         proposed = _evaluate_artifact_threshold(artifact_path, window_df, recommended_threshold)
+        window_search = [_evaluate_artifact_threshold(artifact_path, window_df, threshold) for threshold in THRESHOLD_SEARCH_VALUES]
+        window_selection = _select_threshold_from_search({"threshold_search": window_search, **current}, current_threshold)
+        window_best_threshold = float(window_selection["recommended_threshold"])
         guardrails_ok, guardrail_reasons = _threshold_guardrails_pass(proposed, current)
         current_utility = _numeric_metric(current, "utility_score")
         proposed_utility = _numeric_metric(proposed, "utility_score")
@@ -767,12 +908,22 @@ def _threshold_walk_forward_results(artifact_path: str, test_df: pd.DataFrame, c
             "rows": int(len(window_df)),
             "current": current,
             "proposed": proposed,
+            "window_best_guardrail_threshold": window_best_threshold,
+            "window_threshold_selection_reason": window_selection["reason"],
             "passed": bool(guardrails_ok and utility_ok),
             "reasons": [*guardrail_reasons, *([] if utility_ok else ["proposed threshold utility did not beat current threshold"])],
         })
     evaluated = [item for item in windows if item.get("current", {}).get("rows", 0)]
     consistent = len(evaluated) >= 2 and all(item.get("passed") for item in evaluated)
-    return {"consistent": bool(consistent), "windows_evaluated": len(evaluated), "windows": windows}
+    best_thresholds = [float(item["window_best_guardrail_threshold"]) for item in evaluated]
+    stability = _threshold_stability_summary(best_thresholds, recommended_threshold)
+    return {
+        "consistent": bool(consistent),
+        "threshold_stable": stability["stable"],
+        "threshold_stability": stability,
+        "windows_evaluated": len(evaluated),
+        "windows": windows,
+    }
 
 
 def _threshold_optimizer_report(artifact_path: str, metrics: dict[str, Any], test_df: pd.DataFrame, *, min_rows: int) -> dict[str, Any]:
@@ -784,13 +935,13 @@ def _threshold_optimizer_report(artifact_path: str, metrics: dict[str, Any], tes
     selection = _select_threshold_from_search(metrics, current_threshold)
     recommended = float(selection["recommended_threshold"])
     walk_forward = _threshold_walk_forward_results(artifact_path, test_df, current_threshold, recommended, min_rows=min_rows)
-    change_recommended = abs(recommended - current_threshold) > 1e-9 and bool(walk_forward.get("consistent"))
+    change_recommended = abs(recommended - current_threshold) > 1e-9 and bool(walk_forward.get("consistent")) and bool(walk_forward.get("threshold_stable"))
     if change_recommended:
         reason = f"{selection['reason']}; walk-forward consistent"
     elif abs(recommended - current_threshold) <= 1e-9:
         reason = str(selection["reason"])
     else:
-        reason = f"{selection['reason']}; walk-forward consistency required before changing live threshold"
+        reason = f"{selection['reason']}; walk-forward consistency and threshold stability required before changing live threshold"
     return {
         "current_threshold": round(current_threshold, 6),
         "recommended_threshold": round(recommended if change_recommended else current_threshold, 6),
@@ -828,12 +979,23 @@ def main() -> None:
         raise ValueError("purging/embargo leaves no final comparison rows")
     candidate_metrics = _evaluate(args.candidate_model, test_df.copy())
     production_metrics = _evaluate(args.production_model, test_df.copy())
-
-    decision_win, decision_reasons = _decide(candidate_metrics, production_metrics, min_rows=max(1, args.min_rows))
-    ranking_win, ranking_reasons, ranking_metrics = _ranking_lane_decide(candidate_metrics, production_metrics)
     clone_detection = _clone_detection(args.candidate_model, args.production_model, test_df.copy())
-    walk_forward = _walk_forward_validation(args.candidate_model, args.production_model, test_df.copy(), min_rows=max(1, args.min_rows))
     no_op_clone = bool(clone_detection.get("no_op_clone"))
+    candidate_feature_risk = _feature_risk_audit(args.candidate_model, test_df.copy())
+    production_feature_risk = _feature_risk_audit(args.production_model, test_df.copy())
+    candidate_metrics["feature_risk_audit"] = candidate_feature_risk
+    production_metrics["feature_risk_audit"] = production_feature_risk
+    if no_op_clone:
+        decision_win = False
+        ranking_win = False
+        decision_reasons = ["promotion evaluation skipped because prediction fingerprint/overlap identifies a no-op clone"]
+        ranking_reasons = ["ranking promotion evaluation skipped for no-op clone"]
+        ranking_metrics = {"candidate": {}, "production": {}}
+        walk_forward = {"consistent": False, "skipped": True, "reason": "no-op clone detected before full promotion evaluation", "windows": []}
+    else:
+        decision_win, decision_reasons = _decide(candidate_metrics, production_metrics, min_rows=max(1, args.min_rows))
+        ranking_win, ranking_reasons, ranking_metrics = _ranking_lane_decide(candidate_metrics, production_metrics)
+        walk_forward = _walk_forward_validation(args.candidate_model, args.production_model, test_df.copy(), min_rows=max(1, args.min_rows))
     walk_forward_consistent = bool(walk_forward.get("consistent"))
     report_examples = _prediction_error_examples(args.candidate_model, args.production_model, test_df.copy())
     production_threshold_optimizer = _threshold_optimizer_report(args.production_model, production_metrics, test_df.copy(), min_rows=max(1, args.min_rows))
@@ -869,6 +1031,11 @@ def main() -> None:
         "cmi_false_positive_diagnostic": report_examples.get("cmi_false_positive_diagnostic"),
         "promotion_decision": promotion_decision,
         "clone_detection": clone_detection,
+        "prediction_fingerprints": {
+            "candidate": clone_detection.get("candidate_prediction_fingerprint"),
+            "production": clone_detection.get("production_prediction_fingerprint"),
+        },
+        "feature_risk_audit": {"candidate": candidate_feature_risk, "production": production_feature_risk},
         "walk_forward_validation": walk_forward,
         "challenger_scoring_lanes": {
             "decision_model": {
