@@ -6,6 +6,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -33,7 +34,7 @@ RETURN_BIN_SAMPLE_WEIGHTS = {
     "gain": 1.25,
     "big_gain": 4.0,
 }
-THRESHOLD_SEARCH_VALUES = (0.50, 0.525, 0.55, 0.575, 0.60, 0.625, 0.65, 0.675, 0.70)
+THRESHOLD_SEARCH_VALUES = (0.55, 0.575, 0.60, 0.625, 0.65, 0.675, 0.70)
 UTILITY_BIG_GAIN_WEIGHT = 0.10
 UTILITY_DOWNSIDE_WEIGHT = 1.0
 UTILITY_BIG_LOSS_WEIGHT = 1.0
@@ -137,32 +138,50 @@ def _threshold_selection_frame(train_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _select_profit_threshold(frame: pd.DataFrame, probs: np.ndarray) -> dict[str, Any]:
-    scored: list[dict[str, float | int | None]] = []
+    scored: list[dict[str, float | int | None | bool]] = []
+    bins = frame["return_bin_5d"].fillna("").astype(str)
+    big_loss = (bins == "big_loss").to_numpy()
+    big_gain = (bins == "big_gain").to_numpy()
+    big_loss_rows = int(big_loss.sum())
+    big_gain_rows = int(big_gain.sum())
     for threshold in THRESHOLD_SEARCH_VALUES:
         preds = (probs >= threshold).astype(int)
         utility = _profit_utility_score(frame, preds)
         signal_returns = pd.to_numeric(frame.loc[preds == 1, "return_5d"], errors="coerce").dropna()
+        big_loss_predictions = int((preds[big_loss] == 1).sum()) if big_loss_rows else 0
+        big_gain_predictions = int((preds[big_gain] == 1).sum()) if big_gain_rows else 0
         scored.append(
             {
                 "threshold": float(threshold),
                 "utility_score": round(float(utility), 6) if utility is not None else None,
                 "positive_predictions": int((preds == 1).sum()),
                 "avg_signal_return": round(float(signal_returns.mean()), 6) if not signal_returns.empty else None,
+                "big_loss_rows": big_loss_rows,
+                "big_loss_predictions": big_loss_predictions,
+                "big_loss_prediction_rate": round(big_loss_predictions / big_loss_rows, 6) if big_loss_rows else None,
+                "big_gain_rows": big_gain_rows,
+                "big_gain_predictions": big_gain_predictions,
+                "big_gain_capture_rate": round(big_gain_predictions / big_gain_rows, 6) if big_gain_rows else None,
             }
         )
 
     viable = [item for item in scored if isinstance(item.get("utility_score"), (int, float)) and int(item.get("positive_predictions") or 0) > 0]
     if not viable:
-        return {"threshold": 0.55, "utility_score": None, "positive_predictions": 0, "avg_signal_return": None, "search": scored}
+        return {"threshold": 0.55, "utility_score": None, "positive_predictions": 0, "avg_signal_return": None, "big_loss_guardrail": "no_positive_thresholds", "search": scored}
+
+    zero_big_loss_viable = [item for item in viable if int(item.get("big_loss_predictions") or 0) == 0]
+    guarded = zero_big_loss_viable or viable
     best = max(
-        viable,
+        guarded,
         key=lambda item: (
             float(item["utility_score"] or 0.0),
+            -float(item.get("big_loss_prediction_rate") or 0.0),
             float(item.get("avg_signal_return") or 0.0),
             -abs(float(item["threshold"] or 0.55) - 0.55),
         ),
     )
-    return {**best, "search": scored}
+    guardrail = "zero_big_loss_predictions" if zero_big_loss_viable else "minimize_big_loss_rate"
+    return {**best, "big_loss_guardrail": guardrail, "search": scored}
 
 
 def _load_jsonl(path: str) -> pd.DataFrame:
