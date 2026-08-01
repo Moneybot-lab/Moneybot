@@ -110,6 +110,58 @@ def _average_metric_dicts(metric_dicts: list[dict[str, Any]]) -> dict[str, Any]:
     return averaged
 
 
+def _specialized_training_inputs(
+    train_df: pd.DataFrame,
+    y_train: np.ndarray,
+    return_col: str | None,
+    family: str,
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+    """Apply a specialized family's row, target, and weighting recipe."""
+    family_train_df = train_df
+    family_y_train = np.asarray(y_train, dtype=float)
+    if family == "recent_window_model" and len(train_df) >= 10:
+        recent_rows = max(5, len(train_df) // 2)
+        family_train_df = train_df.tail(recent_rows)
+        family_y_train = family_y_train[-recent_rows:]
+    elif family == "ranking_top5_model":
+        ranking_labels = _ranking_top5_labels(train_df, return_col)
+        if ranking_labels.sum() > 0:
+            family_y_train = ranking_labels
+
+    sample_weight = _specialized_sample_weight(family_train_df, return_col, family)
+    return family_train_df, family_y_train, sample_weight
+
+
+def _train_logistic_recipe(
+    train_df: pd.DataFrame,
+    y_train: np.ndarray,
+    feature_columns: list[str],
+    return_col: str | None,
+    spec: dict[str, Any],
+):
+    """Train one logistic recipe identically for final and walk-forward fits."""
+    recipe_train_df = train_df
+    recipe_y_train = np.asarray(y_train, dtype=float)
+    sample_weight = None
+    family = str(spec.get("family") or "")
+    if family in SPECIALIZED_CHALLENGER_FAMILIES:
+        recipe_train_df, recipe_y_train, sample_weight = _specialized_training_inputs(
+            train_df,
+            recipe_y_train,
+            return_col,
+            family,
+        )
+    return train_logistic_baseline(
+        recipe_train_df[feature_columns].to_numpy(dtype=float),
+        recipe_y_train,
+        learning_rate=float(spec.get("lr", 0.08)),
+        l2=float(spec.get("l2", 0.001)),
+        decision_threshold=float(spec.get("threshold", 0.5)),
+        epochs=int(spec.get("epochs", 550)),
+        sample_weight=sample_weight,
+    )
+
+
 def _apply_walk_forward_metrics(
     challengers: list[dict[str, Any]],
     *,
@@ -126,7 +178,6 @@ def _apply_walk_forward_metrics(
         for train_start, train_end, test_end in folds:
             fold_train = clean.iloc[train_start:train_end]
             fold_test = clean.iloc[train_end:test_end]
-            X_train = fold_train[feature_columns].to_numpy(dtype=float)
             y_train = fold_train[target_col].to_numpy(dtype=float)
             X_test = fold_test[feature_columns].to_numpy(dtype=float)
             y_test = fold_test[target_col].to_numpy(dtype=float)
@@ -134,14 +185,7 @@ def _apply_walk_forward_metrics(
             model_type = challenger.get("model_type")
             spec = challenger.get("spec", {})
             if model_type == "logistic_regression":
-                artifact = train_logistic_baseline(
-                    X_train,
-                    y_train,
-                    learning_rate=float(spec.get("lr", 0.08)),
-                    l2=float(spec.get("l2", 0.001)),
-                    decision_threshold=float(spec.get("threshold", 0.5)),
-                    epochs=int(spec.get("epochs", 550)),
-                )
+                artifact = _train_logistic_recipe(fold_train, y_train, feature_columns, return_col, spec)
                 scores = predict_proba(artifact, X_test)
                 preds = (scores >= artifact.decision_threshold).astype(int)
             elif model_type == "decision_stump":
@@ -176,6 +220,7 @@ def _apply_walk_forward_metrics(
             challenger["metrics"]["walk_forward"] = walk_forward
             challenger["metrics"]["walk_forward_passed"] = walk_forward["passed"]
             challenger["metrics"]["walk_forward_ranking_objective"] = walk_forward.get("ranking_objective", 0.0)
+            challenger["metrics"]["walk_forward_recipe_reproduced"] = True
 
 
 
@@ -401,32 +446,21 @@ def _add_specialized_challengers(
     test_returns: np.ndarray | None,
 ) -> None:
     for family in SPECIALIZED_CHALLENGER_FAMILIES:
-        family_train_df = train_df
-        family_y_train = y_train
-        if family == "recent_window_model" and len(train_df) >= 10:
-            recent_rows = max(5, len(train_df) // 2)
-            family_train_df = train_df.tail(recent_rows)
-            family_y_train = family_train_df.index.map(dict(zip(train_df.index, y_train))).to_numpy(dtype=float)
-        elif family == "ranking_top5_model":
-            family_y_train = _ranking_top5_labels(train_df, return_col)
-            if family_y_train.sum() <= 0:
-                family_y_train = y_train
-
-        X_family = family_train_df[feature_columns].to_numpy(dtype=float)
-        weights = _specialized_sample_weight(family_train_df, return_col, family)
-        artifact = train_logistic_baseline(
-            X_family,
-            family_y_train,
-            learning_rate=0.06,
-            l2=0.002,
-            decision_threshold=0.60 if family in {"big_loss_avoider", "ranking_top5_model"} else 0.55,
-            epochs=650,
-            sample_weight=weights,
-        )
+        threshold = 0.60 if family in {"big_loss_avoider", "ranking_top5_model"} else 0.55
+        spec = {
+            "family": family,
+            "lr": 0.06,
+            "l2": 0.002,
+            "threshold": threshold,
+            "epochs": 650,
+            "sample_weight_policy": family,
+            "target_policy": "daily_top5" if family == "ranking_top5_model" else "configured_target",
+            "training_window_policy": "recent_half" if family == "recent_window_model" else "full_window",
+        }
+        artifact = _train_logistic_recipe(train_df, y_train, feature_columns, return_col, spec)
         artifact.version = f"challenger-{family.replace('_', '-')}-v1"
         artifact.feature_columns = list(feature_columns)
         model_path = output_dir / f"{artifact.version}.json"
-        spec = {"family": family, "lr": 0.06, "l2": 0.002, "epochs": 650, "sample_weight_policy": family}
         _write_artifact(model_path, {"model_type": "logistic_regression", "specialized_family": family, **artifact.to_dict(), "training_spec": spec})
         probs = predict_proba(artifact, test_df[feature_columns].to_numpy(dtype=float))
         preds = (probs >= artifact.decision_threshold).astype(int)
