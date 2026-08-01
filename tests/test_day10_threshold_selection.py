@@ -9,11 +9,11 @@ def test_chronological_training_periods_are_disjoint_and_leave_final_test_untouc
 
     fit, calibration, threshold, final_test = _chronological_training_periods(frame, 0.8)
 
-    assert [len(part) for part in (fit, calibration, threshold, final_test)] == [48, 16, 16, 20]
-    assert fit["row"].tolist() == list(range(48))
-    assert calibration["row"].tolist() == list(range(48, 64))
-    assert threshold["row"].tolist() == list(range(64, 80))
-    assert final_test["row"].tolist() == list(range(80, 100))
+    assert [len(part) for part in (fit, calibration, threshold, final_test)] == [43, 10, 10, 19]
+    assert fit["row"].tolist() == list(range(43))
+    assert calibration["row"].tolist() == list(range(49, 59))
+    assert threshold["row"].tolist() == list(range(65, 75))
+    assert final_test["row"].tolist() == list(range(81, 100))
     later_indexes = set(calibration.index) | set(threshold.index) | set(final_test.index)
     assert set(fit.index).isdisjoint(later_indexes)
 

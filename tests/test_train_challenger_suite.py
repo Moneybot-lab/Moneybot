@@ -131,6 +131,10 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
     assert "walk_forward_passed" in manifest["ranking_metric_names"]
     assert len(manifest["walk_forward_windows"]) >= 2
     assert manifest["walk_forward_windows"][0]["train_end_row"] == manifest["walk_forward_windows"][0]["test_start_row"]
+    assert manifest["temporal_validation_policy"] == {"purged": True, "label_horizon_days": 5, "embargo_days": 1}
+    assert manifest["temporal_split"]["purged_train_rows"] > 0
+    assert manifest["temporal_split"]["embargoed_test_rows"] > 0
+    assert manifest["walk_forward_windows"][0]["temporal_split"]["purged_train_rows"] > 0
     assert "walk-forward" in manifest["ranking_selection_policy"]
     assert "two walk-forward windows" in manifest["promotion_policy"]
     for challenger in manifest["challengers"]:

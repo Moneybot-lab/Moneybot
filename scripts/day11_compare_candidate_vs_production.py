@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from moneybot.services.deterministic_model import load_artifact, predict_proba
+from moneybot.services.temporal_validation import purged_embargoed_split
 
 RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
 TARGET_GAIN_BUCKETS = {"gain", "big_gain"}
@@ -33,6 +34,8 @@ WALK_FORWARD_WINDOWS = 3
 MIN_THRESHOLD_BIG_GAIN_CAPTURE_RATE = 0.10
 MIN_THRESHOLD_POSITIVE_PREDICTIONS = 10
 MIN_THRESHOLD_POSITIVE_FRACTION_OF_CURRENT = 0.25
+LABEL_HORIZON_DAYS = 5
+EMBARGO_DAYS = 1
 
 
 def _load_jsonl(path: str) -> pd.DataFrame:
@@ -797,7 +800,15 @@ def main() -> None:
     if df.empty:
         raise SystemExit("No rows available for model comparison")
 
-    _, test_df = _chronological_split(df, args.train_ratio)
+    development_df, test_df = _chronological_split(df, args.train_ratio)
+    _, test_df, temporal_split = purged_embargoed_split(
+        development_df,
+        test_df,
+        horizon_days=LABEL_HORIZON_DAYS,
+        embargo_days=EMBARGO_DAYS,
+    )
+    if test_df.empty:
+        raise ValueError("purging/embargo leaves no final comparison rows")
     candidate_metrics = _evaluate(args.candidate_model, test_df.copy())
     production_metrics = _evaluate(args.production_model, test_df.copy())
 
@@ -822,6 +833,7 @@ def main() -> None:
         reasons.append("walk-forward validation: candidate is not consistently better across rolling windows")
 
     report = {
+        "temporal_split": temporal_split,
         "candidate_metrics": candidate_metrics,
         "production_metrics": production_metrics,
         "recommended_threshold": production_threshold_optimizer.get("recommended_threshold"),

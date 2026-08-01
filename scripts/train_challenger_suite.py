@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from moneybot.services.deterministic_model import load_artifact, predict_proba, summarize_binary_predictions, train_logistic_baseline
+from moneybot.services.temporal_validation import purged_embargoed_split
 from scripts.day10_train_candidate_model import _backtest_compatible_feature_columns, _chronological_split, _fill_feature_gaps, _prepare_frame, _select_feature_columns
 
 SUITE_SCHEMA_VERSION = "moneybot-challenger-suite.v2"
@@ -18,6 +19,7 @@ LOGISTIC_L2_GRID = (5e-4, 1e-3, 5e-3)
 LOGISTIC_THRESHOLD_GRID = (0.45, 0.50, 0.55, 0.60)
 MAX_STUMP_CHALLENGERS = 8
 SPECIALIZED_CHALLENGER_FAMILIES = ("big_loss_avoider", "big_gain_hunter", "recent_window_model", "ranking_top5_model")
+EMBARGO_DAYS = 1
 
 
 def _return_column(df: pd.DataFrame, horizon_days: int) -> str | None:
@@ -170,6 +172,7 @@ def _apply_walk_forward_metrics(
     feature_columns: list[str],
     target_col: str,
     return_col: str | None,
+    horizon_days: int,
 ) -> None:
     if not folds:
         return
@@ -178,6 +181,14 @@ def _apply_walk_forward_metrics(
         for train_start, train_end, test_end in folds:
             fold_train = clean.iloc[train_start:train_end]
             fold_test = clean.iloc[train_end:test_end]
+            fold_train, fold_test, _ = purged_embargoed_split(
+                fold_train,
+                fold_test,
+                horizon_days=horizon_days,
+                embargo_days=EMBARGO_DAYS,
+            )
+            if fold_train.empty or fold_test.empty:
+                continue
             y_train = fold_train[target_col].to_numpy(dtype=float)
             X_test = fold_test[feature_columns].to_numpy(dtype=float)
             y_test = fold_test[target_col].to_numpy(dtype=float)
@@ -222,6 +233,92 @@ def _apply_walk_forward_metrics(
             challenger["metrics"]["walk_forward_ranking_objective"] = walk_forward.get("ranking_objective", 0.0)
             challenger["metrics"]["walk_forward_recipe_reproduced"] = True
 
+
+
+def _event_date_values(df: pd.DataFrame) -> pd.Series:
+    if "event_date" in df.columns:
+        dates = df["event_date"].fillna("").astype(str)
+        if dates.str.strip().any():
+            return dates.replace("", "unknown")
+    if "ts" in df.columns:
+        parsed = pd.to_datetime(pd.to_numeric(df["ts"], errors="coerce"), unit="s", utc=True, errors="coerce")
+        return parsed.dt.strftime("%Y-%m-%d").fillna("unknown")
+    return pd.Series("unknown", index=df.index)
+
+
+def _return_bucket_series(df: pd.DataFrame, return_col: str | None) -> pd.Series:
+    if "return_bin_5d" in df.columns:
+        return df["return_bin_5d"].fillna("").astype(str)
+    if return_col and return_col in df.columns:
+        returns = pd.to_numeric(df[return_col], errors="coerce")
+        buckets = pd.Series(
+            np.select(
+                [returns < -0.03, returns < -0.005, returns <= 0.005, returns <= 0.03],
+                ["big_loss", "loss", "flat", "gain"],
+                default="big_gain",
+            ),
+            index=df.index,
+        )
+        buckets.loc[returns.isna()] = ""
+        return buckets
+    return pd.Series("", index=df.index)
+
+
+def _artifact_scored_mistake_rows(df: pd.DataFrame, model_path: Path, return_col: str | None) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
+    """Find tail mistakes from an artifact's actual probabilities and threshold."""
+    artifact = load_artifact(model_path)
+    scored = df.copy()
+    for idx, feature in enumerate(artifact.feature_columns):
+        fallback = float(artifact.means[idx]) if idx < len(artifact.means) else 0.0
+        if feature not in scored.columns:
+            scored[feature] = fallback
+        numeric = pd.to_numeric(scored[feature], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        scored[feature] = numeric.fillna(fallback).astype(float)
+    probabilities = predict_proba(artifact, scored[artifact.feature_columns].to_numpy(dtype=float))
+    predictions = (probabilities >= artifact.decision_threshold).astype(int)
+    scored["artifact_model_version"] = artifact.version
+    scored["artifact_model_path"] = str(model_path)
+    scored["artifact_decision_threshold"] = float(artifact.decision_threshold)
+    scored["artifact_probability"] = probabilities
+    scored["artifact_prediction"] = predictions
+    buckets = _return_bucket_series(scored, return_col)
+    missed_big_gain = scored.loc[(buckets == "big_gain") & (predictions == 0)].copy()
+    missed_big_gain["mistake_type"] = "missed_big_gain_winner"
+    bad_buy_big_loss = scored.loc[(buckets == "big_loss") & (predictions == 1)].copy()
+    bad_buy_big_loss["mistake_type"] = "bad_buy_big_loss_false_positive"
+    return (
+        {
+            "missed_big_gain_winners": missed_big_gain,
+            "bad_buy_big_loss_false_positives": bad_buy_big_loss,
+        },
+        {
+            "scoring_method": "artifact_predictions",
+            "model_version": artifact.version,
+            "model_path": str(model_path),
+            "decision_threshold": float(artifact.decision_threshold),
+            "rows_scored": int(len(scored)),
+        },
+    )
+
+
+def _write_daily_mistake_slices(df: pd.DataFrame, output_dir: Path, return_col: str | None, model_path: Path) -> dict[str, Any]:
+    slice_root = output_dir / "mistake_slices"
+    slice_root.mkdir(parents=True, exist_ok=True)
+    slices, scoring = _artifact_scored_mistake_rows(df, model_path, return_col)
+    manifest: dict[str, Any] = {"slice_root": str(slice_root), **scoring, "slices": {}}
+    for slice_name, selected in slices.items():
+        slice_dir = slice_root / slice_name
+        slice_dir.mkdir(parents=True, exist_ok=True)
+        manifest["slices"][slice_name] = {"rows": int(len(selected)), "daily_files": []}
+        if selected.empty:
+            continue
+        selected_dates = _event_date_values(selected)
+        for day, group in selected.groupby(selected_dates):
+            safe_day = str(day or "unknown").replace("/", "-")
+            path = slice_dir / f"{safe_day}.jsonl"
+            path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in group.to_dict(orient="records")), encoding="utf-8")
+            manifest["slices"][slice_name]["daily_files"].append({"date": safe_day, "path": str(path), "rows": int(len(group))})
+    return manifest
 
 
 def _event_date_values(df: pd.DataFrame) -> pd.Series:
@@ -525,6 +622,16 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
     if len(clean) < max(1, min_rows):
         raise ValueError(f"Not enough rows to train challenger suite (have={len(clean)}, need={min_rows})")
     train_df, test_df = _chronological_split(clean, train_ratio)
+    train_df, test_df, holdout_temporal_split = purged_embargoed_split(
+        train_df,
+        test_df,
+        horizon_days=horizon_days,
+        embargo_days=EMBARGO_DAYS,
+    )
+    if train_df.empty or test_df.empty:
+        raise ValueError("purging/embargo leaves an empty challenger train or test period")
+    if len(train_df) + len(test_df) < max(1, min_rows):
+        raise ValueError(f"Not enough rows after purging/embargo (have={len(train_df) + len(test_df)}, need={min_rows})")
     X_train = train_df[feature_columns].to_numpy(dtype=float)
     y_train = train_df[target_col].to_numpy(dtype=float)
     X_test = test_df[feature_columns].to_numpy(dtype=float)
@@ -547,6 +654,7 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         feature_columns=feature_columns,
         target_col=target_col,
         return_col=return_col,
+        horizon_days=horizon_days,
     )
 
     ranked = sorted(
@@ -569,6 +677,23 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         return_col,
         Path(str(scoring_challenger["model_path"])),
     )
+    walk_forward_windows: list[dict[str, Any]] = []
+    for start, train_end, test_end in walk_forward_folds:
+        _, _, diagnostics = purged_embargoed_split(
+            clean.iloc[start:train_end],
+            clean.iloc[train_end:test_end],
+            horizon_days=horizon_days,
+            embargo_days=EMBARGO_DAYS,
+        )
+        walk_forward_windows.append(
+            {
+                "train_start_row": start,
+                "train_end_row": train_end,
+                "test_start_row": train_end,
+                "test_end_row": test_end,
+                "temporal_split": diagnostics,
+            }
+        )
     model_type_counts = {model_type: sum(1 for item in challengers if item["model_type"] == model_type) for model_type in sorted({item["model_type"] for item in challengers})}
     manifest = {
         "schema_version": SUITE_SCHEMA_VERSION,
@@ -578,10 +703,9 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         "rows": len(clean),
         "train_rows": len(train_df),
         "test_rows": len(test_df),
-        "walk_forward_windows": [
-            {"train_start_row": start, "train_end_row": train_end, "test_start_row": train_end, "test_end_row": test_end}
-            for start, train_end, test_end in walk_forward_folds
-        ],
+        "temporal_split": holdout_temporal_split,
+        "temporal_validation_policy": {"purged": True, "label_horizon_days": int(horizon_days), "embargo_days": EMBARGO_DAYS},
+        "walk_forward_windows": walk_forward_windows,
         "target_column": target_col,
         "ranking_selection_policy": "rank by walk-forward pass status across multiple windows, then walk-forward top-K capped-exposure ranking_objective, holdout ranking objective, top-K average return, then accuracy",
         "promotion_policy": "prefer candidates with positive ranking_objective in at least two walk-forward windows before promotion",

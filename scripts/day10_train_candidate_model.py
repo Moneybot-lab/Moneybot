@@ -25,6 +25,7 @@ from moneybot.services.deterministic_model import (
     train_logistic_baseline,
 )
 from moneybot.services.model_metadata import append_artifact_history, build_artifact_metadata, save_artifact_metadata
+from moneybot.services.temporal_validation import purge_embargo_periods
 
 RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
 TARGET_GAIN_BUCKETS = {"gain", "big_gain"}
@@ -41,6 +42,8 @@ UTILITY_DOWNSIDE_WEIGHT = 1.0
 UTILITY_BIG_LOSS_WEIGHT = 1.0
 CALIBRATION_FRACTION_OF_DEVELOPMENT = 0.20
 THRESHOLD_FRACTION_OF_DEVELOPMENT = 0.20
+LABEL_HORIZON_DAYS = 5
+EMBARGO_DAYS = 1
 
 APP_SIGNAL_FEATURE_COLUMNS = {
     "feature_endpoint_hot_momentum_buys",
@@ -144,7 +147,14 @@ def _chronological_training_periods(df: pd.DataFrame, train_ratio: float) -> tup
     fit = development.iloc[:fit_rows].copy()
     calibration = development.iloc[fit_rows:fit_rows + calibration_rows].copy()
     threshold = development.iloc[fit_rows + calibration_rows:].copy()
-    return fit, calibration, threshold, final_test
+    periods, _ = purge_embargo_periods(
+        [fit, calibration, threshold, final_test],
+        horizon_days=LABEL_HORIZON_DAYS,
+        embargo_days=EMBARGO_DAYS,
+    )
+    if any(period.empty for period in periods):
+        raise ValueError("purging/embargo leaves an empty fit, calibration, threshold, or final-test period")
+    return periods[0], periods[1], periods[2], periods[3]
 
 
 def _select_profit_threshold(frame: pd.DataFrame, probs: np.ndarray) -> dict[str, Any]:
@@ -405,6 +415,9 @@ def main() -> None:
                 "calibration_rows": len(calibration_df),
                 "threshold_selection_rows": len(threshold_df),
                 "final_test_rows": len(test_df),
+                "purged_embargoed": True,
+                "label_horizon_days": LABEL_HORIZON_DAYS,
+                "embargo_days": EMBARGO_DAYS,
             },
         }
     )
