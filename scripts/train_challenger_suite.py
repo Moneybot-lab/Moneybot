@@ -308,7 +308,7 @@ def _artifact_scored_mistake_rows(df: pd.DataFrame, model_path: Path, return_col
     )
 
 
-def _resolve_mistake_scoring_model(output_dir: Path, model_path: Path | None) -> Path:
+def _resolve_mistake_scoring_model(output_dir: Path, model_path: Path | None) -> Path | None:
     """Resolve an explicit scoring artifact, with compatibility discovery for older callers."""
     if model_path is not None:
         if not model_path.exists():
@@ -321,13 +321,26 @@ def _resolve_mistake_scoring_model(output_dir: Path, model_path: Path | None) ->
             continue
         if payload.get("model_type") == "logistic_regression" and all(key in payload for key in ("feature_columns", "means", "stds", "weights", "bias")):
             return candidate
-    raise ValueError("No logistic artifact is available for artifact-scored mistake mining; train challengers before writing mistake slices")
+    return None
 
 
 def _write_daily_mistake_slices(df: pd.DataFrame, output_dir: Path, return_col: str | None, model_path: Path | None = None) -> dict[str, Any]:
     slice_root = output_dir / "mistake_slices"
     slice_root.mkdir(parents=True, exist_ok=True)
     resolved_model_path = _resolve_mistake_scoring_model(output_dir, model_path)
+    if resolved_model_path is None:
+        return {
+            "slice_root": str(slice_root),
+            "scoring_method": "unavailable_no_artifact",
+            "model_version": None,
+            "model_path": None,
+            "decision_threshold": None,
+            "rows_scored": 0,
+            "slices": {
+                "missed_big_gain_winners": {"rows": 0, "daily_files": []},
+                "bad_buy_big_loss_false_positives": {"rows": 0, "daily_files": []},
+            },
+        }
     slices, scoring = _artifact_scored_mistake_rows(df, resolved_model_path, return_col)
     manifest: dict[str, Any] = {"slice_root": str(slice_root), **scoring, "slices": {}}
     for slice_name, selected in slices.items():
@@ -489,6 +502,77 @@ def _add_stump_challengers(
         _write_artifact(model_path, payload)
         challengers.append({"model_version": model_version, "model_type": "decision_stump", "model_path": str(model_path), "metrics": metrics, "spec": spec, "lineage": lineage})
 
+
+
+def _ranking_top5_labels(train_df: pd.DataFrame, return_col: str | None) -> np.ndarray:
+    if not return_col or return_col not in train_df.columns:
+        return np.zeros(len(train_df), dtype=float)
+    work = train_df.copy()
+    work["_return"] = pd.to_numeric(work[return_col], errors="coerce").fillna(0.0)
+    work["_event_date"] = _event_date_values(work)
+    labels = pd.Series(0.0, index=work.index)
+    for _, group in work.groupby("_event_date"):
+        top_n = min(5, len(group))
+        if top_n <= 0:
+            continue
+        labels.loc[group.sort_values("_return", ascending=False).head(top_n).index] = 1.0
+    return labels.loc[train_df.index].to_numpy(dtype=float)
+
+
+def _specialized_sample_weight(train_df: pd.DataFrame, return_col: str | None, family: str) -> np.ndarray:
+    buckets = _return_bucket_series(train_df, return_col)
+    weights = np.ones(len(train_df), dtype=float)
+    if family == "big_loss_avoider":
+        weights[buckets.to_numpy() == "big_loss"] = 6.0
+        weights[buckets.to_numpy() == "loss"] = 2.0
+    elif family == "big_gain_hunter":
+        weights[buckets.to_numpy() == "big_gain"] = 6.0
+        weights[buckets.to_numpy() == "gain"] = 2.0
+    elif family == "recent_window_model":
+        ramp = np.linspace(0.5, 2.5, num=len(train_df)) if len(train_df) else np.array([], dtype=float)
+        weights = ramp.astype(float)
+    elif family == "ranking_top5_model":
+        weights[buckets.to_numpy() == "big_gain"] = 4.0
+        weights[buckets.to_numpy() == "big_loss"] = 3.0
+    return weights
+
+
+def _add_specialized_challengers(
+    challengers: list[dict[str, Any]],
+    *,
+    output_dir: Path,
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+    feature_columns: list[str],
+    return_col: str | None,
+    test_returns: np.ndarray | None,
+) -> None:
+    for family in SPECIALIZED_CHALLENGER_FAMILIES:
+        threshold = 0.60 if family in {"big_loss_avoider", "ranking_top5_model"} else 0.55
+        spec = {
+            "family": family,
+            "lr": 0.06,
+            "l2": 0.002,
+            "threshold": threshold,
+            "epochs": 650,
+            "sample_weight_policy": family,
+            "target_policy": "daily_top5" if family == "ranking_top5_model" else "configured_target",
+            "training_window_policy": "recent_half" if family == "recent_window_model" else "full_window",
+        }
+        artifact = _train_logistic_recipe(train_df, y_train, feature_columns, return_col, spec)
+        artifact.version = f"challenger-{family.replace('_', '-')}-v1"
+        artifact.feature_columns = list(feature_columns)
+        model_path = output_dir / f"{artifact.version}.json"
+        lineage = _candidate_lineage(model_version=artifact.version, model_type="logistic_regression", spec=spec, feature_columns=feature_columns, decision_threshold=artifact.decision_threshold, sample_weight_policy=family)
+        _write_artifact(model_path, {"model_type": "logistic_regression", "specialized_family": family, **artifact.to_dict(), "training_spec": spec, "lineage": lineage})
+        probs = predict_proba(artifact, test_df[feature_columns].to_numpy(dtype=float))
+        preds = (probs >= artifact.decision_threshold).astype(int)
+        metrics = summarize_binary_predictions(y_test, preds)
+        metrics.update(_ranking_metrics(probs, y_test, test_returns))
+        metrics["specialized_family"] = family
+        challengers.append({"model_version": artifact.version, "model_type": "logistic_regression", "specialized_family": family, "model_path": str(model_path), "metrics": metrics, "spec": spec, "lineage": lineage})
 
 def _add_specialized_challengers(
     challengers: list[dict[str, Any]],

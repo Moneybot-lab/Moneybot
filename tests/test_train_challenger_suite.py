@@ -80,6 +80,25 @@ def test_mistake_mining_uses_artifact_probabilities_and_threshold(tmp_path):
     assert compatibility_manifest["model_path"] == str(compatibility_model)
 
 
+def test_mistake_slice_request_before_training_is_non_fatal_and_not_proxy_scored(tmp_path):
+    frame = pd.DataFrame(
+        {
+            "symbol": ["CMI"],
+            "event_date": ["2026-07-10"],
+            "feature_probability_up": [0.99],
+            "return_5d": [-0.05],
+            "return_bin_5d": ["big_loss"],
+        }
+    )
+
+    manifest = _write_daily_mistake_slices(frame, tmp_path / "empty-suite", "return_5d")
+
+    assert manifest["scoring_method"] == "unavailable_no_artifact"
+    assert manifest["rows_scored"] == 0
+    assert manifest["model_path"] is None
+    assert manifest["slices"]["bad_buy_big_loss_false_positives"]["rows"] == 0
+
+
 @pytest.mark.parametrize(
     ("family", "expected_rows", "expected_weighted_bucket"),
     [
