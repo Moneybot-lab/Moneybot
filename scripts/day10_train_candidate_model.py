@@ -477,6 +477,25 @@ def main() -> None:
         "rerun_calibration": replica_calibration,
     }
 
+    replica = train_logistic_baseline(X_fit, y_fit, sample_weight=sample_weight)
+    replica_calibration_artifact = _build_artifact_with_features(replica, feature_columns, version="calibration-reproduction")
+    replica_raw_probs = predict_proba(replica_calibration_artifact, calibration_df[feature_columns].to_numpy(dtype=float))
+    replica_calibration = fit_probability_calibration(replica_raw_probs, calibration_df[target_column].to_numpy(dtype=float))
+    replica.calibration_slope = float(replica_calibration["slope"])
+    replica.calibration_intercept = float(replica_calibration["intercept"])
+    replica_threshold_probs = predict_proba(_build_artifact_with_features(replica, feature_columns, version="threshold-reproduction"), X_threshold)
+    replica_threshold = _select_profit_threshold(threshold_df, replica_threshold_probs)
+    replica.decision_threshold = float(replica_threshold.get("threshold") or replica.decision_threshold)
+    recipe_parameter_delta = _artifact_parameter_delta(base_artifact, replica)
+    recipe_reproduction = {
+        "passed": recipe_parameter_delta <= 1e-12,
+        "maximum_parameter_delta": recipe_parameter_delta,
+        "first_threshold": float(base_artifact.decision_threshold),
+        "rerun_threshold": float(replica.decision_threshold),
+        "first_calibration": calibration,
+        "rerun_calibration": replica_calibration,
+    }
+
     X_test = test_df[feature_columns].to_numpy(dtype=float)
     y_test = test_df[target_column].to_numpy(dtype=float)
     y_pred = classify(artifact, X_test)
