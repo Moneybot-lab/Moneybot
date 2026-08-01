@@ -320,6 +320,92 @@ def _write_daily_mistake_slices(df: pd.DataFrame, output_dir: Path, return_col: 
             manifest["slices"][slice_name]["daily_files"].append({"date": safe_day, "path": str(path), "rows": int(len(group))})
     return manifest
 
+
+def _event_date_values(df: pd.DataFrame) -> pd.Series:
+    if "event_date" in df.columns:
+        dates = df["event_date"].fillna("").astype(str)
+        if dates.str.strip().any():
+            return dates.replace("", "unknown")
+    if "ts" in df.columns:
+        parsed = pd.to_datetime(pd.to_numeric(df["ts"], errors="coerce"), unit="s", utc=True, errors="coerce")
+        return parsed.dt.strftime("%Y-%m-%d").fillna("unknown")
+    return pd.Series("unknown", index=df.index)
+
+
+def _return_bucket_series(df: pd.DataFrame, return_col: str | None) -> pd.Series:
+    if "return_bin_5d" in df.columns:
+        return df["return_bin_5d"].fillna("").astype(str)
+    if return_col and return_col in df.columns:
+        returns = pd.to_numeric(df[return_col], errors="coerce")
+        buckets = pd.Series(
+            np.select(
+                [returns < -0.03, returns < -0.005, returns <= 0.005, returns <= 0.03],
+                ["big_loss", "loss", "flat", "gain"],
+                default="big_gain",
+            ),
+            index=df.index,
+        )
+        buckets.loc[returns.isna()] = ""
+        return buckets
+    return pd.Series("", index=df.index)
+
+
+def _artifact_scored_mistake_rows(df: pd.DataFrame, model_path: Path, return_col: str | None) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
+    """Find tail mistakes from an artifact's actual probabilities and threshold."""
+    artifact = load_artifact(model_path)
+    scored = df.copy()
+    for idx, feature in enumerate(artifact.feature_columns):
+        fallback = float(artifact.means[idx]) if idx < len(artifact.means) else 0.0
+        if feature not in scored.columns:
+            scored[feature] = fallback
+        numeric = pd.to_numeric(scored[feature], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        scored[feature] = numeric.fillna(fallback).astype(float)
+    probabilities = predict_proba(artifact, scored[artifact.feature_columns].to_numpy(dtype=float))
+    predictions = (probabilities >= artifact.decision_threshold).astype(int)
+    scored["artifact_model_version"] = artifact.version
+    scored["artifact_model_path"] = str(model_path)
+    scored["artifact_decision_threshold"] = float(artifact.decision_threshold)
+    scored["artifact_probability"] = probabilities
+    scored["artifact_prediction"] = predictions
+    buckets = _return_bucket_series(scored, return_col)
+    missed_big_gain = scored.loc[(buckets == "big_gain") & (predictions == 0)].copy()
+    missed_big_gain["mistake_type"] = "missed_big_gain_winner"
+    bad_buy_big_loss = scored.loc[(buckets == "big_loss") & (predictions == 1)].copy()
+    bad_buy_big_loss["mistake_type"] = "bad_buy_big_loss_false_positive"
+    return (
+        {
+            "missed_big_gain_winners": missed_big_gain,
+            "bad_buy_big_loss_false_positives": bad_buy_big_loss,
+        },
+        {
+            "scoring_method": "artifact_predictions",
+            "model_version": artifact.version,
+            "model_path": str(model_path),
+            "decision_threshold": float(artifact.decision_threshold),
+            "rows_scored": int(len(scored)),
+        },
+    )
+
+
+def _write_daily_mistake_slices(df: pd.DataFrame, output_dir: Path, return_col: str | None, model_path: Path) -> dict[str, Any]:
+    slice_root = output_dir / "mistake_slices"
+    slice_root.mkdir(parents=True, exist_ok=True)
+    slices, scoring = _artifact_scored_mistake_rows(df, model_path, return_col)
+    manifest: dict[str, Any] = {"slice_root": str(slice_root), **scoring, "slices": {}}
+    for slice_name, selected in slices.items():
+        slice_dir = slice_root / slice_name
+        slice_dir.mkdir(parents=True, exist_ok=True)
+        manifest["slices"][slice_name] = {"rows": int(len(selected)), "daily_files": []}
+        if selected.empty:
+            continue
+        selected_dates = _event_date_values(selected)
+        for day, group in selected.groupby(selected_dates):
+            safe_day = str(day or "unknown").replace("/", "-")
+            path = slice_dir / f"{safe_day}.jsonl"
+            path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in group.to_dict(orient="records")), encoding="utf-8")
+            manifest["slices"][slice_name]["daily_files"].append({"date": safe_day, "path": str(path), "rows": int(len(group))})
+    return manifest
+
 def _load_jsonl(path: Path) -> pd.DataFrame:
     rows = []
     with path.open("r", encoding="utf-8") as fh:
@@ -554,6 +640,7 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
     test_returns = test_df[return_col].to_numpy(dtype=float) if return_col else None
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    mistake_slices = _write_daily_mistake_slices(clean, output_dir, return_col)
     challengers: list[dict[str, Any]] = []
     _add_logistic_challengers(challengers, output_dir=output_dir, X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test, feature_columns=feature_columns, test_returns=test_returns)
     _add_stump_challengers(challengers, output_dir=output_dir, train_df=train_df, test_df=test_df, y_train=y_train, y_test=y_test, feature_columns=feature_columns, test_returns=test_returns)
