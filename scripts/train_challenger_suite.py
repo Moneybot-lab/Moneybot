@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from moneybot.services.deterministic_model import predict_proba, summarize_binary_predictions, train_logistic_baseline
+from moneybot.services.deterministic_model import load_artifact, predict_proba, summarize_binary_predictions, train_logistic_baseline
 from scripts.day10_train_candidate_model import _backtest_compatible_feature_columns, _chronological_split, _fill_feature_gaps, _prepare_frame, _select_feature_columns
 
 SUITE_SCHEMA_VERSION = "moneybot-challenger-suite.v2"
@@ -253,32 +253,55 @@ def _return_bucket_series(df: pd.DataFrame, return_col: str | None) -> pd.Series
     return pd.Series("", index=df.index)
 
 
-def _mistake_slice_masks(df: pd.DataFrame, return_col: str | None) -> dict[str, pd.Series]:
-    buckets = _return_bucket_series(df, return_col)
-    rec_positive = df.get("feature_rec_positive", pd.Series(0.0, index=df.index)).astype(float) >= 0.5
-    prob = pd.to_numeric(df.get("feature_probability_up", pd.Series(np.nan, index=df.index)), errors="coerce")
-    missed_big_gain = (buckets == "big_gain") & (~rec_positive | (prob < 0.55))
-    bad_buy_big_loss = (buckets == "big_loss") & (rec_positive | (prob >= 0.55))
-    return {
-        "missed_big_gain_winners": missed_big_gain.fillna(False),
-        "bad_buy_big_loss_false_positives": bad_buy_big_loss.fillna(False),
-    }
+def _artifact_scored_mistake_rows(df: pd.DataFrame, model_path: Path, return_col: str | None) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
+    """Find tail mistakes from an artifact's actual probabilities and threshold."""
+    artifact = load_artifact(model_path)
+    scored = df.copy()
+    for idx, feature in enumerate(artifact.feature_columns):
+        fallback = float(artifact.means[idx]) if idx < len(artifact.means) else 0.0
+        if feature not in scored.columns:
+            scored[feature] = fallback
+        numeric = pd.to_numeric(scored[feature], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        scored[feature] = numeric.fillna(fallback).astype(float)
+    probabilities = predict_proba(artifact, scored[artifact.feature_columns].to_numpy(dtype=float))
+    predictions = (probabilities >= artifact.decision_threshold).astype(int)
+    scored["artifact_model_version"] = artifact.version
+    scored["artifact_model_path"] = str(model_path)
+    scored["artifact_decision_threshold"] = float(artifact.decision_threshold)
+    scored["artifact_probability"] = probabilities
+    scored["artifact_prediction"] = predictions
+    buckets = _return_bucket_series(scored, return_col)
+    missed_big_gain = scored.loc[(buckets == "big_gain") & (predictions == 0)].copy()
+    missed_big_gain["mistake_type"] = "missed_big_gain_winner"
+    bad_buy_big_loss = scored.loc[(buckets == "big_loss") & (predictions == 1)].copy()
+    bad_buy_big_loss["mistake_type"] = "bad_buy_big_loss_false_positive"
+    return (
+        {
+            "missed_big_gain_winners": missed_big_gain,
+            "bad_buy_big_loss_false_positives": bad_buy_big_loss,
+        },
+        {
+            "scoring_method": "artifact_predictions",
+            "model_version": artifact.version,
+            "model_path": str(model_path),
+            "decision_threshold": float(artifact.decision_threshold),
+            "rows_scored": int(len(scored)),
+        },
+    )
 
 
-def _write_daily_mistake_slices(df: pd.DataFrame, output_dir: Path, return_col: str | None) -> dict[str, Any]:
+def _write_daily_mistake_slices(df: pd.DataFrame, output_dir: Path, return_col: str | None, model_path: Path) -> dict[str, Any]:
     slice_root = output_dir / "mistake_slices"
     slice_root.mkdir(parents=True, exist_ok=True)
-    dates = _event_date_values(df)
-    masks = _mistake_slice_masks(df, return_col)
-    manifest: dict[str, Any] = {"slice_root": str(slice_root), "slices": {}}
-    for slice_name, mask in masks.items():
+    slices, scoring = _artifact_scored_mistake_rows(df, model_path, return_col)
+    manifest: dict[str, Any] = {"slice_root": str(slice_root), **scoring, "slices": {}}
+    for slice_name, selected in slices.items():
         slice_dir = slice_root / slice_name
         slice_dir.mkdir(parents=True, exist_ok=True)
-        selected = df.loc[mask].copy()
         manifest["slices"][slice_name] = {"rows": int(len(selected)), "daily_files": []}
         if selected.empty:
             continue
-        selected_dates = dates.loc[selected.index]
+        selected_dates = _event_date_values(selected)
         for day, group in selected.groupby(selected_dates):
             safe_day = str(day or "unknown").replace("/", "-")
             path = slice_dir / f"{safe_day}.jsonl"
@@ -536,6 +559,15 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
             item["metrics"].get("accuracy", 0),
         ),
         reverse=True,
+    )
+    scoring_challenger = next((item for item in ranked if item.get("model_type") == "logistic_regression"), None)
+    if scoring_challenger is None:
+        raise ValueError("No logistic artifact available for artifact-scored mistake mining")
+    mistake_slices = _write_daily_mistake_slices(
+        test_df,
+        output_dir,
+        return_col,
+        Path(str(scoring_challenger["model_path"])),
     )
     model_type_counts = {model_type: sum(1 for item in challengers if item["model_type"] == model_type) for model_type in sorted({item["model_type"] for item in challengers})}
     manifest = {

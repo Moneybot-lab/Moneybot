@@ -4,7 +4,57 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from scripts.train_challenger_suite import _specialized_training_inputs, train_challenger_suite
+from moneybot.services.deterministic_model import BaselineModelArtifact, save_artifact
+from scripts.train_challenger_suite import _artifact_scored_mistake_rows, _specialized_training_inputs, _write_daily_mistake_slices, train_challenger_suite
+
+
+def test_mistake_mining_uses_artifact_probabilities_and_threshold(tmp_path):
+    model_path = tmp_path / "scoring-model.json"
+    save_artifact(
+        BaselineModelArtifact(
+            version="actual-scoring-artifact-v1",
+            feature_columns=["feature_signal"],
+            means=[0.0],
+            stds=[1.0],
+            weights=[10.0],
+            bias=0.0,
+            decision_threshold=0.55,
+        ),
+        model_path,
+    )
+    frame = pd.DataFrame(
+        {
+            "event_date": ["2026-01-01", "2026-01-02", "2026-01-03"],
+            "symbol": ["MISS", "BAD", "SAFE"],
+            "feature_signal": [-1.0, 1.0, -1.0],
+            "feature_rec_positive": [1.0, 0.0, 1.0],
+            "feature_probability_up": [0.99, 0.01, 0.99],
+            "return_5d": [0.05, -0.05, -0.05],
+            "return_bin_5d": ["big_gain", "big_loss", "big_loss"],
+        }
+    )
+
+    slices, scoring = _artifact_scored_mistake_rows(frame, model_path, "return_5d")
+
+    assert slices["missed_big_gain_winners"]["symbol"].tolist() == ["MISS"]
+    assert slices["bad_buy_big_loss_false_positives"]["symbol"].tolist() == ["BAD"]
+    assert slices["missed_big_gain_winners"].iloc[0]["artifact_prediction"] == 0
+    assert slices["bad_buy_big_loss_false_positives"].iloc[0]["artifact_prediction"] == 1
+    assert scoring == {
+        "scoring_method": "artifact_predictions",
+        "model_version": "actual-scoring-artifact-v1",
+        "model_path": str(model_path),
+        "decision_threshold": 0.55,
+        "rows_scored": 3,
+    }
+    manifest = _write_daily_mistake_slices(frame, tmp_path / "suite", "return_5d", model_path)
+    bad_buy_file = manifest["slices"]["bad_buy_big_loss_false_positives"]["daily_files"][0]["path"]
+    bad_buy_row = json.loads(open(bad_buy_file, encoding="utf-8").readline())
+    assert bad_buy_row["symbol"] == "BAD"
+    assert bad_buy_row["artifact_model_version"] == "actual-scoring-artifact-v1"
+    assert bad_buy_row["artifact_decision_threshold"] == 0.55
+    assert bad_buy_row["artifact_prediction"] == 1
+    assert bad_buy_row["mistake_type"] == "bad_buy_big_loss_false_positive"
 
 
 @pytest.mark.parametrize(
@@ -68,6 +118,9 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
     assert manifest["specialized_challenger_families"] == ["big_loss_avoider", "big_gain_hunter", "recent_window_model", "ranking_top5_model"]
     assert {item.get("specialized_family") for item in manifest["challengers"] if item.get("specialized_family")} == set(manifest["specialized_challenger_families"])
     assert "mistake_mining" in manifest
+    assert manifest["mistake_mining"]["scoring_method"] == "artifact_predictions"
+    assert manifest["mistake_mining"]["rows_scored"] == manifest["test_rows"]
+    assert manifest["mistake_mining"]["model_version"] in manifest["ranked_model_versions"]
     assert "missed_big_gain_winners" in manifest["mistake_mining"]["slices"]
     assert "bad_buy_big_loss_false_positives" in manifest["mistake_mining"]["slices"]
     assert manifest["model_type_counts"]["decision_stump"] >= 3
