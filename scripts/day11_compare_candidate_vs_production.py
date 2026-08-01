@@ -36,6 +36,7 @@ MIN_THRESHOLD_POSITIVE_PREDICTIONS = 10
 MIN_THRESHOLD_POSITIVE_FRACTION_OF_CURRENT = 0.25
 LABEL_HORIZON_DAYS = 5
 EMBARGO_DAYS = 1
+REGRESSION_EXAMPLES_DIR = PROJECT_ROOT / "regression_examples"
 
 
 def _load_jsonl(path: str) -> pd.DataFrame:
@@ -548,6 +549,19 @@ def _feature_contributions(artifact_path: str, row: pd.Series) -> list[dict[str,
     return sorted(contributions, key=lambda item: abs(float(item["contribution"])), reverse=True)
 
 
+def _stored_regression_example(symbol: str, event_date: str) -> dict[str, Any] | None:
+    if not REGRESSION_EXAMPLES_DIR.exists():
+        return None
+    for path in sorted(REGRESSION_EXAMPLES_DIR.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if str(payload.get("symbol", "")).upper() == symbol.upper() and str(payload.get("event_date", "")) == event_date:
+            return {**payload, "path": str(path.relative_to(PROJECT_ROOT))}
+    return None
+
+
 def _cmi_false_positive_diagnostic(candidate_model_path: str, production_model_path: str, false_positives: pd.DataFrame) -> dict[str, Any] | None:
     if false_positives.empty or "symbol" not in false_positives.columns:
         return None
@@ -557,12 +571,15 @@ def _cmi_false_positive_diagnostic(candidate_model_path: str, production_model_p
     row = cmi_rows.iloc[0]
     candidate_contributions = _feature_contributions(candidate_model_path, row)
     production_contributions = _feature_contributions(production_model_path, row)
+    event_date = str(row.get("_event_date") or row.get("event_date") or "")
+    regression_example = _stored_regression_example("CMI", event_date)
     return {
         **_compact_error_row(row),
         "diagnostic": "CMI big-loss false positive added to bad-buy mining rows; top positive candidate contributions show which features pushed the candidate above threshold.",
         "top_candidate_positive_features": [item for item in candidate_contributions if float(item["contribution"]) > 0.0][:10],
         "top_candidate_absolute_features": candidate_contributions[:10],
         "top_production_absolute_features": production_contributions[:10],
+        "stored_regression_example": regression_example,
     }
 
 def _prediction_error_examples(candidate_model_path: str, production_model_path: str, test_df: pd.DataFrame, *, limit: int = 100) -> dict[str, Any]:

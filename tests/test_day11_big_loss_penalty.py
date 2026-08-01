@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 from scripts.day11_compare_candidate_vs_production import HARD_BIG_LOSS_FALSE_POSITIVE_PENALTY, _decide
 
 
@@ -38,3 +41,20 @@ def test_decide_keeps_zero_big_loss_candidate_eligible():
     assert candidate_win is True
     assert candidate["big_loss_false_positive_penalty"] == 0.0
     assert "candidate improves profit utility with acceptable brier, return/downside, big-loss avoidance, and minimum big-gain capture" in reasons
+
+
+def test_stored_cmi_regression_example_remains_a_hard_promotion_block():
+    example = json.loads(Path("regression_examples/track_b_cmi_2026-07-10.json").read_text(encoding="utf-8"))
+    candidate = _metrics(brier_score=0.01, avg_return=2.0, big_loss_predictions=1, big_loss_prediction_rate=0.01)
+    production = _metrics(big_loss_predictions=0, big_loss_prediction_rate=0.0)
+
+    candidate_win, reasons = _decide(candidate, production, min_rows=200)
+
+    assert example["symbol"] == "CMI"
+    assert example["event_date"] == "2026-07-10"
+    assert example["observed_comparison"]["candidate_prediction"] == 1
+    assert example["observed_comparison"]["production_prediction"] == 0
+    assert example["expected_guardrails"]["must_not_support_promotion"] is True
+    assert candidate_win is False
+    assert candidate["big_loss_false_positive_penalty"] == HARD_BIG_LOSS_FALSE_POSITIVE_PENALTY
+    assert any("hard false-positive penalty applied" in reason for reason in reasons)

@@ -46,6 +46,11 @@ def test_prediction_error_examples_include_threshold_overlap_and_symbol_date_row
     assert examples["big_loss_false_positives"][0]["event_date"] == "2026-07-10"
     assert examples["cmi_false_positive_diagnostic"]["symbol"] == "CMI"
     assert examples["cmi_false_positive_diagnostic"]["top_candidate_positive_features"]
+    stored = examples["cmi_false_positive_diagnostic"]["stored_regression_example"]
+    assert stored["regression_example_id"] == "track-b-cmi-2026-07-10-big-loss-false-positive"
+    assert stored["observed_comparison"]["candidate_probability"] == 0.557726
+    assert stored["expected_guardrails"]["must_trigger_big_loss_false_positive_penalty"] is True
+    assert stored["path"] == "regression_examples/track_b_cmi_2026-07-10.json"
     assert examples["missed_big_gain_count"] == 1
     assert examples["missed_big_gain_rows"][0]["symbol"] == "GAIN"
     assert examples["missed_big_gain_rows"][0]["event_date"] == "2026-07-21"

@@ -112,6 +112,7 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
     manifest = train_challenger_suite(input_path, tmp_path / "models", min_rows=10)
 
     assert manifest["schema_version"] == "moneybot-challenger-suite.v2"
+    assert manifest["lineage_schema_version"] == "moneybot-challenger-lineage.v1"
     assert manifest["live_routing"] is False
     assert manifest["challenger_count"] >= 20
     assert manifest["model_type_counts"]["logistic_regression"] == 16
@@ -137,8 +138,20 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
     assert manifest["walk_forward_windows"][0]["temporal_split"]["purged_train_rows"] > 0
     assert "walk-forward" in manifest["ranking_selection_policy"]
     assert "two walk-forward windows" in manifest["promotion_policy"]
+    lineage_ids = {challenger["lineage"]["lineage_id"] for challenger in manifest["challengers"]}
+    assert len(lineage_ids) == manifest["challenger_count"]
     for challenger in manifest["challengers"]:
-        assert (tmp_path / "models" / f"{challenger['model_version']}.json").exists()
+        artifact_path = tmp_path / "models" / f"{challenger['model_version']}.json"
+        assert artifact_path.exists()
+        artifact_payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        assert artifact_payload["lineage"] == challenger["lineage"]
+        lineage = challenger["lineage"]
+        assert lineage["schema_version"] == "moneybot-challenger-lineage.v1"
+        assert len(lineage["recipe_hash"]) == 64
+        assert lineage["generation"] == 1
+        assert lineage["parent_lineage_ids"] == []
+        deployable = lineage["recipe"]["deployable_config"]
+        assert set(deployable) == {"model_family", "decision_threshold", "calibration", "feature_subset", "sample_weight_policy", "abstention"}
         assert challenger["metrics"]["rows"] > 0
         assert "top_k_precision" in challenger["metrics"]
         assert "pairwise_ranking_loss" in challenger["metrics"]
