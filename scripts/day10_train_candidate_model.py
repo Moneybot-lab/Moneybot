@@ -139,23 +139,104 @@ def _profit_utility_score(frame: pd.DataFrame, preds: np.ndarray) -> float | Non
 
 def _chronological_training_periods_with_diagnostics(df: pd.DataFrame, train_ratio: float) -> tuple[list[pd.DataFrame], list[dict[str, Any]]]:
     """Split chronologically and return purged/embargoed periods plus diagnostics."""
-    development, final_test = _chronological_split(df, train_ratio)
-    calibration_rows = max(1, int(len(development) * CALIBRATION_FRACTION_OF_DEVELOPMENT))
-    threshold_rows = max(1, int(len(development) * THRESHOLD_FRACTION_OF_DEVELOPMENT))
-    fit_rows = len(development) - calibration_rows - threshold_rows
-    if fit_rows < 1:
-        raise ValueError("train_ratio leaves insufficient rows for separate fit, calibration, and threshold periods")
-    fit = development.iloc[:fit_rows].copy()
-    calibration = development.iloc[fit_rows:fit_rows + calibration_rows].copy()
-    threshold = development.iloc[fit_rows + calibration_rows:].copy()
+    dated_periods = _date_based_training_periods(df, train_ratio)
+    if dated_periods is not None:
+        fit, calibration, threshold, final_test = dated_periods
+    else:
+        development, final_test = _chronological_split(df, train_ratio)
+        calibration_rows = max(1, int(len(development) * CALIBRATION_FRACTION_OF_DEVELOPMENT))
+        threshold_rows = max(1, int(len(development) * THRESHOLD_FRACTION_OF_DEVELOPMENT))
+        fit_rows = len(development) - calibration_rows - threshold_rows
+        if fit_rows < 1:
+            raise ValueError("train_ratio leaves insufficient rows for separate fit, calibration, and threshold periods")
+        fit = development.iloc[:fit_rows].copy()
+        calibration = development.iloc[fit_rows:fit_rows + calibration_rows].copy()
+        threshold = development.iloc[fit_rows + calibration_rows:].copy()
     periods, boundaries = purge_embargo_periods(
         [fit, calibration, threshold, final_test],
         horizon_days=LABEL_HORIZON_DAYS,
         embargo_days=EMBARGO_DAYS,
     )
     if any(period.empty for period in periods):
+        if dated_periods is None and _event_dates(df) is None:
+            # Preserve support for tiny synthetic/legacy snapshots that have no
+            # real event timestamps. They can be trained for smoke testing, but
+            # diagnostics explicitly prevent them from certifying split hygiene.
+            raw_periods = [fit, calibration, threshold, final_test]
+            unavailable = {
+                "method": "unavailable_no_event_time",
+                "horizon_days": LABEL_HORIZON_DAYS,
+                "embargo_days": EMBARGO_DAYS,
+                "label_horizon_gap_passed": False,
+                "date_overlap_count": 0,
+                "symbol_date_overlap_count": 0,
+            }
+            return raw_periods, [
+                {**unavailable, "left_period_index": index, "right_period_index": index + 1}
+                for index in range(len(raw_periods) - 1)
+            ]
         raise ValueError("purging/embargo leaves an empty fit, calibration, threshold, or final-test period")
     return periods, boundaries
+
+
+def _event_dates(df: pd.DataFrame) -> pd.Series | None:
+    if "event_date" in df.columns:
+        times = pd.to_datetime(df["event_date"], utc=True, errors="coerce")
+    elif "ts" in df.columns:
+        numeric = pd.to_numeric(df["ts"], errors="coerce")
+        if numeric.notna().all() and numeric.abs().median() >= 100_000_000:
+            times = pd.to_datetime(numeric, unit="s", utc=True, errors="coerce")
+        else:
+            return None
+    else:
+        return None
+    if times.isna().any():
+        return None
+    return times.dt.normalize()
+
+
+def _date_based_training_periods(df: pd.DataFrame, train_ratio: float) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame] | None:
+    """Allocate whole event dates so dense dates cannot collapse tuning periods."""
+    dates = _event_dates(df)
+    if dates is None:
+        return None
+    unique_dates = sorted(dates.unique())
+    # Middle periods lose rows on both sides: the preceding boundary embargoes
+    # their first dates and the following boundary purges their last horizon.
+    # Reserve enough distinct dates up front rather than relying on row counts;
+    # a single busy trading date can contain hundreds of rows.
+    minimum_period_dates = LABEL_HORIZON_DAYS + EMBARGO_DAYS + 1
+    minimum_dates = minimum_period_dates * 4
+    if len(unique_dates) < minimum_dates:
+        return None
+    requested_development_dates = int(len(unique_dates) * train_ratio)
+    development_date_count = min(
+        max(requested_development_dates, minimum_period_dates * 3),
+        len(unique_dates) - minimum_period_dates,
+    )
+    development_dates = unique_dates[:development_date_count]
+    calibration_date_count = max(
+        minimum_period_dates,
+        int(len(development_dates) * CALIBRATION_FRACTION_OF_DEVELOPMENT),
+    )
+    threshold_date_count = max(
+        minimum_period_dates,
+        int(len(development_dates) * THRESHOLD_FRACTION_OF_DEVELOPMENT),
+    )
+    fit_date_count = len(development_dates) - calibration_date_count - threshold_date_count
+    if fit_date_count < minimum_period_dates:
+        return None
+    threshold_start = fit_date_count + calibration_date_count
+    date_sets = (
+        set(development_dates[:fit_date_count]),
+        set(development_dates[fit_date_count:threshold_start]),
+        set(development_dates[threshold_start:]),
+        set(unique_dates[development_date_count:]),
+    )
+    periods = tuple(df.loc[dates.isin(date_set)].copy() for date_set in date_sets)
+    if any(period.empty for period in periods):
+        return None
+    return periods
 
 
 def _chronological_training_periods(df: pd.DataFrame, train_ratio: float) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:

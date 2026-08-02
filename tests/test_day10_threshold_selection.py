@@ -1,7 +1,13 @@
 import numpy as np
 import pandas as pd
 
-from scripts.day10_train_candidate_model import THRESHOLD_SEARCH_VALUES, _chronological_training_periods, _future_safe_feature_columns, _select_profit_threshold
+from scripts.day10_train_candidate_model import (
+    THRESHOLD_SEARCH_VALUES,
+    _chronological_training_periods,
+    _chronological_training_periods_with_diagnostics,
+    _future_safe_feature_columns,
+    _select_profit_threshold,
+)
 
 
 def test_chronological_training_periods_are_disjoint_and_leave_final_test_untouched():
@@ -16,6 +22,25 @@ def test_chronological_training_periods_are_disjoint_and_leave_final_test_untouc
     assert final_test["row"].tolist() == list(range(81, 100))
     later_indexes = set(calibration.index) | set(threshold.index) | set(final_test.index)
     assert set(fit.index).isdisjoint(later_indexes)
+
+
+def test_chronological_training_periods_allocate_whole_dense_event_dates():
+    dates = pd.date_range("2026-04-01", periods=80, freq="D", tz="UTC")
+    rows = []
+    for offset, event_date in enumerate(dates):
+        # Reproduce production-like density where recent dates contain most rows.
+        count = 50 if offset >= 60 else 1
+        rows.extend({"event_date": event_date.isoformat(), "row": len(rows) + item} for item in range(count))
+    frame = pd.DataFrame(rows)
+
+    periods, boundaries = _chronological_training_periods_with_diagnostics(frame, 0.8)
+
+    assert all(not period.empty for period in periods)
+    assert len(boundaries) == 3
+    assert all(boundary["method"] == "event_time" for boundary in boundaries)
+    assert all(boundary["label_horizon_gap_passed"] for boundary in boundaries)
+    period_dates = [set(pd.to_datetime(period["event_date"], utc=True).dt.date) for period in periods]
+    assert all(period_dates[left].isdisjoint(period_dates[right]) for left in range(4) for right in range(left + 1, 4))
 
 
 def test_future_labels_outcomes_and_realized_returns_are_never_features():
