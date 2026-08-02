@@ -626,6 +626,7 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
     test_returns = test_df[return_col].to_numpy(dtype=float) if return_col else None
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    mistake_slices = _write_daily_mistake_slices(clean, output_dir, return_col)
     challengers: list[dict[str, Any]] = []
     _add_logistic_challengers(challengers, output_dir=output_dir, X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test, feature_columns=feature_columns, test_returns=test_returns)
     _add_stump_challengers(challengers, output_dir=output_dir, train_df=train_df, test_df=test_df, y_train=y_train, y_test=y_test, feature_columns=feature_columns, test_returns=test_returns)
