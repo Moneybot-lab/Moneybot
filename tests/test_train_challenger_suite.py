@@ -161,12 +161,16 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
     assert manifest["model_type_counts"]["calibrated_linear"] == 4
     assert manifest["model_type_counts"]["shallow_decision_tree"] == 2
     assert manifest["model_type_counts"]["two_stage_risk_filter"] == 2
+    assert manifest["model_type_counts"]["hard_example_linear"] == 2
+    assert manifest["model_type_counts"]["ranking_lane_linear"] == 2
     assert manifest["phase_2_candidate_families"] == {
         "calibrated_linear": ["full-balanced", "no-raw-price", "momentum-recent-half", "no-price-recent-quarter"],
         "shallow_decision_tree": {"max_depths": [2, 3], "maximum_allowed_depth": 3},
         "two_stage_risk_filter": {"risk_thresholds": [0.2, 0.3], "decision_threshold": 0.6},
+        "bounded_hard_example": {"max_fraction": 0.2, "hard_example_weight": 4.0, "max_sample_weight": 5.0},
+        "ranking_lane_linear": {"training_windows": ["full", "recent_half"], "promotion_scope": "ranking_only"},
     }
-    assert manifest["phase_2_diversity"]["candidate_count"] == 8
+    assert manifest["phase_2_diversity"]["candidate_count"] == 12
     assert manifest["phase_2_diversity"]["distinct_prediction_clusters"] >= 2
     assert manifest["phase_2_diversity"]["feature_subset_policies"] == ["all", "exclude_raw_price", "momentum"]
     assert manifest["phase_2_diversity"]["training_window_policies"] == ["full", "recent_half", "recent_quarter"]
@@ -202,8 +206,12 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
         lineage = challenger["lineage"]
         assert lineage["schema_version"] == "moneybot-challenger-lineage.v1"
         assert len(lineage["recipe_hash"]) == 64
-        assert lineage["generation"] == 1
-        assert lineage["parent_lineage_ids"] == []
+        if challenger["model_type"] == "hard_example_linear":
+            assert lineage["generation"] == 2
+            assert len(lineage["parent_lineage_ids"]) == 1
+        else:
+            assert lineage["generation"] == 1
+            assert lineage["parent_lineage_ids"] == []
         deployable = lineage["recipe"]["deployable_config"]
         assert {"model_family", "decision_threshold", "calibration", "feature_subset", "sample_weight_policy", "abstention"}.issubset(deployable)
         assert challenger["metrics"]["rows"] > 0
@@ -245,6 +253,20 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
         assert deployable["risk_filter"]["risk_threshold"] == artifact["risk_threshold"]
         assert deployable["abstention"]["enabled"] is True
         assert challenger["metrics"]["risk_rejections"] >= 0
+
+    hard_candidates = [item for item in manifest["challengers"] if item["model_type"] == "hard_example_linear"]
+    for challenger in hard_candidates:
+        mining = challenger["metrics"]["hard_example_mining"]
+        assert mining["scoring_method"] == "artifact_predictions"
+        assert mining["selected_fraction"] <= 0.20
+        assert mining["max_sample_weight"] <= 5.0
+        assert isinstance(mining["repeated_mistakes_declined"], bool)
+
+    ranking_candidates = [item for item in manifest["challengers"] if item["model_type"] == "ranking_lane_linear"]
+    assert len(ranking_candidates) == 2
+    assert manifest["candidate_lanes"]["ranking"]["can_replace_main_decision_model"] is False
+    assert {item["model_version"] for item in ranking_candidates}.issubset(manifest["candidate_lanes"]["ranking"]["ranked_model_versions"])
+    assert all(item["lineage"]["recipe"]["deployable_config"]["candidate_lane"] == "ranking" for item in ranking_candidates)
 
     for challenger in manifest["challengers"]:
         family = challenger.get("specialized_family")

@@ -34,6 +34,9 @@ CALIBRATED_LINEAR_VARIANTS = (
     {"name": "no-price-recent-quarter", "feature_subset_policy": "exclude_raw_price", "training_window_policy": "recent_quarter", "sample_weight_policy": "tail_safe", "l2": 0.008},
 )
 RISK_FILTER_THRESHOLDS = (0.20, 0.30)
+HARD_EXAMPLE_MAX_FRACTION = 0.20
+HARD_EXAMPLE_WEIGHT = 4.0
+HARD_EXAMPLE_MAX_WEIGHT = 5.0
 SPECIALIZED_CHALLENGER_FAMILIES = ("big_loss_avoider", "big_gain_hunter", "recent_window_model", "ranking_top5_model")
 EMBARGO_DAYS = 1
 
@@ -344,6 +347,102 @@ def _two_stage_scores(decision_model, risk_model, frame: pd.DataFrame, risk_thre
     return decision_probs, risk_probs, predictions
 
 
+def _bounded_hard_example_weights(
+    frame: pd.DataFrame,
+    labels: np.ndarray,
+    feature_columns: list[str],
+    return_col: str | None,
+    spec: dict[str, Any],
+) -> tuple[np.ndarray, dict[str, Any], str]:
+    """Mine a bounded set of tail mistakes from an actual seed artifact."""
+    seed = train_logistic_baseline(
+        frame[feature_columns].to_numpy(dtype=float),
+        labels,
+        learning_rate=0.06,
+        l2=float(spec["seed_l2"]),
+        decision_threshold=float(spec["threshold"]),
+        epochs=500,
+    )
+    seed.feature_columns = list(feature_columns)
+    probabilities = predict_proba(seed, frame[feature_columns].to_numpy(dtype=float))
+    predictions = (probabilities >= seed.decision_threshold).astype(int)
+    buckets = _return_bucket_series(frame, return_col).to_numpy()
+    bad_buy = (buckets == "big_loss") & (predictions == 1)
+    missed_winner = (buckets == "big_gain") & (predictions == 0)
+    candidate_indexes = np.flatnonzero(bad_buy | missed_winner)
+    max_rows = min(len(candidate_indexes), max(1, int(np.floor(len(frame) * float(spec["max_hard_fraction"])))))
+    severity = np.where(bad_buy, probabilities, 1.0 - probabilities)
+    selected = candidate_indexes[np.argsort(-severity[candidate_indexes], kind="stable")[:max_rows]]
+    weights = np.ones(len(frame), dtype=float)
+    weights[selected] = min(float(spec["hard_example_weight"]), float(spec["max_sample_weight"]))
+    seed_recipe = {
+        "model_type": "logistic_regression_seed",
+        "feature_columns": feature_columns,
+        "l2": spec["seed_l2"],
+        "threshold": spec["threshold"],
+    }
+    seed_id = f"recipe-{hashlib.sha256(json.dumps(seed_recipe, sort_keys=True).encode('utf-8')).hexdigest()[:16]}"
+    diagnostics = {
+        "scoring_method": "artifact_predictions",
+        "seed_lineage_id": seed_id,
+        "candidate_mistake_rows": int(len(candidate_indexes)),
+        "selected_hard_rows": int(len(selected)),
+        "selected_bad_buy_rows": int(bad_buy[selected].sum()),
+        "selected_missed_winner_rows": int(missed_winner[selected].sum()),
+        "max_hard_rows": int(max(1, np.floor(len(frame) * float(spec["max_hard_fraction"])) )),
+        "selected_fraction": round(len(selected) / len(frame), 6) if len(frame) else 0.0,
+        "hard_example_weight": float(weights[selected[0]]) if len(selected) else 1.0,
+        "max_sample_weight": float(weights.max()) if len(weights) else 1.0,
+    }
+    return weights, diagnostics, seed_id
+
+
+def _train_hard_example_recipe(
+    train_df: pd.DataFrame,
+    target_col: str,
+    feature_columns: list[str],
+    return_col: str | None,
+    spec: dict[str, Any],
+):
+    subset = _linear_feature_subset(feature_columns, str(spec["feature_subset_policy"]))
+    labels = train_df[target_col].to_numpy(dtype=float)
+    weights, diagnostics, parent_id = _bounded_hard_example_weights(train_df, labels, subset, return_col, spec)
+    artifact = train_logistic_baseline(
+        train_df[subset].to_numpy(dtype=float),
+        labels,
+        learning_rate=0.06,
+        l2=float(spec["l2"]),
+        decision_threshold=float(spec["threshold"]),
+        epochs=650,
+        sample_weight=weights,
+    )
+    artifact.feature_columns = subset
+    return artifact, diagnostics, parent_id
+
+
+def _train_ranking_lane_recipe(
+    train_df: pd.DataFrame,
+    feature_columns: list[str],
+    return_col: str | None,
+    spec: dict[str, Any],
+):
+    recipe_df = _apply_training_window(train_df, str(spec["training_window_policy"]))
+    subset = _linear_feature_subset(feature_columns, str(spec["feature_subset_policy"]))
+    labels = _ranking_top5_labels(recipe_df, return_col)
+    weights = _specialized_sample_weight(recipe_df, return_col, "ranking_top5_model")
+    artifact = train_logistic_baseline(
+        recipe_df[subset].to_numpy(dtype=float),
+        labels,
+        learning_rate=0.06,
+        l2=float(spec["l2"]),
+        decision_threshold=float(spec["threshold"]),
+        epochs=650,
+        sample_weight=weights,
+    )
+    artifact.feature_columns = subset
+    return artifact
+
+
 def _apply_walk_forward_metrics(
     challengers: list[dict[str, Any]],
     *,
@@ -378,6 +477,46 @@ def _apply_walk_forward_metrics(
             if model_type == "logistic_regression":
                 artifact = _train_logistic_recipe(fold_train, y_train, feature_columns, return_col, spec)
                 scores = predict_proba(artifact, X_test)
+                preds = (scores >= artifact.decision_threshold).astype(int)
+            elif model_type == "calibrated_linear":
+                artifact, _, _ = _train_calibrated_linear_recipe(
+                    fold_train,
+                    target_col,
+                    feature_columns,
+                    return_col,
+                    spec,
+                    horizon_days=horizon_days,
+                )
+                scores = predict_proba(artifact, fold_test[artifact.feature_columns].to_numpy(dtype=float))
+                preds = (scores >= artifact.decision_threshold).astype(int)
+            elif model_type == "shallow_decision_tree":
+                min_leaf = min(int(spec["min_leaf"]), max(2, len(fold_train) // 10))
+                tree = _fit_shallow_tree(
+                    fold_train,
+                    y_train,
+                    feature_columns,
+                    max_depth=int(spec["max_depth"]),
+                    min_leaf=min_leaf,
+                )
+                scores = _shallow_tree_scores(tree, fold_test)
+                preds = (scores >= float(spec["threshold"])).astype(int)
+            elif model_type == "two_stage_risk_filter":
+                decision_model, risk_model, _, _, _ = _train_two_stage_risk_recipe(
+                    fold_train,
+                    target_col,
+                    feature_columns,
+                    return_col,
+                    spec,
+                    horizon_days=horizon_days,
+                )
+                scores, _, preds = _two_stage_scores(decision_model, risk_model, fold_test, float(spec["risk_threshold"]))
+            elif model_type == "hard_example_linear":
+                artifact, _, _ = _train_hard_example_recipe(fold_train, target_col, feature_columns, return_col, spec)
+                scores = predict_proba(artifact, fold_test[artifact.feature_columns].to_numpy(dtype=float))
+                preds = (scores >= artifact.decision_threshold).astype(int)
+            elif model_type == "ranking_lane_linear":
+                artifact = _train_ranking_lane_recipe(fold_train, feature_columns, return_col, spec)
+                scores = predict_proba(artifact, fold_test[artifact.feature_columns].to_numpy(dtype=float))
                 preds = (scores >= artifact.decision_threshold).astype(int)
             elif model_type == "calibrated_linear":
                 artifact, _, _ = _train_calibrated_linear_recipe(
@@ -447,117 +586,6 @@ def _apply_walk_forward_metrics(
             challenger["metrics"]["walk_forward_passed"] = walk_forward["passed"]
             challenger["metrics"]["walk_forward_ranking_objective"] = walk_forward.get("ranking_objective", 0.0)
             challenger["metrics"]["walk_forward_recipe_reproduced"] = True
-
-
-
-def _event_date_values(df: pd.DataFrame) -> pd.Series:
-    if "event_date" in df.columns:
-        dates = df["event_date"].fillna("").astype(str)
-        if dates.str.strip().any():
-            return dates.replace("", "unknown")
-    if "ts" in df.columns:
-        parsed = pd.to_datetime(pd.to_numeric(df["ts"], errors="coerce"), unit="s", utc=True, errors="coerce")
-        return parsed.dt.strftime("%Y-%m-%d").fillna("unknown")
-    return pd.Series("unknown", index=df.index)
-
-
-def _return_bucket_series(df: pd.DataFrame, return_col: str | None) -> pd.Series:
-    if "return_bin_5d" in df.columns:
-        return df["return_bin_5d"].fillna("").astype(str)
-    if return_col and return_col in df.columns:
-        returns = pd.to_numeric(df[return_col], errors="coerce")
-        buckets = pd.Series(
-            np.select(
-                [returns < -0.03, returns < -0.005, returns <= 0.005, returns <= 0.03],
-                ["big_loss", "loss", "flat", "gain"],
-                default="big_gain",
-            ),
-            index=df.index,
-        )
-        buckets.loc[returns.isna()] = ""
-        return buckets
-    return pd.Series("", index=df.index)
-
-
-def _artifact_scored_mistake_rows(df: pd.DataFrame, model_path: Path, return_col: str | None) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
-    """Find tail mistakes from an artifact's actual probabilities and threshold."""
-    artifact = load_artifact(model_path)
-    scored = df.copy()
-    for idx, feature in enumerate(artifact.feature_columns):
-        fallback = float(artifact.means[idx]) if idx < len(artifact.means) else 0.0
-        if feature not in scored.columns:
-            scored[feature] = fallback
-        numeric = pd.to_numeric(scored[feature], errors="coerce").replace([np.inf, -np.inf], np.nan)
-        scored[feature] = numeric.fillna(fallback).astype(float)
-    probabilities = predict_proba(artifact, scored[artifact.feature_columns].to_numpy(dtype=float))
-    predictions = (probabilities >= artifact.decision_threshold).astype(int)
-    scored["artifact_model_version"] = artifact.version
-    scored["artifact_model_path"] = str(model_path)
-    scored["artifact_decision_threshold"] = float(artifact.decision_threshold)
-    scored["artifact_probability"] = probabilities
-    scored["artifact_prediction"] = predictions
-    buckets = _return_bucket_series(scored, return_col)
-    missed_big_gain = scored.loc[(buckets == "big_gain") & (predictions == 0)].copy()
-    missed_big_gain["mistake_type"] = "missed_big_gain_winner"
-    bad_buy_big_loss = scored.loc[(buckets == "big_loss") & (predictions == 1)].copy()
-    bad_buy_big_loss["mistake_type"] = "bad_buy_big_loss_false_positive"
-    return (
-        {
-            "missed_big_gain_winners": missed_big_gain,
-            "bad_buy_big_loss_false_positives": bad_buy_big_loss,
-        },
-        {
-            "scoring_method": "artifact_predictions",
-            "model_version": artifact.version,
-            "model_path": str(model_path),
-            "decision_threshold": float(artifact.decision_threshold),
-            "rows_scored": int(len(scored)),
-        },
-    )
-
-
-def _resolve_mistake_scoring_model(output_dir: Path, model_path: Path | None) -> Path | None:
-    """Resolve an explicit scoring artifact, with compatibility discovery for older callers."""
-    if model_path is not None:
-        if not model_path.exists():
-            raise FileNotFoundError(f"Mistake-scoring model does not exist: {model_path}")
-        return model_path
-    for candidate in sorted(output_dir.glob("*.json")):
-        try:
-            payload = json.loads(candidate.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if payload.get("model_type") == "logistic_regression" and all(key in payload for key in ("feature_columns", "means", "stds", "weights", "bias")):
-            return candidate
-    return None
-
-def _event_date_values(df: pd.DataFrame) -> pd.Series:
-    if "event_date" in df.columns:
-        dates = df["event_date"].fillna("").astype(str)
-        if dates.str.strip().any():
-            return dates.replace("", "unknown")
-    if "ts" in df.columns:
-        parsed = pd.to_datetime(pd.to_numeric(df["ts"], errors="coerce"), unit="s", utc=True, errors="coerce")
-        return parsed.dt.strftime("%Y-%m-%d").fillna("unknown")
-    return pd.Series("unknown", index=df.index)
-
-
-def _return_bucket_series(df: pd.DataFrame, return_col: str | None) -> pd.Series:
-    if "return_bin_5d" in df.columns:
-        return df["return_bin_5d"].fillna("").astype(str)
-    if return_col and return_col in df.columns:
-        returns = pd.to_numeric(df[return_col], errors="coerce")
-        buckets = pd.Series(
-            np.select(
-                [returns < -0.03, returns < -0.005, returns <= 0.005, returns <= 0.03],
-                ["big_loss", "loss", "flat", "gain"],
-                default="big_gain",
-            ),
-            index=df.index,
-        )
-        buckets.loc[returns.isna()] = ""
-        return buckets
-    return pd.Series("", index=df.index)
 
 
 def _artifact_scored_mistake_rows(df: pd.DataFrame, model_path: Path, return_col: str | None) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
@@ -645,6 +673,121 @@ def _write_daily_mistake_slices(df: pd.DataFrame, output_dir: Path, return_col: 
             path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in group.to_dict(orient="records")), encoding="utf-8")
             manifest["slices"][slice_name]["daily_files"].append({"date": safe_day, "path": str(path), "rows": int(len(group))})
     return manifest
+
+def _write_daily_mistake_slices(df: pd.DataFrame, output_dir: Path, return_col: str | None, model_path: Path | None = None) -> dict[str, Any]:
+    slice_root = output_dir / "mistake_slices"
+    slice_root.mkdir(parents=True, exist_ok=True)
+    resolved_model_path = _resolve_mistake_scoring_model(output_dir, model_path)
+    if resolved_model_path is None:
+        return {
+            "slice_root": str(slice_root),
+            "scoring_method": "unavailable_no_artifact",
+            "model_version": None,
+            "model_path": None,
+            "decision_threshold": None,
+            "rows_scored": 0,
+            "slices": {
+                "missed_big_gain_winners": {"rows": 0, "daily_files": []},
+                "bad_buy_big_loss_false_positives": {"rows": 0, "daily_files": []},
+            },
+        }
+    slices, scoring = _artifact_scored_mistake_rows(df, resolved_model_path, return_col)
+    manifest: dict[str, Any] = {"slice_root": str(slice_root), **scoring, "slices": {}}
+    for slice_name, selected in slices.items():
+        slice_dir = slice_root / slice_name
+        slice_dir.mkdir(parents=True, exist_ok=True)
+        manifest["slices"][slice_name] = {"rows": int(len(selected)), "daily_files": []}
+        if selected.empty:
+            continue
+        selected_dates = _event_date_values(selected)
+        for day, group in selected.groupby(selected_dates):
+            safe_day = str(day or "unknown").replace("/", "-")
+            path = slice_dir / f"{safe_day}.jsonl"
+            path.write_text("".join(json.dumps(row, sort_keys=True) + "\n" for row in group.to_dict(orient="records")), encoding="utf-8")
+            manifest["slices"][slice_name]["daily_files"].append({"date": safe_day, "path": str(path), "rows": int(len(group))})
+    return manifest
+
+def _event_date_values(df: pd.DataFrame) -> pd.Series:
+    if "event_date" in df.columns:
+        dates = df["event_date"].fillna("").astype(str)
+        if dates.str.strip().any():
+            return dates.replace("", "unknown")
+    if "ts" in df.columns:
+        parsed = pd.to_datetime(pd.to_numeric(df["ts"], errors="coerce"), unit="s", utc=True, errors="coerce")
+        return parsed.dt.strftime("%Y-%m-%d").fillna("unknown")
+    return pd.Series("unknown", index=df.index)
+
+
+def _return_bucket_series(df: pd.DataFrame, return_col: str | None) -> pd.Series:
+    if "return_bin_5d" in df.columns:
+        return df["return_bin_5d"].fillna("").astype(str)
+    if return_col and return_col in df.columns:
+        returns = pd.to_numeric(df[return_col], errors="coerce")
+        buckets = pd.Series(
+            np.select(
+                [returns < -0.03, returns < -0.005, returns <= 0.005, returns <= 0.03],
+                ["big_loss", "loss", "flat", "gain"],
+                default="big_gain",
+            ),
+            index=df.index,
+        )
+        buckets.loc[returns.isna()] = ""
+        return buckets
+    return pd.Series("", index=df.index)
+
+
+def _artifact_scored_mistake_rows(df: pd.DataFrame, model_path: Path, return_col: str | None) -> tuple[dict[str, pd.DataFrame], dict[str, Any]]:
+    """Find tail mistakes from an artifact's actual probabilities and threshold."""
+    artifact = load_artifact(model_path)
+    scored = df.copy()
+    for idx, feature in enumerate(artifact.feature_columns):
+        fallback = float(artifact.means[idx]) if idx < len(artifact.means) else 0.0
+        if feature not in scored.columns:
+            scored[feature] = fallback
+        numeric = pd.to_numeric(scored[feature], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        scored[feature] = numeric.fillna(fallback).astype(float)
+    probabilities = predict_proba(artifact, scored[artifact.feature_columns].to_numpy(dtype=float))
+    predictions = (probabilities >= artifact.decision_threshold).astype(int)
+    scored["artifact_model_version"] = artifact.version
+    scored["artifact_model_path"] = str(model_path)
+    scored["artifact_decision_threshold"] = float(artifact.decision_threshold)
+    scored["artifact_probability"] = probabilities
+    scored["artifact_prediction"] = predictions
+    buckets = _return_bucket_series(scored, return_col)
+    missed_big_gain = scored.loc[(buckets == "big_gain") & (predictions == 0)].copy()
+    missed_big_gain["mistake_type"] = "missed_big_gain_winner"
+    bad_buy_big_loss = scored.loc[(buckets == "big_loss") & (predictions == 1)].copy()
+    bad_buy_big_loss["mistake_type"] = "bad_buy_big_loss_false_positive"
+    return (
+        {
+            "missed_big_gain_winners": missed_big_gain,
+            "bad_buy_big_loss_false_positives": bad_buy_big_loss,
+        },
+        {
+            "scoring_method": "artifact_predictions",
+            "model_version": artifact.version,
+            "model_path": str(model_path),
+            "decision_threshold": float(artifact.decision_threshold),
+            "rows_scored": int(len(scored)),
+        },
+    )
+
+
+def _resolve_mistake_scoring_model(output_dir: Path, model_path: Path | None) -> Path | None:
+    """Resolve an explicit scoring artifact, with compatibility discovery for older callers."""
+    if model_path is not None:
+        if not model_path.exists():
+            raise FileNotFoundError(f"Mistake-scoring model does not exist: {model_path}")
+        return model_path
+    for candidate in sorted(output_dir.glob("*.json")):
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if payload.get("model_type") == "logistic_regression" and all(key in payload for key in ("feature_columns", "means", "stds", "weights", "bias")):
+            return candidate
+    return None
+
 
 def _write_daily_mistake_slices(df: pd.DataFrame, output_dir: Path, return_col: str | None, model_path: Path | None = None) -> dict[str, Any]:
     slice_root = output_dir / "mistake_slices"
@@ -717,6 +860,8 @@ def _candidate_lineage(
     calibration: dict[str, Any] | None = None,
     abstention: dict[str, Any] | None = None,
     extra_deployable_config: dict[str, Any] | None = None,
+    generation: int = 1,
+    parent_lineage_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Build stable lineage and deployable configuration for one recipe."""
     deployable_config = {
@@ -736,8 +881,8 @@ def _candidate_lineage(
         "schema_version": LINEAGE_SCHEMA_VERSION,
         "lineage_id": f"recipe-{recipe_hash[:16]}",
         "recipe_hash": recipe_hash,
-        "generation": 1,
-        "parent_lineage_ids": [],
+        "generation": int(generation),
+        "parent_lineage_ids": list(parent_lineage_ids or []),
         "model_version": model_version,
         "recipe": recipe,
     }
@@ -943,6 +1088,113 @@ def _add_two_stage_risk_challengers(
         challengers.append({"model_version": model_version, "model_type": "two_stage_risk_filter", "model_path": str(model_path), "metrics": metrics, "spec": spec, "lineage": lineage})
 
 
+def _add_hard_example_challengers(
+    challengers: list[dict[str, Any]],
+    *,
+    output_dir: Path,
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    target_col: str,
+    feature_columns: list[str],
+    return_col: str | None,
+    test_returns: np.ndarray | None,
+) -> None:
+    y_test = test_df[target_col].to_numpy(dtype=float)
+    for feature_policy in ("all", "exclude_raw_price"):
+        spec = {
+            "family": "bounded_hard_example",
+            "candidate_lane": "decision",
+            "feature_subset_policy": feature_policy,
+            "training_window_policy": "full",
+            "sample_weight_policy": "artifact_scored_bounded_tail_mistakes",
+            "seed_l2": 0.002,
+            "l2": 0.004,
+            "threshold": 0.60,
+            "max_hard_fraction": HARD_EXAMPLE_MAX_FRACTION,
+            "hard_example_weight": HARD_EXAMPLE_WEIGHT,
+            "max_sample_weight": HARD_EXAMPLE_MAX_WEIGHT,
+            "abstention": {"enabled": False, "margin": 0.0},
+        }
+        artifact, mining, parent_id = _train_hard_example_recipe(train_df, target_col, feature_columns, return_col, spec)
+        train_scores = predict_proba(artifact, train_df[artifact.feature_columns].to_numpy(dtype=float))
+        train_predictions = (train_scores >= artifact.decision_threshold).astype(int)
+        train_buckets = _return_bucket_series(train_df, return_col).to_numpy()
+        remaining_mistakes = int((((train_buckets == "big_loss") & (train_predictions == 1)) | ((train_buckets == "big_gain") & (train_predictions == 0))).sum())
+        mining["repeated_mistakes_after_training"] = remaining_mistakes
+        mining["repeated_mistake_delta"] = remaining_mistakes - int(mining["candidate_mistake_rows"])
+        mining["repeated_mistakes_declined"] = remaining_mistakes < int(mining["candidate_mistake_rows"])
+        suffix = "all" if feature_policy == "all" else "no-price"
+        model_version = f"challenger-hard-example-{suffix}-v2"
+        artifact.version = model_version
+        model_path = output_dir / f"{model_version}.json"
+        lineage = _candidate_lineage(
+            model_version=model_version,
+            model_type="hard_example_linear",
+            spec=spec,
+            feature_columns=artifact.feature_columns,
+            decision_threshold=artifact.decision_threshold,
+            sample_weight_policy=str(spec["sample_weight_policy"]),
+            abstention=spec["abstention"],
+            extra_deployable_config={"candidate_lane": "decision", "hard_example_mining": mining},
+            generation=2,
+            parent_lineage_ids=[parent_id],
+        )
+        _write_artifact(model_path, {"model_type": "hard_example_linear", "candidate_lane": "decision", **artifact.to_dict(), "hard_example_mining": mining, "training_spec": spec, "lineage": lineage})
+        scores = predict_proba(artifact, test_df[artifact.feature_columns].to_numpy(dtype=float))
+        preds = (scores >= artifact.decision_threshold).astype(int)
+        metrics = summarize_binary_predictions(y_test, preds)
+        metrics.update(_ranking_metrics(scores, y_test, test_returns))
+        metrics.update(_prediction_profile(preds, test_df, return_col))
+        metrics["hard_example_mining"] = mining
+        challengers.append({"model_version": model_version, "model_type": "hard_example_linear", "candidate_lane": "decision", "model_path": str(model_path), "metrics": metrics, "spec": spec, "lineage": lineage})
+
+
+def _add_ranking_lane_challengers(
+    challengers: list[dict[str, Any]],
+    *,
+    output_dir: Path,
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    y_test: np.ndarray,
+    feature_columns: list[str],
+    return_col: str | None,
+    test_returns: np.ndarray | None,
+) -> None:
+    for window_policy in ("full", "recent_half"):
+        spec = {
+            "family": "ranking_top5_linear",
+            "candidate_lane": "ranking",
+            "feature_subset_policy": "exclude_raw_price",
+            "training_window_policy": window_policy,
+            "sample_weight_policy": "ranking_top5_tail_aware",
+            "target_policy": "daily_top5",
+            "l2": 0.004,
+            "threshold": 0.60,
+            "abstention": {"enabled": False, "margin": 0.0},
+        }
+        artifact = _train_ranking_lane_recipe(train_df, feature_columns, return_col, spec)
+        model_version = f"challenger-ranking-lane-{window_policy.replace('_', '-')}-v1"
+        artifact.version = model_version
+        model_path = output_dir / f"{model_version}.json"
+        lineage = _candidate_lineage(
+            model_version=model_version,
+            model_type="ranking_lane_linear",
+            spec=spec,
+            feature_columns=artifact.feature_columns,
+            decision_threshold=artifact.decision_threshold,
+            sample_weight_policy=str(spec["sample_weight_policy"]),
+            abstention=spec["abstention"],
+            extra_deployable_config={"candidate_lane": "ranking", "promotion_scope": "ranking_only_never_main_decision_replacement"},
+        )
+        _write_artifact(model_path, {"model_type": "ranking_lane_linear", "candidate_lane": "ranking", **artifact.to_dict(), "training_spec": spec, "lineage": lineage})
+        scores = predict_proba(artifact, test_df[artifact.feature_columns].to_numpy(dtype=float))
+        preds = (scores >= artifact.decision_threshold).astype(int)
+        metrics = summarize_binary_predictions(y_test, preds)
+        metrics.update(_ranking_metrics(scores, y_test, test_returns))
+        metrics.update(_prediction_profile(preds, test_df, return_col))
+        challengers.append({"model_version": model_version, "model_type": "ranking_lane_linear", "candidate_lane": "ranking", "model_path": str(model_path), "metrics": metrics, "spec": spec, "lineage": lineage})
+
+
 def _stump_predictions(values: np.ndarray, threshold: float, direction: str) -> np.ndarray:
     if direction == "gte_positive":
         return (values >= threshold).astype(int)
@@ -1136,6 +1388,7 @@ def _add_specialized_challengers(
     test_returns: np.ndarray | None,
 ) -> None:
     for family in SPECIALIZED_CHALLENGER_FAMILIES:
+        candidate_lane = "ranking" if family == "ranking_top5_model" else "decision"
         threshold = 0.60 if family in {"big_loss_avoider", "ranking_top5_model"} else 0.55
         spec = {
             "family": family,
@@ -1151,14 +1404,22 @@ def _add_specialized_challengers(
         artifact.version = f"challenger-{family.replace('_', '-')}-v1"
         artifact.feature_columns = list(feature_columns)
         model_path = output_dir / f"{artifact.version}.json"
-        lineage = _candidate_lineage(model_version=artifact.version, model_type="logistic_regression", spec=spec, feature_columns=feature_columns, decision_threshold=artifact.decision_threshold, sample_weight_policy=family)
-        _write_artifact(model_path, {"model_type": "logistic_regression", "specialized_family": family, **artifact.to_dict(), "training_spec": spec, "lineage": lineage})
+        lineage = _candidate_lineage(
+            model_version=artifact.version,
+            model_type="logistic_regression",
+            spec=spec,
+            feature_columns=feature_columns,
+            decision_threshold=artifact.decision_threshold,
+            sample_weight_policy=family,
+            extra_deployable_config={"candidate_lane": candidate_lane},
+        )
+        _write_artifact(model_path, {"model_type": "logistic_regression", "candidate_lane": candidate_lane, "specialized_family": family, **artifact.to_dict(), "training_spec": spec, "lineage": lineage})
         probs = predict_proba(artifact, test_df[feature_columns].to_numpy(dtype=float))
         preds = (probs >= artifact.decision_threshold).astype(int)
         metrics = summarize_binary_predictions(y_test, preds)
         metrics.update(_ranking_metrics(probs, y_test, test_returns))
         metrics["specialized_family"] = family
-        challengers.append({"model_version": artifact.version, "model_type": "logistic_regression", "specialized_family": family, "model_path": str(model_path), "metrics": metrics, "spec": spec, "lineage": lineage})
+        challengers.append({"model_version": artifact.version, "model_type": "logistic_regression", "candidate_lane": candidate_lane, "specialized_family": family, "model_path": str(model_path), "metrics": metrics, "spec": spec, "lineage": lineage})
 
 def _add_baseline_challengers(challengers: list[dict[str, Any]], *, output_dir: Path, y_train: np.ndarray, y_test: np.ndarray, test_returns: np.ndarray | None) -> None:
     majority_class = int(float(y_train.mean()) >= 0.5)
@@ -1237,6 +1498,26 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         test_returns=test_returns,
         horizon_days=horizon_days,
     )
+    _add_hard_example_challengers(
+        challengers,
+        output_dir=output_dir,
+        train_df=train_df,
+        test_df=test_df,
+        target_col=target_col,
+        feature_columns=feature_columns,
+        return_col=return_col,
+        test_returns=test_returns,
+    )
+    _add_ranking_lane_challengers(
+        challengers,
+        output_dir=output_dir,
+        train_df=train_df,
+        test_df=test_df,
+        y_test=y_test,
+        feature_columns=feature_columns,
+        return_col=return_col,
+        test_returns=test_returns,
+    )
     _add_stump_challengers(challengers, output_dir=output_dir, train_df=train_df, test_df=test_df, y_train=y_train, y_test=y_test, feature_columns=feature_columns, test_returns=test_returns)
     _add_shallow_tree_challengers(challengers, output_dir=output_dir, train_df=train_df, test_df=test_df, y_train=y_train, y_test=y_test, feature_columns=feature_columns, test_returns=test_returns, return_col=return_col)
     _add_specialized_challengers(challengers, output_dir=output_dir, train_df=train_df, test_df=test_df, y_train=y_train, y_test=y_test, feature_columns=feature_columns, return_col=return_col, test_returns=test_returns)
@@ -1290,12 +1571,17 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
             }
         )
     model_type_counts = {model_type: sum(1 for item in challengers if item["model_type"] == model_type) for model_type in sorted({item["model_type"] for item in challengers})}
-    phase_2_challengers = [item for item in challengers if item["model_type"] in {"calibrated_linear", "shallow_decision_tree", "two_stage_risk_filter"}]
+    phase_2_challengers = [item for item in challengers if item["model_type"] in {"calibrated_linear", "shallow_decision_tree", "two_stage_risk_filter", "hard_example_linear", "ranking_lane_linear"}]
     phase_2_fingerprints = {
         str(item["metrics"]["prediction_fingerprint"])
         for item in phase_2_challengers
         if item["metrics"].get("prediction_fingerprint")
     }
+    ranking_lane = [item for item in challengers if item.get("candidate_lane") == "ranking" or item.get("specialized_family") == "ranking_top5_model"]
+    ranking_versions = {item["model_version"] for item in ranking_lane}
+    decision_lane = [item for item in challengers if item["model_version"] not in ranking_versions]
+    decision_lane_ranked = sorted(decision_lane, key=lambda item: (bool(item["metrics"].get("walk_forward_passed")), item["metrics"].get("accuracy", 0.0), -item["metrics"].get("big_loss_prediction_rate", 0.0)), reverse=True)
+    ranking_lane_ranked = sorted(ranking_lane, key=lambda item: (bool(item["metrics"].get("walk_forward_passed")), item["metrics"].get("walk_forward_ranking_objective", 0.0), item["metrics"].get("ranking_objective", 0.0)), reverse=True)
     manifest = {
         "schema_version": SUITE_SCHEMA_VERSION,
         "lineage_schema_version": LINEAGE_SCHEMA_VERSION,
@@ -1320,6 +1606,12 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
             "calibrated_linear": [str(spec["name"]) for spec in CALIBRATED_LINEAR_VARIANTS],
             "shallow_decision_tree": {"max_depths": list(SHALLOW_TREE_DEPTHS), "maximum_allowed_depth": max(SHALLOW_TREE_DEPTHS)},
             "two_stage_risk_filter": {"risk_thresholds": list(RISK_FILTER_THRESHOLDS), "decision_threshold": 0.60},
+            "bounded_hard_example": {"max_fraction": HARD_EXAMPLE_MAX_FRACTION, "hard_example_weight": HARD_EXAMPLE_WEIGHT, "max_sample_weight": HARD_EXAMPLE_MAX_WEIGHT},
+            "ranking_lane_linear": {"training_windows": ["full", "recent_half"], "promotion_scope": "ranking_only"},
+        },
+        "candidate_lanes": {
+            "decision": {"candidate_count": len(decision_lane), "ranked_model_versions": [item["model_version"] for item in decision_lane_ranked]},
+            "ranking": {"candidate_count": len(ranking_lane), "ranked_model_versions": [item["model_version"] for item in ranking_lane_ranked], "can_replace_main_decision_model": False},
         },
         "phase_2_diversity": {
             "candidate_count": len(phase_2_challengers),

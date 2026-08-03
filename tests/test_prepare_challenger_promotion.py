@@ -36,3 +36,31 @@ def test_prepare_challenger_promotion_writes_losing_report_when_no_model_clears_
     assert result["candidate_win"] is False
     assert (tmp_path / "out" / "model_comparison_track_b.json").exists()
     assert (tmp_path / "out" / "candidate_model_track_b.json").exists()
+
+
+def test_prepare_challenger_promotion_never_uses_ranking_lane_win(tmp_path):
+    model = tmp_path / "ranking.json"
+    model.write_text(json.dumps({"version": "ranking", "model_type": "logistic_regression"}), encoding="utf-8")
+    report_path = tmp_path / "backtest.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "ranked_model_versions": ["ranking"],
+                "challengers": [
+                    {
+                        "model_version": "ranking",
+                        "model_type": "logistic_regression",
+                        "candidate_lane": "ranking",
+                        "model_path": str(model),
+                        "promotion_gates": {"promotion_ready": True},
+                        "routing_allowed": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = prepare_challenger_promotion(backtest_report_path=report_path, output_dir=tmp_path / "out")
+
+    assert result["candidate_win"] is False

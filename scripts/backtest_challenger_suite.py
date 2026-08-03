@@ -88,7 +88,7 @@ def _predict(artifact: dict[str, Any], frame: pd.DataFrame, feature_columns: lis
         return _sigmoid(logits)
 
     model_type = str(artifact.get("model_type") or "logistic_regression")
-    if model_type in {"logistic_regression", "calibrated_linear"}:
+    if model_type in {"logistic_regression", "calibrated_linear", "hard_example_linear", "ranking_lane_linear"}:
         probs = linear_probabilities(artifact)
         preds = (probs >= float(artifact.get("decision_threshold", 0.5))).astype(int)
         return probs, preds
