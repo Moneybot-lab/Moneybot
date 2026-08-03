@@ -32,6 +32,9 @@ class BaselineModelArtifact:
     weights: List[float]
     bias: float
     decision_threshold: float
+    calibration_slope: float = 1.0
+    calibration_intercept: float = 0.0
+    lineage: Dict[str, Any] | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -42,6 +45,9 @@ class BaselineModelArtifact:
             "weights": self.weights,
             "bias": self.bias,
             "decision_threshold": self.decision_threshold,
+            "calibration_slope": self.calibration_slope,
+            "calibration_intercept": self.calibration_intercept,
+            "lineage": self.lineage,
         }
 
 
@@ -208,7 +214,42 @@ def predict_proba(artifact: BaselineModelArtifact, rows: np.ndarray) -> np.ndarr
     weights = np.asarray(artifact.weights, dtype=float)
     rows_n = (rows - means) / stds
     logits = rows_n @ weights + float(artifact.bias)
+    logits = (logits * float(artifact.calibration_slope)) + float(artifact.calibration_intercept)
     return _sigmoid(logits)
+
+
+def fit_probability_calibration(raw_probs: np.ndarray, labels: np.ndarray, *, learning_rate: float = 0.05, epochs: int = 500) -> dict[str, float | int | bool | str]:
+    """Fit conservative Platt scaling, retaining identity if it worsens Brier."""
+    probs = np.clip(np.asarray(raw_probs, dtype=float), 1e-6, 1.0 - 1e-6)
+    y = np.asarray(labels, dtype=float)
+    if probs.ndim != 1 or y.ndim != 1 or len(probs) != len(y):
+        raise ValueError("raw_probs and labels must be matching 1D arrays")
+    raw_brier = float(np.mean((probs - y) ** 2)) if len(y) else 0.0
+    if len(y) < 2 or len(np.unique(y)) < 2:
+        return {"method": "identity", "slope": 1.0, "intercept": 0.0, "rows": int(len(y)), "raw_brier_score": raw_brier, "calibrated_brier_score": raw_brier, "applied": False, "reason": "calibration period needs both classes"}
+
+    logits = np.log(probs / (1.0 - probs))
+    slope = 1.0
+    intercept = 0.0
+    for _ in range(epochs):
+        calibrated = _sigmoid((slope * logits) + intercept)
+        error = calibrated - y
+        slope -= learning_rate * float(np.mean(error * logits))
+        intercept -= learning_rate * float(np.mean(error))
+
+    calibrated_probs = _sigmoid((slope * logits) + intercept)
+    calibrated_brier = float(np.mean((calibrated_probs - y) ** 2))
+    applied = calibrated_brier < raw_brier
+    return {
+        "method": "platt" if applied else "identity",
+        "slope": float(slope) if applied else 1.0,
+        "intercept": float(intercept) if applied else 0.0,
+        "rows": int(len(y)),
+        "raw_brier_score": raw_brier,
+        "calibrated_brier_score": calibrated_brier if applied else raw_brier,
+        "applied": applied,
+        "reason": "calibrated Brier improved" if applied else "identity retained because calibration did not improve Brier",
+    }
 
 
 def classify(artifact: BaselineModelArtifact, rows: np.ndarray) -> np.ndarray:
@@ -232,6 +273,9 @@ def load_artifact(path: str | Path) -> BaselineModelArtifact:
         weights=[float(v) for v in payload["weights"]],
         bias=float(payload["bias"]),
         decision_threshold=float(payload.get("decision_threshold", 0.55)),
+        calibration_slope=float(payload.get("calibration_slope", 1.0)),
+        calibration_intercept=float(payload.get("calibration_intercept", 0.0)),
+        lineage=payload.get("lineage") if isinstance(payload.get("lineage"), dict) else None,
     )
 
 
