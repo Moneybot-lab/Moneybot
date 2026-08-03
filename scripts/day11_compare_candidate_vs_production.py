@@ -537,6 +537,27 @@ def _utility_score(metrics: dict[str, Any]) -> float | None:
     )
 
 
+def _candidate_behavior(candidate: dict[str, Any], production: dict[str, Any]) -> str:
+    """Describe candidate selectivity without affecting promotion eligibility."""
+    candidate_positive = _numeric_metric(candidate, "positive_predictions")
+    production_positive = _numeric_metric(production, "positive_predictions")
+    candidate_capture = _numeric_metric(candidate, "big_gain_capture_rate")
+    production_capture = _numeric_metric(production, "big_gain_capture_rate")
+    candidate_utility = _numeric_metric(candidate, "utility_score_after_big_loss_penalty")
+    production_utility = _utility_score(production)
+    low_activity = candidate_positive is not None and (
+        candidate_positive <= 25
+        or (production_positive is not None and candidate_positive <= production_positive * 0.5)
+    )
+    low_recall = candidate_capture is not None and production_capture is not None and candidate_capture < production_capture
+    high_utility = candidate_utility is not None and production_utility is not None and candidate_utility > production_utility
+    if low_activity and low_recall and high_utility:
+        return "high_precision_low_recall"
+    if low_activity:
+        return "abstention_style_candidate"
+    return "balanced_activity_candidate"
+
+
 def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: int = 200) -> tuple[bool, list[str]]:
     reasons: list[str] = []
     rows = int(candidate.get("rows") or 0)
@@ -1214,6 +1235,7 @@ def _phase_1_gate(
     threshold_optimizer: dict[str, Any],
     report_examples: dict[str, Any],
     temporal_split: dict[str, Any],
+    production_feature_risk: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     candidate_lineage = load_artifact(candidate_model_path).lineage if Path(candidate_model_path).exists() else None
     recipe_lineage_passed = bool(
@@ -1253,7 +1275,7 @@ def _phase_1_gate(
         "cmi_regression_detection_passed": bool(detailed_certification.get("cmi_regression_test_passed")),
         "clone_detection_passed": bool(detailed_certification.get("clone_detection_passed")) and no_op_detected_correctly,
         "threshold_guardrails_passed": bool(detailed_certification.get("threshold_walk_forward_guardrails_passed")) and threshold_guardrails_passed,
-        "symbol_date_concentration_passed": bool(detailed_certification.get("symbol_date_concentration_passed")),
+        "symbol_date_concentration_handling_passed": bool(detailed_certification.get("symbol_date_concentration_passed")),
         "report_traceability_passed": report_traceability_passed,
     }
     issue_messages = {
@@ -1267,16 +1289,25 @@ def _phase_1_gate(
         "cmi_regression_detection_passed": "stored CMI 2026-07-10 regression detection is missing or did not trigger",
         "clone_detection_passed": "clone detection did not produce traceable fingerprints or correctly identify a near-duplicate",
         "threshold_guardrails_passed": "threshold changes are not proven to be blocked unless all walk-forward guardrails pass",
-        "symbol_date_concentration_passed": "symbol/date concentration is neither within limits nor correctly flagged as a promotion block",
+        "symbol_date_concentration_handling_passed": "symbol/date concentration is neither within limits nor correctly flagged as a promotion block",
         "report_traceability_passed": "report is missing artifact, fingerprint, threshold, mistake-scoring, or split traceability",
     }
     blocking_issues = [issue_messages[name] for name, passed in gate_results.items() if not passed]
     certified = all(gate_results.values())
+    warnings: list[str] = []
+    production_feature_risk = production_feature_risk or {}
+    raw_price_count = int(production_feature_risk.get("raw_price_top_positive_contributor_count") or 0)
+    if production_feature_risk.get("raw_feature_price_present") and raw_price_count > 0:
+        raw_price_rate = float(production_feature_risk.get("raw_price_top_positive_contributor_rate") or 0.0)
+        warnings.append(
+            "production raw feature_price remains a top positive contributor "
+            f"for {raw_price_count} scored rows (rate={raw_price_rate:.4f}); monitor high-price symbols"
+        )
     return {
         "phase_1_certified": certified,
         "ready_for_phase_2": certified,
         "blocking_issues": blocking_issues,
-        "warnings": [],
+        "warnings": warnings,
         "gate_results": gate_results,
     }
 
@@ -1338,7 +1369,7 @@ def _production_promotion_gates(
     }
     issue_messages = {
         "phase_1_certified": "Phase 1 evaluation harness is not certified",
-        "decision_lane_passed": "decision lane did not beat production",
+        "decision_lane_passed": "decision lane did not pass all promotion gates",
         "ranking_lane_supportive": "ranking lane did not independently support the candidate",
         "no_op_clone_blocked": "candidate is a no-op clone",
         "walk_forward_consistent": "candidate did not win consistently across walk-forward windows",
@@ -1440,6 +1471,7 @@ def main() -> None:
         threshold_optimizer=candidate_threshold_optimizer,
         report_examples=report_examples,
         temporal_split=temporal_split,
+        production_feature_risk=production_feature_risk,
     )
     paired_bootstrap = _paired_date_bootstrap_utility_delta(args.candidate_model, args.production_model, test_df.copy())
     production_promotion_gates = _production_promotion_gates(
@@ -1458,6 +1490,7 @@ def main() -> None:
     )
     candidate_win = bool(production_promotion_gates["promotion_allowed"])
     promotion_decision = _promotion_decision(candidate_win, no_op_clone, decision_win, ranking_win, walk_forward_consistent)
+    candidate_behavior = _candidate_behavior(candidate_metrics, production_metrics)
     reasons = [
         *(f"decision lane: {reason}" for reason in decision_reasons),
         *(f"ranking lane: {reason}" for reason in ranking_reasons),
@@ -1474,6 +1507,7 @@ def main() -> None:
         "temporal_split": temporal_split,
         "phase_1_gate": phase_1_gate,
         "production_promotion_gates": production_promotion_gates,
+        "candidate_behavior": candidate_behavior,
         "candidate_metrics": candidate_metrics,
         "production_metrics": production_metrics,
         "recommended_threshold": production_threshold_optimizer.get("recommended_threshold"),

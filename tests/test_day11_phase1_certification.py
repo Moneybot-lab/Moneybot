@@ -144,8 +144,48 @@ def test_phase_1_certification_reports_all_required_checks(tmp_path):
         "cmi_regression_detection_passed",
         "clone_detection_passed",
         "threshold_guardrails_passed",
-        "symbol_date_concentration_passed",
+        "symbol_date_concentration_handling_passed",
         "report_traceability_passed",
     }
     assert gate["ready_for_phase_2"] == gate["phase_1_certified"]
     assert gate["warnings"] == []
+
+
+def test_phase_1_gate_warns_when_production_raw_price_drives_positive_rows(tmp_path):
+    candidate_path = tmp_path / "candidate.json"
+    production_path = tmp_path / "production.json"
+    _artifact(candidate_path, weight=1.0)
+    _artifact(production_path, weight=1.0)
+    detailed = {
+        "reproducible": True,
+        "recipe_reproduction_passed": True,
+        "split_hygiene_passed": True,
+        "purge_embargo_passed": True,
+        "future_feature_leakage_passed": True,
+        "artifact_scored_mistake_mining_passed": True,
+        "cmi_regression_test_passed": True,
+        "clone_detection_passed": True,
+        "threshold_walk_forward_guardrails_passed": True,
+        "symbol_date_concentration_passed": True,
+    }
+    gate = compare._phase_1_gate(
+        candidate_model_path=str(candidate_path),
+        production_model_path=str(production_path),
+        detailed_certification=detailed,
+        walk_forward={"recipe_reproduction_passed": True},
+        clone_detection={"no_op_clone": False, "candidate_prediction_fingerprint": "a", "production_prediction_fingerprint": "b"},
+        threshold_optimizer={"threshold_change_recommended": False},
+        report_examples={"chosen_threshold": 0.55, "mistake_scoring_method": "artifact_predictions"},
+        temporal_split={"train_rows_before": 10, "test_rows_before": 5},
+        production_feature_risk={
+            "raw_feature_price_present": True,
+            "raw_price_top_positive_contributor_count": 3,
+            "raw_price_top_positive_contributor_rate": 0.3,
+        },
+    )
+
+    assert gate["phase_1_certified"] is True
+    assert gate["blocking_issues"] == []
+    assert gate["warnings"] == [
+        "production raw feature_price remains a top positive contributor for 3 scored rows (rate=0.3000); monitor high-price symbols"
+    ]

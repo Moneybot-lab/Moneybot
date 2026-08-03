@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from moneybot.services.deterministic_model import BaselineModelArtifact, save_artifact
-from scripts.day11_compare_candidate_vs_production import HARD_BIG_LOSS_FALSE_POSITIVE_PENALTY, _decide, _production_promotion_gates
+from scripts.day11_compare_candidate_vs_production import HARD_BIG_LOSS_FALSE_POSITIVE_PENALTY, _candidate_behavior, _decide, _production_promotion_gates
 
 
 def _metrics(**overrides):
@@ -135,9 +135,19 @@ def test_production_promotion_requires_every_conservative_gate(tmp_path):
 
     passed = _production_promotion_gates(**common)
     blocked = _production_promotion_gates(**{**common, "bootstrap": {"passed": False}, "report_examples": {"big_loss_false_positive_count": 1}})
+    decision_blocked = _production_promotion_gates(**{**common, "decision_win": False})
 
     assert passed["promotion_allowed"] is True
     assert all(passed["gate_results"].values())
     assert blocked["promotion_allowed"] is False
     assert blocked["gate_results"]["paired_bootstrap_utility_passed"] is False
     assert blocked["gate_results"]["candidate_only_big_loss_false_positives_zero"] is False
+    assert "decision lane did not pass all promotion gates" in decision_blocked["blocking_issues"]
+
+
+def test_candidate_behavior_labels_high_utility_selective_candidate():
+    candidate = _metrics(positive_predictions=21, big_gain_capture_rate=0.12)
+    candidate["utility_score_after_big_loss_penalty"] = 0.25
+    production = _metrics(positive_predictions=100, big_gain_capture_rate=0.60, avg_return=0.10)
+
+    assert _candidate_behavior(candidate, production) == "high_precision_low_recall"
