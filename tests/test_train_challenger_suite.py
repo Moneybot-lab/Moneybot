@@ -158,14 +158,18 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
     assert manifest["live_routing"] is False
     assert manifest["challenger_count"] >= 20
     assert manifest["model_type_counts"]["logistic_regression"] == 16
-    assert manifest["model_type_counts"]["calibrated_linear"] == 3
+    assert manifest["model_type_counts"]["calibrated_linear"] == 4
     assert manifest["model_type_counts"]["shallow_decision_tree"] == 2
+    assert manifest["model_type_counts"]["two_stage_risk_filter"] == 2
     assert manifest["phase_2_candidate_families"] == {
-        "calibrated_linear": ["full-balanced", "no-raw-price", "momentum"],
+        "calibrated_linear": ["full-balanced", "no-raw-price", "momentum-recent-half", "no-price-recent-quarter"],
         "shallow_decision_tree": {"max_depths": [2, 3], "maximum_allowed_depth": 3},
+        "two_stage_risk_filter": {"risk_thresholds": [0.2, 0.3], "decision_threshold": 0.6},
     }
-    assert manifest["phase_2_diversity"]["candidate_count"] == 5
+    assert manifest["phase_2_diversity"]["candidate_count"] == 8
     assert manifest["phase_2_diversity"]["distinct_prediction_clusters"] >= 2
+    assert manifest["phase_2_diversity"]["feature_subset_policies"] == ["all", "exclude_raw_price", "momentum"]
+    assert manifest["phase_2_diversity"]["training_window_policies"] == ["full", "recent_half", "recent_quarter"]
     assert manifest["specialized_challenger_families"] == ["big_loss_avoider", "big_gain_hunter", "recent_window_model", "ranking_top5_model"]
     assert {item.get("specialized_family") for item in manifest["challengers"] if item.get("specialized_family")} == set(manifest["specialized_challenger_families"])
     assert "mistake_mining" in manifest
@@ -201,7 +205,7 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
         assert lineage["generation"] == 1
         assert lineage["parent_lineage_ids"] == []
         deployable = lineage["recipe"]["deployable_config"]
-        assert set(deployable) == {"model_family", "decision_threshold", "calibration", "feature_subset", "sample_weight_policy", "abstention"}
+        assert {"model_family", "decision_threshold", "calibration", "feature_subset", "sample_weight_policy", "abstention"}.issubset(deployable)
         assert challenger["metrics"]["rows"] > 0
         assert "top_k_precision" in challenger["metrics"]
         assert "pairwise_ranking_loss" in challenger["metrics"]
@@ -231,6 +235,16 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
         assert artifact["training_spec"]["max_depth"] <= 3
         assert artifact["lineage"]["recipe"]["deployable_config"]["model_family"] == "shallow_decision_tree"
         assert len(challenger["metrics"]["prediction_fingerprint"]) == 64
+
+    risk_candidates = [item for item in manifest["challengers"] if item["model_type"] == "two_stage_risk_filter"]
+    assert len(risk_candidates) == 2
+    for challenger in risk_candidates:
+        artifact = json.loads((tmp_path / "models" / f"{challenger['model_version']}.json").read_text(encoding="utf-8"))
+        deployable = challenger["lineage"]["recipe"]["deployable_config"]
+        assert artifact["risk_threshold"] in {0.2, 0.3}
+        assert deployable["risk_filter"]["risk_threshold"] == artifact["risk_threshold"]
+        assert deployable["abstention"]["enabled"] is True
+        assert challenger["metrics"]["risk_rejections"] >= 0
 
     for challenger in manifest["challengers"]:
         family = challenger.get("specialized_family")

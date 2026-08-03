@@ -65,13 +65,12 @@ def _prepare_features(df: pd.DataFrame, feature_columns: list[str], fill_values:
 
 
 def _predict(artifact: dict[str, Any], frame: pd.DataFrame, feature_columns: list[str]) -> tuple[np.ndarray, np.ndarray]:
-    model_type = str(artifact.get("model_type") or "logistic_regression")
-    if model_type in {"logistic_regression", "calibrated_linear"}:
-        artifact_features = [str(col) for col in artifact.get("feature_columns") or feature_columns]
+    def linear_probabilities(linear: dict[str, Any]) -> np.ndarray:
+        artifact_features = [str(col) for col in linear.get("feature_columns") or feature_columns]
         aligned = frame.copy()
         missing = [col for col in artifact_features if col not in aligned.columns]
         if missing:
-            fill_values = artifact.get("feature_fill_values") if isinstance(artifact.get("feature_fill_values"), dict) else {}
+            fill_values = linear.get("feature_fill_values") if isinstance(linear.get("feature_fill_values"), dict) else {}
             for col in missing:
                 fill = fill_values.get(col, 0.0) if isinstance(fill_values, dict) else 0.0
                 try:
@@ -80,15 +79,26 @@ def _predict(artifact: dict[str, Any], frame: pd.DataFrame, feature_columns: lis
                     fill = 0.0
                 aligned[col] = fill
         X = aligned[artifact_features].to_numpy(dtype=float)
-        means = np.asarray(artifact.get("means"), dtype=float)
-        stds = np.asarray(artifact.get("stds"), dtype=float)
+        means = np.asarray(linear.get("means"), dtype=float)
+        stds = np.asarray(linear.get("stds"), dtype=float)
         stds = np.where(stds == 0.0, 1.0, stds)
-        weights = np.asarray(artifact.get("weights"), dtype=float)
-        logits = ((X - means) / stds) @ weights + float(artifact.get("bias", 0.0))
-        logits = (logits * float(artifact.get("calibration_slope", 1.0))) + float(artifact.get("calibration_intercept", 0.0))
-        probs = _sigmoid(logits)
+        weights = np.asarray(linear.get("weights"), dtype=float)
+        logits = ((X - means) / stds) @ weights + float(linear.get("bias", 0.0))
+        logits = (logits * float(linear.get("calibration_slope", 1.0))) + float(linear.get("calibration_intercept", 0.0))
+        return _sigmoid(logits)
+
+    model_type = str(artifact.get("model_type") or "logistic_regression")
+    if model_type in {"logistic_regression", "calibrated_linear"}:
+        probs = linear_probabilities(artifact)
         preds = (probs >= float(artifact.get("decision_threshold", 0.5))).astype(int)
         return probs, preds
+    if model_type == "two_stage_risk_filter":
+        decision_probs = linear_probabilities(artifact["decision_model"])
+        risk_probs = linear_probabilities(artifact["risk_model"])
+        decision_threshold = float(artifact.get("decision_threshold", 0.60))
+        risk_threshold = float(artifact.get("risk_threshold", 0.20))
+        preds = ((decision_probs >= decision_threshold) & (risk_probs <= risk_threshold)).astype(int)
+        return decision_probs, preds
     if model_type == "decision_stump":
         feature = str(artifact["feature"])
         values = (frame[feature] if feature in frame.columns else pd.Series(0.0, index=frame.index)).to_numpy(dtype=float)
