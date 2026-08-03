@@ -163,12 +163,16 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
     assert manifest["model_type_counts"]["two_stage_risk_filter"] == 2
     assert manifest["model_type_counts"]["hard_example_linear"] == 2
     assert manifest["model_type_counts"]["ranking_lane_linear"] == 2
+    assert manifest["model_type_counts"]["abstention_linear"] == 2
     assert manifest["phase_2_candidate_families"] == {
         "calibrated_linear": ["full-balanced", "no-raw-price", "momentum-recent-half", "no-price-recent-quarter"],
         "shallow_decision_tree": {"max_depths": [2, 3], "maximum_allowed_depth": 3},
         "two_stage_risk_filter": {"risk_thresholds": [0.2, 0.3], "decision_threshold": 0.6},
         "bounded_hard_example": {"max_fraction": 0.2, "hard_example_weight": 4.0, "max_sample_weight": 5.0},
         "ranking_lane_linear": {"training_windows": ["full", "recent_half"], "promotion_scope": "ranking_only"},
+    }
+    assert manifest["phase_3_candidate_families"] == {
+        "abstention_linear": {"margins": [0.025, 0.05], "base_threshold": 0.6, "abstained_action": "cash_no_signal"}
     }
     assert manifest["phase_2_diversity"]["candidate_count"] == 12
     assert manifest["phase_2_diversity"]["distinct_prediction_clusters"] >= 2
@@ -267,6 +271,14 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
     assert manifest["candidate_lanes"]["ranking"]["can_replace_main_decision_model"] is False
     assert {item["model_version"] for item in ranking_candidates}.issubset(manifest["candidate_lanes"]["ranking"]["ranked_model_versions"])
     assert all(item["lineage"]["recipe"]["deployable_config"]["candidate_lane"] == "ranking" for item in ranking_candidates)
+
+    abstention_candidates = [item for item in manifest["challengers"] if item["model_type"] == "abstention_linear"]
+    assert len(abstention_candidates) == 2
+    for challenger in abstention_candidates:
+        deployable = challenger["lineage"]["recipe"]["deployable_config"]
+        assert deployable["abstention"]["enabled"] is True
+        assert deployable["effective_positive_threshold"] == pytest.approx(0.60 + deployable["abstention"]["margin"])
+        assert challenger["metrics"]["abstained_rows"] >= 0
 
     for challenger in manifest["challengers"]:
         family = challenger.get("specialized_family")

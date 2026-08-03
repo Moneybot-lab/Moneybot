@@ -88,9 +88,12 @@ def _predict(artifact: dict[str, Any], frame: pd.DataFrame, feature_columns: lis
         return _sigmoid(logits)
 
     model_type = str(artifact.get("model_type") or "logistic_regression")
-    if model_type in {"logistic_regression", "calibrated_linear", "hard_example_linear", "ranking_lane_linear"}:
+    if model_type in {"logistic_regression", "calibrated_linear", "hard_example_linear", "ranking_lane_linear", "abstention_linear"}:
         probs = linear_probabilities(artifact)
-        preds = (probs >= float(artifact.get("decision_threshold", 0.5))).astype(int)
+        threshold = float(artifact.get("decision_threshold", 0.5))
+        abstention = artifact.get("abstention") if isinstance(artifact.get("abstention"), dict) else {}
+        margin = float(abstention.get("margin", 0.0)) if abstention.get("enabled") else 0.0
+        preds = (probs >= min(1.0, threshold + margin)).astype(int)
         return probs, preds
     if model_type == "two_stage_risk_filter":
         decision_probs = linear_probabilities(artifact["decision_model"])
@@ -225,6 +228,35 @@ def _drift(frame: pd.DataFrame, feature_columns: list[str]) -> dict[str, Any]:
     return {"max_mean_shift": max(shifts.values()) if shifts else 0.0, "feature_shifts": shifts}
 
 
+def _bootstrap_confidence_bounds(strategy_returns: np.ndarray, frame: pd.DataFrame, *, resamples: int = 500, confidence: float = 0.95) -> dict[str, Any]:
+    """Deterministic date-block bootstrap for net average return."""
+    if "event_date" in frame.columns:
+        dates = pd.to_datetime(frame["event_date"], utc=True, errors="coerce")
+    elif "ts" in frame.columns:
+        numeric = pd.to_numeric(frame["ts"], errors="coerce")
+        dates = pd.to_datetime(numeric, unit="s", utc=True, errors="coerce") if numeric.abs().median() >= 100_000_000 else pd.Series(pd.NaT, index=frame.index)
+    else:
+        dates = pd.Series(pd.NaT, index=frame.index)
+    block_keys = dates.dt.strftime("%Y-%m-%d") if dates.notna().all() else pd.Series([f"row-{index}" for index in range(len(frame))], index=frame.index)
+    work = pd.DataFrame({"block": block_keys.to_numpy(), "return": np.asarray(strategy_returns, dtype=float)})
+    block_means = work.groupby("block", sort=True)["return"].mean().to_numpy(dtype=float)
+    if block_means.size == 0:
+        return {"method": "date_block_bootstrap", "confidence": confidence, "resamples": resamples, "independent_date_blocks": 0, "avg_return_lower": None, "avg_return_median": None, "avg_return_upper": None, "probability_positive": 0.0}
+    rng = np.random.default_rng(20260803)
+    samples = block_means[rng.integers(0, len(block_means), size=(max(1, resamples), len(block_means)))].mean(axis=1)
+    alpha = (1.0 - confidence) / 2.0
+    return {
+        "method": "date_block_bootstrap",
+        "confidence": confidence,
+        "resamples": int(max(1, resamples)),
+        "independent_date_blocks": int(len(block_means)),
+        "avg_return_lower": round(float(np.quantile(samples, alpha)), 6),
+        "avg_return_median": round(float(np.quantile(samples, 0.5)), 6),
+        "avg_return_upper": round(float(np.quantile(samples, 1.0 - alpha)), 6),
+        "probability_positive": round(float((samples > 0.0).mean()), 6),
+    }
+
+
 def _promotion_gates(metrics: dict[str, Any], benchmark: dict[str, Any], *, min_rows: int, max_drawdown: float, max_ece: float, min_excess_return: float, max_drift_shift: float) -> dict[str, Any]:
     failures: list[str] = []
     if metrics["rows"] < min_rows:
@@ -237,7 +269,10 @@ def _promotion_gates(metrics: dict[str, Any], benchmark: dict[str, Any], *, min_
         failures.append("calibration_gate_failed")
     if metrics["drift"]["max_mean_shift"] > max_drift_shift:
         failures.append("drift_gate_failed")
-    return {"promotion_ready": not failures, "failed_gates": failures, "objective_gates": {"min_rows": min_rows, "max_drawdown": max_drawdown, "max_ece": max_ece, "min_excess_return": min_excess_return, "max_drift_shift": max_drift_shift}}
+    lower_bound = metrics.get("bootstrap_confidence", {}).get("avg_return_lower")
+    if lower_bound is None or float(lower_bound) < 0.0:
+        failures.append("bootstrap_profit_confidence_failed")
+    return {"promotion_ready": not failures, "failed_gates": failures, "objective_gates": {"min_rows": min_rows, "max_drawdown": max_drawdown, "max_ece": max_ece, "min_excess_return": min_excess_return, "max_drift_shift": max_drift_shift, "min_bootstrap_avg_return_lower": 0.0}}
 
 
 def backtest_challenger_suite(
@@ -291,6 +326,7 @@ def backtest_challenger_suite(
             "top_k_ranking": _ranking_metrics(probs, labels, returns),
             "calibration": _calibration(probs, labels),
             "drift": _drift(frame, features),
+            "bootstrap_confidence": _bootstrap_confidence_bounds(strategy_returns, frame),
         }
         gates = _promotion_gates(metrics, benchmark, min_rows=min_rows, max_drawdown=max_drawdown, max_ece=max_ece, min_excess_return=min_excess_return, max_drift_shift=max_drift_shift)
         challengers.append({**challenger, "backtest_metrics": metrics, "promotion_gates": gates, "shadow_logging_recommended": gates["promotion_ready"], "routing_allowed": False})
@@ -313,6 +349,7 @@ def backtest_challenger_suite(
         "rows": int(len(frame)),
         "horizon_days": horizon_days,
         "benchmark": benchmark,
+        "bootstrap_policy": {"method": "date_block_bootstrap", "confidence": 0.95, "resamples": 500, "promotion_requires_nonnegative_lower_avg_return": True},
         "challengers": challengers,
         "ranked_model_versions": [item["model_version"] for item in ranked],
         "shadow_candidates": [item["model_version"] for item in ranked if item["shadow_logging_recommended"]],
