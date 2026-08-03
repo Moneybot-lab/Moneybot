@@ -16,7 +16,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from moneybot.services.deterministic_model import load_artifact, predict_proba, summarize_binary_predictions, train_logistic_baseline
+from moneybot.services.deterministic_model import fit_probability_calibration, load_artifact, predict_proba, summarize_binary_predictions, train_logistic_baseline
 from moneybot.services.temporal_validation import purged_embargoed_split
 from scripts.day10_train_candidate_model import _backtest_compatible_feature_columns, _chronological_split, _fill_feature_gaps, _future_safe_feature_columns, _prepare_frame, _select_feature_columns
 
@@ -25,6 +25,13 @@ LINEAGE_SCHEMA_VERSION = "moneybot-challenger-lineage.v1"
 LOGISTIC_L2_GRID = (5e-4, 1e-3, 5e-3)
 LOGISTIC_THRESHOLD_GRID = (0.45, 0.50, 0.55, 0.60)
 MAX_STUMP_CHALLENGERS = 8
+SHALLOW_TREE_DEPTHS = (2, 3)
+SHALLOW_TREE_MIN_LEAF = 20
+CALIBRATED_LINEAR_VARIANTS = (
+    {"name": "full-balanced", "feature_subset_policy": "all", "sample_weight_policy": "balanced", "l2": 0.001},
+    {"name": "no-raw-price", "feature_subset_policy": "exclude_raw_price", "sample_weight_policy": "tail_safe", "l2": 0.002},
+    {"name": "momentum", "feature_subset_policy": "momentum", "sample_weight_policy": "balanced", "l2": 0.005},
+)
 SPECIALIZED_CHALLENGER_FAMILIES = ("big_loss_avoider", "big_gain_hunter", "recent_window_model", "ranking_top5_model")
 EMBARGO_DAYS = 1
 
@@ -84,6 +91,19 @@ def _ranking_metrics(scores: np.ndarray, labels: np.ndarray, returns: np.ndarray
         "big_gain_capture": round(big_gain_capture, 6),
         "big_loss_demotion": round(big_loss_demotion, 6),
         "ranking_objective": round(float(objective), 6),
+    }
+
+
+def _prediction_profile(predictions: np.ndarray, frame: pd.DataFrame, return_col: str | None) -> dict[str, Any]:
+    values = np.asarray(predictions, dtype=np.uint8)
+    buckets = _return_bucket_series(frame, return_col).to_numpy()
+    big_loss = buckets == "big_loss"
+    big_loss_predictions = int(((values == 1) & big_loss).sum())
+    return {
+        "prediction_fingerprint": hashlib.sha256(values.tobytes()).hexdigest(),
+        "positive_predictions": int(values.sum()),
+        "big_loss_predictions": big_loss_predictions,
+        "big_loss_prediction_rate": round(big_loss_predictions / int(big_loss.sum()), 6) if big_loss.any() else 0.0,
     }
 
 
@@ -171,6 +191,76 @@ def _train_logistic_recipe(
     )
 
 
+def _linear_feature_subset(feature_columns: list[str], policy: str) -> list[str]:
+    if policy == "exclude_raw_price":
+        selected = [column for column in feature_columns if column != "feature_price" and not column.endswith("_close")]
+    elif policy == "momentum":
+        tokens = ("return", "change", "rsi", "macd", "momentum", "volume")
+        selected = [column for column in feature_columns if any(token in column.lower() for token in tokens)]
+    else:
+        selected = list(feature_columns)
+    return selected or list(feature_columns)
+
+
+def _linear_sample_weights(frame: pd.DataFrame, labels: np.ndarray, return_col: str | None, policy: str) -> np.ndarray:
+    weights = np.ones(len(frame), dtype=float)
+    if policy == "balanced":
+        positives = max(1, int((labels >= 0.5).sum()))
+        negatives = max(1, int((labels < 0.5).sum()))
+        weights[labels >= 0.5] = len(labels) / (2.0 * positives)
+        weights[labels < 0.5] = len(labels) / (2.0 * negatives)
+    elif policy == "tail_safe":
+        buckets = _return_bucket_series(frame, return_col).to_numpy()
+        weights[buckets == "big_loss"] = 8.0
+        weights[buckets == "loss"] = 2.0
+        weights[buckets == "big_gain"] = 3.0
+    return weights
+
+
+def _train_calibrated_linear_recipe(
+    train_df: pd.DataFrame,
+    target_col: str,
+    feature_columns: list[str],
+    return_col: str | None,
+    spec: dict[str, Any],
+    *,
+    horizon_days: int,
+):
+    """Fit and calibrate a linear recipe on separate purged periods."""
+    subset = _linear_feature_subset(feature_columns, str(spec["feature_subset_policy"]))
+    fit_df, calibration_df = _chronological_split(train_df, 0.8)
+    fit_df, calibration_df, split = purged_embargoed_split(
+        fit_df,
+        calibration_df,
+        horizon_days=horizon_days,
+        embargo_days=EMBARGO_DAYS,
+    )
+    if fit_df.empty or calibration_df.empty:
+        fit_df = train_df
+        calibration_df = train_df.iloc[0:0]
+        split = {**split, "calibration_available": False, "fallback": "identity_calibration"}
+    fit_labels = fit_df[target_col].to_numpy(dtype=float)
+    weights = _linear_sample_weights(fit_df, fit_labels, return_col, str(spec["sample_weight_policy"]))
+    artifact = train_logistic_baseline(
+        fit_df[subset].to_numpy(dtype=float),
+        fit_labels,
+        learning_rate=float(spec.get("lr", 0.06)),
+        l2=float(spec["l2"]),
+        decision_threshold=float(spec.get("threshold", 0.60)),
+        epochs=int(spec.get("epochs", 650)),
+        sample_weight=weights,
+    )
+    artifact.feature_columns = subset
+    if calibration_df.empty:
+        calibration = {"method": "identity_insufficient_calibration_rows", "slope": 1.0, "intercept": 0.0, "applied": False}
+    else:
+        raw = predict_proba(artifact, calibration_df[subset].to_numpy(dtype=float))
+        calibration = fit_probability_calibration(raw, calibration_df[target_col].to_numpy(dtype=float))
+    artifact.calibration_slope = float(calibration["slope"])
+    artifact.calibration_intercept = float(calibration["intercept"])
+    return artifact, calibration, split
+
+
 def _apply_walk_forward_metrics(
     challengers: list[dict[str, Any]],
     *,
@@ -206,6 +296,28 @@ def _apply_walk_forward_metrics(
                 artifact = _train_logistic_recipe(fold_train, y_train, feature_columns, return_col, spec)
                 scores = predict_proba(artifact, X_test)
                 preds = (scores >= artifact.decision_threshold).astype(int)
+            elif model_type == "calibrated_linear":
+                artifact, _, _ = _train_calibrated_linear_recipe(
+                    fold_train,
+                    target_col,
+                    feature_columns,
+                    return_col,
+                    spec,
+                    horizon_days=horizon_days,
+                )
+                scores = predict_proba(artifact, fold_test[artifact.feature_columns].to_numpy(dtype=float))
+                preds = (scores >= artifact.decision_threshold).astype(int)
+            elif model_type == "shallow_decision_tree":
+                min_leaf = min(int(spec["min_leaf"]), max(2, len(fold_train) // 10))
+                tree = _fit_shallow_tree(
+                    fold_train,
+                    y_train,
+                    feature_columns,
+                    max_depth=int(spec["max_depth"]),
+                    min_leaf=min_leaf,
+                )
+                scores = _shallow_tree_scores(tree, fold_test)
+                preds = (scores >= float(spec["threshold"])).astype(int)
             elif model_type == "decision_stump":
                 feature = str(spec.get("feature", ""))
                 if feature not in fold_train.columns or feature not in fold_test.columns:
@@ -227,6 +339,7 @@ def _apply_walk_forward_metrics(
                 continue
             metrics = summarize_binary_predictions(y_test, preds)
             metrics.update(_ranking_metrics(scores, y_test, fold_returns))
+            metrics.update(_prediction_profile(preds, fold_test, return_col))
             fold_metrics.append(metrics)
         walk_forward = _average_metric_dicts(fold_metrics)
         if walk_forward:
@@ -235,6 +348,8 @@ def _apply_walk_forward_metrics(
             walk_forward["positive_ranking_windows"] = positive_windows
             walk_forward["min_positive_windows_required"] = min_positive_windows
             walk_forward["passed"] = positive_windows >= min_positive_windows
+            walk_forward["zero_big_loss_windows"] = sum(1 for metrics in fold_metrics if int(metrics.get("big_loss_predictions", 0)) == 0)
+            walk_forward["zero_big_loss_window_rate"] = round(walk_forward["zero_big_loss_windows"] / len(fold_metrics), 6)
             challenger["metrics"]["walk_forward"] = walk_forward
             challenger["metrics"]["walk_forward_passed"] = walk_forward["passed"]
             challenger["metrics"]["walk_forward_ranking_objective"] = walk_forward.get("ranking_objective", 0.0)
@@ -392,15 +507,17 @@ def _candidate_lineage(
     feature_columns: list[str],
     decision_threshold: float | None,
     sample_weight_policy: str = "uniform",
+    calibration: dict[str, Any] | None = None,
+    abstention: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build stable lineage and deployable configuration for one recipe."""
     deployable_config = {
         "model_family": model_type,
         "decision_threshold": decision_threshold,
-        "calibration": {"method": "identity", "slope": 1.0, "intercept": 0.0},
+        "calibration": calibration or {"method": "identity", "slope": 1.0, "intercept": 0.0},
         "feature_subset": list(feature_columns),
         "sample_weight_policy": sample_weight_policy,
-        "abstention": {"enabled": False, "margin": 0.0},
+        "abstention": abstention or {"enabled": False, "margin": 0.0},
     }
     recipe = {"model_version": model_version, "model_type": model_type, "training_spec": spec, "deployable_config": deployable_config}
     recipe_hash = hashlib.sha256(json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
@@ -464,10 +581,184 @@ def _add_logistic_challengers(
         challengers.append({"model_version": artifact.version, "model_type": "logistic_regression", "model_path": str(model_path), "metrics": metrics, "spec": spec, "lineage": lineage})
 
 
+def _add_calibrated_linear_challengers(
+    challengers: list[dict[str, Any]],
+    *,
+    output_dir: Path,
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    target_col: str,
+    feature_columns: list[str],
+    return_col: str | None,
+    test_returns: np.ndarray | None,
+    horizon_days: int,
+) -> None:
+    y_test = test_df[target_col].to_numpy(dtype=float)
+    for variant in CALIBRATED_LINEAR_VARIANTS:
+        spec = {
+            "family": "calibrated_linear",
+            **variant,
+            "lr": 0.06,
+            "threshold": 0.60,
+            "epochs": 650,
+            "calibration_policy": "platt_if_brier_improves",
+            "abstention": {"enabled": False, "margin": 0.0},
+        }
+        artifact, calibration, calibration_split = _train_calibrated_linear_recipe(
+            train_df,
+            target_col,
+            feature_columns,
+            return_col,
+            spec,
+            horizon_days=horizon_days,
+        )
+        artifact.version = f"challenger-calibrated-linear-{variant['name']}-v1"
+        model_path = output_dir / f"{artifact.version}.json"
+        lineage = _candidate_lineage(
+            model_version=artifact.version,
+            model_type="calibrated_linear",
+            spec=spec,
+            feature_columns=artifact.feature_columns,
+            decision_threshold=artifact.decision_threshold,
+            sample_weight_policy=str(spec["sample_weight_policy"]),
+            calibration={"method": calibration["method"], "slope": artifact.calibration_slope, "intercept": artifact.calibration_intercept},
+            abstention=spec["abstention"],
+        )
+        payload = {
+            "model_type": "calibrated_linear",
+            **artifact.to_dict(),
+            "training_spec": spec,
+            "calibration": calibration,
+            "calibration_split": calibration_split,
+            "lineage": lineage,
+        }
+        _write_artifact(model_path, payload)
+        probs = predict_proba(artifact, test_df[artifact.feature_columns].to_numpy(dtype=float))
+        preds = (probs >= artifact.decision_threshold).astype(int)
+        metrics = summarize_binary_predictions(y_test, preds)
+        metrics.update(_ranking_metrics(probs, y_test, test_returns))
+        metrics.update(_prediction_profile(preds, test_df, return_col))
+        challengers.append({
+            "model_version": artifact.version,
+            "model_type": "calibrated_linear",
+            "model_path": str(model_path),
+            "metrics": metrics,
+            "spec": spec,
+            "lineage": lineage,
+        })
+
+
 def _stump_predictions(values: np.ndarray, threshold: float, direction: str) -> np.ndarray:
     if direction == "gte_positive":
         return (values >= threshold).astype(int)
     return (values < threshold).astype(int)
+
+
+def _tree_leaf_probability(labels: np.ndarray) -> float:
+    return float((labels.sum() + 1.0) / (len(labels) + 2.0))
+
+
+def _fit_shallow_tree(
+    frame: pd.DataFrame,
+    labels: np.ndarray,
+    feature_columns: list[str],
+    *,
+    max_depth: int,
+    min_leaf: int,
+    depth: int = 0,
+) -> dict[str, Any]:
+    probability = _tree_leaf_probability(labels)
+    if depth >= max_depth or len(labels) < (2 * min_leaf) or np.unique(labels).size < 2:
+        return {"leaf": True, "probability": probability, "rows": int(len(labels))}
+    best: tuple[float, str, float, np.ndarray] | None = None
+    for feature in feature_columns:
+        values = frame[feature].to_numpy(dtype=float)
+        for threshold in np.unique(np.quantile(values, (0.25, 0.5, 0.75))):
+            left = values < float(threshold)
+            if int(left.sum()) < min_leaf or int((~left).sum()) < min_leaf:
+                continue
+            impurity = 0.0
+            for mask in (left, ~left):
+                rate = float(labels[mask].mean())
+                impurity += int(mask.sum()) * (2.0 * rate * (1.0 - rate))
+            candidate = (impurity, feature, float(threshold), left)
+            if best is None or candidate[:3] < best[:3]:
+                best = candidate
+    if best is None:
+        return {"leaf": True, "probability": probability, "rows": int(len(labels))}
+    _, feature, threshold, left = best
+    return {
+        "leaf": False,
+        "probability": probability,
+        "rows": int(len(labels)),
+        "feature": feature,
+        "threshold": threshold,
+        "left": _fit_shallow_tree(frame.loc[left], labels[left], feature_columns, max_depth=max_depth, min_leaf=min_leaf, depth=depth + 1),
+        "right": _fit_shallow_tree(frame.loc[~left], labels[~left], feature_columns, max_depth=max_depth, min_leaf=min_leaf, depth=depth + 1),
+    }
+
+
+def _shallow_tree_scores(tree: dict[str, Any], frame: pd.DataFrame) -> np.ndarray:
+    scores = np.empty(len(frame), dtype=float)
+    for output_index, (_, row) in enumerate(frame.iterrows()):
+        node = tree
+        while not bool(node.get("leaf")):
+            node = node["left"] if float(row[str(node["feature"])]) < float(node["threshold"]) else node["right"]
+        scores[output_index] = float(node["probability"])
+    return scores
+
+
+def _add_shallow_tree_challengers(
+    challengers: list[dict[str, Any]],
+    *,
+    output_dir: Path,
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+    feature_columns: list[str],
+    test_returns: np.ndarray | None,
+    return_col: str | None,
+) -> None:
+    min_leaf = min(SHALLOW_TREE_MIN_LEAF, max(2, len(train_df) // 10))
+    for max_depth in SHALLOW_TREE_DEPTHS:
+        spec = {
+            "family": "shallow_decision_tree",
+            "max_depth": max_depth,
+            "min_leaf": min_leaf,
+            "threshold": 0.60,
+            "feature_subset_policy": "all",
+            "sample_weight_policy": "uniform",
+            "calibration": {"method": "identity", "slope": 1.0, "intercept": 0.0},
+            "abstention": {"enabled": False, "margin": 0.0},
+        }
+        tree = _fit_shallow_tree(train_df, y_train, feature_columns, max_depth=max_depth, min_leaf=min_leaf)
+        model_version = f"challenger-shallow-tree-depth{max_depth}-v1"
+        model_path = output_dir / f"{model_version}.json"
+        lineage = _candidate_lineage(
+            model_version=model_version,
+            model_type="shallow_decision_tree",
+            spec=spec,
+            feature_columns=feature_columns,
+            decision_threshold=float(spec["threshold"]),
+            calibration=spec["calibration"],
+            abstention=spec["abstention"],
+        )
+        _write_artifact(model_path, {
+            "version": model_version,
+            "model_type": "shallow_decision_tree",
+            "feature_columns": feature_columns,
+            "decision_threshold": spec["threshold"],
+            "tree": tree,
+            "training_spec": spec,
+            "lineage": lineage,
+        })
+        scores = _shallow_tree_scores(tree, test_df)
+        preds = (scores >= float(spec["threshold"])).astype(int)
+        metrics = summarize_binary_predictions(y_test, preds)
+        metrics.update(_ranking_metrics(scores, y_test, test_returns))
+        metrics.update(_prediction_profile(preds, test_df, return_col))
+        challengers.append({"model_version": model_version, "model_type": "shallow_decision_tree", "model_path": str(model_path), "metrics": metrics, "spec": spec, "lineage": lineage})
 
 
 def _add_stump_challengers(
@@ -536,6 +827,75 @@ def _specialized_sample_weight(train_df: pd.DataFrame, return_col: str | None, f
         weights[buckets.to_numpy() == "big_loss"] = 3.0
     return weights
 
+def _ranking_top5_labels(train_df: pd.DataFrame, return_col: str | None) -> np.ndarray:
+    if not return_col or return_col not in train_df.columns:
+        return np.zeros(len(train_df), dtype=float)
+    work = train_df.copy()
+    work["_return"] = pd.to_numeric(work[return_col], errors="coerce").fillna(0.0)
+    work["_event_date"] = _event_date_values(work)
+    labels = pd.Series(0.0, index=work.index)
+    for _, group in work.groupby("_event_date"):
+        top_n = min(5, len(group))
+        if top_n <= 0:
+            continue
+        labels.loc[group.sort_values("_return", ascending=False).head(top_n).index] = 1.0
+    return labels.loc[train_df.index].to_numpy(dtype=float)
+
+
+def _specialized_sample_weight(train_df: pd.DataFrame, return_col: str | None, family: str) -> np.ndarray:
+    buckets = _return_bucket_series(train_df, return_col)
+    weights = np.ones(len(train_df), dtype=float)
+    if family == "big_loss_avoider":
+        weights[buckets.to_numpy() == "big_loss"] = 6.0
+        weights[buckets.to_numpy() == "loss"] = 2.0
+    elif family == "big_gain_hunter":
+        weights[buckets.to_numpy() == "big_gain"] = 6.0
+        weights[buckets.to_numpy() == "gain"] = 2.0
+    elif family == "recent_window_model":
+        ramp = np.linspace(0.5, 2.5, num=len(train_df)) if len(train_df) else np.array([], dtype=float)
+        weights = ramp.astype(float)
+    elif family == "ranking_top5_model":
+        weights[buckets.to_numpy() == "big_gain"] = 4.0
+        weights[buckets.to_numpy() == "big_loss"] = 3.0
+    return weights
+
+
+def _add_specialized_challengers(
+    challengers: list[dict[str, Any]],
+    *,
+    output_dir: Path,
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+    y_train: np.ndarray,
+    y_test: np.ndarray,
+    feature_columns: list[str],
+    return_col: str | None,
+    test_returns: np.ndarray | None,
+) -> None:
+    for family in SPECIALIZED_CHALLENGER_FAMILIES:
+        threshold = 0.60 if family in {"big_loss_avoider", "ranking_top5_model"} else 0.55
+        spec = {
+            "family": family,
+            "lr": 0.06,
+            "l2": 0.002,
+            "threshold": threshold,
+            "epochs": 650,
+            "sample_weight_policy": family,
+            "target_policy": "daily_top5" if family == "ranking_top5_model" else "configured_target",
+            "training_window_policy": "recent_half" if family == "recent_window_model" else "full_window",
+        }
+        artifact = _train_logistic_recipe(train_df, y_train, feature_columns, return_col, spec)
+        artifact.version = f"challenger-{family.replace('_', '-')}-v1"
+        artifact.feature_columns = list(feature_columns)
+        model_path = output_dir / f"{artifact.version}.json"
+        lineage = _candidate_lineage(model_version=artifact.version, model_type="logistic_regression", spec=spec, feature_columns=feature_columns, decision_threshold=artifact.decision_threshold, sample_weight_policy=family)
+        _write_artifact(model_path, {"model_type": "logistic_regression", "specialized_family": family, **artifact.to_dict(), "training_spec": spec, "lineage": lineage})
+        probs = predict_proba(artifact, test_df[feature_columns].to_numpy(dtype=float))
+        preds = (probs >= artifact.decision_threshold).astype(int)
+        metrics = summarize_binary_predictions(y_test, preds)
+        metrics.update(_ranking_metrics(probs, y_test, test_returns))
+        metrics["specialized_family"] = family
+        challengers.append({"model_version": artifact.version, "model_type": "logistic_regression", "specialized_family": family, "model_path": str(model_path), "metrics": metrics, "spec": spec, "lineage": lineage})
 
 def _add_specialized_challengers(
     challengers: list[dict[str, Any]],
@@ -629,7 +989,19 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
     mistake_slices = _write_daily_mistake_slices(clean, output_dir, return_col)
     challengers: list[dict[str, Any]] = []
     _add_logistic_challengers(challengers, output_dir=output_dir, X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test, feature_columns=feature_columns, test_returns=test_returns)
+    _add_calibrated_linear_challengers(
+        challengers,
+        output_dir=output_dir,
+        train_df=train_df,
+        test_df=test_df,
+        target_col=target_col,
+        feature_columns=feature_columns,
+        return_col=return_col,
+        test_returns=test_returns,
+        horizon_days=horizon_days,
+    )
     _add_stump_challengers(challengers, output_dir=output_dir, train_df=train_df, test_df=test_df, y_train=y_train, y_test=y_test, feature_columns=feature_columns, test_returns=test_returns)
+    _add_shallow_tree_challengers(challengers, output_dir=output_dir, train_df=train_df, test_df=test_df, y_train=y_train, y_test=y_test, feature_columns=feature_columns, test_returns=test_returns, return_col=return_col)
     _add_specialized_challengers(challengers, output_dir=output_dir, train_df=train_df, test_df=test_df, y_train=y_train, y_test=y_test, feature_columns=feature_columns, return_col=return_col, test_returns=test_returns)
     _add_baseline_challengers(challengers, output_dir=output_dir, y_train=y_train, y_test=y_test, test_returns=test_returns)
     walk_forward_folds = _walk_forward_splits(clean)
@@ -681,6 +1053,12 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
             }
         )
     model_type_counts = {model_type: sum(1 for item in challengers if item["model_type"] == model_type) for model_type in sorted({item["model_type"] for item in challengers})}
+    phase_2_challengers = [item for item in challengers if item["model_type"] in {"calibrated_linear", "shallow_decision_tree"}]
+    phase_2_fingerprints = {
+        str(item["metrics"]["prediction_fingerprint"])
+        for item in phase_2_challengers
+        if item["metrics"].get("prediction_fingerprint")
+    }
     manifest = {
         "schema_version": SUITE_SCHEMA_VERSION,
         "lineage_schema_version": LINEAGE_SCHEMA_VERSION,
@@ -701,6 +1079,15 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         "feature_fill_values": fill_values,
         "model_type_counts": model_type_counts,
         "specialized_challenger_families": list(SPECIALIZED_CHALLENGER_FAMILIES),
+        "phase_2_candidate_families": {
+            "calibrated_linear": [str(spec["name"]) for spec in CALIBRATED_LINEAR_VARIANTS],
+            "shallow_decision_tree": {"max_depths": list(SHALLOW_TREE_DEPTHS), "maximum_allowed_depth": max(SHALLOW_TREE_DEPTHS)},
+        },
+        "phase_2_diversity": {
+            "candidate_count": len(phase_2_challengers),
+            "distinct_prediction_clusters": len(phase_2_fingerprints),
+            "prediction_fingerprints": sorted(phase_2_fingerprints),
+        },
         "mistake_mining": mistake_slices,
         "challenger_count": len(challengers),
         "challengers": challengers,

@@ -158,6 +158,14 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
     assert manifest["live_routing"] is False
     assert manifest["challenger_count"] >= 20
     assert manifest["model_type_counts"]["logistic_regression"] == 16
+    assert manifest["model_type_counts"]["calibrated_linear"] == 3
+    assert manifest["model_type_counts"]["shallow_decision_tree"] == 2
+    assert manifest["phase_2_candidate_families"] == {
+        "calibrated_linear": ["full-balanced", "no-raw-price", "momentum"],
+        "shallow_decision_tree": {"max_depths": [2, 3], "maximum_allowed_depth": 3},
+    }
+    assert manifest["phase_2_diversity"]["candidate_count"] == 5
+    assert manifest["phase_2_diversity"]["distinct_prediction_clusters"] >= 2
     assert manifest["specialized_challenger_families"] == ["big_loss_avoider", "big_gain_hunter", "recent_window_model", "ranking_top5_model"]
     assert {item.get("specialized_family") for item in manifest["challengers"] if item.get("specialized_family")} == set(manifest["specialized_challenger_families"])
     assert "mistake_mining" in manifest
@@ -200,10 +208,29 @@ def test_train_challenger_suite_writes_multiple_offline_models_and_manifest(tmp_
         assert "ranking_objective" in challenger["metrics"]
         assert "walk_forward" in challenger["metrics"]
         assert challenger["metrics"]["walk_forward"]["window_count"] >= 2
+        assert "zero_big_loss_windows" in challenger["metrics"]["walk_forward"]
+        assert 0.0 <= challenger["metrics"]["walk_forward"]["zero_big_loss_window_rate"] <= 1.0
         assert "positive_ranking_windows" in challenger["metrics"]["walk_forward"]
         assert "walk_forward_ranking_objective" in challenger["metrics"]
         assert "walk_forward_passed" in challenger["metrics"]
         assert challenger["metrics"]["walk_forward_recipe_reproduced"] is True
+
+    calibrated = [item for item in manifest["challengers"] if item["model_type"] == "calibrated_linear"]
+    assert len({tuple(item["lineage"]["recipe"]["deployable_config"]["feature_subset"]) for item in calibrated}) >= 2
+    for challenger in calibrated:
+        artifact = json.loads((tmp_path / "models" / f"{challenger['model_version']}.json").read_text(encoding="utf-8"))
+        deployable = challenger["lineage"]["recipe"]["deployable_config"]
+        assert deployable["calibration"]["method"] == artifact["calibration"]["method"]
+        assert deployable["sample_weight_policy"] == challenger["spec"]["sample_weight_policy"]
+        assert len(challenger["metrics"]["prediction_fingerprint"]) == 64
+        assert challenger["metrics"]["big_loss_predictions"] >= 0
+
+    for challenger in (item for item in manifest["challengers"] if item["model_type"] == "shallow_decision_tree"):
+        artifact = json.loads((tmp_path / "models" / f"{challenger['model_version']}.json").read_text(encoding="utf-8"))
+        assert artifact["training_spec"]["max_depth"] in {2, 3}
+        assert artifact["training_spec"]["max_depth"] <= 3
+        assert artifact["lineage"]["recipe"]["deployable_config"]["model_family"] == "shallow_decision_tree"
+        assert len(challenger["metrics"]["prediction_fingerprint"]) == 64
 
     for challenger in manifest["challengers"]:
         family = challenger.get("specialized_family")
