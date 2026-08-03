@@ -1,7 +1,23 @@
 import json
 
-from scripts.backtest_challenger_suite import backtest_challenger_suite
+import numpy as np
+import pandas as pd
+
+from scripts.backtest_challenger_suite import _bootstrap_confidence_bounds, backtest_challenger_suite
 from scripts.train_challenger_suite import train_challenger_suite
+
+
+def test_date_block_bootstrap_is_deterministic_and_conservative():
+    frame = pd.DataFrame({"event_date": ["2026-01-01"] * 2 + ["2026-01-02"] * 2 + ["2026-01-03"] * 2})
+    returns = np.asarray([0.02, 0.01, -0.03, -0.02, 0.01, 0.01])
+
+    first = _bootstrap_confidence_bounds(returns, frame, resamples=300)
+    second = _bootstrap_confidence_bounds(returns, frame, resamples=300)
+
+    assert first == second
+    assert first["independent_date_blocks"] == 3
+    assert first["avg_return_lower"] <= first["avg_return_median"] <= first["avg_return_upper"]
+    assert first["avg_return_lower"] < 0.0
 
 
 def test_backtest_challenger_suite_scores_every_model_with_gates_and_benchmarks(tmp_path):
@@ -41,7 +57,10 @@ def test_backtest_challenger_suite_scores_every_model_with_gates_and_benchmarks(
     assert "top_k_ranking" in first["backtest_metrics"]
     assert "ranking_objective" in first["backtest_metrics"]["top_k_ranking"]
     assert "drift" in first["backtest_metrics"]
+    assert first["backtest_metrics"]["bootstrap_confidence"]["method"] == "date_block_bootstrap"
+    assert first["backtest_metrics"]["bootstrap_confidence"]["avg_return_lower"] is not None
     assert first["promotion_gates"]["objective_gates"]["min_rows"] == 10
+    assert first["promotion_gates"]["objective_gates"]["min_bootstrap_avg_return_lower"] == 0.0
     assert first["routing_allowed"] is False
 
 
