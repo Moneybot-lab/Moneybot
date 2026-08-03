@@ -66,7 +66,7 @@ def _prepare_features(df: pd.DataFrame, feature_columns: list[str], fill_values:
 
 def _predict(artifact: dict[str, Any], frame: pd.DataFrame, feature_columns: list[str]) -> tuple[np.ndarray, np.ndarray]:
     model_type = str(artifact.get("model_type") or "logistic_regression")
-    if model_type == "logistic_regression":
+    if model_type in {"logistic_regression", "calibrated_linear"}:
         artifact_features = [str(col) for col in artifact.get("feature_columns") or feature_columns]
         aligned = frame.copy()
         missing = [col for col in artifact_features if col not in aligned.columns]
@@ -84,7 +84,9 @@ def _predict(artifact: dict[str, Any], frame: pd.DataFrame, feature_columns: lis
         stds = np.asarray(artifact.get("stds"), dtype=float)
         stds = np.where(stds == 0.0, 1.0, stds)
         weights = np.asarray(artifact.get("weights"), dtype=float)
-        probs = _sigmoid(((X - means) / stds) @ weights + float(artifact.get("bias", 0.0)))
+        logits = ((X - means) / stds) @ weights + float(artifact.get("bias", 0.0))
+        logits = (logits * float(artifact.get("calibration_slope", 1.0))) + float(artifact.get("calibration_intercept", 0.0))
+        probs = _sigmoid(logits)
         preds = (probs >= float(artifact.get("decision_threshold", 0.5))).astype(int)
         return probs, preds
     if model_type == "decision_stump":
@@ -96,6 +98,18 @@ def _predict(artifact: dict[str, Any], frame: pd.DataFrame, feature_columns: lis
         else:
             preds = (values < threshold).astype(int)
         return preds.astype(float), preds
+    if model_type == "shallow_decision_tree":
+        tree = artifact["tree"]
+        scores = np.empty(len(frame), dtype=float)
+        for output_index, (_, row) in enumerate(frame.iterrows()):
+            node = tree
+            while not bool(node.get("leaf")):
+                feature = str(node["feature"])
+                value = float(row[feature]) if feature in frame.columns else 0.0
+                node = node["left"] if value < float(node["threshold"]) else node["right"]
+            scores[output_index] = float(node["probability"])
+        preds = (scores >= float(artifact.get("decision_threshold", 0.60))).astype(int)
+        return scores, preds
     if model_type == "baseline_classifier":
         spec = artifact.get("training_spec") if isinstance(artifact.get("training_spec"), dict) else {}
         if "always-down" in str(artifact.get("version")):
