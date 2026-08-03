@@ -38,6 +38,8 @@ RETURN_BIN_SAMPLE_WEIGHTS = {
     "big_gain": 4.0,
 }
 THRESHOLD_SEARCH_VALUES = (0.55, 0.575, 0.60, 0.625, 0.65, 0.675, 0.70)
+FLAT_OPTIMUM_ABSOLUTE_TOLERANCE = 0.005
+FLAT_OPTIMUM_RELATIVE_TOLERANCE = 0.02
 UTILITY_BIG_GAIN_WEIGHT = 0.10
 UTILITY_DOWNSIDE_WEIGHT = 1.0
 UTILITY_BIG_LOSS_WEIGHT = 1.0
@@ -258,6 +260,48 @@ def _period_window(frame: pd.DataFrame) -> dict[str, Any]:
     return {"rows": int(len(frame)), "start": str(values.iloc[0]), "end": str(values.iloc[-1])}
 
 
+def _flat_optimum_threshold(candidates: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Select the center of the broadest near-optimal utility plateau."""
+    peak = max(candidates, key=lambda item: float(item["utility_score"]))
+    peak_utility = float(peak["utility_score"])
+    tolerance = max(FLAT_OPTIMUM_ABSOLUTE_TOLERANCE, abs(peak_utility) * FLAT_OPTIMUM_RELATIVE_TOLERANCE)
+    near_optimal = sorted(
+        [item for item in candidates if float(item["utility_score"]) >= peak_utility - tolerance],
+        key=lambda item: float(item["threshold"]),
+    )
+    grid_indexes = {float(value): index for index, value in enumerate(THRESHOLD_SEARCH_VALUES)}
+    plateaus: list[list[dict[str, Any]]] = []
+    for item in near_optimal:
+        if not plateaus:
+            plateaus.append([item])
+            continue
+        previous = plateaus[-1][-1]
+        previous_index = grid_indexes.get(float(previous["threshold"]))
+        current_index = grid_indexes.get(float(item["threshold"]))
+        if previous_index is not None and current_index == previous_index + 1:
+            plateaus[-1].append(item)
+        else:
+            plateaus.append([item])
+    plateau = max(
+        plateaus,
+        key=lambda group: (
+            len(group),
+            max(float(item["utility_score"]) for item in group),
+            -min(float(item.get("big_loss_prediction_rate") or 0.0) for item in group),
+        ),
+    )
+    selected = plateau[(len(plateau) - 1) // 2]
+    return selected, {
+        "policy": "center_of_broadest_near_optimal_plateau",
+        "peak_threshold": float(peak["threshold"]),
+        "peak_utility_score": round(peak_utility, 6),
+        "utility_tolerance": round(tolerance, 6),
+        "near_optimal_thresholds": [float(item["threshold"]) for item in near_optimal],
+        "selected_plateau_thresholds": [float(item["threshold"]) for item in plateau],
+        "selected_threshold": float(selected["threshold"]),
+    }
+
+
 def _select_profit_threshold(frame: pd.DataFrame, probs: np.ndarray) -> dict[str, Any]:
     scored: list[dict[str, float | int | None | bool]] = []
     bins = frame["return_bin_5d"].fillna("").astype(str)
@@ -292,17 +336,9 @@ def _select_profit_threshold(frame: pd.DataFrame, probs: np.ndarray) -> dict[str
 
     zero_big_loss_viable = [item for item in viable if int(item.get("big_loss_predictions") or 0) == 0]
     guarded = zero_big_loss_viable or viable
-    best = max(
-        guarded,
-        key=lambda item: (
-            float(item["utility_score"] or 0.0),
-            -float(item.get("big_loss_prediction_rate") or 0.0),
-            float(item.get("avg_signal_return") or 0.0),
-            -abs(float(item["threshold"] or 0.55) - 0.55),
-        ),
-    )
+    best, flat_optimum = _flat_optimum_threshold(guarded)
     guardrail = "zero_big_loss_predictions" if zero_big_loss_viable else "minimize_big_loss_rate"
-    return {**best, "big_loss_guardrail": guardrail, "search": scored}
+    return {**best, "big_loss_guardrail": guardrail, "flat_optimum": flat_optimum, "search": scored}
 
 
 def _load_jsonl(path: str) -> pd.DataFrame:

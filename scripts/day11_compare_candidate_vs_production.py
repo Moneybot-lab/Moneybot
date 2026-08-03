@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from moneybot.services.deterministic_model import load_artifact, predict_proba
 from moneybot.services.temporal_validation import purged_embargoed_split
+from scripts.day10_train_candidate_model import _flat_optimum_threshold
 
 RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
 TARGET_GAIN_BUCKETS = {"gain", "big_gain"}
@@ -806,12 +807,21 @@ def _select_threshold_from_search(metrics: dict[str, Any], current_threshold: fl
             rejected.append({"threshold": item.get("threshold"), "reasons": guardrail_reasons})
     if not candidates:
         return {"recommended_threshold": float(current_threshold), "selected": current, "rejected": rejected, "reason": "no threshold passed guardrails"}
-    best = max(candidates, key=lambda item: (float(item.get("utility_score") or -999.0), -float(item.get("big_loss_prediction_rate") or 0.0), float(item.get("big_gain_capture_rate") or 0.0)))
+    best, flat_optimum = _flat_optimum_threshold(candidates)
+    plateau_thresholds = [float(value) for value in flat_optimum["selected_plateau_thresholds"]]
+    if any(abs(float(current_threshold) - value) < 1e-9 for value in plateau_thresholds):
+        return {
+            "recommended_threshold": float(current_threshold),
+            "selected": current,
+            "rejected": rejected,
+            "flat_optimum": flat_optimum,
+            "reason": "current threshold is inside the flat-optimum utility plateau",
+        }
     current_utility = _numeric_metric(current, "utility_score")
     best_utility = _numeric_metric(best, "utility_score")
     if current_utility is not None and best_utility is not None and best_utility <= current_utility:
-        return {"recommended_threshold": float(current_threshold), "selected": current, "rejected": rejected, "reason": "current threshold utility is already best after guardrails"}
-    return {"recommended_threshold": float(best["threshold"]), "selected": best, "rejected": rejected, "reason": "higher utility threshold passed guardrails"}
+        return {"recommended_threshold": float(current_threshold), "selected": current, "rejected": rejected, "flat_optimum": flat_optimum, "reason": "current threshold utility is already best after guardrails"}
+    return {"recommended_threshold": float(best["threshold"]), "selected": best, "rejected": rejected, "flat_optimum": flat_optimum, "reason": "flat-optimum threshold passed guardrails"}
 
 def _walk_forward_consistency(window_results: list[dict[str, Any]]) -> dict[str, Any]:
     evaluated = [item for item in window_results if item.get("evaluated")]
@@ -971,6 +981,7 @@ def _threshold_optimizer_report(artifact_path: str, metrics: dict[str, Any], tes
         "threshold_change_recommended": bool(change_recommended),
         "threshold_change_reason": reason,
         "selected_threshold_metrics": selection.get("selected"),
+        "flat_optimum": selection.get("flat_optimum"),
         "rejected_thresholds": selection.get("rejected"),
         "threshold_walk_forward_results": walk_forward,
         "deployable_model_config": {"model_path": artifact_path, "decision_threshold": round(recommended if change_recommended else current_threshold, 6)},
@@ -1334,6 +1345,7 @@ def main() -> None:
         "threshold_change_recommended": production_threshold_optimizer.get("threshold_change_recommended"),
         "threshold_change_reason": production_threshold_optimizer.get("threshold_change_reason"),
         "threshold_walk_forward_results": production_threshold_optimizer.get("threshold_walk_forward_results"),
+        "threshold_flat_optimum": production_threshold_optimizer.get("flat_optimum"),
         "threshold_optimizer": {"production": production_threshold_optimizer, "candidate": candidate_threshold_optimizer},
         "chosen_threshold": report_examples.get("chosen_threshold"),
         "prediction_overlap": report_examples.get("prediction_overlap"),

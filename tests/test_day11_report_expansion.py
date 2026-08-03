@@ -76,7 +76,25 @@ def test_threshold_optimizer_selects_best_guardrailed_utility_threshold():
     selected = _select_threshold_from_search(metrics, 0.55)
 
     assert selected["recommended_threshold"] == 0.70
-    assert selected["reason"] == "higher utility threshold passed guardrails"
+    assert selected["reason"] == "flat-optimum threshold passed guardrails"
+    assert selected["flat_optimum"]["selected_plateau_thresholds"] == [0.7]
+
+
+def test_flat_optimum_keeps_current_threshold_inside_near_optimal_plateau():
+    metrics = {
+        "threshold_search": [
+            {"threshold": 0.60, "utility_score": 0.270, "positive_predictions": 70, "big_loss_predictions": 0, "big_loss_prediction_rate": 0.0, "big_gain_capture_rate": 0.4},
+            {"threshold": 0.625, "utility_score": 0.274, "positive_predictions": 65, "big_loss_predictions": 0, "big_loss_prediction_rate": 0.0, "big_gain_capture_rate": 0.38},
+            {"threshold": 0.65, "utility_score": 0.273, "positive_predictions": 60, "big_loss_predictions": 0, "big_loss_prediction_rate": 0.0, "big_gain_capture_rate": 0.35},
+            {"threshold": 0.70, "utility_score": 0.24, "positive_predictions": 50, "big_loss_predictions": 0, "big_loss_prediction_rate": 0.0, "big_gain_capture_rate": 0.3},
+        ]
+    }
+
+    selected = _select_threshold_from_search(metrics, 0.60)
+
+    assert selected["recommended_threshold"] == 0.60
+    assert selected["reason"] == "current threshold is inside the flat-optimum utility plateau"
+    assert selected["flat_optimum"]["selected_plateau_thresholds"] == [0.6, 0.625, 0.65]
 
 
 def test_threshold_guardrails_reject_too_few_positive_predictions():

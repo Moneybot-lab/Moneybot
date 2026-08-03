@@ -5,6 +5,7 @@ from scripts.day10_train_candidate_model import (
     THRESHOLD_SEARCH_VALUES,
     _chronological_training_periods,
     _chronological_training_periods_with_diagnostics,
+    _flat_optimum_threshold,
     _future_safe_feature_columns,
     _select_profit_threshold,
 )
@@ -65,4 +66,21 @@ def test_threshold_search_uses_track_b_profit_grid_and_records_big_loss_guardrai
     assert selected["threshold"] == 0.625
     assert selected["big_loss_predictions"] == 0
     assert selected["big_loss_guardrail"] == "zero_big_loss_predictions"
+    assert selected["flat_optimum"]["policy"] == "center_of_broadest_near_optimal_plateau"
+    assert selected["threshold"] in selected["flat_optimum"]["selected_plateau_thresholds"]
     assert all("big_loss_prediction_rate" in row for row in selected["search"])
+
+
+def test_flat_optimum_prefers_broad_plateau_over_isolated_peak():
+    candidates = [
+        {"threshold": 0.60, "utility_score": 0.275, "big_loss_prediction_rate": 0.0},
+        {"threshold": 0.625, "utility_score": 0.276, "big_loss_prediction_rate": 0.0},
+        {"threshold": 0.65, "utility_score": 0.2745, "big_loss_prediction_rate": 0.0},
+        {"threshold": 0.70, "utility_score": 0.280, "big_loss_prediction_rate": 0.0},
+    ]
+
+    selected, diagnostics = _flat_optimum_threshold(candidates)
+
+    assert selected["threshold"] == 0.625
+    assert diagnostics["peak_threshold"] == 0.70
+    assert diagnostics["selected_plateau_thresholds"] == [0.60, 0.625, 0.65]
