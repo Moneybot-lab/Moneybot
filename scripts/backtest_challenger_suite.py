@@ -275,6 +275,57 @@ def _promotion_gates(metrics: dict[str, Any], benchmark: dict[str, Any], *, min_
     return {"promotion_ready": not failures, "failed_gates": failures, "objective_gates": {"min_rows": min_rows, "max_drawdown": max_drawdown, "max_ece": max_ece, "min_excess_return": min_excess_return, "max_drift_shift": max_drift_shift, "min_bootstrap_avg_return_lower": 0.0}}
 
 
+def _challenger_lane(challenger: dict[str, Any]) -> str:
+    if challenger.get("candidate_lane") == "ranking" or challenger.get("specialized_family") == "ranking_top5_model":
+        return "ranking"
+    return "decision"
+
+
+def _pareto_objectives(challenger: dict[str, Any], lane: str) -> dict[str, float]:
+    metrics = challenger["backtest_metrics"]
+    bootstrap_lower = metrics["bootstrap_confidence"].get("avg_return_lower")
+    brier = metrics.get("calibration", {}).get("brier_score")
+    common = {
+        "bootstrap_lower": float(bootstrap_lower) if bootstrap_lower is not None else -999.0,
+        "max_drawdown": float(metrics.get("max_drawdown") or 0.0),
+        "negative_big_loss_rate": -float(metrics.get("big_loss_prediction_rate") or 0.0),
+    }
+    if lane == "ranking":
+        ranking = metrics.get("top_k_ranking") or {}
+        return {
+            **common,
+            "ranking_objective": float(ranking.get("ranking_objective") or 0.0),
+            "top_k_avg_return": float(ranking.get("top_k_avg_return") or 0.0),
+        }
+    return {
+        **common,
+        "avg_return_net": float(metrics.get("avg_return_net") or 0.0),
+        "negative_brier": -float(brier) if brier is not None else -1.0,
+    }
+
+
+def _pareto_frontier(challengers: list[dict[str, Any]], lane: str) -> list[dict[str, Any]]:
+    """Return all non-dominated candidates for one scoring lane."""
+    eligible = [item for item in challengers if _challenger_lane(item) == lane and item.get("model_type") != "baseline_classifier"]
+    objectives = {str(item["model_version"]): _pareto_objectives(item, lane) for item in eligible}
+    frontier: list[dict[str, Any]] = []
+    for candidate in eligible:
+        candidate_values = objectives[str(candidate["model_version"])]
+        dominated = False
+        for other in eligible:
+            if other is candidate:
+                continue
+            other_values = objectives[str(other["model_version"])]
+            no_worse = all(other_values[key] >= candidate_values[key] for key in candidate_values)
+            strictly_better = any(other_values[key] > candidate_values[key] for key in candidate_values)
+            if no_worse and strictly_better:
+                dominated = True
+                break
+        if not dominated:
+            frontier.append({**candidate, "pareto_objectives": candidate_values})
+    return sorted(frontier, key=lambda item: str(item["model_version"]))
+
+
 def backtest_challenger_suite(
     *,
     suite_manifest_path: Path,
@@ -313,12 +364,20 @@ def backtest_challenger_suite(
         position_changes = np.abs(np.diff(np.concatenate([[0], preds.astype(float)])))
         strategy_returns = (preds * returns) - (position_changes * cost_rate)
         equity = np.cumprod(1.0 + strategy_returns)
+        big_loss_rows = returns < -0.03
+        big_loss_predictions = int(((preds == 1) & big_loss_rows).sum())
+        selected_returns = returns[preds == 1]
+        negative_selected_returns = selected_returns[selected_returns < 0.0]
         metrics = {
             "rows": int(len(frame)),
             "accuracy": round(float((preds == labels).mean()), 6) if len(frame) else 0.0,
             "positive_rate": round(float(preds.mean()), 6) if len(frame) else 0.0,
             "total_return_net": round(float(equity[-1] - 1.0), 6) if len(equity) else 0.0,
             "avg_return_net": round(float(strategy_returns.mean()), 6) if len(strategy_returns) else 0.0,
+            "downside_risk": round(float(abs(negative_selected_returns.mean())), 6) if len(negative_selected_returns) else 0.0,
+            "big_loss_rows": int(big_loss_rows.sum()),
+            "big_loss_predictions": big_loss_predictions,
+            "big_loss_prediction_rate": round(big_loss_predictions / int(big_loss_rows.sum()), 6) if big_loss_rows.any() else 0.0,
             "turnover": round(float(position_changes.sum()), 6),
             "transaction_cost_bps": transaction_cost_bps,
             "slippage_bps": slippage_bps,
@@ -341,6 +400,18 @@ def backtest_challenger_suite(
         ),
         reverse=True,
     )
+    decision_frontier = _pareto_frontier(challengers, "decision")
+    ranking_frontier = _pareto_frontier(challengers, "ranking")
+    frontier_versions = {item["model_version"] for item in [*decision_frontier, *ranking_frontier]}
+    retained = [item for item in ranked if item["model_version"] in frontier_versions]
+    promotion_eligible_frontier = [
+        item
+        for item in retained
+        if _challenger_lane(item) == "decision"
+        and item.get("model_type") == "logistic_regression"
+        and item["promotion_gates"].get("promotion_ready") is True
+    ]
+    shadow_candidates = [item for item in retained if item["promotion_gates"].get("promotion_ready") is True]
     report = {
         "schema_version": BACKTEST_SCHEMA_VERSION,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -352,8 +423,22 @@ def backtest_challenger_suite(
         "bootstrap_policy": {"method": "date_block_bootstrap", "confidence": 0.95, "resamples": 500, "promotion_requires_nonnegative_lower_avg_return": True},
         "challengers": challengers,
         "ranked_model_versions": [item["model_version"] for item in ranked],
-        "shadow_candidates": [item["model_version"] for item in ranked if item["shadow_logging_recommended"]],
-        "ranking_policy": "rank promotion-ready models by top-K capped-exposure objective before total return",
+        "pareto_frontiers": {
+            "decision": {
+                "objectives": ["bootstrap_lower", "avg_return_net", "negative_brier", "max_drawdown", "negative_big_loss_rate"],
+                "model_versions": [item["model_version"] for item in decision_frontier],
+            },
+            "ranking": {
+                "objectives": ["bootstrap_lower", "ranking_objective", "top_k_avg_return", "max_drawdown", "negative_big_loss_rate"],
+                "model_versions": [item["model_version"] for item in ranking_frontier],
+                "can_replace_main_decision_model": False,
+            },
+        },
+        "retained_model_versions": [item["model_version"] for item in retained],
+        "promotion_eligible_frontier_model_versions": [item["model_version"] for item in promotion_eligible_frontier],
+        "shadow_candidates": [item["model_version"] for item in shadow_candidates],
+        "retention_policy": "retain every non-dominated candidate on the lane-specific Pareto frontier; do not collapse research retention to one overall winner",
+        "ranking_policy": "legacy deterministic ordering is retained only for display and promotion packaging; Pareto frontiers control candidate retention",
         "routing_policy": "shadow-log first; user-facing routing remains disabled until gates pass and human promotion occurs",
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)

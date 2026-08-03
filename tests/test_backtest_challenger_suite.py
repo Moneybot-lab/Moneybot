@@ -3,7 +3,7 @@ import json
 import numpy as np
 import pandas as pd
 
-from scripts.backtest_challenger_suite import _bootstrap_confidence_bounds, backtest_challenger_suite
+from scripts.backtest_challenger_suite import _bootstrap_confidence_bounds, _pareto_frontier, backtest_challenger_suite
 from scripts.train_challenger_suite import train_challenger_suite
 
 
@@ -18,6 +18,33 @@ def test_date_block_bootstrap_is_deterministic_and_conservative():
     assert first["independent_date_blocks"] == 3
     assert first["avg_return_lower"] <= first["avg_return_median"] <= first["avg_return_upper"]
     assert first["avg_return_lower"] < 0.0
+
+
+def test_pareto_frontier_retains_tradeoffs_and_drops_dominated_candidate():
+    def candidate(version, avg_return, brier, bootstrap_lower, drawdown, big_loss_rate):
+        return {
+            "model_version": version,
+            "model_type": "logistic_regression",
+            "candidate_lane": "decision",
+            "backtest_metrics": {
+                "avg_return_net": avg_return,
+                "max_drawdown": drawdown,
+                "big_loss_prediction_rate": big_loss_rate,
+                "calibration": {"brier_score": brier},
+                "bootstrap_confidence": {"avg_return_lower": bootstrap_lower},
+            },
+        }
+
+    frontier = _pareto_frontier(
+        [
+            candidate("profit", 0.10, 0.20, 0.01, -0.10, 0.0),
+            candidate("calibrated", 0.08, 0.10, 0.02, -0.05, 0.0),
+            candidate("dominated", 0.05, 0.30, -0.01, -0.20, 0.20),
+        ],
+        "decision",
+    )
+
+    assert [item["model_version"] for item in frontier] == ["calibrated", "profit"]
 
 
 def test_backtest_challenger_suite_scores_every_model_with_gates_and_benchmarks(tmp_path):
@@ -47,7 +74,7 @@ def test_backtest_challenger_suite_scores_every_model_with_gates_and_benchmarks(
 
     assert report["schema_version"] == "moneybot-challenger-backtest.v1"
     assert report["routing_policy"].startswith("shadow-log first")
-    assert report["ranking_policy"].startswith("rank promotion-ready")
+    assert "Pareto frontiers control candidate retention" in report["ranking_policy"]
     assert "buy_and_hold_return" in report["benchmark"]
     assert len(report["challengers"]) == suite["challenger_count"]
     first = report["challengers"][0]
@@ -62,6 +89,11 @@ def test_backtest_challenger_suite_scores_every_model_with_gates_and_benchmarks(
     assert first["promotion_gates"]["objective_gates"]["min_rows"] == 10
     assert first["promotion_gates"]["objective_gates"]["min_bootstrap_avg_return_lower"] == 0.0
     assert first["routing_allowed"] is False
+    retained = set(report["retained_model_versions"])
+    frontier = set(report["pareto_frontiers"]["decision"]["model_versions"]) | set(report["pareto_frontiers"]["ranking"]["model_versions"])
+    assert retained == frontier
+    assert report["pareto_frontiers"]["ranking"]["can_replace_main_decision_model"] is False
+    assert "one overall winner" in report["retention_policy"]
 
 
 def test_backtest_challenger_suite_rehydrates_derived_app_signal_features(tmp_path):

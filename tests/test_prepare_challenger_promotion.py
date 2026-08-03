@@ -64,3 +64,31 @@ def test_prepare_challenger_promotion_never_uses_ranking_lane_win(tmp_path):
     result = prepare_challenger_promotion(backtest_report_path=report_path, output_dir=tmp_path / "out")
 
     assert result["candidate_win"] is False
+
+
+def test_prepare_challenger_promotion_uses_only_pareto_retained_models(tmp_path):
+    model = tmp_path / "dominated.json"
+    model.write_text(json.dumps({"version": "dominated", "model_type": "logistic_regression"}), encoding="utf-8")
+    report_path = tmp_path / "backtest.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "ranked_model_versions": ["dominated"],
+                "promotion_eligible_frontier_model_versions": [],
+                "challengers": [
+                    {
+                        "model_version": "dominated",
+                        "model_type": "logistic_regression",
+                        "model_path": str(model),
+                        "promotion_gates": {"promotion_ready": True},
+                        "routing_allowed": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = prepare_challenger_promotion(backtest_report_path=report_path, output_dir=tmp_path / "out")
+
+    assert result["candidate_win"] is False
