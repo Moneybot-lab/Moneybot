@@ -34,6 +34,8 @@ def _eligible_challengers(report: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         if challenger.get("routing_allowed") is not False:
             continue
+        if challenger.get("candidate_lane") == "ranking" or challenger.get("specialized_family") == "ranking_top5_model":
+            continue
         if challenger.get("model_type") != "logistic_regression":
             continue
         out.append(challenger)

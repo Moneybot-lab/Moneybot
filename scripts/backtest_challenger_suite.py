@@ -65,13 +65,12 @@ def _prepare_features(df: pd.DataFrame, feature_columns: list[str], fill_values:
 
 
 def _predict(artifact: dict[str, Any], frame: pd.DataFrame, feature_columns: list[str]) -> tuple[np.ndarray, np.ndarray]:
-    model_type = str(artifact.get("model_type") or "logistic_regression")
-    if model_type == "logistic_regression":
-        artifact_features = [str(col) for col in artifact.get("feature_columns") or feature_columns]
+    def linear_probabilities(linear: dict[str, Any]) -> np.ndarray:
+        artifact_features = [str(col) for col in linear.get("feature_columns") or feature_columns]
         aligned = frame.copy()
         missing = [col for col in artifact_features if col not in aligned.columns]
         if missing:
-            fill_values = artifact.get("feature_fill_values") if isinstance(artifact.get("feature_fill_values"), dict) else {}
+            fill_values = linear.get("feature_fill_values") if isinstance(linear.get("feature_fill_values"), dict) else {}
             for col in missing:
                 fill = fill_values.get(col, 0.0) if isinstance(fill_values, dict) else 0.0
                 try:
@@ -80,13 +79,29 @@ def _predict(artifact: dict[str, Any], frame: pd.DataFrame, feature_columns: lis
                     fill = 0.0
                 aligned[col] = fill
         X = aligned[artifact_features].to_numpy(dtype=float)
-        means = np.asarray(artifact.get("means"), dtype=float)
-        stds = np.asarray(artifact.get("stds"), dtype=float)
+        means = np.asarray(linear.get("means"), dtype=float)
+        stds = np.asarray(linear.get("stds"), dtype=float)
         stds = np.where(stds == 0.0, 1.0, stds)
-        weights = np.asarray(artifact.get("weights"), dtype=float)
-        probs = _sigmoid(((X - means) / stds) @ weights + float(artifact.get("bias", 0.0)))
-        preds = (probs >= float(artifact.get("decision_threshold", 0.5))).astype(int)
+        weights = np.asarray(linear.get("weights"), dtype=float)
+        logits = ((X - means) / stds) @ weights + float(linear.get("bias", 0.0))
+        logits = (logits * float(linear.get("calibration_slope", 1.0))) + float(linear.get("calibration_intercept", 0.0))
+        return _sigmoid(logits)
+
+    model_type = str(artifact.get("model_type") or "logistic_regression")
+    if model_type in {"logistic_regression", "calibrated_linear", "hard_example_linear", "ranking_lane_linear", "abstention_linear"}:
+        probs = linear_probabilities(artifact)
+        threshold = float(artifact.get("decision_threshold", 0.5))
+        abstention = artifact.get("abstention") if isinstance(artifact.get("abstention"), dict) else {}
+        margin = float(abstention.get("margin", 0.0)) if abstention.get("enabled") else 0.0
+        preds = (probs >= min(1.0, threshold + margin)).astype(int)
         return probs, preds
+    if model_type == "two_stage_risk_filter":
+        decision_probs = linear_probabilities(artifact["decision_model"])
+        risk_probs = linear_probabilities(artifact["risk_model"])
+        decision_threshold = float(artifact.get("decision_threshold", 0.60))
+        risk_threshold = float(artifact.get("risk_threshold", 0.20))
+        preds = ((decision_probs >= decision_threshold) & (risk_probs <= risk_threshold)).astype(int)
+        return decision_probs, preds
     if model_type == "decision_stump":
         feature = str(artifact["feature"])
         values = (frame[feature] if feature in frame.columns else pd.Series(0.0, index=frame.index)).to_numpy(dtype=float)
@@ -96,6 +111,18 @@ def _predict(artifact: dict[str, Any], frame: pd.DataFrame, feature_columns: lis
         else:
             preds = (values < threshold).astype(int)
         return preds.astype(float), preds
+    if model_type == "shallow_decision_tree":
+        tree = artifact["tree"]
+        scores = np.empty(len(frame), dtype=float)
+        for output_index, (_, row) in enumerate(frame.iterrows()):
+            node = tree
+            while not bool(node.get("leaf")):
+                feature = str(node["feature"])
+                value = float(row[feature]) if feature in frame.columns else 0.0
+                node = node["left"] if value < float(node["threshold"]) else node["right"]
+            scores[output_index] = float(node["probability"])
+        preds = (scores >= float(artifact.get("decision_threshold", 0.60))).astype(int)
+        return scores, preds
     if model_type == "baseline_classifier":
         spec = artifact.get("training_spec") if isinstance(artifact.get("training_spec"), dict) else {}
         if "always-down" in str(artifact.get("version")):
@@ -201,6 +228,35 @@ def _drift(frame: pd.DataFrame, feature_columns: list[str]) -> dict[str, Any]:
     return {"max_mean_shift": max(shifts.values()) if shifts else 0.0, "feature_shifts": shifts}
 
 
+def _bootstrap_confidence_bounds(strategy_returns: np.ndarray, frame: pd.DataFrame, *, resamples: int = 500, confidence: float = 0.95) -> dict[str, Any]:
+    """Deterministic date-block bootstrap for net average return."""
+    if "event_date" in frame.columns:
+        dates = pd.to_datetime(frame["event_date"], utc=True, errors="coerce")
+    elif "ts" in frame.columns:
+        numeric = pd.to_numeric(frame["ts"], errors="coerce")
+        dates = pd.to_datetime(numeric, unit="s", utc=True, errors="coerce") if numeric.abs().median() >= 100_000_000 else pd.Series(pd.NaT, index=frame.index)
+    else:
+        dates = pd.Series(pd.NaT, index=frame.index)
+    block_keys = dates.dt.strftime("%Y-%m-%d") if dates.notna().all() else pd.Series([f"row-{index}" for index in range(len(frame))], index=frame.index)
+    work = pd.DataFrame({"block": block_keys.to_numpy(), "return": np.asarray(strategy_returns, dtype=float)})
+    block_means = work.groupby("block", sort=True)["return"].mean().to_numpy(dtype=float)
+    if block_means.size == 0:
+        return {"method": "date_block_bootstrap", "confidence": confidence, "resamples": resamples, "independent_date_blocks": 0, "avg_return_lower": None, "avg_return_median": None, "avg_return_upper": None, "probability_positive": 0.0}
+    rng = np.random.default_rng(20260803)
+    samples = block_means[rng.integers(0, len(block_means), size=(max(1, resamples), len(block_means)))].mean(axis=1)
+    alpha = (1.0 - confidence) / 2.0
+    return {
+        "method": "date_block_bootstrap",
+        "confidence": confidence,
+        "resamples": int(max(1, resamples)),
+        "independent_date_blocks": int(len(block_means)),
+        "avg_return_lower": round(float(np.quantile(samples, alpha)), 6),
+        "avg_return_median": round(float(np.quantile(samples, 0.5)), 6),
+        "avg_return_upper": round(float(np.quantile(samples, 1.0 - alpha)), 6),
+        "probability_positive": round(float((samples > 0.0).mean()), 6),
+    }
+
+
 def _promotion_gates(metrics: dict[str, Any], benchmark: dict[str, Any], *, min_rows: int, max_drawdown: float, max_ece: float, min_excess_return: float, max_drift_shift: float) -> dict[str, Any]:
     failures: list[str] = []
     if metrics["rows"] < min_rows:
@@ -213,7 +269,10 @@ def _promotion_gates(metrics: dict[str, Any], benchmark: dict[str, Any], *, min_
         failures.append("calibration_gate_failed")
     if metrics["drift"]["max_mean_shift"] > max_drift_shift:
         failures.append("drift_gate_failed")
-    return {"promotion_ready": not failures, "failed_gates": failures, "objective_gates": {"min_rows": min_rows, "max_drawdown": max_drawdown, "max_ece": max_ece, "min_excess_return": min_excess_return, "max_drift_shift": max_drift_shift}}
+    lower_bound = metrics.get("bootstrap_confidence", {}).get("avg_return_lower")
+    if lower_bound is None or float(lower_bound) < 0.0:
+        failures.append("bootstrap_profit_confidence_failed")
+    return {"promotion_ready": not failures, "failed_gates": failures, "objective_gates": {"min_rows": min_rows, "max_drawdown": max_drawdown, "max_ece": max_ece, "min_excess_return": min_excess_return, "max_drift_shift": max_drift_shift, "min_bootstrap_avg_return_lower": 0.0}}
 
 
 def backtest_challenger_suite(
@@ -267,6 +326,7 @@ def backtest_challenger_suite(
             "top_k_ranking": _ranking_metrics(probs, labels, returns),
             "calibration": _calibration(probs, labels),
             "drift": _drift(frame, features),
+            "bootstrap_confidence": _bootstrap_confidence_bounds(strategy_returns, frame),
         }
         gates = _promotion_gates(metrics, benchmark, min_rows=min_rows, max_drawdown=max_drawdown, max_ece=max_ece, min_excess_return=min_excess_return, max_drift_shift=max_drift_shift)
         challengers.append({**challenger, "backtest_metrics": metrics, "promotion_gates": gates, "shadow_logging_recommended": gates["promotion_ready"], "routing_allowed": False})
@@ -289,6 +349,7 @@ def backtest_challenger_suite(
         "rows": int(len(frame)),
         "horizon_days": horizon_days,
         "benchmark": benchmark,
+        "bootstrap_policy": {"method": "date_block_bootstrap", "confidence": 0.95, "resamples": 500, "promotion_requires_nonnegative_lower_avg_return": True},
         "challengers": challengers,
         "ranked_model_versions": [item["model_version"] for item in ranked],
         "shadow_candidates": [item["model_version"] for item in ranked if item["shadow_logging_recommended"]],
