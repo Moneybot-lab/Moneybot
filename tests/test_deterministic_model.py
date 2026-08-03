@@ -7,6 +7,7 @@ from moneybot.services.deterministic_model import (
     build_training_matrix,
     classify,
     engineer_features,
+    fit_probability_calibration,
     predict_proba,
     train_logistic_baseline,
 )
@@ -61,3 +62,22 @@ def test_train_logistic_baseline_is_deterministic_and_predicts_probabilities():
     assert classes.shape == (5,)
     assert np.all((probs >= 0) & (probs <= 1))
     assert set(np.unique(classes)).issubset({0, 1})
+
+
+def test_fit_probability_calibration_improves_brier_or_retains_identity():
+    raw_probs = np.asarray([0.40, 0.45, 0.55, 0.60] * 10, dtype=float)
+    labels = np.asarray([0.0, 0.0, 1.0, 1.0] * 10, dtype=float)
+
+    calibration = fit_probability_calibration(raw_probs, labels)
+
+    assert calibration["rows"] == 40
+    assert calibration["calibrated_brier_score"] <= calibration["raw_brier_score"]
+    assert calibration["method"] in {"platt", "identity"}
+
+
+def test_fit_probability_calibration_retains_identity_for_single_class_period():
+    calibration = fit_probability_calibration(np.asarray([0.2, 0.3, 0.4]), np.zeros(3))
+
+    assert calibration["applied"] is False
+    assert calibration["slope"] == 1.0
+    assert calibration["intercept"] == 0.0

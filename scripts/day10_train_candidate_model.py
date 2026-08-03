@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -17,12 +19,14 @@ if str(PROJECT_ROOT) not in sys.path:
 from moneybot.services.deterministic_model import (
     BaselineModelArtifact,
     classify,
+    fit_probability_calibration,
     predict_proba,
     save_artifact,
     summarize_binary_predictions,
     train_logistic_baseline,
 )
 from moneybot.services.model_metadata import append_artifact_history, build_artifact_metadata, save_artifact_metadata
+from moneybot.services.temporal_validation import purge_embargo_periods
 
 RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
 TARGET_GAIN_BUCKETS = {"gain", "big_gain"}
@@ -33,10 +37,16 @@ RETURN_BIN_SAMPLE_WEIGHTS = {
     "gain": 1.25,
     "big_gain": 4.0,
 }
-THRESHOLD_SEARCH_VALUES = (0.50, 0.525, 0.55, 0.575, 0.60, 0.625, 0.65, 0.675, 0.70)
+THRESHOLD_SEARCH_VALUES = (0.55, 0.575, 0.60, 0.625, 0.65, 0.675, 0.70)
+FLAT_OPTIMUM_ABSOLUTE_TOLERANCE = 0.005
+FLAT_OPTIMUM_RELATIVE_TOLERANCE = 0.02
 UTILITY_BIG_GAIN_WEIGHT = 0.10
 UTILITY_DOWNSIDE_WEIGHT = 1.0
 UTILITY_BIG_LOSS_WEIGHT = 1.0
+CALIBRATION_FRACTION_OF_DEVELOPMENT = 0.20
+THRESHOLD_FRACTION_OF_DEVELOPMENT = 0.20
+LABEL_HORIZON_DAYS = 5
+EMBARGO_DAYS = 1
 
 APP_SIGNAL_FEATURE_COLUMNS = {
     "feature_endpoint_hot_momentum_buys",
@@ -129,40 +139,206 @@ def _profit_utility_score(frame: pd.DataFrame, preds: np.ndarray) -> float | Non
     )
 
 
-def _threshold_selection_frame(train_df: pd.DataFrame) -> pd.DataFrame:
-    validation_rows = int(len(train_df) * 0.25)
-    if validation_rows >= 20 and validation_rows < len(train_df):
-        return train_df.tail(validation_rows).copy()
-    return train_df.copy()
+def _chronological_training_periods_with_diagnostics(df: pd.DataFrame, train_ratio: float) -> tuple[list[pd.DataFrame], list[dict[str, Any]]]:
+    """Split chronologically and return purged/embargoed periods plus diagnostics."""
+    dated_periods = _date_based_training_periods(df, train_ratio)
+    if dated_periods is not None:
+        fit, calibration, threshold, final_test = dated_periods
+    else:
+        development, final_test = _chronological_split(df, train_ratio)
+        calibration_rows = max(1, int(len(development) * CALIBRATION_FRACTION_OF_DEVELOPMENT))
+        threshold_rows = max(1, int(len(development) * THRESHOLD_FRACTION_OF_DEVELOPMENT))
+        fit_rows = len(development) - calibration_rows - threshold_rows
+        if fit_rows < 1:
+            raise ValueError("train_ratio leaves insufficient rows for separate fit, calibration, and threshold periods")
+        fit = development.iloc[:fit_rows].copy()
+        calibration = development.iloc[fit_rows:fit_rows + calibration_rows].copy()
+        threshold = development.iloc[fit_rows + calibration_rows:].copy()
+    periods, boundaries = purge_embargo_periods(
+        [fit, calibration, threshold, final_test],
+        horizon_days=LABEL_HORIZON_DAYS,
+        embargo_days=EMBARGO_DAYS,
+    )
+    if any(period.empty for period in periods):
+        if dated_periods is None and _event_dates(df) is None:
+            # Preserve support for tiny synthetic/legacy snapshots that have no
+            # real event timestamps. They can be trained for smoke testing, but
+            # diagnostics explicitly prevent them from certifying split hygiene.
+            raw_periods = [fit, calibration, threshold, final_test]
+            unavailable = {
+                "method": "unavailable_no_event_time",
+                "horizon_days": LABEL_HORIZON_DAYS,
+                "embargo_days": EMBARGO_DAYS,
+                "label_horizon_gap_passed": False,
+                "date_overlap_count": 0,
+                "symbol_date_overlap_count": 0,
+            }
+            return raw_periods, [
+                {**unavailable, "left_period_index": index, "right_period_index": index + 1}
+                for index in range(len(raw_periods) - 1)
+            ]
+        raise ValueError("purging/embargo leaves an empty fit, calibration, threshold, or final-test period")
+    return periods, boundaries
+
+
+def _event_dates(df: pd.DataFrame) -> pd.Series | None:
+    if "event_date" in df.columns:
+        times = pd.to_datetime(df["event_date"], utc=True, errors="coerce")
+    elif "ts" in df.columns:
+        numeric = pd.to_numeric(df["ts"], errors="coerce")
+        if numeric.notna().all() and numeric.abs().median() >= 100_000_000:
+            times = pd.to_datetime(numeric, unit="s", utc=True, errors="coerce")
+        else:
+            return None
+    else:
+        return None
+    if times.isna().any():
+        return None
+    return times.dt.normalize()
+
+
+def _date_based_training_periods(df: pd.DataFrame, train_ratio: float) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame] | None:
+    """Allocate whole event dates so dense dates cannot collapse tuning periods."""
+    dates = _event_dates(df)
+    if dates is None:
+        return None
+    unique_dates = sorted(dates.unique())
+    # Middle periods lose rows on both sides: the preceding boundary embargoes
+    # their first dates and the following boundary purges their last horizon.
+    # Reserve enough distinct dates up front rather than relying on row counts;
+    # a single busy trading date can contain hundreds of rows.
+    minimum_period_dates = LABEL_HORIZON_DAYS + EMBARGO_DAYS + 1
+    minimum_dates = minimum_period_dates * 4
+    if len(unique_dates) < minimum_dates:
+        return None
+    requested_development_dates = int(len(unique_dates) * train_ratio)
+    development_date_count = min(
+        max(requested_development_dates, minimum_period_dates * 3),
+        len(unique_dates) - minimum_period_dates,
+    )
+    development_dates = unique_dates[:development_date_count]
+    calibration_date_count = max(
+        minimum_period_dates,
+        int(len(development_dates) * CALIBRATION_FRACTION_OF_DEVELOPMENT),
+    )
+    threshold_date_count = max(
+        minimum_period_dates,
+        int(len(development_dates) * THRESHOLD_FRACTION_OF_DEVELOPMENT),
+    )
+    fit_date_count = len(development_dates) - calibration_date_count - threshold_date_count
+    if fit_date_count < minimum_period_dates:
+        return None
+    threshold_start = fit_date_count + calibration_date_count
+    date_sets = (
+        set(development_dates[:fit_date_count]),
+        set(development_dates[fit_date_count:threshold_start]),
+        set(development_dates[threshold_start:]),
+        set(unique_dates[development_date_count:]),
+    )
+    periods = tuple(df.loc[dates.isin(date_set)].copy() for date_set in date_sets)
+    if any(period.empty for period in periods):
+        return None
+    return periods
+
+
+def _chronological_training_periods(df: pd.DataFrame, train_ratio: float) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Split chronologically into disjoint fit, calibration, threshold, and test periods."""
+    periods, _ = _chronological_training_periods_with_diagnostics(df, train_ratio)
+    return periods[0], periods[1], periods[2], periods[3]
+
+
+def _period_window(frame: pd.DataFrame) -> dict[str, Any]:
+    if frame.empty:
+        return {"rows": 0, "start": None, "end": None}
+    if "event_date" in frame.columns:
+        values = frame["event_date"].fillna("").astype(str)
+    elif "ts" in frame.columns:
+        numeric = pd.to_numeric(frame["ts"], errors="coerce")
+        values = pd.to_datetime(numeric, unit="s", utc=True, errors="coerce").astype(str)
+    else:
+        values = pd.Series(frame.index.astype(str), index=frame.index)
+    return {"rows": int(len(frame)), "start": str(values.iloc[0]), "end": str(values.iloc[-1])}
+
+
+def _flat_optimum_threshold(candidates: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Select the center of the broadest near-optimal utility plateau."""
+    peak = max(candidates, key=lambda item: float(item["utility_score"]))
+    peak_utility = float(peak["utility_score"])
+    tolerance = max(FLAT_OPTIMUM_ABSOLUTE_TOLERANCE, abs(peak_utility) * FLAT_OPTIMUM_RELATIVE_TOLERANCE)
+    near_optimal = sorted(
+        [item for item in candidates if float(item["utility_score"]) >= peak_utility - tolerance],
+        key=lambda item: float(item["threshold"]),
+    )
+    grid_indexes = {float(value): index for index, value in enumerate(THRESHOLD_SEARCH_VALUES)}
+    plateaus: list[list[dict[str, Any]]] = []
+    for item in near_optimal:
+        if not plateaus:
+            plateaus.append([item])
+            continue
+        previous = plateaus[-1][-1]
+        previous_index = grid_indexes.get(float(previous["threshold"]))
+        current_index = grid_indexes.get(float(item["threshold"]))
+        if previous_index is not None and current_index == previous_index + 1:
+            plateaus[-1].append(item)
+        else:
+            plateaus.append([item])
+    plateau = max(
+        plateaus,
+        key=lambda group: (
+            len(group),
+            max(float(item["utility_score"]) for item in group),
+            -min(float(item.get("big_loss_prediction_rate") or 0.0) for item in group),
+        ),
+    )
+    selected = plateau[(len(plateau) - 1) // 2]
+    return selected, {
+        "policy": "center_of_broadest_near_optimal_plateau",
+        "peak_threshold": float(peak["threshold"]),
+        "peak_utility_score": round(peak_utility, 6),
+        "utility_tolerance": round(tolerance, 6),
+        "near_optimal_thresholds": [float(item["threshold"]) for item in near_optimal],
+        "selected_plateau_thresholds": [float(item["threshold"]) for item in plateau],
+        "selected_threshold": float(selected["threshold"]),
+    }
 
 
 def _select_profit_threshold(frame: pd.DataFrame, probs: np.ndarray) -> dict[str, Any]:
-    scored: list[dict[str, float | int | None]] = []
+    scored: list[dict[str, float | int | None | bool]] = []
+    bins = frame["return_bin_5d"].fillna("").astype(str)
+    big_loss = (bins == "big_loss").to_numpy()
+    big_gain = (bins == "big_gain").to_numpy()
+    big_loss_rows = int(big_loss.sum())
+    big_gain_rows = int(big_gain.sum())
     for threshold in THRESHOLD_SEARCH_VALUES:
         preds = (probs >= threshold).astype(int)
         utility = _profit_utility_score(frame, preds)
         signal_returns = pd.to_numeric(frame.loc[preds == 1, "return_5d"], errors="coerce").dropna()
+        big_loss_predictions = int((preds[big_loss] == 1).sum()) if big_loss_rows else 0
+        big_gain_predictions = int((preds[big_gain] == 1).sum()) if big_gain_rows else 0
         scored.append(
             {
                 "threshold": float(threshold),
                 "utility_score": round(float(utility), 6) if utility is not None else None,
                 "positive_predictions": int((preds == 1).sum()),
                 "avg_signal_return": round(float(signal_returns.mean()), 6) if not signal_returns.empty else None,
+                "big_loss_rows": big_loss_rows,
+                "big_loss_predictions": big_loss_predictions,
+                "big_loss_prediction_rate": round(big_loss_predictions / big_loss_rows, 6) if big_loss_rows else None,
+                "big_gain_rows": big_gain_rows,
+                "big_gain_predictions": big_gain_predictions,
+                "big_gain_capture_rate": round(big_gain_predictions / big_gain_rows, 6) if big_gain_rows else None,
             }
         )
 
     viable = [item for item in scored if isinstance(item.get("utility_score"), (int, float)) and int(item.get("positive_predictions") or 0) > 0]
     if not viable:
-        return {"threshold": 0.55, "utility_score": None, "positive_predictions": 0, "avg_signal_return": None, "search": scored}
-    best = max(
-        viable,
-        key=lambda item: (
-            float(item["utility_score"] or 0.0),
-            float(item.get("avg_signal_return") or 0.0),
-            -abs(float(item["threshold"] or 0.55) - 0.55),
-        ),
-    )
-    return {**best, "search": scored}
+        return {"threshold": 0.55, "utility_score": None, "positive_predictions": 0, "avg_signal_return": None, "big_loss_guardrail": "no_positive_thresholds", "search": scored}
+
+    zero_big_loss_viable = [item for item in viable if int(item.get("big_loss_predictions") or 0) == 0]
+    guarded = zero_big_loss_viable or viable
+    best, flat_optimum = _flat_optimum_threshold(guarded)
+    guardrail = "zero_big_loss_predictions" if zero_big_loss_viable else "minimize_big_loss_rate"
+    return {**best, "big_loss_guardrail": guardrail, "flat_optimum": flat_optimum, "search": scored}
 
 
 def _load_jsonl(path: str) -> pd.DataFrame:
@@ -192,6 +368,12 @@ def _select_feature_columns(df: pd.DataFrame) -> list[str]:
         if numeric.notna().any():
             cols.append(str(col))
     return sorted(cols)
+
+
+def _future_safe_feature_columns(feature_columns: list[str]) -> list[str]:
+    """Reject labels, outcomes, and realized/future returns from model inputs."""
+    forbidden_fragments = ("forward_return", "future_return", "realized_return", "outcome_", "label_")
+    return [column for column in feature_columns if not any(fragment in column.lower() for fragment in forbidden_fragments)]
 
 
 def _backtest_compatible_feature_columns(feature_columns: list[str], persisted_feature_columns: set[str]) -> list[str]:
@@ -227,6 +409,15 @@ def _fill_feature_gaps(df: pd.DataFrame, feature_columns: list[str]) -> tuple[pd
         out[col] = numeric.fillna(fill_value).astype(float)
         fill_values[col] = fill_value
     return out, fill_values
+
+
+def _apply_feature_fill_values(df: pd.DataFrame, feature_columns: list[str], fill_values: dict[str, float]) -> pd.DataFrame:
+    """Apply fit-period feature medians without learning from later periods."""
+    out = df.copy()
+    for col in feature_columns:
+        numeric = pd.to_numeric(out[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        out[col] = numeric.fillna(float(fill_values.get(col, 0.0))).astype(float)
+    return out
 
 
 def _prepare_frame(df: pd.DataFrame) -> pd.DataFrame:
@@ -275,7 +466,42 @@ def _build_artifact_with_features(base: BaselineModelArtifact, feature_columns: 
         weights=base.weights,
         bias=base.bias,
         decision_threshold=base.decision_threshold,
+        calibration_slope=base.calibration_slope,
+        calibration_intercept=base.calibration_intercept,
+        lineage=base.lineage,
     )
+
+
+def _candidate_lineage(artifact: BaselineModelArtifact, feature_columns: list[str]) -> dict[str, Any]:
+    recipe = {
+        "model_family": "logistic_regression",
+        "feature_subset": list(feature_columns),
+        "sample_weight_policy": RETURN_BIN_SAMPLE_WEIGHTS,
+        "calibration": {"method": "identity" if artifact.calibration_slope == 1.0 and artifact.calibration_intercept == 0.0 else "platt", "slope": artifact.calibration_slope, "intercept": artifact.calibration_intercept},
+        "decision_threshold": artifact.decision_threshold,
+        "abstention": {"enabled": False, "margin": 0.0},
+    }
+    recipe_hash = hashlib.sha256(json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return {
+        "schema_version": "moneybot-challenger-lineage.v1",
+        "lineage_id": f"recipe-{recipe_hash[:16]}",
+        "recipe_hash": recipe_hash,
+        "generation": 1,
+        "parent_lineage_ids": [],
+        "recipe": recipe,
+    }
+
+
+def _artifact_parameter_delta(left: BaselineModelArtifact, right: BaselineModelArtifact) -> float:
+    values = [
+        abs(float(left.bias) - float(right.bias)),
+        abs(float(left.decision_threshold) - float(right.decision_threshold)),
+        abs(float(left.calibration_slope) - float(right.calibration_slope)),
+        abs(float(left.calibration_intercept) - float(right.calibration_intercept)),
+    ]
+    for left_values, right_values in ((left.means, right.means), (left.stds, right.stds), (left.weights, right.weights)):
+        values.extend(abs(float(a) - float(b)) for a, b in zip(left_values, right_values))
+    return max(values, default=0.0)
 
 
 def main() -> None:
@@ -311,32 +537,62 @@ def main() -> None:
     rows_after_target_filter = len(filtered_target)
 
     feature_columns = _backtest_compatible_feature_columns(
-        _select_feature_columns(filtered_target),
+        _future_safe_feature_columns(_select_feature_columns(filtered_target)),
         persisted_feature_columns,
     )
     if not feature_columns:
         raise SystemExit("No numeric feature columns found in decision dataset")
 
-    clean, feature_fill_values = _fill_feature_gaps(filtered_target, feature_columns)
+    periods, purge_embargo_boundaries = _chronological_training_periods_with_diagnostics(filtered_target, args.train_ratio)
+    fit_raw, calibration_raw, threshold_raw, test_raw = periods
+    fit_df, feature_fill_values = _fill_feature_gaps(fit_raw, feature_columns)
+    calibration_df = _apply_feature_fill_values(calibration_raw, feature_columns, feature_fill_values)
+    threshold_df = _apply_feature_fill_values(threshold_raw, feature_columns, feature_fill_values)
+    test_df = _apply_feature_fill_values(test_raw, feature_columns, feature_fill_values)
+    clean = pd.concat([fit_df, calibration_df, threshold_df, test_df]).sort_index()
     rows_after_feature_filter = len(clean)
 
     if len(clean) < max(1, args.min_rows):
         raise SystemExit(f"Not enough rows to train candidate model (have={len(clean)}, need={args.min_rows})")
 
-    train_df, test_df = _chronological_split(clean, args.train_ratio)
+    X_fit = fit_df[feature_columns].to_numpy(dtype=float)
+    y_fit = fit_df[target_column].to_numpy(dtype=float)
+    sample_weight = _bucket_sample_weights(fit_df).to_numpy(dtype=float)
+    base_artifact = train_logistic_baseline(X_fit, y_fit, sample_weight=sample_weight)
 
-    X_train = train_df[feature_columns].to_numpy(dtype=float)
-    y_train = train_df[target_column].to_numpy(dtype=float)
-    sample_weight = _bucket_sample_weights(train_df).to_numpy(dtype=float)
-    base_artifact = train_logistic_baseline(X_train, y_train, sample_weight=sample_weight)
-    threshold_df = _threshold_selection_frame(train_df)
+    calibration_artifact = _build_artifact_with_features(base_artifact, feature_columns, version="calibration-fit")
+    raw_calibration_probs = predict_proba(calibration_artifact, calibration_df[feature_columns].to_numpy(dtype=float))
+    calibration = fit_probability_calibration(raw_calibration_probs, calibration_df[target_column].to_numpy(dtype=float))
+    base_artifact.calibration_slope = float(calibration["slope"])
+    base_artifact.calibration_intercept = float(calibration["intercept"])
+
     X_threshold = threshold_df[feature_columns].to_numpy(dtype=float)
-    train_probs = predict_proba(_build_artifact_with_features(base_artifact, feature_columns, version="threshold-search"), X_threshold)
-    threshold_selection = _select_profit_threshold(threshold_df, train_probs)
+    threshold_probs = predict_proba(_build_artifact_with_features(base_artifact, feature_columns, version="threshold-search"), X_threshold)
+    threshold_selection = _select_profit_threshold(threshold_df, threshold_probs)
     threshold_selection["selection_rows"] = int(len(threshold_df))
     base_artifact.decision_threshold = float(threshold_selection.get("threshold") or base_artifact.decision_threshold)
     candidate_version = f"candidate-logreg-v1-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
     artifact = _build_artifact_with_features(base_artifact, feature_columns, version=candidate_version)
+    artifact.lineage = _candidate_lineage(artifact, feature_columns)
+
+    replica = train_logistic_baseline(X_fit, y_fit, sample_weight=sample_weight)
+    replica_calibration_artifact = _build_artifact_with_features(replica, feature_columns, version="calibration-reproduction")
+    replica_raw_probs = predict_proba(replica_calibration_artifact, calibration_df[feature_columns].to_numpy(dtype=float))
+    replica_calibration = fit_probability_calibration(replica_raw_probs, calibration_df[target_column].to_numpy(dtype=float))
+    replica.calibration_slope = float(replica_calibration["slope"])
+    replica.calibration_intercept = float(replica_calibration["intercept"])
+    replica_threshold_probs = predict_proba(_build_artifact_with_features(replica, feature_columns, version="threshold-reproduction"), X_threshold)
+    replica_threshold = _select_profit_threshold(threshold_df, replica_threshold_probs)
+    replica.decision_threshold = float(replica_threshold.get("threshold") or replica.decision_threshold)
+    recipe_parameter_delta = _artifact_parameter_delta(base_artifact, replica)
+    recipe_reproduction = {
+        "passed": recipe_parameter_delta <= 1e-12,
+        "maximum_parameter_delta": recipe_parameter_delta,
+        "first_threshold": float(base_artifact.decision_threshold),
+        "rerun_threshold": float(replica.decision_threshold),
+        "first_calibration": calibration,
+        "rerun_calibration": replica_calibration,
+    }
 
     X_test = test_df[feature_columns].to_numpy(dtype=float)
     y_test = test_df[target_column].to_numpy(dtype=float)
@@ -350,6 +606,24 @@ def main() -> None:
             "return_bin_sample_weights": RETURN_BIN_SAMPLE_WEIGHTS,
             "selected_decision_threshold": artifact.decision_threshold,
             "threshold_selection": threshold_selection,
+            "calibration": calibration,
+            "recipe_reproduction": recipe_reproduction,
+            "training_periods": {
+                "fit_rows": len(fit_df),
+                "calibration_rows": len(calibration_df),
+                "threshold_selection_rows": len(threshold_df),
+                "final_test_rows": len(test_df),
+                "purged_embargoed": True,
+                "label_horizon_days": LABEL_HORIZON_DAYS,
+                "embargo_days": EMBARGO_DAYS,
+                "windows": {
+                    "fit": _period_window(fit_df),
+                    "calibration": _period_window(calibration_df),
+                    "threshold_selection": _period_window(threshold_df),
+                    "final_test": _period_window(test_df),
+                },
+                "purge_embargo_boundaries": purge_embargo_boundaries,
+            },
         }
     )
 
@@ -358,7 +632,7 @@ def main() -> None:
         model_path=args.output_model,
         model_version=artifact.version,
         input_path=args.input,
-        train_rows=len(train_df),
+        train_rows=len(fit_df) + len(calibration_df) + len(threshold_df),
         test_rows=len(test_df),
         metrics=metrics,
         train_ratio=args.train_ratio,
@@ -381,6 +655,9 @@ def main() -> None:
                 "return_bin_sample_weights": RETURN_BIN_SAMPLE_WEIGHTS,
                 "selected_decision_threshold": artifact.decision_threshold,
                 "threshold_selection": threshold_selection,
+                "calibration": calibration,
+                "recipe_reproduction": recipe_reproduction,
+                "training_periods": metrics["training_periods"],
             },
             sort_keys=True,
         )
