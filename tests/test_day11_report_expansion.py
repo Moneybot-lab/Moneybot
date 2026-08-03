@@ -4,6 +4,7 @@ from moneybot.services.deterministic_model import BaselineModelArtifact, save_ar
 from scripts.day11_compare_candidate_vs_production import (
     _feature_risk_audit,
     _prediction_error_examples,
+    _paired_date_bootstrap_utility_delta,
     _promotion_decision,
     _select_threshold_from_search,
     _threshold_guardrails_pass,
@@ -95,6 +96,38 @@ def test_flat_optimum_keeps_current_threshold_inside_near_optimal_plateau():
     assert selected["recommended_threshold"] == 0.60
     assert selected["reason"] == "current threshold is inside the flat-optimum utility plateau"
     assert selected["flat_optimum"]["selected_plateau_thresholds"] == [0.6, 0.625, 0.65]
+
+
+def test_paired_date_bootstrap_requires_positive_candidate_utility_delta(tmp_path):
+    candidate_path = tmp_path / "candidate.json"
+    production_path = tmp_path / "production.json"
+    _artifact(candidate_path, threshold=0.55)
+    save_artifact(
+        BaselineModelArtifact(
+            version="production",
+            feature_columns=["feature_signal"],
+            means=[0.0],
+            stds=[1.0],
+            weights=[-10.0],
+            bias=0.0,
+            decision_threshold=0.55,
+        ),
+        production_path,
+    )
+    frame = pd.DataFrame(
+        {
+            "event_date": pd.date_range("2026-01-01", periods=12, freq="D").astype(str),
+            "feature_signal": [1.0] * 12,
+            "return_5d": [0.02] * 12,
+        }
+    )
+
+    result = _paired_date_bootstrap_utility_delta(str(candidate_path), str(production_path), frame)
+
+    assert result["passed"] is True
+    assert result["independent_date_blocks"] == 12
+    assert result["utility_delta_lower"] > 0.0
+    assert result["probability_positive"] == 1.0
 
 
 def test_threshold_guardrails_reject_too_few_positive_predictions():

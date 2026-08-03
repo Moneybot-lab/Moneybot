@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
 
-from scripts.day11_compare_candidate_vs_production import HARD_BIG_LOSS_FALSE_POSITIVE_PENALTY, _decide
+from moneybot.services.deterministic_model import BaselineModelArtifact, save_artifact
+from scripts.day11_compare_candidate_vs_production import HARD_BIG_LOSS_FALSE_POSITIVE_PENALTY, _decide, _production_promotion_gates
 
 
 def _metrics(**overrides):
@@ -85,3 +86,58 @@ def test_decide_blocks_candidate_requiring_feature_risk_review():
 
     assert candidate_win is False
     assert "candidate feature-risk audit requires review" in reasons
+
+
+def test_production_promotion_requires_every_conservative_gate(tmp_path):
+    candidate_path = tmp_path / "candidate.json"
+    save_artifact(
+        BaselineModelArtifact(
+            version="candidate",
+            feature_columns=["feature_signal"],
+            means=[0.0],
+            stds=[1.0],
+            weights=[1.0],
+            bias=0.0,
+            decision_threshold=0.60,
+            lineage={
+                "schema_version": "moneybot-challenger-lineage.v1",
+                "lineage_id": "recipe-candidate",
+                "recipe_hash": "a" * 64,
+                "recipe": {
+                    "model_family": "logistic_regression",
+                    "feature_subset": ["feature_signal"],
+                    "sample_weight_policy": "tail_safe",
+                    "calibration": {"method": "identity"},
+                    "decision_threshold": 0.60,
+                    "abstention": {"enabled": False, "margin": 0.0},
+                },
+            },
+        ),
+        candidate_path,
+    )
+    candidate = _metrics(brier_score=0.05, avg_return=0.20, big_loss_predictions=0, big_loss_prediction_rate=0.0)
+    candidate["utility_score_after_big_loss_penalty"] = 0.22
+    production = _metrics(brier_score=0.10, avg_return=0.10, big_loss_predictions=0, big_loss_prediction_rate=0.0)
+    common = {
+        "candidate_model_path": str(candidate_path),
+        "candidate_metrics": candidate,
+        "production_metrics": production,
+        "decision_win": True,
+        "ranking_win": True,
+        "no_op_clone": False,
+        "walk_forward": {"consistent": True, "recipe_reproduction_passed": True},
+        "phase_1_gate": {"phase_1_certified": True},
+        "report_examples": {"big_loss_false_positive_count": 0},
+        "threshold_optimizer": {"threshold_change_recommended": False},
+        "candidate_feature_risk": {"requires_review": False},
+        "bootstrap": {"passed": True},
+    }
+
+    passed = _production_promotion_gates(**common)
+    blocked = _production_promotion_gates(**{**common, "bootstrap": {"passed": False}, "report_examples": {"big_loss_false_positive_count": 1}})
+
+    assert passed["promotion_allowed"] is True
+    assert all(passed["gate_results"].values())
+    assert blocked["promotion_allowed"] is False
+    assert blocked["gate_results"]["paired_bootstrap_utility_passed"] is False
+    assert blocked["gate_results"]["candidate_only_big_loss_false_positives_zero"] is False

@@ -43,6 +43,8 @@ MAX_SYMBOL_UTILITY_CONCENTRATION = 0.50
 MAX_DATE_UTILITY_CONCENTRATION = 0.50
 MAX_STABLE_THRESHOLD_SPREAD = 0.05
 RAW_PRICE_TOP_CONTRIBUTOR_RATE_LIMIT = 0.25
+PRODUCTION_BOOTSTRAP_RESAMPLES = 1000
+MIN_PRODUCTION_BOOTSTRAP_PROBABILITY_POSITIVE = 0.95
 
 
 def _load_jsonl(path: str) -> pd.DataFrame:
@@ -413,6 +415,42 @@ def _clone_detection(candidate_model_path: str, production_model_path: str, test
     candidate_preds, candidate_probs = _artifact_predictions(candidate_model_path, test_df)
     production_preds, production_probs = _artifact_predictions(production_model_path, test_df)
     return _no_op_clone_summary(candidate_preds, production_preds, candidate_probs, production_probs)
+
+
+def _paired_date_bootstrap_utility_delta(candidate_model_path: str, production_model_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
+    """Bootstrap paired candidate-minus-production realized return by independent date."""
+    candidate = _artifact_scored_frame(candidate_model_path, test_df, prefix="candidate")
+    production = _artifact_scored_frame(production_model_path, test_df, prefix="production")
+    common = candidate.index.intersection(production.index)
+    if common.empty:
+        return {"passed": False, "reason": "no common scored rows", "independent_date_blocks": 0}
+    work = candidate.loc[common].copy()
+    work["_production_pred"] = production.loc[common, "_production_pred"]
+    work["_event_date"] = _event_date_series(work)
+    returns = pd.to_numeric(work["return_5d"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    work["_utility_delta"] = (work["_candidate_pred"].to_numpy(dtype=float) - work["_production_pred"].to_numpy(dtype=float)) * returns
+    daily = work.groupby("_event_date", sort=True)["_utility_delta"].mean().to_numpy(dtype=float)
+    if daily.size == 0:
+        return {"passed": False, "reason": "no independent date blocks", "independent_date_blocks": 0}
+    rng = np.random.default_rng(20260803)
+    samples = daily[rng.integers(0, len(daily), size=(PRODUCTION_BOOTSTRAP_RESAMPLES, len(daily)))].mean(axis=1)
+    lower = float(np.quantile(samples, 0.025))
+    median = float(np.quantile(samples, 0.5))
+    upper = float(np.quantile(samples, 0.975))
+    probability_positive = float((samples > 0.0).mean())
+    passed = lower > 0.0 and median > 0.0 and probability_positive >= MIN_PRODUCTION_BOOTSTRAP_PROBABILITY_POSITIVE
+    return {
+        "passed": bool(passed),
+        "method": "paired_date_block_bootstrap",
+        "resamples": PRODUCTION_BOOTSTRAP_RESAMPLES,
+        "confidence": 0.95,
+        "independent_date_blocks": int(len(daily)),
+        "utility_delta_lower": round(lower, 6),
+        "utility_delta_median": round(median, 6),
+        "utility_delta_upper": round(upper, 6),
+        "probability_positive": round(probability_positive, 6),
+        "minimum_probability_positive": MIN_PRODUCTION_BOOTSTRAP_PROBABILITY_POSITIVE,
+    }
 
 
 def _feature_risk_audit(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
@@ -1242,6 +1280,89 @@ def _phase_1_gate(
         "gate_results": gate_results,
     }
 
+
+def _production_promotion_gates(
+    *,
+    candidate_model_path: str,
+    candidate_metrics: dict[str, Any],
+    production_metrics: dict[str, Any],
+    decision_win: bool,
+    ranking_win: bool,
+    no_op_clone: bool,
+    walk_forward: dict[str, Any],
+    phase_1_gate: dict[str, Any],
+    report_examples: dict[str, Any],
+    threshold_optimizer: dict[str, Any],
+    candidate_feature_risk: dict[str, Any],
+    bootstrap: dict[str, Any],
+) -> dict[str, Any]:
+    lineage = load_artifact(candidate_model_path).lineage if Path(candidate_model_path).exists() else None
+    recipe = lineage.get("recipe") if isinstance(lineage, dict) and isinstance(lineage.get("recipe"), dict) else {}
+    deployable = recipe.get("deployable_config") if isinstance(recipe.get("deployable_config"), dict) else recipe
+    required_config = {"model_family", "feature_subset", "sample_weight_policy", "calibration", "decision_threshold", "abstention"}
+    candidate_big_loss_predictions = _numeric_metric(candidate_metrics, "big_loss_predictions") or 0.0
+    production_big_loss_predictions = _numeric_metric(production_metrics, "big_loss_predictions") or 0.0
+    candidate_big_loss_rate = _numeric_metric(candidate_metrics, "big_loss_prediction_rate") or 0.0
+    production_big_loss_rate = _numeric_metric(production_metrics, "big_loss_prediction_rate") or 0.0
+    candidate_brier = _numeric_metric(candidate_metrics, "brier_score")
+    production_brier = _numeric_metric(production_metrics, "brier_score")
+    candidate_utility = _numeric_metric(candidate_metrics, "utility_score_after_big_loss_penalty")
+    production_utility = _utility_score(production_metrics)
+    threshold_change = bool(threshold_optimizer.get("threshold_change_recommended"))
+    threshold_results = threshold_optimizer.get("threshold_walk_forward_results") or {}
+    threshold_safe = not threshold_change or bool(
+        threshold_results.get("consistent")
+        and threshold_results.get("threshold_stable")
+        and threshold_results.get("windows")
+        and all(item.get("passed") for item in threshold_results.get("windows", []) if item.get("current"))
+    )
+    symbol_concentration = _numeric_metric(candidate_metrics, "symbol_utility_concentration")
+    date_concentration = _numeric_metric(candidate_metrics, "date_utility_concentration")
+    gate_results = {
+        "phase_1_certified": bool(phase_1_gate.get("phase_1_certified")),
+        "decision_lane_passed": bool(decision_win),
+        "ranking_lane_supportive": bool(ranking_win),
+        "no_op_clone_blocked": not no_op_clone,
+        "walk_forward_consistent": bool(walk_forward.get("consistent")),
+        "walk_forward_recipe_reproduced": bool(walk_forward.get("recipe_reproduction_passed")),
+        "paired_bootstrap_utility_passed": bool(bootstrap.get("passed")),
+        "brier_improved": candidate_brier is not None and production_brier is not None and candidate_brier < production_brier,
+        "profit_utility_improved": candidate_utility is not None and production_utility is not None and candidate_utility > production_utility,
+        "candidate_only_big_loss_false_positives_zero": int(report_examples.get("big_loss_false_positive_count") or 0) == 0,
+        "big_loss_predictions_not_worse": candidate_big_loss_predictions == 0.0 or candidate_big_loss_predictions <= production_big_loss_predictions,
+        "big_loss_rate_not_worse": candidate_big_loss_rate <= production_big_loss_rate,
+        "threshold_change_guarded": threshold_safe,
+        "symbol_date_concentration_passed": (symbol_concentration is None or symbol_concentration <= MAX_SYMBOL_UTILITY_CONCENTRATION) and (date_concentration is None or date_concentration <= MAX_DATE_UTILITY_CONCENTRATION),
+        "feature_risk_audit_passed": not bool(candidate_feature_risk.get("requires_review")),
+        "deployable_config_complete": bool(lineage) and required_config.issubset(deployable),
+    }
+    issue_messages = {
+        "phase_1_certified": "Phase 1 evaluation harness is not certified",
+        "decision_lane_passed": "decision lane did not beat production",
+        "ranking_lane_supportive": "ranking lane did not independently support the candidate",
+        "no_op_clone_blocked": "candidate is a no-op clone",
+        "walk_forward_consistent": "candidate did not win consistently across walk-forward windows",
+        "walk_forward_recipe_reproduced": "walk-forward folds did not reproduce the exact recipe",
+        "paired_bootstrap_utility_passed": "paired date-block bootstrap did not prove positive utility delta",
+        "brier_improved": "candidate Brier score did not improve production",
+        "profit_utility_improved": "candidate penalized profit utility did not improve production",
+        "candidate_only_big_loss_false_positives_zero": "candidate introduced one or more production-avoided big-loss signals",
+        "big_loss_predictions_not_worse": "candidate big-loss predictions exceeded production",
+        "big_loss_rate_not_worse": "candidate big-loss prediction rate exceeded production",
+        "threshold_change_guarded": "threshold change did not pass every stability and walk-forward guardrail",
+        "symbol_date_concentration_passed": "candidate utility was dominated by one symbol or date",
+        "feature_risk_audit_passed": "candidate feature-risk audit requires review",
+        "deployable_config_complete": "candidate deployable config is incomplete or lacks lineage",
+    }
+    blocking_issues = [issue_messages[name] for name, passed in gate_results.items() if not passed]
+    return {
+        "promotion_allowed": all(gate_results.values()),
+        "decision": "PROMOTE" if all(gate_results.values()) else "HOLD",
+        "gate_results": gate_results,
+        "blocking_issues": blocking_issues,
+        "paired_bootstrap_utility_delta": bootstrap,
+    }
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare candidate model against production model on same holdout.")
     parser.add_argument("--input", default="data/decision_training_snapshot.jsonl")
@@ -1320,10 +1441,23 @@ def main() -> None:
         report_examples=report_examples,
         temporal_split=temporal_split,
     )
-    if not phase_1_gate["phase_1_certified"]:
-        candidate_win = False
-        if promotion_decision == "PROMOTE":
-            promotion_decision = "HOLD"
+    paired_bootstrap = _paired_date_bootstrap_utility_delta(args.candidate_model, args.production_model, test_df.copy())
+    production_promotion_gates = _production_promotion_gates(
+        candidate_model_path=args.candidate_model,
+        candidate_metrics=candidate_metrics,
+        production_metrics=production_metrics,
+        decision_win=decision_win,
+        ranking_win=ranking_win,
+        no_op_clone=no_op_clone,
+        walk_forward=walk_forward,
+        phase_1_gate=phase_1_gate,
+        report_examples=report_examples,
+        threshold_optimizer=candidate_threshold_optimizer,
+        candidate_feature_risk=candidate_feature_risk,
+        bootstrap=paired_bootstrap,
+    )
+    candidate_win = bool(production_promotion_gates["promotion_allowed"])
+    promotion_decision = _promotion_decision(candidate_win, no_op_clone, decision_win, ranking_win, walk_forward_consistent)
     reasons = [
         *(f"decision lane: {reason}" for reason in decision_reasons),
         *(f"ranking lane: {reason}" for reason in ranking_reasons),
@@ -1334,10 +1468,12 @@ def main() -> None:
         reasons.append("walk-forward validation: candidate is not consistently better across rolling windows")
     if not phase_1_gate["phase_1_certified"]:
         reasons.append("phase 1 certification failed; promotion remains blocked")
+    reasons.extend(f"production promotion gate: {issue}" for issue in production_promotion_gates["blocking_issues"])
 
     report = {
         "temporal_split": temporal_split,
         "phase_1_gate": phase_1_gate,
+        "production_promotion_gates": production_promotion_gates,
         "candidate_metrics": candidate_metrics,
         "production_metrics": production_metrics,
         "recommended_threshold": production_threshold_optimizer.get("recommended_threshold"),
