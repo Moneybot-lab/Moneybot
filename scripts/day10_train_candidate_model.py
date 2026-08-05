@@ -357,6 +357,39 @@ def _load_jsonl(path: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+MASSIVE_PREFERRED_FEATURE_TOKENS = (
+    "_lagged",
+    "sma",
+    "ema",
+    "rsi",
+    "macd",
+    "atr",
+    "trend",
+    "momentum",
+    "volatility",
+    "volume",
+    "liquidity",
+    "vwap",
+    "dollar_volume",
+    "market_regime",
+    "market_volatility",
+    "spy",
+    "relative",
+    "beta",
+    "symbol_minus_spy",
+    "sector_relative",
+)
+
+
+def _feature_preference_rank(column: str) -> tuple[int, str]:
+    lowered = column.lower()
+    if any(token in lowered for token in MASSIVE_PREFERRED_FEATURE_TOKENS):
+        return (0, column)
+    if lowered in APP_SIGNAL_FEATURE_COLUMNS:
+        return (2, column)
+    return (1, column)
+
+
 def _select_feature_columns(df: pd.DataFrame) -> list[str]:
     cols: list[str] = []
     for col in df.columns:
@@ -367,7 +400,24 @@ def _select_feature_columns(df: pd.DataFrame) -> list[str]:
         numeric = pd.to_numeric(df[col], errors="coerce")
         if numeric.notna().any():
             cols.append(str(col))
-    return sorted(cols)
+    return sorted(cols, key=_feature_preference_rank)
+
+
+FUTURE_LEAKAGE_FEATURE_EXACT = {"feature_return_1d", "feature_return_5d"}
+FUTURE_LEAKAGE_FEATURE_FRAGMENTS = ("forward_return", "future_return", "realized_return", "outcome_", "label_")
+
+
+def _future_safe_feature_columns(feature_columns: list[str]) -> list[str]:
+    """Reject labels, outcomes, and unlagged/future returns from model inputs."""
+    safe: list[str] = []
+    for column in feature_columns:
+        lowered = column.lower()
+        if lowered in FUTURE_LEAKAGE_FEATURE_EXACT:
+            continue
+        if any(fragment in lowered for fragment in FUTURE_LEAKAGE_FEATURE_FRAGMENTS):
+            continue
+        safe.append(column)
+    return safe
 
 
 FUTURE_LEAKAGE_FEATURE_EXACT = {"feature_return_1d", "feature_return_5d"}
@@ -503,6 +553,32 @@ def _candidate_lineage(artifact: BaselineModelArtifact, feature_columns: list[st
     }
 
 
+def _training_input_manifest(input_path: str, frame: pd.DataFrame | None = None) -> dict[str, Any]:
+    path = Path(input_path)
+    manifest_path = path.with_suffix(path.suffix + ".manifest.json")
+    manifest: dict[str, Any] = {}
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            manifest = {"manifest_error": "invalid_json"}
+    leakage_guards: list[str] = []
+    if frame is not None and "leakage_guard" in frame.columns:
+        leakage_guards = sorted(str(value) for value in frame["leakage_guard"].dropna().astype(str).unique())
+    return {
+        "input_path": str(path),
+        "canonical_training_input": "data/track_b/decision_training_snapshot_massive.jsonl",
+        "uses_massive_canonical_input": path.name == "decision_training_snapshot_massive.jsonl",
+        "manifest_path": str(manifest_path),
+        "manifest_loaded": bool(manifest),
+        "schema_version": manifest.get("schema_version"),
+        "leakage_safe": bool(manifest.get("leakage_safe")),
+        "join_policy": manifest.get("join_policy"),
+        "leakage_guard_values": leakage_guards,
+        "massive_manifest": manifest,
+    }
+
+
 def _artifact_parameter_delta(left: BaselineModelArtifact, right: BaselineModelArtifact) -> float:
     values = [
         abs(float(left.bias) - float(right.bias)),
@@ -527,6 +603,7 @@ def main() -> None:
     if df.empty:
         raise SystemExit("No rows available in input dataset")
 
+    training_source = _training_input_manifest(args.input, df)
     persisted_feature_columns = {str(col) for col in df.columns if str(col).startswith("feature_")}
 
     if "ts" in df.columns:
@@ -619,6 +696,11 @@ def main() -> None:
             "threshold_selection": threshold_selection,
             "calibration": calibration,
             "recipe_reproduction": recipe_reproduction,
+            "training_source": training_source,
+            "feature_preference_policy": {
+                "preferred_families": ["lagged_returns", "technical", "volume_liquidity", "market_regime", "spy_relative"],
+                "app_signal_features_ranked_after_massive_market_features": True,
+            },
             "training_periods": {
                 "fit_rows": len(fit_df),
                 "calibration_rows": len(calibration_df),
@@ -668,6 +750,8 @@ def main() -> None:
                 "threshold_selection": threshold_selection,
                 "calibration": calibration,
                 "recipe_reproduction": recipe_reproduction,
+                "training_source": training_source,
+                "feature_preference_policy": metrics["feature_preference_policy"],
                 "training_periods": metrics["training_periods"],
             },
             sort_keys=True,

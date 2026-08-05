@@ -47,6 +47,51 @@ PRODUCTION_BOOTSTRAP_RESAMPLES = 1000
 MIN_PRODUCTION_BOOTSTRAP_PROBABILITY_POSITIVE = 0.95
 
 
+def _training_source_report(input_path: str, frame: pd.DataFrame | None = None) -> dict[str, Any]:
+    path = Path(input_path)
+    manifest_path = path.with_suffix(path.suffix + ".manifest.json")
+    manifest: dict[str, Any] = {}
+    manifest_error = None
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            manifest_error = "invalid_json"
+    leakage_guards: list[str] = []
+    if frame is not None and "leakage_guard" in frame.columns:
+        leakage_guards = sorted(str(value) for value in frame["leakage_guard"].dropna().astype(str).unique())
+    return {
+        "input_path": str(path),
+        "canonical_training_input": "data/track_b/decision_training_snapshot_massive.jsonl",
+        "uses_massive_canonical_input": path.name == "decision_training_snapshot_massive.jsonl",
+        "manifest_path": str(manifest_path),
+        "manifest_loaded": bool(manifest),
+        "manifest_error": manifest_error,
+        "schema_version": manifest.get("schema_version"),
+        "leakage_safe": bool(manifest.get("leakage_safe")),
+        "join_policy": manifest.get("join_policy"),
+        "leakage_guard_values": leakage_guards,
+        "massive_manifest": manifest,
+    }
+
+
+def _training_source_phase1_passed(training_source: dict[str, Any] | None) -> bool:
+    if not training_source:
+        return True
+    if not training_source.get("uses_massive_canonical_input"):
+        return False
+    if not training_source.get("manifest_loaded") or not training_source.get("leakage_safe"):
+        return False
+    if str(training_source.get("schema_version") or "") != "massive-decision-training-rows.v1":
+        return False
+    join_policy = str(training_source.get("join_policy") or "").lower()
+    normalized_join_policy = join_policy.replace("_", " ")
+    if "strictly after" not in normalized_join_policy or "on or before" not in normalized_join_policy:
+        return False
+    leakage_guards = [str(value).lower() for value in training_source.get("leakage_guard_values") or []]
+    return bool(leakage_guards) and all("features_asof" in guard and "labels_after" in guard for guard in leakage_guards)
+
+
 def _load_jsonl(path: str) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     with Path(path).open("r", encoding="utf-8") as fh:
@@ -1281,6 +1326,7 @@ def _phase_1_gate(
     report_examples: dict[str, Any],
     temporal_split: dict[str, Any],
     production_feature_risk: dict[str, Any] | None = None,
+    training_source: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     candidate_lineage = load_artifact(candidate_model_path).lineage if Path(candidate_model_path).exists() else None
     recipe_lineage_passed = bool(
@@ -1299,6 +1345,7 @@ def _phase_1_gate(
         and threshold_results.get("windows")
         and all(item.get("passed") for item in threshold_results.get("windows", []) if item.get("current"))
     )
+    training_source_passed = _training_source_phase1_passed(training_source)
     report_traceability_passed = bool(
         Path(candidate_model_path).exists()
         and Path(production_model_path).exists()
@@ -1308,6 +1355,7 @@ def _phase_1_gate(
         and report_examples.get("mistake_scoring_method") == "artifact_predictions"
         and temporal_split.get("train_rows_before") is not None
         and temporal_split.get("test_rows_before") is not None
+        and training_source_passed
     )
     gate_results = {
         "reproducibility_passed": bool(detailed_certification.get("reproducible")),
@@ -1335,7 +1383,7 @@ def _phase_1_gate(
         "clone_detection_passed": "clone detection did not produce traceable fingerprints or correctly identify a near-duplicate",
         "threshold_guardrails_passed": "threshold changes are not proven to be blocked unless all walk-forward guardrails pass",
         "symbol_date_concentration_handling_passed": "symbol/date concentration is neither within limits nor correctly flagged as a promotion block",
-        "report_traceability_passed": "report is missing artifact, fingerprint, threshold, mistake-scoring, or split traceability",
+        "report_traceability_passed": "report is missing artifact, fingerprint, threshold, mistake-scoring, split, or Massive source traceability",
     }
     blocking_issues = [issue_messages[name] for name, passed in gate_results.items() if not passed]
     certified = all(gate_results.values())
@@ -1452,6 +1500,7 @@ def main() -> None:
     df = _load_jsonl(args.input)
     if df.empty:
         raise SystemExit("No rows available for model comparison")
+    training_source = _training_source_report(args.input, df)
 
     development_df, test_df = _chronological_split(df, args.train_ratio)
     _, test_df, temporal_split = purged_embargoed_split(
@@ -1517,6 +1566,7 @@ def main() -> None:
         report_examples=report_examples,
         temporal_split=temporal_split,
         production_feature_risk=production_feature_risk,
+        training_source=training_source,
     )
     paired_bootstrap = _paired_date_bootstrap_utility_delta(args.candidate_model, args.production_model, test_df.copy())
     production_promotion_gates = _production_promotion_gates(
@@ -1549,6 +1599,7 @@ def main() -> None:
     reasons.extend(f"production promotion gate: {issue}" for issue in production_promotion_gates["blocking_issues"])
 
     report = {
+        "training_source": training_source,
         "temporal_split": temporal_split,
         "phase_1_gate": phase_1_gate,
         "production_promotion_gates": production_promotion_gates,

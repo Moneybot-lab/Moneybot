@@ -66,6 +66,33 @@ def test_future_feature_leakage_audit_rejects_unlagged_return_5d_feature(tmp_pat
     assert audit["violations"] == [{"artifact_path": str(leaky), "feature": "feature_return_5d", "reason": "forbidden_feature_name"}]
 
 
+def test_training_source_report_requires_massive_manifest_and_leakage_guard(tmp_path):
+    input_path = tmp_path / "decision_training_snapshot_massive.jsonl"
+    input_path.write_text("{}\n", encoding="utf-8")
+    input_path.with_suffix(".jsonl.manifest.json").write_text(json.dumps({
+        "schema_version": "massive-decision-training-rows.v1",
+        "leakage_safe": True,
+        "join_policy": "last_market_row_on_or_before_decision_date; labels strictly after that row",
+    }), encoding="utf-8")
+    frame = pd.DataFrame({"leakage_guard": ["features_asof_market_close_on_or_before_decision_date_labels_after_decision_date"]})
+
+    report = compare._training_source_report(str(input_path), frame)
+
+    assert report["uses_massive_canonical_input"] is True
+    assert report["leakage_safe"] is True
+    assert compare._training_source_phase1_passed(report) is True
+
+
+def test_training_source_report_rejects_legacy_track_b_snapshot(tmp_path):
+    input_path = tmp_path / "decision_training_snapshot_track_b.jsonl"
+    input_path.write_text("{}\n", encoding="utf-8")
+
+    report = compare._training_source_report(str(input_path), pd.DataFrame())
+
+    assert report["uses_massive_canonical_input"] is False
+    assert compare._training_source_phase1_passed(report) is False
+
+
 def test_phase_1_certification_reports_all_required_checks(tmp_path):
     candidate_path = tmp_path / "candidate.json"
     production_path = tmp_path / "production.json"

@@ -7,6 +7,7 @@ from scripts.day10_train_candidate_model import (
     _chronological_training_periods_with_diagnostics,
     _flat_optimum_threshold,
     _future_safe_feature_columns,
+    _select_feature_columns,
     _select_profit_threshold,
 )
 
@@ -48,6 +49,21 @@ def test_future_labels_outcomes_and_realized_returns_are_never_features():
     columns = ["feature_price", "feature_return_5d", "feature_forward_return_5d", "feature_future_return", "feature_realized_return", "feature_outcome_5d", "feature_label_gain_5d"]
 
     assert _future_safe_feature_columns(columns) == ["feature_price"]
+
+
+def test_feature_selection_prefers_massive_lagged_technical_and_relative_features():
+    frame = pd.DataFrame({
+        "feature_rec_buy": [1.0, 0.0],
+        "feature_return_5d_lagged": [0.01, 0.02],
+        "feature_spy_return_5d": [0.0, 0.01],
+        "feature_volume_ratio_20d": [1.2, 0.9],
+        "feature_rsi_14": [55.0, 45.0],
+    })
+
+    selected = _select_feature_columns(frame)
+
+    assert selected[:4] == ["feature_return_5d_lagged", "feature_rsi_14", "feature_spy_return_5d", "feature_volume_ratio_20d"]
+    assert selected[-1] == "feature_rec_buy"
 
 
 def test_threshold_search_uses_track_b_profit_grid_and_records_big_loss_guardrail():

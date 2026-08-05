@@ -23,27 +23,36 @@ def build_track_b_commands(
     output_dir: Path,
     production_model: str = "data/day1_baseline_model.json",
     dataset_limit: int | None = 50000,
+    training_source: str = "massive",
 ) -> list[list[str]]:
     scripts_dir = project_root / "scripts"
-    dataset_path = output_dir / "decision_training_snapshot_track_b.jsonl"
+    legacy_dataset_path = output_dir / "decision_training_snapshot_track_b.jsonl"
+    massive_dataset_path = output_dir / "decision_training_snapshot_massive.jsonl"
+    dataset_path = massive_dataset_path if training_source == "massive" else legacy_dataset_path
     candidate_model_path = output_dir / "candidate_model_track_b.json"
     comparison_report_path = output_dir / "model_comparison_track_b.json"
-    build_dataset_command = [
-        python_executable,
-        str(scripts_dir / "day8_build_decision_training_dataset.py"),
-        "--input",
-        input_log,
-        "--output",
-        str(dataset_path),
-    ]
-    if dataset_limit is not None:
-        build_dataset_command.extend(["--limit", str(max(1, int(dataset_limit)))])
 
-    return [
-        build_dataset_command,
-        [python_executable, str(scripts_dir / "day10_train_candidate_model.py"), "--input", str(dataset_path), "--output-model", str(candidate_model_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
-        [python_executable, str(scripts_dir / "day11_compare_candidate_vs_production.py"), "--input", str(dataset_path), "--candidate-model", str(candidate_model_path), "--production-model", str(production_model), "--output", str(comparison_report_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
-    ]
+    commands: list[list[str]] = []
+    if training_source != "massive":
+        build_dataset_command = [
+            python_executable,
+            str(scripts_dir / "day8_build_decision_training_dataset.py"),
+            "--input",
+            input_log,
+            "--output",
+            str(dataset_path),
+        ]
+        if dataset_limit is not None:
+            build_dataset_command.extend(["--limit", str(max(1, int(dataset_limit)))])
+        commands.append(build_dataset_command)
+
+    commands.extend(
+        [
+            [python_executable, str(scripts_dir / "day10_train_candidate_model.py"), "--input", str(dataset_path), "--output-model", str(candidate_model_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
+            [python_executable, str(scripts_dir / "day11_compare_candidate_vs_production.py"), "--input", str(dataset_path), "--candidate-model", str(candidate_model_path), "--production-model", str(production_model), "--output", str(comparison_report_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
+        ]
+    )
+    return commands
 
 
 def main() -> None:
@@ -59,6 +68,7 @@ def main() -> None:
         default=50000,
         help="Decision-event rows to pass through to the dataset builder. Defaults to the workflow export size so mature rows are not truncated to day8's smaller standalone default.",
     )
+    parser.add_argument("--training-source", choices=("massive", "legacy"), default="massive", help="Use Massive-backed training rows by default; legacy rebuilds the older yfinance/day8 snapshot.")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -74,6 +84,7 @@ def main() -> None:
         output_dir=output_dir,
         production_model=args.production_model,
         dataset_limit=max(1, int(args.dataset_limit)),
+        training_source=args.training_source,
     )
 
     started_at = datetime.now(timezone.utc).isoformat()
@@ -84,6 +95,8 @@ def main() -> None:
         "output_dir": str(output_dir),
         "dry_run": bool(args.dry_run),
         "dataset_limit": max(1, int(args.dataset_limit)),
+        "training_source": args.training_source,
+        "canonical_training_input": str(output_dir / ("decision_training_snapshot_massive.jsonl" if args.training_source == "massive" else "decision_training_snapshot_track_b.jsonl")),
         "commands": commands,
         "steps": [],
         "success": False,
@@ -92,6 +105,9 @@ def main() -> None:
     if args.dry_run:
         print(json.dumps(summary, indent=2))
         return
+
+    if args.training_source == "massive" and not (output_dir / "decision_training_snapshot_massive.jsonl").exists():
+        raise SystemExit("Track B massive training source requires data/track_b/decision_training_snapshot_massive.jsonl; run Massive ingest/build steps first or pass --training-source legacy")
 
     for command in commands:
         completed = subprocess.run(command, cwd=str(PROJECT_ROOT), capture_output=True, text=True, check=False)

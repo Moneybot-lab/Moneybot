@@ -105,11 +105,14 @@ BASE_URL="$MONEYBOT_BASE_URL" ./scripts/gate_check.sh --gate portfolio_75_to_100
 
 ```text
 data/track_b/track_b_summary.json
-data/track_b/decision_training_snapshot_track_b.jsonl
+data/track_b/decision_training_snapshot_massive.jsonl
+data/track_b/decision_training_snapshot_massive.jsonl.manifest.json
 data/track_b/production_model.json
 data/track_b/candidate_model_track_b.json
 data/track_b/model_comparison_track_b.json
 ```
+
+The Massive-backed snapshot is the canonical Track B training input. The legacy `decision_training_snapshot_track_b.jsonl` path is only available through `--training-source legacy` for emergency debugging. Day10 and Day11 carry the Massive row manifest (`*.manifest.json`), `leakage_safe`, join policy, and per-row `leakage_guard` values into metadata/reporting so Phase 1 can fail if training reverts to the older yfinance/day8 source. Feature selection ranks Massive lagged returns, technical indicators, volume/liquidity, market-regime, and SPY-relative features ahead of app-signal columns.
 
 ## Manual GitHub promotion workflow
 
