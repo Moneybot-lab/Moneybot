@@ -420,6 +420,23 @@ def _future_safe_feature_columns(feature_columns: list[str]) -> list[str]:
     return safe
 
 
+FUTURE_LEAKAGE_FEATURE_EXACT = {"feature_return_1d", "feature_return_5d"}
+FUTURE_LEAKAGE_FEATURE_FRAGMENTS = ("forward_return", "future_return", "realized_return", "outcome_", "label_")
+
+
+def _future_safe_feature_columns(feature_columns: list[str]) -> list[str]:
+    """Reject labels, outcomes, and unlagged/future returns from model inputs."""
+    safe: list[str] = []
+    for column in feature_columns:
+        lowered = column.lower()
+        if lowered in FUTURE_LEAKAGE_FEATURE_EXACT:
+            continue
+        if any(fragment in lowered for fragment in FUTURE_LEAKAGE_FEATURE_FRAGMENTS):
+            continue
+        safe.append(column)
+    return safe
+
+
 def _backtest_compatible_feature_columns(feature_columns: list[str], persisted_feature_columns: set[str]) -> list[str]:
     """Keep derived app-signal features only when they are persisted upstream.
 
