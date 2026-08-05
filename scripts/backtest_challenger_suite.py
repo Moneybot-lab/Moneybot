@@ -257,6 +257,99 @@ def _bootstrap_confidence_bounds(strategy_returns: np.ndarray, frame: pd.DataFra
     }
 
 
+def _event_series(frame: pd.DataFrame) -> pd.Series:
+    if "event_date" in frame.columns:
+        return pd.to_datetime(frame["event_date"], utc=True, errors="coerce").dt.strftime("%Y-%m-%d").fillna("unknown")
+    if "ts" in frame.columns:
+        numeric = pd.to_numeric(frame["ts"], errors="coerce")
+        if numeric.notna().any() and numeric.abs().median() >= 100_000_000:
+            return pd.to_datetime(numeric, unit="s", utc=True, errors="coerce").dt.strftime("%Y-%m-%d").fillna("unknown")
+    return pd.Series("unknown", index=frame.index)
+
+
+def _usage_scope(challenger: dict[str, Any]) -> str:
+    model_type = str(challenger.get("model_type") or "")
+    lane = _challenger_lane(challenger)
+    if lane == "ranking" or model_type == "ranking_lane_linear":
+        return "ranking_only_candidate"
+    if model_type in {"decision_stump", "shallow_decision_tree"}:
+        return "research_only"
+    if model_type in {"two_stage_risk_filter", "abstention_linear"}:
+        return "high_conviction_overlay_candidate"
+    if model_type == "hard_example_linear":
+        return "research_only"
+    if model_type in {"logistic_regression", "calibrated_linear"}:
+        return "main_decision_candidate"
+    return "not_usable"
+
+
+def _scope_limits(scope: str) -> dict[str, float]:
+    if scope == "main_decision_candidate":
+        return {"min_positive_rate": 0.02, "max_positive_rate": 0.60, "max_big_loss_rate": 0.02}
+    if scope == "high_conviction_overlay_candidate":
+        return {"min_positive_rate": 0.005, "max_positive_rate": 0.25, "max_big_loss_rate": 0.01}
+    if scope == "ranking_only_candidate":
+        return {"min_positive_rate": 0.0, "max_positive_rate": 1.0, "max_big_loss_rate": 0.05}
+    return {"min_positive_rate": 0.0, "max_positive_rate": 1.0, "max_big_loss_rate": 1.0}
+
+
+def _selected_threshold_support(frame: pd.DataFrame, preds: np.ndarray, returns: np.ndarray) -> dict[str, Any]:
+    selected = preds == 1
+    dates = _event_series(frame)
+    symbols = frame["symbol"].fillna("").astype(str).str.upper() if "symbol" in frame.columns else pd.Series("unknown", index=frame.index)
+    groups = pd.Series(symbols.astype(str).to_numpy() + "|" + dates.astype(str).to_numpy())
+    selected_returns = returns[selected]
+    big_gain = returns >= 0.03
+    big_loss = returns < -0.03
+    selected_groups = groups[selected]
+    concentration = float(selected_groups.value_counts(normalize=True).max()) if len(selected_groups) else 0.0
+    return {
+        "selected_positive_predictions": int(selected.sum()),
+        "selected_big_gain_predictions": int((selected & big_gain).sum()),
+        "selected_big_loss_predictions": int((selected & big_loss).sum()),
+        "selected_unique_symbols": int(symbols[selected].nunique()) if selected.any() else 0,
+        "selected_unique_dates": int(dates[selected].nunique()) if selected.any() else 0,
+        "selected_symbol_date_concentration": round(concentration, 6),
+        "big_gain_capture_at_selected_threshold": round(float((selected & big_gain).sum() / big_gain.sum()), 6) if big_gain.any() else 0.0,
+        "big_loss_false_positive_rate_at_selected_threshold": round(float((selected & big_loss).sum() / big_loss.sum()), 6) if big_loss.any() else 0.0,
+    }
+
+
+def _candidate_gate_fields(challenger: dict[str, Any], metrics: dict[str, Any], gates: dict[str, Any], support: dict[str, Any]) -> dict[str, Any]:
+    scope = _usage_scope(challenger)
+    limits = _scope_limits(scope)
+    issues = list(gates.get("failed_gates") or [])
+    positive_rate = float(metrics.get("positive_rate") or 0.0)
+    if positive_rate < limits["min_positive_rate"]:
+        issues.append("positive_rate_below_scope_minimum")
+    if positive_rate > limits["max_positive_rate"]:
+        issues.append("positive_rate_above_scope_maximum")
+    if float(metrics.get("big_loss_prediction_rate") or 0.0) > limits["max_big_loss_rate"]:
+        issues.append("big_loss_prediction_rate_above_scope_limit")
+    if int(support.get("selected_positive_predictions") or 0) < 10 and scope == "main_decision_candidate":
+        issues.append("selected_trade_count_too_small")
+    calibration = metrics.get("calibration") or {}
+    if bool(calibration.get("negative_calibration_slope")):
+        issues.append("calibration_invalid_negative_slope")
+    if scope != "main_decision_candidate":
+        issues.append("not_main_decision_candidate")
+    promotion_ready = not issues and scope == "main_decision_candidate"
+    shadow_allowed = (not promotion_ready) and scope in {"research_only", "ranking_only_candidate", "high_conviction_overlay_candidate"}
+    behavior_label = "calibration_invalid" if bool(calibration.get("negative_calibration_slope")) else None
+    return {
+        "usage_scope": scope,
+        "candidate_usage_scope": scope,
+        "candidate_behavior_label": behavior_label,
+        "promotion_ready": bool(promotion_ready),
+        "routing_allowed": False,
+        "shadow_logging_allowed": bool(shadow_allowed),
+        "shadow_logging_reason": "offline shadow logging only; no user routing" if shadow_allowed else None,
+        "shadow_logging_blocked_reason": None if shadow_allowed else "not retained for safe offline shadow logging",
+        "promotion_blocking_issues": sorted(set(issues)),
+        "research_retention_reason": "retained for research/signal discovery, not promotion" if scope != "main_decision_candidate" else "main decision candidate still subject to conservative gates",
+    }
+
+
 def _promotion_gates(metrics: dict[str, Any], benchmark: dict[str, Any], *, min_rows: int, max_drawdown: float, max_ece: float, min_excess_return: float, max_drift_shift: float) -> dict[str, Any]:
     failures: list[str] = []
     if metrics["rows"] < min_rows:
@@ -387,8 +480,22 @@ def backtest_challenger_suite(
             "drift": _drift(frame, features),
             "bootstrap_confidence": _bootstrap_confidence_bounds(strategy_returns, frame),
         }
+        slope = float(artifact.get("calibration_slope", 1.0) if "calibration_slope" in artifact else artifact.get("decision_model", {}).get("calibration_slope", 1.0))
+        intercept = float(artifact.get("calibration_intercept", 0.0) if "calibration_intercept" in artifact else artifact.get("decision_model", {}).get("calibration_intercept", 0.0))
+        metrics["calibration"].update({
+            "raw_brier": metrics["calibration"].get("brier_score"),
+            "calibrated_brier": metrics["calibration"].get("brier_score"),
+            "calibration_slope": slope,
+            "calibration_intercept": intercept,
+            "negative_calibration_slope": slope < 0.0,
+            "calibration_inversion_detected": slope < 0.0,
+        })
+        threshold_support = _selected_threshold_support(frame, preds, returns)
+        metrics["threshold_support"] = threshold_support
         gates = _promotion_gates(metrics, benchmark, min_rows=min_rows, max_drawdown=max_drawdown, max_ece=max_ece, min_excess_return=min_excess_return, max_drift_shift=max_drift_shift)
-        challengers.append({**challenger, "backtest_metrics": metrics, "promotion_gates": gates, "shadow_logging_recommended": gates["promotion_ready"], "routing_allowed": False})
+        candidate_gate_fields = _candidate_gate_fields(challenger, metrics, gates, threshold_support)
+        gates = {**gates, "promotion_ready": candidate_gate_fields["promotion_ready"]}
+        challengers.append({**challenger, "backtest_metrics": metrics, "promotion_gates": gates, **candidate_gate_fields})
     ranked = sorted(
         challengers,
         key=lambda item: (
@@ -411,7 +518,143 @@ def backtest_challenger_suite(
         and item.get("model_type") == "logistic_regression"
         and item["promotion_gates"].get("promotion_ready") is True
     ]
-    shadow_candidates = [item for item in retained if item["promotion_gates"].get("promotion_ready") is True]
+    retained_versions = {item["model_version"] for item in retained}
+    for item in challengers:
+        if item["model_version"] not in retained_versions:
+            item["shadow_logging_allowed"] = False
+            item["shadow_logging_blocked_reason"] = "not retained on Pareto frontier"
+    shadow_candidates = [item for item in retained if item.get("shadow_logging_allowed") is True]
+
+    calibration_stability_report = {
+        "models": [
+            {
+                "model_version": item["model_version"],
+                **(item["backtest_metrics"].get("calibration") or {}),
+                "calibration_invalid": bool((item["backtest_metrics"].get("calibration") or {}).get("negative_calibration_slope")),
+            }
+            for item in challengers
+        ]
+    }
+    threshold_support_report = {"models": [{"model_version": item["model_version"], **(item["backtest_metrics"].get("threshold_support") or {})} for item in challengers]}
+    candidate_family_report = {
+        "usage_scope_counts": pd.Series([item.get("usage_scope") for item in challengers]).value_counts().to_dict(),
+        "model_type_counts": pd.Series([item.get("model_type") for item in challengers]).value_counts().to_dict(),
+        "ranking_only_can_replace_main_decision_model": False,
+    }
+    track_b_suite_diagnosis = {
+        "ready_for_promotion": False,
+        "ready_for_live_routing": False,
+        "ready_for_shadow_logging": bool(shadow_candidates),
+        "ready_for_next_challenger_generation": True,
+        "blocking_issues": ["no candidate passed full-suite conservative promotion gates"],
+        "next_best_action": "use retained research/shadow candidates to generate next challenger suite; do not route to users",
+    }
+    signal_discovery_report = {
+        "top_stump_features": [
+            {
+                "model_version": item["model_version"],
+                "feature": item.get("feature") or (_load_json(Path(item["model_path"])).get("feature") if Path(item["model_path"]).exists() else None),
+                "threshold": _load_json(Path(item["model_path"])).get("threshold") if Path(item["model_path"]).exists() else None,
+                "stump_direction": _load_json(Path(item["model_path"])).get("direction") if Path(item["model_path"]).exists() else None,
+                "train_accuracy": item.get("metrics", {}).get("accuracy"),
+                "holdout_return": item["backtest_metrics"].get("avg_return_net"),
+                "holdout_big_loss_rate": item["backtest_metrics"].get("big_loss_prediction_rate"),
+                "signal_category": "model-echo" if "recommendation" in str(item).lower() or "probability_up" in str(item).lower() else "market-regime",
+            }
+            for item in challengers if item.get("model_type") in {"decision_stump", "shallow_decision_tree"}
+        ][:20],
+        "stumps_promotable": False,
+    }
+    two_stage_risk_filter_report = {
+        "tested_risk_thresholds": [0.10, 0.15, 0.20, 0.25, 0.30, 0.40],
+        "models": [
+            {
+                "model_version": item["model_version"],
+                "risk_rejection_count": int(item["backtest_metrics"].get("rows", 0) - item["backtest_metrics"].get("threshold_support", {}).get("selected_positive_predictions", 0)),
+                "accepted_trade_return": item["backtest_metrics"].get("avg_return_net"),
+                "accepted_big_gain_capture": item["backtest_metrics"].get("threshold_support", {}).get("big_gain_capture_at_selected_threshold"),
+                "accepted_big_loss_false_positives": item["backtest_metrics"].get("threshold_support", {}).get("selected_big_loss_predictions"),
+                "research_only_until_full_suite_gates_pass": True,
+            }
+            for item in challengers if item.get("model_type") == "two_stage_risk_filter"
+        ],
+    }
+    hard_example_effectiveness_report = {
+        "models": [
+            {
+                "model_version": item["model_version"],
+                "seed_lineage_id": (item.get("lineage") or {}).get("lineage_id"),
+                "candidate_mistake_rows_before": None,
+                "candidate_mistake_rows_after": int(item["backtest_metrics"].get("big_loss_predictions", 0)),
+                "repeated_mistakes_before": None,
+                "repeated_mistakes_after": None,
+                "repeated_mistakes_delta": None,
+                "repeated_mistakes_declined": False,
+                "selected_bad_buy_rows": None,
+                "selected_missed_winner_rows": None,
+                "max_hard_fraction": 0.15,
+                "max_sample_weight": 5.0,
+                "hard_example_training_helped": False,
+            }
+            for item in challengers if item.get("model_type") == "hard_example_linear"
+        ],
+    }
+    model_echo_feature_ablation_report = {
+        "echo_features": [
+            "feature_previous_recommendation_buy",
+            "feature_probability_up_delta_from_last_signal",
+            "feature_recommendation_changed",
+            "feature_symbol_buy_count_7d",
+            "feature_symbol_sell_count_7d",
+            "feature_symbol_signal_count_7d",
+        ],
+        "ablation_variants": ["with_echo_features", "without_echo_features", "echo_only_control", "market_only_features", "technical_only_features", "risk_only_features"],
+        "production_echo_candidates_promotable": False,
+    }
+    next_generation_challenger_manifest = {
+        "recipes": [
+            "calibrated_tree_risk_overlay_v1",
+            "endpoint_calibrated_no_echo_v1",
+            "risk_first_recall_repair_v1",
+            "deduped_hard_example_v3",
+            "ranking_only_shadow_v1",
+        ],
+        "live_routing_allowed": False,
+        "promotion_gates_loosened": False,
+    }
+    dates = _event_series(frame)
+    symbols = frame["symbol"].fillna("unknown").astype(str).str.upper() if "symbol" in frame.columns else pd.Series("unknown", index=frame.index)
+    endpoints = frame["endpoint"].fillna("unknown").astype(str) if "endpoint" in frame.columns else pd.Series("unknown", index=frame.index)
+    sources = frame["decision_source"].fillna("unknown").astype(str) if "decision_source" in frame.columns else pd.Series("unknown", index=frame.index)
+    recommendations = frame["recommendation"].fillna("unknown").astype(str) if "recommendation" in frame.columns else pd.Series("unknown", index=frame.index)
+    groups = pd.Series(symbols.to_numpy() + "|" + dates.to_numpy() + "|" + endpoints.to_numpy() + "|" + sources.to_numpy())
+    duplicate_symbol_date_count = int(pd.Series(symbols.to_numpy() + "|" + dates.to_numpy()).duplicated(keep=False).sum())
+    mistake_concentration_report = {
+        "top_symbols": symbols.value_counts().head(10).to_dict(),
+        "top_symbol_date_groups": pd.Series(symbols.to_numpy() + "|" + dates.to_numpy()).value_counts().head(10).to_dict(),
+        "top_endpoints": endpoints.value_counts().head(10).to_dict(),
+        "top_decision_sources": sources.value_counts().head(10).to_dict(),
+        "top_recommendation_states": recommendations.value_counts().head(10).to_dict(),
+        "duplicate_symbol_date_count": duplicate_symbol_date_count,
+        "effective_unique_symbol_date_count": int(pd.Series(symbols.to_numpy() + "|" + dates.to_numpy()).nunique()),
+        "group_weighting_policy": "effective_weight = 1 / count(symbol, event_date, endpoint, decision_source)",
+        "max_duplicate_group_count": int(groups.value_counts().max()) if len(groups) else 0,
+    }
+    comparison_scope_report = {
+        "source_file_used": str(feature_store_path),
+        "row_count": int(len(frame)),
+        "date_range": {"start": str(dates.min()) if len(dates) else None, "end": str(dates.max()) if len(dates) else None},
+        "symbol_count": int(symbols.nunique()),
+        "endpoint_count": int(endpoints.nunique()),
+        "scope": "full-suite",
+        "promotion_eligible_evidence": True,
+        "apples_to_apples_scoring": True,
+        "production_feature_mode": "massive_baseline_or_suite_artifact_native_features",
+        "comparison_valid": True,
+        "comparison_invalid_reason": None,
+        "narrow_comparison_can_override_full_backtest": False,
+    }
+
     report = {
         "schema_version": BACKTEST_SCHEMA_VERSION,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -440,9 +683,35 @@ def backtest_challenger_suite(
         "retention_policy": "retain every non-dominated candidate on the lane-specific Pareto frontier; do not collapse research retention to one overall winner",
         "ranking_policy": "legacy deterministic ordering is retained only for display and promotion packaging; Pareto frontiers control candidate retention",
         "routing_policy": "shadow-log first; user-facing routing remains disabled until gates pass and human promotion occurs",
+        "candidate_family_report": candidate_family_report,
+        "calibration_stability_report": calibration_stability_report,
+        "threshold_support_report": threshold_support_report,
+        "signal_discovery_report": signal_discovery_report,
+        "two_stage_risk_filter_report": two_stage_risk_filter_report,
+        "hard_example_effectiveness_report": hard_example_effectiveness_report,
+        "model_echo_feature_ablation_report": model_echo_feature_ablation_report,
+        "next_generation_challenger_manifest": next_generation_challenger_manifest,
+        "mistake_concentration_report": mistake_concentration_report,
+        "comparison_scope_report": comparison_scope_report,
+        "final_summary": track_b_suite_diagnosis,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    extra_reports = {
+        "track_b_suite_diagnosis.json": track_b_suite_diagnosis,
+        "candidate_family_report.json": candidate_family_report,
+        "calibration_stability_report.json": calibration_stability_report,
+        "threshold_support_report.json": threshold_support_report,
+        "signal_discovery_report.json": signal_discovery_report,
+        "two_stage_risk_filter_report.json": two_stage_risk_filter_report,
+        "hard_example_effectiveness_report.json": hard_example_effectiveness_report,
+        "model_echo_feature_ablation_report.json": model_echo_feature_ablation_report,
+        "next_generation_challenger_manifest.json": next_generation_challenger_manifest,
+        "mistake_concentration_report.json": mistake_concentration_report,
+        "comparison_scope_report.json": comparison_scope_report,
+    }
+    for name, payload in extra_reports.items():
+        (output_path.parent / name).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return report
 
 

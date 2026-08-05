@@ -2,6 +2,7 @@ import pandas as pd
 
 from moneybot.services.deterministic_model import BaselineModelArtifact, save_artifact
 from scripts.day11_compare_candidate_vs_production import (
+    _comparison_scope_report,
     _feature_risk_audit,
     _prediction_error_examples,
     _paired_date_bootstrap_utility_delta,
@@ -58,6 +59,27 @@ def test_prediction_error_examples_include_threshold_overlap_and_symbol_date_row
     assert examples["missed_big_gain_count"] == 1
     assert examples["missed_big_gain_rows"][0]["symbol"] == "GAIN"
     assert examples["missed_big_gain_rows"][0]["event_date"] == "2026-07-21"
+
+
+def test_comparison_scope_report_marks_narrow_or_incompatible_comparison_invalid():
+    frame = pd.DataFrame({
+        "event_date": ["2026-07-10"] * 517,
+        "symbol": ["CMI"] * 517,
+        "endpoint": ["user_watchlist"] * 517,
+    })
+    candidate_availability = {"features": {"feature_signal": {"availability_rate": 1.0}}}
+    production_availability = {"features": {"legacy_feature": {"availability_rate": 0.0}}}
+
+    report = _comparison_scope_report("data/track_b/decision_training_snapshot_massive.jsonl", frame, candidate_availability, production_availability)
+
+    assert report["scope"] == "narrow_diagnostic"
+    assert report["promotion_eligible_evidence"] is False
+    assert report["production_feature_coverage_passed"] is False
+    assert report["candidate_feature_coverage_passed"] is True
+    assert report["feature_schema_compatible"] is False
+    assert report["comparison_valid"] is False
+    assert "narrow" in report["comparison_invalid_reason"]
+    assert report["narrow_comparison_can_override_full_backtest"] is False
 
 
 def test_promotion_decision_labels_promote_hold_watch_and_no_op_clone():

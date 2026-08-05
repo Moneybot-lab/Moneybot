@@ -1490,6 +1490,53 @@ def _phase_1_gate(
     }
 
 
+def _coverage_passed(availability: dict[str, Any], *, min_availability: float = 0.80) -> bool:
+    features = availability.get("features") or {}
+    if not features:
+        return False
+    return all(float(item.get("availability_rate") or 0.0) >= min_availability for item in features.values())
+
+
+def _comparison_scope_report(
+    input_path: str,
+    frame: pd.DataFrame,
+    candidate_availability: dict[str, Any],
+    production_availability: dict[str, Any],
+) -> dict[str, Any]:
+    dates = _event_date_series(frame) if len(frame) else pd.Series([], dtype=str)
+    symbols = frame["symbol"].fillna("unknown").astype(str).str.upper() if "symbol" in frame.columns else pd.Series("unknown", index=frame.index)
+    endpoints = frame["endpoint"].fillna("unknown").astype(str) if "endpoint" in frame.columns else pd.Series("unknown", index=frame.index)
+    production_passed = _coverage_passed(production_availability)
+    candidate_passed = _coverage_passed(candidate_availability)
+    feature_schema_compatible = bool(production_passed and candidate_passed)
+    scope = "narrow_diagnostic" if len(frame) < 1000 else "holdout-only"
+    promotion_eligible = bool(scope != "narrow_diagnostic" and feature_schema_compatible)
+    invalid_reasons: list[str] = []
+    if scope == "narrow_diagnostic":
+        invalid_reasons.append("comparison row count is too narrow to override full-suite backtest")
+    if not production_passed:
+        invalid_reasons.append("production model used missing/fill/default values for one or more features")
+    if not candidate_passed:
+        invalid_reasons.append("candidate feature coverage is incomplete")
+    return {
+        "source_file_used": input_path,
+        "row_count": int(len(frame)),
+        "date_range": {"start": str(dates.min()) if len(dates) else None, "end": str(dates.max()) if len(dates) else None},
+        "symbol_count": int(symbols.nunique()) if len(symbols) else 0,
+        "endpoint_count": int(endpoints.nunique()) if len(endpoints) else 0,
+        "scope": scope,
+        "promotion_eligible_evidence": promotion_eligible,
+        "apples_to_apples_scoring": feature_schema_compatible,
+        "production_feature_mode": "native_massive_features" if production_passed else "fill_or_default_values",
+        "production_feature_coverage_passed": production_passed,
+        "candidate_feature_coverage_passed": candidate_passed,
+        "feature_schema_compatible": feature_schema_compatible,
+        "comparison_valid": not invalid_reasons,
+        "comparison_invalid_reason": "; ".join(invalid_reasons) if invalid_reasons else None,
+        "narrow_comparison_can_override_full_backtest": False,
+    }
+
+
 def _production_promotion_gates(
     *,
     candidate_model_path: str,
@@ -1657,6 +1704,7 @@ def main() -> None:
     )
     phase_1_leakage_audit = ((detailed_phase_1_certification.get("diagnostics") or {}).get("future_feature_leakage_audit") or {})
     feature_leakage_value_audit = _feature_leakage_value_audit(phase_1_leakage_audit)
+    comparison_scope_report = _comparison_scope_report(args.input, test_df.copy(), candidate_feature_availability, production_feature_availability)
     paired_bootstrap = _paired_date_bootstrap_utility_delta(args.candidate_model, args.production_model, test_df.copy())
     production_promotion_gates = _production_promotion_gates(
         candidate_model_path=args.candidate_model,
@@ -1693,6 +1741,12 @@ def main() -> None:
         "massive_training_enabled": bool(training_source.get("uses_massive_canonical_input")),
         "feature_leakage_value_audit": feature_leakage_value_audit,
         "feature_availability_report": {"candidate": candidate_feature_availability, "production": production_feature_availability},
+        "comparison_scope_report": comparison_scope_report,
+        "production_feature_coverage_passed": comparison_scope_report["production_feature_coverage_passed"],
+        "candidate_feature_coverage_passed": comparison_scope_report["candidate_feature_coverage_passed"],
+        "feature_schema_compatible": comparison_scope_report["feature_schema_compatible"],
+        "comparison_valid": comparison_scope_report["comparison_valid"],
+        "comparison_invalid_reason": comparison_scope_report["comparison_invalid_reason"],
         "threshold_selection_support": {
             "production": production_threshold_optimizer.get("threshold_selection_support"),
             "candidate": candidate_threshold_optimizer.get("threshold_selection_support"),
@@ -1746,6 +1800,7 @@ def main() -> None:
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    (output_path.parent / "comparison_scope_report.json").write_text(json.dumps(comparison_scope_report, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps(report, indent=2, sort_keys=True))
 
 

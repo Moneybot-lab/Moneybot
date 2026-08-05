@@ -132,3 +132,24 @@ def test_backtest_challenger_suite_rehydrates_derived_app_signal_features(tmp_pa
 
     assert len(report["challengers"]) == suite["challenger_count"]
     assert report["challengers"][0]["backtest_metrics"]["rows"] == 40
+
+
+def test_candidate_usage_scope_and_gate_fields_keep_ranking_out_of_promotion():
+    from scripts.backtest_challenger_suite import _candidate_gate_fields
+
+    challenger = {"model_type": "ranking_lane_linear", "candidate_lane": "ranking"}
+    metrics = {
+        "rows": 100,
+        "positive_rate": 0.10,
+        "big_loss_prediction_rate": 0.0,
+        "calibration": {"negative_calibration_slope": False},
+    }
+    gates = {"failed_gates": []}
+    support = {"selected_positive_predictions": 20}
+
+    fields = _candidate_gate_fields(challenger, metrics, gates, support)
+
+    assert fields["usage_scope"] == "ranking_only_candidate"
+    assert fields["promotion_ready"] is False
+    assert fields["routing_allowed"] is False
+    assert "not_main_decision_candidate" in fields["promotion_blocking_issues"]
