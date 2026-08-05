@@ -3,7 +3,10 @@ import pandas as pd
 from moneybot.services.deterministic_model import BaselineModelArtifact, save_artifact
 from scripts.day11_compare_candidate_vs_production import (
     _comparison_scope_report,
+    _candidate_feature_coverage_segmented_report,
+    _feature_leakage_name_value_audit,
     _feature_risk_audit,
+    _production_comparison_status,
     _prediction_error_examples,
     _paired_date_bootstrap_utility_delta,
     _promotion_decision,
@@ -79,7 +82,54 @@ def test_comparison_scope_report_marks_narrow_or_incompatible_comparison_invalid
     assert report["feature_schema_compatible"] is False
     assert report["comparison_valid"] is False
     assert "narrow" in report["comparison_invalid_reason"]
+    assert report["allowed_uses"] == ["diagnostic_only"]
+    assert report["production_scoring_mode"] == "fill_or_default_values"
     assert report["narrow_comparison_can_override_full_backtest"] is False
+
+
+def test_invalid_default_filled_production_status_is_not_promotion_eligible():
+    comparison = {"comparison_valid": False, "production_feature_mode": "fill_or_default_values"}
+    metrics = {"positive_predictions": 0, "utility_score": None}
+
+    status = _production_comparison_status(comparison, metrics, pd.Series([0.3458, 0.3458]).to_numpy())
+
+    assert status["production_comparison_status"] == "invalid_default_filled"
+    assert status["production_positive_predictions"] == 0
+    assert status["production_probability_constant"] is True
+    assert status["production_metric_validity"]["brier"] == "not_promotion_eligible"
+
+
+def test_segmented_feature_coverage_does_not_fail_market_features_for_sparse_echo():
+    report = _candidate_feature_coverage_segmented_report({
+        "features": {
+            "feature_spy_return_5d_lagged": {"availability_rate": 0.99},
+            "feature_relative_volume": {"availability_rate": 0.98},
+            "feature_probability_up_delta_from_last_signal": {"availability_rate": 0.10},
+        }
+    })
+
+    assert report["candidate_market_feature_coverage_passed"] is True
+    assert report["candidate_model_echo_feature_coverage_passed"] is False
+    assert report["low_coverage_features"] == ["feature_probability_up_delta_from_last_signal"]
+
+
+def test_feature_name_value_audit_allows_lagged_returns_but_reports_production_future_like_schema(tmp_path):
+    candidate_path = tmp_path / "candidate.json"
+    production_path = tmp_path / "production.json"
+    save_artifact(
+        BaselineModelArtifact(version="candidate", feature_columns=["feature_return_5d_lagged"], means=[0.0], stds=[1.0], weights=[1.0], bias=0.0, decision_threshold=0.55),
+        candidate_path,
+    )
+    save_artifact(
+        BaselineModelArtifact(version="production", feature_columns=["feature_return_5d"], means=[0.0], stds=[1.0], weights=[1.0], bias=0.0, decision_threshold=0.55),
+        production_path,
+    )
+
+    report = _feature_leakage_name_value_audit(str(candidate_path), str(production_path), {"passed": True, "violations": []}, {"comparison_valid": False})
+
+    assert report["candidate_future_feature_leakage_passed"] is True
+    assert report["production_legacy_schema_contains_future_like_feature_name"] is True
+    assert report["production_schema_comparison_invalid"] is True
 
 
 def test_promotion_decision_labels_promote_hold_watch_and_no_op_clone():

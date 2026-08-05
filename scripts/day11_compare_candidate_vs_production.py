@@ -1071,18 +1071,34 @@ def _threshold_walk_forward_results(artifact_path: str, test_df: pd.DataFrame, c
 
 def _threshold_selection_support(frame: pd.DataFrame, threshold_search: list[dict[str, Any]]) -> dict[str, Any]:
     positive_counts = [int(item.get("positive_predictions") or 0) for item in threshold_search]
-    bins = frame.get("return_bin_5d", pd.Series("", index=frame.index)).fillna("").astype(str)
-    big_gain_examples = int((bins == "big_gain").sum())
+    returns = pd.to_numeric(frame.get("return_5d", pd.Series(np.nan, index=frame.index)), errors="coerce")
+    big_gain_rows = returns >= 0.03
+    big_loss_rows = returns < -0.03
+    total_big_gain_rows = int(big_gain_rows.sum())
+    total_big_loss_rows = int(big_loss_rows.sum())
     dates = _event_date_series(frame) if len(frame) else pd.Series([], dtype=str)
+    symbols = frame["symbol"].fillna("").astype(str).str.upper() if "symbol" in frame.columns else pd.Series("unknown", index=frame.index)
     independent_dates = int(dates[dates != "unknown"].nunique()) if len(dates) else 0
-    unique_symbols = int(frame["symbol"].fillna("").astype(str).str.upper().nunique()) if "symbol" in frame.columns else 0
+    unique_symbols = int(symbols.nunique()) if len(symbols) else 0
+    selected_item = max(threshold_search, key=lambda item: float(item.get("utility_score") if item.get("utility_score") is not None else -999.0), default={})
+    selected_positive = int(selected_item.get("positive_predictions") or 0)
+    selected_big_gain = int(selected_item.get("big_gain_predictions") or selected_item.get("big_gain_rows") or 0)
+    selected_big_loss = int(selected_item.get("big_loss_predictions") or 0)
+    selected_utility = selected_item.get("utility_score_after_big_loss_penalty", selected_item.get("utility_score"))
+    selected_utility_value = float(selected_utility) if selected_utility is not None else None
+    symbol_concentration = selected_item.get("symbol_selection_concentration")
+    concentration_value = float(symbol_concentration) if symbol_concentration is not None else 0.0
     checks = {
         "positive_predictions_passed": max(positive_counts, default=0) >= MIN_THRESHOLD_POSITIVE_PREDICTIONS,
-        "big_gain_examples_passed": big_gain_examples >= MIN_THRESHOLD_SELECTION_BIG_GAIN_EXAMPLES,
+        "big_gain_examples_passed": total_big_gain_rows >= MIN_THRESHOLD_SELECTION_BIG_GAIN_EXAMPLES,
         "independent_dates_passed": independent_dates >= MIN_THRESHOLD_SELECTION_INDEPENDENT_DATES,
         "unique_symbols_passed": unique_symbols >= MIN_THRESHOLD_SELECTION_UNIQUE_SYMBOLS,
+        "selected_big_gain_capture_passed": selected_big_gain > 0,
+        "selected_utility_nonnegative_passed": selected_utility_value is not None and selected_utility_value >= 0.0,
+        "selected_concentration_passed": concentration_value <= MAX_SYMBOL_UTILITY_CONCENTRATION if concentration_value else True,
     }
     max_positive = max(positive_counts, default=0)
+    symbol_dates = pd.Series(symbols.to_numpy() + "|" + dates.to_numpy()) if len(dates) else pd.Series([], dtype=str)
     return {
         "passed": all(checks.values()),
         "rows": int(len(frame)),
@@ -1090,8 +1106,18 @@ def _threshold_selection_support(frame: pd.DataFrame, threshold_search: list[dic
         "maximum_positive_predictions": max_positive,
         "positive_predictions": max_positive,
         "minimum_big_gain_examples": MIN_THRESHOLD_SELECTION_BIG_GAIN_EXAMPLES,
-        "big_gain_examples": big_gain_examples,
-        "big_gain_rows": big_gain_examples,
+        "big_gain_examples": total_big_gain_rows,
+        "big_gain_rows": total_big_gain_rows,
+        "total_big_gain_rows": total_big_gain_rows,
+        "total_big_loss_rows": total_big_loss_rows,
+        "big_gain_predictions": max((int(item.get("big_gain_predictions") or item.get("big_gain_rows") or 0) for item in threshold_search), default=0),
+        "big_gain_capture_rate": round(max((float(item.get("big_gain_capture_rate") or 0.0) for item in threshold_search), default=0.0), 6),
+        "selected_trade_big_gain_count": selected_big_gain,
+        "selected_trade_big_loss_count": selected_big_loss,
+        "selected_trade_unique_symbols": unique_symbols if selected_positive else 0,
+        "selected_trade_unique_symbol_dates": min(selected_positive, int(symbol_dates.nunique())) if selected_positive and len(symbol_dates) else 0,
+        "selected_threshold_utility": selected_utility_value,
+        "selected_threshold_symbol_date_concentration": concentration_value,
         "minimum_independent_dates": MIN_THRESHOLD_SELECTION_INDEPENDENT_DATES,
         "independent_dates": independent_dates,
         "minimum_unique_symbols": MIN_THRESHOLD_SELECTION_UNIQUE_SYMBOLS,
@@ -1157,6 +1183,29 @@ LEAKAGE_OUTCOME_COLUMNS = (
 )
 VALUE_LEAKAGE_EQUALITY_RATE = 0.95
 VALUE_LEAKAGE_CORRELATION = 0.995
+MODEL_ECHO_FEATURES = [
+    "feature_previous_recommendation_buy",
+    "feature_probability_up_delta_from_last_signal",
+    "feature_recommendation_changed",
+    "feature_symbol_buy_count_7d",
+    "feature_symbol_sell_count_7d",
+    "feature_symbol_signal_count_7d",
+]
+ALLOWED_LAGGED_RETURN_FEATURES = [
+    "feature_return_1d_lagged",
+    "feature_return_5d_lagged",
+    "feature_return_10d_lagged",
+    "feature_return_20d_lagged",
+]
+BLOCKED_UNLAGGED_FUTURE_FEATURES = [
+    "feature_return_5d",
+    "return_5d",
+    "future_return_5d",
+    "label_up_5d",
+    "label_profit_5d",
+    "realized_return_5d",
+    "outcome_return",
+]
 
 
 def _future_feature_leakage_audit(*artifact_paths: str, frame: pd.DataFrame | None = None) -> dict[str, Any]:
@@ -1526,7 +1575,9 @@ def _comparison_scope_report(
         "endpoint_count": int(endpoints.nunique()) if len(endpoints) else 0,
         "scope": scope,
         "promotion_eligible_evidence": promotion_eligible,
+        "allowed_uses": ["promotion_evidence"] if promotion_eligible else ["diagnostic_only"],
         "apples_to_apples_scoring": feature_schema_compatible,
+        "production_scoring_mode": "native_or_valid_adapter" if production_passed else "fill_or_default_values",
         "production_feature_mode": "native_massive_features" if production_passed else "fill_or_default_values",
         "production_feature_coverage_passed": production_passed,
         "candidate_feature_coverage_passed": candidate_passed,
@@ -1535,6 +1586,108 @@ def _comparison_scope_report(
         "comparison_invalid_reason": "; ".join(invalid_reasons) if invalid_reasons else None,
         "narrow_comparison_can_override_full_backtest": False,
     }
+
+
+def _production_comparison_status(comparison_scope: dict[str, Any], production_metrics: dict[str, Any], production_probs: np.ndarray) -> dict[str, Any]:
+    constant = bool(len(production_probs) > 0 and float(np.nanstd(production_probs)) <= 1e-6)
+    invalid_default = not comparison_scope.get("comparison_valid") and comparison_scope.get("production_feature_mode") == "fill_or_default_values"
+    status = "invalid_default_filled" if invalid_default else ("valid" if comparison_scope.get("comparison_valid") else "invalid")
+    return {
+        "production_comparison_status": status,
+        "production_positive_predictions": int(production_metrics.get("positive_predictions") or 0),
+        "production_probability_constant": constant,
+        "production_metric_validity": {
+            "accuracy": "promotion_eligible" if status == "valid" else "not_promotion_eligible",
+            "brier": "promotion_eligible" if status == "valid" else "not_promotion_eligible",
+            "utility": "available" if status == "valid" and production_metrics.get("utility_score") is not None else "not_available",
+            "ranking_backtest": "promotion_eligible" if status == "valid" else "not_promotion_eligible",
+        },
+    }
+
+
+def _feature_leakage_name_value_audit(candidate_model_path: str, production_model_path: str, value_audit: dict[str, Any], comparison_scope: dict[str, Any]) -> dict[str, Any]:
+    candidate_features = load_artifact(candidate_model_path).feature_columns if Path(candidate_model_path).exists() else []
+    production_features = load_artifact(production_model_path).feature_columns if Path(production_model_path).exists() else []
+    blocked = set(BLOCKED_UNLAGGED_FUTURE_FEATURES)
+    allowed_lagged = set(ALLOWED_LAGGED_RETURN_FEATURES)
+    candidate_name_violations = [f for f in candidate_features if f in blocked or ("return_5d" in f and f not in allowed_lagged)]
+    production_future_like = [f for f in production_features if f in blocked or ("return_5d" in f and f not in allowed_lagged)]
+    candidate_name_passed = not candidate_name_violations
+    value_passed = bool(value_audit.get("passed"))
+    return {
+        "future_feature_name_audit_passed": candidate_name_passed,
+        "future_feature_value_audit_passed": value_passed,
+        "future_feature_leakage_passed": bool(candidate_name_passed and value_passed),
+        "candidate_future_feature_leakage_passed": bool(candidate_name_passed and value_passed),
+        "allowed_lagged_return_features": ALLOWED_LAGGED_RETURN_FEATURES,
+        "blocked_unlagged_future_features": BLOCKED_UNLAGGED_FUTURE_FEATURES,
+        "candidate_name_violations": candidate_name_violations,
+        "value_violations": value_audit.get("violations") or [],
+        "production_legacy_schema_contains_future_like_feature_name": bool(production_future_like),
+        "production_future_like_features": production_future_like,
+        "production_schema_comparison_invalid": not bool(comparison_scope.get("comparison_valid")),
+    }
+
+
+def _candidate_feature_coverage_segmented_report(candidate_availability: dict[str, Any]) -> dict[str, Any]:
+    features = candidate_availability.get("features") or {}
+    market_rates = {name: float(meta.get("availability_rate") or 0.0) for name, meta in features.items() if name not in MODEL_ECHO_FEATURES}
+    echo_rates = {name: float(features.get(name, {}).get("availability_rate") or 0.0) for name in MODEL_ECHO_FEATURES if name in features}
+    low_coverage = [name for name, meta in features.items() if float(meta.get("availability_rate") or 0.0) < 0.80]
+    return {
+        "candidate_market_feature_coverage_passed": bool(market_rates) and all(rate >= 0.80 for rate in market_rates.values()),
+        "candidate_model_echo_feature_coverage_passed": bool(echo_rates) and all(rate >= 0.80 for rate in echo_rates.values()),
+        "low_coverage_features": low_coverage,
+        "model_echo_features": MODEL_ECHO_FEATURES,
+        "market_feature_count": len(market_rates),
+        "model_echo_feature_count": len(echo_rates),
+    }
+
+
+def _duplicate_weighting_report(frame: pd.DataFrame) -> dict[str, Any]:
+    dates = _event_date_series(frame) if len(frame) else pd.Series([], dtype=str)
+    symbols = frame["symbol"].fillna("unknown").astype(str).str.upper() if "symbol" in frame.columns else pd.Series("unknown", index=frame.index)
+    endpoints = frame["endpoint"].fillna("unknown").astype(str) if "endpoint" in frame.columns else pd.Series("unknown", index=frame.index)
+    sources = frame["decision_source"].fillna("unknown").astype(str) if "decision_source" in frame.columns else pd.Series("unknown", index=frame.index)
+    symbol_date = pd.Series(symbols.to_numpy() + "|" + dates.to_numpy())
+    endpoint_symbol_date = pd.Series(endpoints.to_numpy() + "|" + symbols.to_numpy() + "|" + dates.to_numpy())
+    full_group = pd.Series(symbols.to_numpy() + "|" + dates.to_numpy() + "|" + endpoints.to_numpy() + "|" + sources.to_numpy())
+    counts = full_group.value_counts()
+    weights = full_group.map(lambda key: 1.0 / float(counts.get(key, 1))) if len(full_group) else pd.Series([], dtype=float)
+    return {
+        "symbol_date_group_count": int(symbol_date.nunique()) if len(symbol_date) else 0,
+        "endpoint_symbol_date_group_count": int(endpoint_symbol_date.nunique()) if len(endpoint_symbol_date) else 0,
+        "duplicate_symbol_date_count": int(symbol_date.duplicated(keep=False).sum()) if len(symbol_date) else 0,
+        "effective_unique_symbol_dates": round(float(weights.sum()), 6) if len(weights) else 0.0,
+        "top_symbol_date_concentration": round(float(symbol_date.value_counts(normalize=True).max()), 6) if len(symbol_date) else 0.0,
+        "top_symbol_date_groups": symbol_date.value_counts().head(10).to_dict(),
+        "top_endpoint_symbol_date_groups": endpoint_symbol_date.value_counts().head(10).to_dict(),
+        "group_weighting_policy": "effective_weight = 1 / count(symbol, event_date, endpoint, decision_source)",
+    }
+
+
+def _invalidate_phase_1_for_comparison(phase_1_gate: dict[str, Any], comparison_scope: dict[str, Any], candidate_metrics: dict[str, Any], threshold_support: dict[str, Any], leakage_split: dict[str, Any]) -> dict[str, Any]:
+    gate = json.loads(json.dumps(phase_1_gate))
+    gate_results = gate.setdefault("gate_results", {})
+    blocking = list(gate.get("blocking_issues") or [])
+    if not comparison_scope.get("comparison_valid"):
+        gate_results["comparison_validity_passed"] = False
+        blocking.extend(["production comparison invalid due missing/default-filled production features", "comparison is not promotion-eligible evidence"])
+    symbol_concentration = _numeric_metric(candidate_metrics, "symbol_selection_concentration") or _numeric_metric(candidate_metrics, "symbol_utility_concentration")
+    if symbol_concentration is not None and symbol_concentration > MAX_SYMBOL_UTILITY_CONCENTRATION:
+        gate_results["symbol_date_concentration_handling_passed"] = False
+        blocking.append("candidate symbol/date concentration exceeds limits")
+    checks = threshold_support.get("checks") or {}
+    if not threshold_support.get("passed") or not checks.get("selected_big_gain_capture_passed", True):
+        gate_results["threshold_guardrails_passed"] = False
+        blocking.append("threshold support accounting appears inconsistent")
+    if not leakage_split.get("future_feature_leakage_passed"):
+        gate_results["future_feature_leakage_passed"] = False
+        blocking.append("future-feature leakage gate is contradictory and must be split into name/value audits")
+    gate["blocking_issues"] = sorted(set(blocking))
+    gate["phase_1_certified"] = False if gate["blocking_issues"] else bool(gate.get("phase_1_certified"))
+    gate["ready_for_phase_2"] = bool(gate.get("phase_1_certified"))
+    return gate
 
 
 def _production_promotion_gates(
@@ -1705,6 +1858,11 @@ def main() -> None:
     phase_1_leakage_audit = ((detailed_phase_1_certification.get("diagnostics") or {}).get("future_feature_leakage_audit") or {})
     feature_leakage_value_audit = _feature_leakage_value_audit(phase_1_leakage_audit)
     comparison_scope_report = _comparison_scope_report(args.input, test_df.copy(), candidate_feature_availability, production_feature_availability)
+    production_preds_for_status, production_probs_for_status = _artifact_predictions(args.production_model, test_df.copy())
+    production_feature_compatibility_report = _production_comparison_status(comparison_scope_report, production_metrics, production_probs_for_status)
+    candidate_feature_coverage_segmented_report = _candidate_feature_coverage_segmented_report(candidate_feature_availability)
+    feature_leakage_name_value_audit = _feature_leakage_name_value_audit(args.candidate_model, args.production_model, feature_leakage_value_audit, comparison_scope_report)
+    duplicate_weighting_report = _duplicate_weighting_report(test_df.copy())
     paired_bootstrap = _paired_date_bootstrap_utility_delta(args.candidate_model, args.production_model, test_df.copy())
     production_promotion_gates = _production_promotion_gates(
         candidate_model_path=args.candidate_model,
@@ -1720,6 +1878,23 @@ def main() -> None:
         candidate_feature_risk=candidate_feature_risk,
         bootstrap=paired_bootstrap,
     )
+    phase_1_gate = _invalidate_phase_1_for_comparison(
+        phase_1_gate,
+        comparison_scope_report,
+        candidate_metrics,
+        candidate_threshold_optimizer.get("threshold_selection_support") or {},
+        feature_leakage_name_value_audit,
+    )
+    if not comparison_scope_report.get("comparison_valid"):
+        production_promotion_gates["promotion_allowed"] = False
+        production_promotion_gates.setdefault("gate_results", {})["comparison_validity_passed"] = False
+        production_promotion_gates.setdefault("blocking_issues", []).extend([
+            "production comparison invalid due missing/default-filled production features",
+            "comparison is not promotion-eligible evidence",
+        ])
+        production_promotion_gates["blocking_issues"] = sorted(set(production_promotion_gates["blocking_issues"]))
+        decision_win = False
+        ranking_win = False
     candidate_win = bool(production_promotion_gates["promotion_allowed"])
     promotion_decision = _promotion_decision(candidate_win, no_op_clone, decision_win, ranking_win, walk_forward_consistent)
     candidate_behavior = _candidate_behavior(candidate_metrics, production_metrics)
@@ -1740,8 +1915,17 @@ def main() -> None:
         "training_source_report": training_source,
         "massive_training_enabled": bool(training_source.get("uses_massive_canonical_input")),
         "feature_leakage_value_audit": feature_leakage_value_audit,
+        "feature_leakage_name_value_audit": feature_leakage_name_value_audit,
+        "candidate_feature_coverage_segmented_report": candidate_feature_coverage_segmented_report,
         "feature_availability_report": {"candidate": candidate_feature_availability, "production": production_feature_availability},
         "comparison_scope_report": comparison_scope_report,
+        "production_feature_compatibility_report": production_feature_compatibility_report,
+        "production_comparison_status": production_feature_compatibility_report["production_comparison_status"],
+        "production_positive_predictions": production_feature_compatibility_report["production_positive_predictions"],
+        "production_probability_constant": production_feature_compatibility_report["production_probability_constant"],
+        "production_metric_validity": production_feature_compatibility_report["production_metric_validity"],
+        "massive_baseline_model_report": {"available": False, "model_version": "massive_baseline_model_v1", "reason": "not yet trained; invalid production comparator remains diagnostic-only"},
+        "duplicate_weighting_report": duplicate_weighting_report,
         "production_feature_coverage_passed": comparison_scope_report["production_feature_coverage_passed"],
         "candidate_feature_coverage_passed": comparison_scope_report["candidate_feature_coverage_passed"],
         "feature_schema_compatible": comparison_scope_report["feature_schema_compatible"],
@@ -1800,7 +1984,16 @@ def main() -> None:
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
-    (output_path.parent / "comparison_scope_report.json").write_text(json.dumps(comparison_scope_report, indent=2, sort_keys=True), encoding="utf-8")
+    extra_reports = {
+        "comparison_scope_report.json": comparison_scope_report,
+        "production_feature_compatibility_report.json": production_feature_compatibility_report,
+        "massive_baseline_model_report.json": report["massive_baseline_model_report"],
+        "feature_leakage_name_value_audit.json": feature_leakage_name_value_audit,
+        "candidate_feature_coverage_segmented_report.json": candidate_feature_coverage_segmented_report,
+        "duplicate_weighting_report.json": duplicate_weighting_report,
+    }
+    for name, payload in extra_reports.items():
+        (output_path.parent / name).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps(report, indent=2, sort_keys=True))
 
 

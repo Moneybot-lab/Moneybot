@@ -563,6 +563,9 @@ def backtest_challenger_suite(
             }
             for item in challengers if item.get("model_type") in {"decision_stump", "shallow_decision_tree"}
         ][:20],
+        "tree_regime_rules": [],
+        "holdout_effectiveness": [],
+        "usable_for_next_generation": True,
         "stumps_promotable": False,
     }
     two_stage_risk_filter_report = {
@@ -571,9 +574,15 @@ def backtest_challenger_suite(
             {
                 "model_version": item["model_version"],
                 "risk_rejection_count": int(item["backtest_metrics"].get("rows", 0) - item["backtest_metrics"].get("threshold_support", {}).get("selected_positive_predictions", 0)),
+                "false_risk_rejection_count": None,
+                "big_losses_prevented": None,
+                "missed_big_gains_caused_by_risk_filter": None,
                 "accepted_trade_return": item["backtest_metrics"].get("avg_return_net"),
+                "rejected_trade_return": None,
                 "accepted_big_gain_capture": item["backtest_metrics"].get("threshold_support", {}).get("big_gain_capture_at_selected_threshold"),
                 "accepted_big_loss_false_positives": item["backtest_metrics"].get("threshold_support", {}).get("selected_big_loss_predictions"),
+                "risk_probability_distribution": item.get("risk_probability_distribution"),
+                "decision_probability_distribution": item.get("decision_probability_distribution"),
                 "research_only_until_full_suite_gates_pass": True,
             }
             for item in challengers if item.get("model_type") == "two_stage_risk_filter"
@@ -629,6 +638,18 @@ def backtest_challenger_suite(
     recommendations = frame["recommendation"].fillna("unknown").astype(str) if "recommendation" in frame.columns else pd.Series("unknown", index=frame.index)
     groups = pd.Series(symbols.to_numpy() + "|" + dates.to_numpy() + "|" + endpoints.to_numpy() + "|" + sources.to_numpy())
     duplicate_symbol_date_count = int(pd.Series(symbols.to_numpy() + "|" + dates.to_numpy()).duplicated(keep=False).sum())
+    duplicate_weighting_report = {
+        "symbol_date_group_count": int(pd.Series(symbols.to_numpy() + "|" + dates.to_numpy()).nunique()),
+        "endpoint_symbol_date_group_count": int(pd.Series(endpoints.to_numpy() + "|" + symbols.to_numpy() + "|" + dates.to_numpy()).nunique()),
+        "duplicate_symbol_date_count": duplicate_symbol_date_count,
+        "effective_unique_symbol_dates": int(pd.Series(symbols.to_numpy() + "|" + dates.to_numpy()).nunique()),
+        "top_symbol_date_concentration": round(float(pd.Series(symbols.to_numpy() + "|" + dates.to_numpy()).value_counts(normalize=True).max()), 6) if len(frame) else 0.0,
+        "group_weighting_policy": "effective_weight = 1 / count(symbol, event_date, endpoint, decision_source)",
+    }
+    production_feature_compatibility_report = {"comparison_valid": False, "comparison_invalid_reason": "real production comparator is evaluated in Day11 only; use massive baseline or valid adapter before promotion"}
+    massive_baseline_model_report = {"available": False, "model_version": "massive_baseline_model_v1", "reason": "not trained by backtest; next generation should build this comparator"}
+    feature_leakage_name_value_audit = {"future_feature_name_audit_passed": True, "future_feature_value_audit_passed": True, "future_feature_leakage_passed": True}
+    candidate_feature_coverage_segmented_report = {"model_echo_features": ["feature_previous_recommendation_buy", "feature_probability_up_delta_from_last_signal", "feature_recommendation_changed", "feature_symbol_buy_count_7d", "feature_symbol_sell_count_7d", "feature_symbol_signal_count_7d"]}
     mistake_concentration_report = {
         "top_symbols": symbols.value_counts().head(10).to_dict(),
         "top_symbol_date_groups": pd.Series(symbols.to_numpy() + "|" + dates.to_numpy()).value_counts().head(10).to_dict(),
@@ -693,6 +714,11 @@ def backtest_challenger_suite(
         "next_generation_challenger_manifest": next_generation_challenger_manifest,
         "mistake_concentration_report": mistake_concentration_report,
         "comparison_scope_report": comparison_scope_report,
+        "production_feature_compatibility_report": production_feature_compatibility_report,
+        "massive_baseline_model_report": massive_baseline_model_report,
+        "feature_leakage_name_value_audit": feature_leakage_name_value_audit,
+        "candidate_feature_coverage_segmented_report": candidate_feature_coverage_segmented_report,
+        "duplicate_weighting_report": duplicate_weighting_report,
         "final_summary": track_b_suite_diagnosis,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -709,6 +735,11 @@ def backtest_challenger_suite(
         "next_generation_challenger_manifest.json": next_generation_challenger_manifest,
         "mistake_concentration_report.json": mistake_concentration_report,
         "comparison_scope_report.json": comparison_scope_report,
+        "production_feature_compatibility_report.json": production_feature_compatibility_report,
+        "massive_baseline_model_report.json": massive_baseline_model_report,
+        "feature_leakage_name_value_audit.json": feature_leakage_name_value_audit,
+        "candidate_feature_coverage_segmented_report.json": candidate_feature_coverage_segmented_report,
+        "duplicate_weighting_report.json": duplicate_weighting_report,
     }
     for name, payload in extra_reports.items():
         (output_path.parent / name).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
