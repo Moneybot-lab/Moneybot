@@ -47,7 +47,7 @@ def test_chronological_training_periods_allocate_whole_dense_event_dates():
 def test_future_labels_outcomes_and_realized_returns_are_never_features():
     columns = ["feature_price", "feature_return_5d", "feature_forward_return_5d", "feature_future_return", "feature_realized_return", "feature_outcome_5d", "feature_label_gain_5d"]
 
-    assert _future_safe_feature_columns(columns) == ["feature_price", "feature_return_5d"]
+    assert _future_safe_feature_columns(columns) == ["feature_price"]
 
 
 def test_threshold_search_uses_track_b_profit_grid_and_records_big_loss_guardrail():

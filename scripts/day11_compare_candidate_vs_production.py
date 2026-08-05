@@ -17,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from moneybot.services.deterministic_model import load_artifact, predict_proba
 from moneybot.services.temporal_validation import purged_embargoed_split
-from scripts.day10_train_candidate_model import _flat_optimum_threshold
+from scripts.day10_train_candidate_model import _flat_optimum_threshold, _future_safe_feature_columns
 
 RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
 TARGET_GAIN_BUCKETS = {"gain", "big_gain"}
@@ -1047,22 +1047,67 @@ def _threshold_optimizer_report(artifact_path: str, metrics: dict[str, Any], tes
     }
 
 
-def _future_feature_leakage_audit(*artifact_paths: str) -> dict[str, Any]:
-    forbidden_exact = {"return_5d", "return_1d", "outcome_1d", "outcome_5d", "label_up_5d", "label_gain_5d"}
-    forbidden_fragments = ("forward_return", "future_return", "realized_return", "outcome_", "label_")
+LEAKAGE_OUTCOME_COLUMNS = (
+    "return_5d",
+    "return_1d",
+    "label_up_5d",
+    "label_gain_5d",
+    "label_profit_5d",
+    "outcome_1d",
+    "outcome_5d",
+    "forward_return_5d",
+    "future_return_5d",
+    "realized_return_5d",
+)
+VALUE_LEAKAGE_EQUALITY_RATE = 0.95
+VALUE_LEAKAGE_CORRELATION = 0.995
+
+
+def _future_feature_leakage_audit(*artifact_paths: str, frame: pd.DataFrame | None = None) -> dict[str, Any]:
     artifacts: list[dict[str, Any]] = []
-    violations: list[dict[str, str]] = []
+    violations: list[dict[str, Any]] = []
+    value_checks: list[dict[str, Any]] = []
     for artifact_path in artifact_paths:
         if not Path(artifact_path).exists():
-            violations.append({"artifact_path": artifact_path, "feature": "<artifact unavailable>"})
+            violations.append({"artifact_path": artifact_path, "feature": "<artifact unavailable>", "reason": "artifact_unavailable"})
             continue
         artifact = load_artifact(artifact_path)
         artifacts.append({"artifact_path": artifact_path, "model_version": artifact.version, "feature_columns": artifact.feature_columns})
+        safe_features = set(_future_safe_feature_columns([str(feature) for feature in artifact.feature_columns]))
         for feature in artifact.feature_columns:
-            lowered = str(feature).lower()
-            if lowered in forbidden_exact or any(fragment in lowered for fragment in forbidden_fragments):
-                violations.append({"artifact_path": artifact_path, "feature": str(feature)})
-    return {"passed": not violations, "violations": violations, "artifacts": artifacts}
+            feature_name = str(feature)
+            if feature_name not in safe_features:
+                violations.append({"artifact_path": artifact_path, "feature": feature_name, "reason": "forbidden_feature_name"})
+                continue
+            if frame is None or feature_name not in frame.columns:
+                continue
+            feature_values = pd.to_numeric(frame[feature_name], errors="coerce")
+            for outcome_col in LEAKAGE_OUTCOME_COLUMNS:
+                if outcome_col not in frame.columns:
+                    continue
+                outcome_values = pd.to_numeric(frame[outcome_col], errors="coerce")
+                paired = pd.DataFrame({"feature": feature_values, "outcome": outcome_values}).dropna()
+                rows = int(len(paired))
+                if rows < 20:
+                    continue
+                equality_rate = float(np.isclose(paired["feature"].to_numpy(), paired["outcome"].to_numpy(), rtol=1e-9, atol=1e-12).mean())
+                correlation = None
+                if float(paired["feature"].std()) > 0.0 and float(paired["outcome"].std()) > 0.0:
+                    correlation = float(paired["feature"].corr(paired["outcome"]))
+                check = {
+                    "artifact_path": artifact_path,
+                    "feature": feature_name,
+                    "outcome_column": outcome_col,
+                    "rows_compared": rows,
+                    "equality_rate": round(equality_rate, 6),
+                    "correlation": round(correlation, 6) if correlation is not None else None,
+                }
+                value_checks.append(check)
+                if equality_rate >= VALUE_LEAKAGE_EQUALITY_RATE:
+                    violations.append({**check, "reason": "feature_matches_outcome_values"})
+                elif correlation is not None and abs(correlation) >= VALUE_LEAKAGE_CORRELATION:
+                    violations.append({**check, "reason": "feature_correlates_with_outcome_values"})
+    return {"passed": not violations, "violations": violations, "value_checks": value_checks, "artifacts": artifacts}
 
 
 def _max_numeric_delta(left: Any, right: Any) -> float:
@@ -1163,7 +1208,7 @@ def _phase_1_certification(
     )
     split_ok, purge_ok, training_recipe_reproduced, split_issues = _split_hygiene_certification(candidate_model_path)
     recipe_reproduction = training_recipe_reproduced and bool(walk_forward.get("recipe_reproduction_passed")) and bool(rerun_walk_forward.get("recipe_reproduction_passed")) and fold_outcomes == rerun_fold_outcomes
-    leakage_audit = _future_feature_leakage_audit(candidate_model_path, production_model_path)
+    leakage_audit = _future_feature_leakage_audit(candidate_model_path, production_model_path, frame=test_df)
     mistake_ok = report_examples.get("mistake_scoring_method") == "artifact_predictions"
     stored_cmi = _stored_regression_example("CMI", "2026-07-10")
     candidate_scored = _artifact_scored_frame(candidate_model_path, test_df, prefix="candidate")

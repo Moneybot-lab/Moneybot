@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from scripts.day10_train_candidate_model import _prepare_frame
+from scripts.day10_train_candidate_model import _future_safe_feature_columns, _prepare_frame
 
 BACKTEST_SCHEMA_VERSION = "moneybot-challenger-backtest.v1"
 
@@ -48,8 +48,8 @@ def _return_column(df: pd.DataFrame, horizon_days: int) -> str:
 def _feature_columns(df: pd.DataFrame, suite_manifest: dict[str, Any]) -> list[str]:
     cols = [str(col) for col in suite_manifest.get("feature_columns") or [] if str(col) in df.columns]
     if cols:
-        return cols
-    return sorted(str(col) for col in df.columns if str(col).startswith("feature_"))
+        return _future_safe_feature_columns(cols)
+    return _future_safe_feature_columns(sorted(str(col) for col in df.columns if str(col).startswith("feature_")))
 
 
 def _prepare_features(df: pd.DataFrame, feature_columns: list[str], fill_values: dict[str, Any]) -> pd.DataFrame:

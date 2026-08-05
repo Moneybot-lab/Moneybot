@@ -38,7 +38,32 @@ def test_future_feature_leakage_audit_rejects_label_and_realized_features(tmp_pa
     audit = compare._future_feature_leakage_audit(str(safe), str(unsafe))
 
     assert audit["passed"] is False
-    assert audit["violations"] == [{"artifact_path": str(unsafe), "feature": "feature_forward_return_5d"}]
+    assert audit["violations"] == [{"artifact_path": str(unsafe), "feature": "feature_forward_return_5d", "reason": "forbidden_feature_name"}]
+
+
+def test_future_feature_leakage_audit_rejects_value_matched_return_feature(tmp_path):
+    leaky = tmp_path / "leaky.json"
+    _artifact(leaky, weight=1.0, feature="feature_price")
+    frame = pd.DataFrame({
+        "feature_price": [float(i) / 100.0 for i in range(30)],
+        "return_5d": [float(i) / 100.0 for i in range(30)],
+    })
+
+    audit = compare._future_feature_leakage_audit(str(leaky), frame=frame)
+
+    assert audit["passed"] is False
+    assert audit["violations"][0]["reason"] == "feature_matches_outcome_values"
+    assert audit["violations"][0]["outcome_column"] == "return_5d"
+
+
+def test_future_feature_leakage_audit_rejects_unlagged_return_5d_feature(tmp_path):
+    leaky = tmp_path / "leaky_return.json"
+    _artifact(leaky, weight=1.0, feature="feature_return_5d")
+
+    audit = compare._future_feature_leakage_audit(str(leaky))
+
+    assert audit["passed"] is False
+    assert audit["violations"] == [{"artifact_path": str(leaky), "feature": "feature_return_5d", "reason": "forbidden_feature_name"}]
 
 
 def test_phase_1_certification_reports_all_required_checks(tmp_path):
