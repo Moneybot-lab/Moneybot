@@ -491,7 +491,7 @@ python3 scripts/run_track_b_offline.py --input-log data/decision_events.jsonl --
 What it does:
 - builds an offline decision training dataset (`day8_build_decision_training_dataset.py`)
 - trains a challenger candidate artifact in `data/track_b/candidate_model_track_b.json`
-- selects the candidate decision threshold from the training split using the same profit-aware utility that the promotion gate evaluates, so candidates are not stuck on the default 0.55 cutoff
+- treats model + threshold as the challenger artifact by evaluating thresholds 0.55, 0.575, 0.60, 0.625, 0.65, 0.675, and 0.70 on the training split, then selecting by the same profit-aware utility that the promotion gate evaluates with big-loss guardrails
 - compares challenger vs the exported current production artifact (`data/track_b/production_model.json` in GitHub Actions) on holdout and writes `data/track_b/model_comparison_track_b.json`
 - writes a run summary to `data/track_b/track_b_summary.json`
 
