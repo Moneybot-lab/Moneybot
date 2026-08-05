@@ -1,5 +1,8 @@
 from scripts import day13_calibration_report as calibration_script
-from scripts.day13_calibration_report import calibration_rows_from_events, calibration_summary
+from scripts.day13_calibration_report import (
+    calibration_rows_from_events,
+    calibration_summary,
+)
 
 
 def test_calibration_summary_computes_brier_and_bins():
@@ -30,7 +33,9 @@ def test_calibration_rows_from_events_skips_non_mature_events(monkeypatch):
 
     monkeypatch.setattr(calibration_script, "_future_return", fake_future_return)
 
-    rows = calibration_rows_from_events(events, horizon_days=5, now_ts=100 + (7 * 86400))
+    rows = calibration_rows_from_events(
+        events, horizon_days=5, now_ts=100 + (7 * 86400)
+    )
     assert len(rows) == 1
     assert rows[0]["symbol"] == "AAPL"
 
@@ -66,3 +71,49 @@ def test_calibration_summary_reports_effective_calibrated_brier_for_underconfide
     assert summary["calibrated_brier_score"] <= summary["brier_score"]
     assert summary["effective_brier_score"] == summary["calibrated_brier_score"]
     assert summary["brier_improvement"] > 0
+
+
+def test_calibration_rows_exclude_null_probability_and_quote_only(monkeypatch):
+    events = [
+        {
+            "symbol": "AAPL",
+            "ts": 100,
+            "endpoint": "quick_ask",
+            "decision_source": "model",
+            "payload": {"probability_up": None},
+        },
+        {
+            "symbol": "MSFT",
+            "ts": 100,
+            "endpoint": "portfolio",
+            "decision_source": "rule",
+            "payload": {"probability_up": 0.7, "provider": "portfolio_quote_only"},
+        },
+        {
+            "symbol": "NVDA",
+            "ts": 100,
+            "endpoint": "quick_ask",
+            "decision_source": "model",
+            "payload": {
+                "probability_up": 0.8,
+                "features": {"rsi": 55},
+                "model_version": "v1",
+            },
+        },
+    ]
+
+    monkeypatch.setattr(
+        calibration_script, "_future_return", lambda symbol, ts, days: 0.01
+    )
+
+    rows = calibration_rows_from_events(
+        events, horizon_days=5, now_ts=100 + (7 * 86400)
+    )
+    profile = calibration_script.calibration_input_profile(events, horizon_days=5)
+    segments = calibration_script.segmented_calibration_summaries(rows, bins=4)
+
+    assert [row["symbol"] for row in rows] == ["NVDA"]
+    assert profile["null_probability_rows"] == 1
+    assert profile["portfolio_quote_only_rows"] == 1
+    assert segments["endpoint"]["quick_ask"]["rows"] == 1
+    assert segments["signal_completeness"]["full_signal"]["rows"] == 1
