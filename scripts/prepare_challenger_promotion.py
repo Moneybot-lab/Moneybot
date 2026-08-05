@@ -22,7 +22,8 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 
 def _eligible_challengers(report: dict[str, Any]) -> list[dict[str, Any]]:
-    ranked = [str(item) for item in report.get("ranked_model_versions") or []]
+    retained = report.get("promotion_eligible_frontier_model_versions")
+    ranked = [str(item) for item in (retained if isinstance(retained, list) else report.get("ranked_model_versions") or [])]
     by_version = {str(item.get("model_version")): item for item in report.get("challengers") or [] if isinstance(item, dict)}
     out: list[dict[str, Any]] = []
     for version in ranked:
@@ -33,6 +34,8 @@ def _eligible_challengers(report: dict[str, Any]) -> list[dict[str, Any]]:
         if gates.get("promotion_ready") is not True:
             continue
         if challenger.get("routing_allowed") is not False:
+            continue
+        if challenger.get("candidate_lane") == "ranking" or challenger.get("specialized_family") == "ranking_top5_model":
             continue
         if challenger.get("model_type") != "logistic_regression":
             continue
