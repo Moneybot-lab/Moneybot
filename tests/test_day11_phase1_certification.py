@@ -66,6 +66,38 @@ def test_future_feature_leakage_audit_rejects_unlagged_return_5d_feature(tmp_pat
     assert audit["violations"] == [{"artifact_path": str(leaky), "feature": "feature_return_5d", "reason": "forbidden_feature_name"}]
 
 
+def test_feature_leakage_value_audit_exposes_value_checks(tmp_path):
+    leaky = tmp_path / "leaky.json"
+    _artifact(leaky, weight=1.0, feature="feature_price")
+    frame = pd.DataFrame({
+        "feature_price": [float(i) / 100.0 for i in range(30)],
+        "return_5d": [float(i) / 100.0 for i in range(30)],
+    })
+
+    leakage = compare._future_feature_leakage_audit(str(leaky), frame=frame)
+    value_audit = compare._feature_leakage_value_audit(leakage)
+
+    assert value_audit["passed"] is False
+    assert value_audit["violations"][0]["reason"] == "feature_matches_outcome_values"
+    assert value_audit["value_checks"][0]["outcome_column"] == "return_5d"
+
+
+def test_feature_availability_report_counts_nulls_and_fill_rate(tmp_path):
+    model = tmp_path / "candidate.json"
+    _artifact(model, weight=1.0, feature="feature_signal")
+    frame = pd.DataFrame({"feature_signal": [1.0, None, 0.5], "return_5d": [0.01, 0.02, -0.01]})
+
+    report = compare._feature_availability_report(str(model), frame)
+
+    assert report["rows"] == 3
+    assert report["features"]["feature_signal"] == {
+        "non_null_count": 2,
+        "fill_count": 1,
+        "fill_rate": 0.333333,
+        "availability_rate": 0.666667,
+    }
+
+
 def test_training_source_report_requires_massive_manifest_and_leakage_guard(tmp_path):
     input_path = tmp_path / "decision_training_snapshot_massive.jsonl"
     input_path.write_text("{}\n", encoding="utf-8")
@@ -79,6 +111,9 @@ def test_training_source_report_requires_massive_manifest_and_leakage_guard(tmp_
     report = compare._training_source_report(str(input_path), frame)
 
     assert report["uses_massive_canonical_input"] is True
+    assert report["source_kind"] == "massive-backed"
+    assert report["massive_backed"] is True
+    assert report["legacy_track_b"] is False
     assert report["leakage_safe"] is True
     assert compare._training_source_phase1_passed(report) is True
 
@@ -90,6 +125,8 @@ def test_training_source_report_rejects_legacy_track_b_snapshot(tmp_path):
     report = compare._training_source_report(str(input_path), pd.DataFrame())
 
     assert report["uses_massive_canonical_input"] is False
+    assert report["source_kind"] == "legacy_track_b"
+    assert report["legacy_track_b"] is True
     assert compare._training_source_phase1_passed(report) is False
 
 

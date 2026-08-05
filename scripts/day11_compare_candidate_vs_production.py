@@ -63,8 +63,12 @@ def _training_source_report(input_path: str, frame: pd.DataFrame | None = None) 
     leakage_guards: list[str] = []
     if frame is not None and "leakage_guard" in frame.columns:
         leakage_guards = sorted(str(value) for value in frame["leakage_guard"].dropna().astype(str).unique())
+    source_kind = "massive-backed" if path.name == "decision_training_snapshot_massive.jsonl" else "legacy_track_b"
     return {
         "input_path": str(path),
+        "source_kind": source_kind,
+        "legacy_track_b": source_kind == "legacy_track_b",
+        "massive_backed": source_kind == "massive-backed",
         "canonical_training_input": "data/track_b/decision_training_snapshot_massive.jsonl",
         "uses_massive_canonical_input": path.name == "decision_training_snapshot_massive.jsonl",
         "manifest_path": str(manifest_path),
@@ -1078,12 +1082,16 @@ def _threshold_selection_support(frame: pd.DataFrame, threshold_search: list[dic
         "independent_dates_passed": independent_dates >= MIN_THRESHOLD_SELECTION_INDEPENDENT_DATES,
         "unique_symbols_passed": unique_symbols >= MIN_THRESHOLD_SELECTION_UNIQUE_SYMBOLS,
     }
+    max_positive = max(positive_counts, default=0)
     return {
         "passed": all(checks.values()),
+        "rows": int(len(frame)),
         "minimum_positive_predictions": MIN_THRESHOLD_POSITIVE_PREDICTIONS,
-        "maximum_positive_predictions": max(positive_counts, default=0),
+        "maximum_positive_predictions": max_positive,
+        "positive_predictions": max_positive,
         "minimum_big_gain_examples": MIN_THRESHOLD_SELECTION_BIG_GAIN_EXAMPLES,
         "big_gain_examples": big_gain_examples,
+        "big_gain_rows": big_gain_examples,
         "minimum_independent_dates": MIN_THRESHOLD_SELECTION_INDEPENDENT_DATES,
         "independent_dates": independent_dates,
         "minimum_unique_symbols": MIN_THRESHOLD_SELECTION_UNIQUE_SYMBOLS,
@@ -1196,6 +1204,40 @@ def _future_feature_leakage_audit(*artifact_paths: str, frame: pd.DataFrame | No
                 elif correlation is not None and abs(correlation) >= VALUE_LEAKAGE_CORRELATION:
                     violations.append({**check, "reason": "feature_correlates_with_outcome_values"})
     return {"passed": not violations, "violations": violations, "value_checks": value_checks, "artifacts": artifacts}
+
+
+def _feature_availability_report(artifact_path: str, frame: pd.DataFrame) -> dict[str, Any]:
+    if not Path(artifact_path).exists():
+        return {"artifact_path": artifact_path, "rows": int(len(frame)), "feature_count": 0, "features": {}, "available": False}
+    artifact = load_artifact(artifact_path)
+    rows = int(len(frame))
+    features: dict[str, Any] = {}
+    for feature in artifact.feature_columns:
+        feature_name = str(feature)
+        if feature_name in frame.columns:
+            non_null = int(pd.to_numeric(frame[feature_name], errors="coerce").notna().sum())
+        else:
+            non_null = 0
+        fill_count = max(0, rows - non_null)
+        features[feature_name] = {
+            "non_null_count": non_null,
+            "fill_count": fill_count,
+            "fill_rate": round(fill_count / rows, 6) if rows else 0.0,
+            "availability_rate": round(non_null / rows, 6) if rows else 0.0,
+        }
+    return {"artifact_path": artifact_path, "rows": rows, "feature_count": len(artifact.feature_columns), "features": features, "available": True}
+
+
+def _feature_leakage_value_audit(leakage_audit: dict[str, Any]) -> dict[str, Any]:
+    value_violations = [
+        item for item in leakage_audit.get("violations") or []
+        if str(item.get("reason") or "") in {"feature_matches_outcome_values", "feature_correlates_with_outcome_values"}
+    ]
+    return {
+        "passed": not value_violations,
+        "violations": value_violations,
+        "value_checks": leakage_audit.get("value_checks") or [],
+    }
 
 
 def _max_numeric_delta(left: Any, right: Any) -> float:
@@ -1560,6 +1602,8 @@ def main() -> None:
     no_op_clone = bool(clone_detection.get("no_op_clone"))
     candidate_feature_risk = _feature_risk_audit(args.candidate_model, test_df.copy())
     production_feature_risk = _feature_risk_audit(args.production_model, test_df.copy())
+    candidate_feature_availability = _feature_availability_report(args.candidate_model, test_df.copy())
+    production_feature_availability = _feature_availability_report(args.production_model, test_df.copy())
     candidate_metrics["feature_risk_audit"] = candidate_feature_risk
     production_metrics["feature_risk_audit"] = production_feature_risk
     if no_op_clone:
@@ -1611,6 +1655,8 @@ def main() -> None:
         production_feature_risk=production_feature_risk,
         training_source=training_source,
     )
+    phase_1_leakage_audit = ((detailed_phase_1_certification.get("diagnostics") or {}).get("future_feature_leakage_audit") or {})
+    feature_leakage_value_audit = _feature_leakage_value_audit(phase_1_leakage_audit)
     paired_bootstrap = _paired_date_bootstrap_utility_delta(args.candidate_model, args.production_model, test_df.copy())
     production_promotion_gates = _production_promotion_gates(
         candidate_model_path=args.candidate_model,
@@ -1643,6 +1689,14 @@ def main() -> None:
 
     report = {
         "training_source": training_source,
+        "training_source_report": training_source,
+        "massive_training_enabled": bool(training_source.get("uses_massive_canonical_input")),
+        "feature_leakage_value_audit": feature_leakage_value_audit,
+        "feature_availability_report": {"candidate": candidate_feature_availability, "production": production_feature_availability},
+        "threshold_selection_support": {
+            "production": production_threshold_optimizer.get("threshold_selection_support"),
+            "candidate": candidate_threshold_optimizer.get("threshold_selection_support"),
+        },
         "temporal_split": temporal_split,
         "phase_1_gate": phase_1_gate,
         "production_promotion_gates": production_promotion_gates,

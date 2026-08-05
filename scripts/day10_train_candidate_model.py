@@ -327,12 +327,16 @@ def _threshold_selection_support(
         "independent_dates_passed": independent_dates >= min_independent_dates,
         "unique_symbols_passed": unique_symbols >= min_unique_symbols,
     }
+    max_positive = max(positive_counts, default=0)
     return {
         "passed": all(checks.values()),
+        "rows": int(len(frame)),
         "minimum_positive_predictions": int(min_positive_predictions),
-        "maximum_positive_predictions": max(positive_counts, default=0),
+        "maximum_positive_predictions": max_positive,
+        "positive_predictions": max_positive,
         "minimum_big_gain_examples": int(min_big_gain_examples),
         "big_gain_examples": big_gain_examples,
+        "big_gain_rows": big_gain_examples,
         "minimum_independent_dates": int(min_independent_dates),
         "independent_dates": independent_dates,
         "minimum_unique_symbols": int(min_unique_symbols),
@@ -605,6 +609,24 @@ def _candidate_lineage(artifact: BaselineModelArtifact, feature_columns: list[st
     }
 
 
+def _feature_availability_report(frame: pd.DataFrame, feature_columns: list[str]) -> dict[str, Any]:
+    rows = int(len(frame))
+    features: dict[str, Any] = {}
+    for feature in feature_columns:
+        if feature in frame.columns:
+            non_null = int(pd.to_numeric(frame[feature], errors="coerce").notna().sum())
+        else:
+            non_null = 0
+        fill_count = max(0, rows - non_null)
+        features[feature] = {
+            "non_null_count": non_null,
+            "fill_count": fill_count,
+            "fill_rate": round(fill_count / rows, 6) if rows else 0.0,
+            "availability_rate": round(non_null / rows, 6) if rows else 0.0,
+        }
+    return {"rows": rows, "feature_count": len(feature_columns), "features": features}
+
+
 def _training_input_manifest(input_path: str, frame: pd.DataFrame | None = None) -> dict[str, Any]:
     path = Path(input_path)
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
@@ -753,6 +775,7 @@ def main() -> None:
                 "preferred_families": ["lagged_returns", "technical", "volume_liquidity", "market_regime", "spy_relative"],
                 "app_signal_features_ranked_after_massive_market_features": True,
             },
+            "feature_availability_report": _feature_availability_report(clean, feature_columns),
             "training_periods": {
                 "fit_rows": len(fit_df),
                 "calibration_rows": len(calibration_df),
@@ -804,6 +827,7 @@ def main() -> None:
                 "recipe_reproduction": recipe_reproduction,
                 "training_source": training_source,
                 "feature_preference_policy": metrics["feature_preference_policy"],
+                "feature_availability_report": metrics["feature_availability_report"],
                 "training_periods": metrics["training_periods"],
             },
             sort_keys=True,

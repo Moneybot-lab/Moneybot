@@ -104,7 +104,10 @@ def test_threshold_optimizer_keeps_current_threshold_when_support_is_too_thin(tm
     assert report["recommended_threshold"] == 0.55
     assert report["threshold_change_recommended"] is False
     assert report["threshold_selection_sufficient"] is False
+    assert report["threshold_selection_support"]["rows"] == 201
     assert report["threshold_selection_support"]["maximum_positive_predictions"] == 1
+    assert report["threshold_selection_support"]["positive_predictions"] == 1
+    assert report["threshold_selection_support"]["big_gain_rows"] == 1
     assert "support insufficient" in report["threshold_change_reason"]
 
 

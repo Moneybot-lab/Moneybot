@@ -101,8 +101,11 @@ def test_threshold_selection_keeps_current_threshold_when_support_is_too_thin():
     assert selected["threshold"] == 0.55
     assert selected["threshold_selection_sufficient"] is False
     assert selected["selection_status"] == "insufficient_support_keep_current_threshold"
+    assert selected["threshold_selection_support"]["rows"] == 201
     assert selected["threshold_selection_support"]["maximum_positive_predictions"] == 1
+    assert selected["threshold_selection_support"]["positive_predictions"] == 1
     assert selected["threshold_selection_support"]["big_gain_examples"] == 1
+    assert selected["threshold_selection_support"]["big_gain_rows"] == 1
     assert selected["threshold_selection_support"]["independent_dates"] == 1
     assert selected["threshold_selection_support"]["unique_symbols"] == 1
 
