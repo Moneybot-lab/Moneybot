@@ -609,6 +609,15 @@ def _candidate_lineage(artifact: BaselineModelArtifact, feature_columns: list[st
     }
 
 
+def _average_optional_return(frame: pd.DataFrame, column: str) -> float | None:
+    if column not in frame.columns:
+        return None
+    values = pd.to_numeric(frame[column], errors="coerce").dropna()
+    if values.empty:
+        return None
+    return round(float(values.mean()), 4)
+
+
 def _feature_availability_report(frame: pd.DataFrame, feature_columns: list[str]) -> dict[str, Any]:
     rows = int(len(frame))
     features: dict[str, Any] = {}
@@ -762,8 +771,8 @@ def main() -> None:
     metrics = summarize_binary_predictions(y_test, y_pred)
     metrics.update(
         {
-            "avg_return_1d": round(float(test_df["return_1d"].dropna().mean()), 4) if test_df["return_1d"].notna().any() else None,
-            "avg_return_5d": round(float(test_df["return_5d"].dropna().mean()), 4) if test_df["return_5d"].notna().any() else None,
+            "avg_return_1d": _average_optional_return(test_df, "return_1d"),
+            "avg_return_5d": _average_optional_return(test_df, "return_5d"),
             "return_bin_counts": _bucket_counts(test_df),
             "return_bin_sample_weights": RETURN_BIN_SAMPLE_WEIGHTS,
             "selected_decision_threshold": artifact.decision_threshold,

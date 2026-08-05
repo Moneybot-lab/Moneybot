@@ -3,6 +3,7 @@ import pandas as pd
 
 from scripts.day10_train_candidate_model import (
     THRESHOLD_SEARCH_VALUES,
+    _average_optional_return,
     _chronological_training_periods,
     _chronological_training_periods_with_diagnostics,
     _flat_optimum_threshold,
@@ -10,6 +11,13 @@ from scripts.day10_train_candidate_model import (
     _select_feature_columns,
     _select_profit_threshold,
 )
+
+
+def test_average_optional_return_handles_missing_massive_return_1d():
+    frame = pd.DataFrame({"return_5d": [0.02, -0.01, None]})
+
+    assert _average_optional_return(frame, "return_1d") is None
+    assert _average_optional_return(frame, "return_5d") == 0.005
 
 
 def test_chronological_training_periods_are_disjoint_and_leave_final_test_untouched():
