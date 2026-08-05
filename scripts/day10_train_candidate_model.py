@@ -47,6 +47,11 @@ CALIBRATION_FRACTION_OF_DEVELOPMENT = 0.20
 THRESHOLD_FRACTION_OF_DEVELOPMENT = 0.20
 LABEL_HORIZON_DAYS = 5
 EMBARGO_DAYS = 1
+DEFAULT_DECISION_THRESHOLD = 0.55
+MIN_THRESHOLD_SELECTION_POSITIVE_PREDICTIONS = 10
+MIN_THRESHOLD_SELECTION_BIG_GAIN_EXAMPLES = 10
+MIN_THRESHOLD_SELECTION_INDEPENDENT_DATES = 5
+MIN_THRESHOLD_SELECTION_UNIQUE_SYMBOLS = 5
 
 APP_SIGNAL_FEATURE_COLUMNS = {
     "feature_endpoint_hot_momentum_buys",
@@ -302,8 +307,51 @@ def _flat_optimum_threshold(candidates: list[dict[str, Any]]) -> tuple[dict[str,
     }
 
 
-def _select_profit_threshold(frame: pd.DataFrame, probs: np.ndarray) -> dict[str, Any]:
-    scored: list[dict[str, float | int | None | bool]] = []
+def _threshold_selection_support(
+    frame: pd.DataFrame,
+    scored: list[dict[str, Any]],
+    *,
+    min_positive_predictions: int,
+    min_big_gain_examples: int,
+    min_independent_dates: int,
+    min_unique_symbols: int,
+) -> dict[str, Any]:
+    positive_counts = [int(item.get("positive_predictions") or 0) for item in scored]
+    dates = _event_dates(frame)
+    independent_dates = int(dates.nunique()) if dates is not None else 0
+    unique_symbols = int(frame["symbol"].fillna("").astype(str).str.upper().nunique()) if "symbol" in frame.columns else 0
+    big_gain_examples = int((frame.get("return_bin_5d", pd.Series("", index=frame.index)).fillna("").astype(str) == "big_gain").sum())
+    checks = {
+        "positive_predictions_passed": max(positive_counts, default=0) >= min_positive_predictions,
+        "big_gain_examples_passed": big_gain_examples >= min_big_gain_examples,
+        "independent_dates_passed": independent_dates >= min_independent_dates,
+        "unique_symbols_passed": unique_symbols >= min_unique_symbols,
+    }
+    return {
+        "passed": all(checks.values()),
+        "minimum_positive_predictions": int(min_positive_predictions),
+        "maximum_positive_predictions": max(positive_counts, default=0),
+        "minimum_big_gain_examples": int(min_big_gain_examples),
+        "big_gain_examples": big_gain_examples,
+        "minimum_independent_dates": int(min_independent_dates),
+        "independent_dates": independent_dates,
+        "minimum_unique_symbols": int(min_unique_symbols),
+        "unique_symbols": unique_symbols,
+        "checks": checks,
+    }
+
+
+def _select_profit_threshold(
+    frame: pd.DataFrame,
+    probs: np.ndarray,
+    *,
+    current_threshold: float = DEFAULT_DECISION_THRESHOLD,
+    min_positive_predictions: int = MIN_THRESHOLD_SELECTION_POSITIVE_PREDICTIONS,
+    min_big_gain_examples: int = MIN_THRESHOLD_SELECTION_BIG_GAIN_EXAMPLES,
+    min_independent_dates: int = MIN_THRESHOLD_SELECTION_INDEPENDENT_DATES,
+    min_unique_symbols: int = MIN_THRESHOLD_SELECTION_UNIQUE_SYMBOLS,
+) -> dict[str, Any]:
+    scored: list[dict[str, Any]] = []
     bins = frame["return_bin_5d"].fillna("").astype(str)
     big_loss = (bins == "big_loss").to_numpy()
     big_gain = (bins == "big_gain").to_numpy()
@@ -330,15 +378,36 @@ def _select_profit_threshold(frame: pd.DataFrame, probs: np.ndarray) -> dict[str
             }
         )
 
-    viable = [item for item in scored if isinstance(item.get("utility_score"), (int, float)) and int(item.get("positive_predictions") or 0) > 0]
+    support = _threshold_selection_support(
+        frame,
+        scored,
+        min_positive_predictions=min_positive_predictions,
+        min_big_gain_examples=min_big_gain_examples,
+        min_independent_dates=min_independent_dates,
+        min_unique_symbols=min_unique_symbols,
+    )
+    if not support["passed"]:
+        return {
+            "threshold": float(current_threshold),
+            "utility_score": None,
+            "positive_predictions": 0,
+            "avg_signal_return": None,
+            "big_loss_guardrail": "threshold_selection_support_insufficient",
+            "threshold_selection_support": support,
+            "threshold_selection_sufficient": False,
+            "selection_status": "insufficient_support_keep_current_threshold",
+            "search": scored,
+        }
+
+    viable = [item for item in scored if isinstance(item.get("utility_score"), (int, float)) and int(item.get("positive_predictions") or 0) >= min_positive_predictions]
     if not viable:
-        return {"threshold": 0.55, "utility_score": None, "positive_predictions": 0, "avg_signal_return": None, "big_loss_guardrail": "no_positive_thresholds", "search": scored}
+        return {"threshold": float(current_threshold), "utility_score": None, "positive_predictions": 0, "avg_signal_return": None, "big_loss_guardrail": "no_supported_positive_thresholds", "threshold_selection_support": support, "threshold_selection_sufficient": False, "selection_status": "insufficient_positive_thresholds_keep_current_threshold", "search": scored}
 
     zero_big_loss_viable = [item for item in viable if int(item.get("big_loss_predictions") or 0) == 0]
     guarded = zero_big_loss_viable or viable
     best, flat_optimum = _flat_optimum_threshold(guarded)
     guardrail = "zero_big_loss_predictions" if zero_big_loss_viable else "minimize_big_loss_rate"
-    return {**best, "big_loss_guardrail": guardrail, "flat_optimum": flat_optimum, "search": scored}
+    return {**best, "big_loss_guardrail": guardrail, "flat_optimum": flat_optimum, "threshold_selection_support": support, "threshold_selection_sufficient": True, "selection_status": "selected_supported_threshold", "search": scored}
 
 
 def _load_jsonl(path: str) -> pd.DataFrame:
@@ -401,23 +470,6 @@ def _select_feature_columns(df: pd.DataFrame) -> list[str]:
         if numeric.notna().any():
             cols.append(str(col))
     return sorted(cols, key=_feature_preference_rank)
-
-
-FUTURE_LEAKAGE_FEATURE_EXACT = {"feature_return_1d", "feature_return_5d"}
-FUTURE_LEAKAGE_FEATURE_FRAGMENTS = ("forward_return", "future_return", "realized_return", "outcome_", "label_")
-
-
-def _future_safe_feature_columns(feature_columns: list[str]) -> list[str]:
-    """Reject labels, outcomes, and unlagged/future returns from model inputs."""
-    safe: list[str] = []
-    for column in feature_columns:
-        lowered = column.lower()
-        if lowered in FUTURE_LEAKAGE_FEATURE_EXACT:
-            continue
-        if any(fragment in lowered for fragment in FUTURE_LEAKAGE_FEATURE_FRAGMENTS):
-            continue
-        safe.append(column)
-    return safe
 
 
 FUTURE_LEAKAGE_FEATURE_EXACT = {"feature_return_1d", "feature_return_5d"}

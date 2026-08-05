@@ -75,7 +75,7 @@ def test_threshold_search_uses_track_b_profit_grid_and_records_big_loss_guardrai
     )
     probs = np.array([0.56, 0.66, 0.61, 0.58])
 
-    selected = _select_profit_threshold(frame, probs)
+    selected = _select_profit_threshold(frame, probs, min_positive_predictions=1, min_big_gain_examples=1, min_independent_dates=0, min_unique_symbols=0)
 
     assert THRESHOLD_SEARCH_VALUES == (0.55, 0.575, 0.60, 0.625, 0.65, 0.675, 0.70)
     assert [row["threshold"] for row in selected["search"]] == list(THRESHOLD_SEARCH_VALUES)
@@ -85,6 +85,26 @@ def test_threshold_search_uses_track_b_profit_grid_and_records_big_loss_guardrai
     assert selected["flat_optimum"]["policy"] == "center_of_broadest_near_optimal_plateau"
     assert selected["threshold"] in selected["flat_optimum"]["selected_plateau_thresholds"]
     assert all("big_loss_prediction_rate" in row for row in selected["search"])
+
+
+def test_threshold_selection_keeps_current_threshold_when_support_is_too_thin():
+    frame = pd.DataFrame({
+        "event_date": ["2026-07-10"] * 201,
+        "symbol": ["CMI"] * 201,
+        "return_5d": [0.04] + [-0.01] * 200,
+        "return_bin_5d": ["big_gain"] + ["loss"] * 200,
+    })
+    probs = np.array([0.56] + [0.10] * 200)
+
+    selected = _select_profit_threshold(frame, probs, current_threshold=0.55)
+
+    assert selected["threshold"] == 0.55
+    assert selected["threshold_selection_sufficient"] is False
+    assert selected["selection_status"] == "insufficient_support_keep_current_threshold"
+    assert selected["threshold_selection_support"]["maximum_positive_predictions"] == 1
+    assert selected["threshold_selection_support"]["big_gain_examples"] == 1
+    assert selected["threshold_selection_support"]["independent_dates"] == 1
+    assert selected["threshold_selection_support"]["unique_symbols"] == 1
 
 
 def test_flat_optimum_prefers_broad_plateau_over_isolated_peak():

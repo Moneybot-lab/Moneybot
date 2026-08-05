@@ -8,6 +8,7 @@ from scripts.day11_compare_candidate_vs_production import (
     _promotion_decision,
     _select_threshold_from_search,
     _threshold_guardrails_pass,
+    _threshold_optimizer_report,
     _threshold_stability_summary,
 )
 
@@ -79,6 +80,32 @@ def test_threshold_optimizer_selects_best_guardrailed_utility_threshold():
     assert selected["recommended_threshold"] == 0.70
     assert selected["reason"] == "flat-optimum threshold passed guardrails"
     assert selected["flat_optimum"]["selected_plateau_thresholds"] == [0.7]
+
+
+def test_threshold_optimizer_keeps_current_threshold_when_support_is_too_thin(tmp_path):
+    artifact_path = tmp_path / "candidate.json"
+    _artifact(artifact_path, threshold=0.55)
+    metrics = {
+        "threshold_search": [
+            {"threshold": 0.55, "utility_score": 0.20, "positive_predictions": 1, "big_loss_predictions": 0, "big_loss_prediction_rate": 0.0, "big_gain_capture_rate": 1.0},
+            {"threshold": 0.70, "utility_score": None, "positive_predictions": 0, "big_loss_predictions": 0, "big_loss_prediction_rate": 0.0, "big_gain_capture_rate": 0.0},
+        ]
+    }
+    frame = pd.DataFrame({
+        "event_date": ["2026-07-10"] * 201,
+        "symbol": ["CMI"] * 201,
+        "feature_signal": [1.0] + [-1.0] * 200,
+        "return_5d": [0.04] + [-0.01] * 200,
+        "return_bin_5d": ["big_gain"] + ["loss"] * 200,
+    })
+
+    report = _threshold_optimizer_report(str(artifact_path), metrics, frame, min_rows=200)
+
+    assert report["recommended_threshold"] == 0.55
+    assert report["threshold_change_recommended"] is False
+    assert report["threshold_selection_sufficient"] is False
+    assert report["threshold_selection_support"]["maximum_positive_predictions"] == 1
+    assert "support insufficient" in report["threshold_change_reason"]
 
 
 def test_flat_optimum_keeps_current_threshold_inside_near_optimal_plateau():

@@ -36,6 +36,9 @@ WALK_FORWARD_WINDOWS = 3
 MIN_THRESHOLD_BIG_GAIN_CAPTURE_RATE = 0.10
 MIN_THRESHOLD_POSITIVE_PREDICTIONS = 10
 MIN_THRESHOLD_POSITIVE_FRACTION_OF_CURRENT = 0.25
+MIN_THRESHOLD_SELECTION_BIG_GAIN_EXAMPLES = 10
+MIN_THRESHOLD_SELECTION_INDEPENDENT_DATES = 5
+MIN_THRESHOLD_SELECTION_UNIQUE_SYMBOLS = 5
 LABEL_HORIZON_DAYS = 5
 EMBARGO_DAYS = 1
 REGRESSION_EXAMPLES_DIR = PROJECT_ROOT / "regression_examples"
@@ -1062,13 +1065,51 @@ def _threshold_walk_forward_results(artifact_path: str, test_df: pd.DataFrame, c
     }
 
 
+def _threshold_selection_support(frame: pd.DataFrame, threshold_search: list[dict[str, Any]]) -> dict[str, Any]:
+    positive_counts = [int(item.get("positive_predictions") or 0) for item in threshold_search]
+    bins = frame.get("return_bin_5d", pd.Series("", index=frame.index)).fillna("").astype(str)
+    big_gain_examples = int((bins == "big_gain").sum())
+    dates = _event_date_series(frame) if len(frame) else pd.Series([], dtype=str)
+    independent_dates = int(dates[dates != "unknown"].nunique()) if len(dates) else 0
+    unique_symbols = int(frame["symbol"].fillna("").astype(str).str.upper().nunique()) if "symbol" in frame.columns else 0
+    checks = {
+        "positive_predictions_passed": max(positive_counts, default=0) >= MIN_THRESHOLD_POSITIVE_PREDICTIONS,
+        "big_gain_examples_passed": big_gain_examples >= MIN_THRESHOLD_SELECTION_BIG_GAIN_EXAMPLES,
+        "independent_dates_passed": independent_dates >= MIN_THRESHOLD_SELECTION_INDEPENDENT_DATES,
+        "unique_symbols_passed": unique_symbols >= MIN_THRESHOLD_SELECTION_UNIQUE_SYMBOLS,
+    }
+    return {
+        "passed": all(checks.values()),
+        "minimum_positive_predictions": MIN_THRESHOLD_POSITIVE_PREDICTIONS,
+        "maximum_positive_predictions": max(positive_counts, default=0),
+        "minimum_big_gain_examples": MIN_THRESHOLD_SELECTION_BIG_GAIN_EXAMPLES,
+        "big_gain_examples": big_gain_examples,
+        "minimum_independent_dates": MIN_THRESHOLD_SELECTION_INDEPENDENT_DATES,
+        "independent_dates": independent_dates,
+        "minimum_unique_symbols": MIN_THRESHOLD_SELECTION_UNIQUE_SYMBOLS,
+        "unique_symbols": unique_symbols,
+        "checks": checks,
+    }
+
+
 def _threshold_optimizer_report(artifact_path: str, metrics: dict[str, Any], test_df: pd.DataFrame, *, min_rows: int) -> dict[str, Any]:
     current_threshold = None
     if Path(artifact_path).exists():
         current_threshold = float(load_artifact(artifact_path).decision_threshold)
     if current_threshold is None:
         return {"current_threshold": None, "recommended_threshold": None, "threshold_change_recommended": False, "threshold_change_reason": "artifact unavailable", "threshold_walk_forward_results": {}}
-    selection = _select_threshold_from_search(metrics, current_threshold)
+    support = _threshold_selection_support(test_df, list(metrics.get("threshold_search") or []))
+    if not support["passed"]:
+        selection = {
+            "recommended_threshold": float(current_threshold),
+            "selected": _threshold_item_at(metrics, current_threshold),
+            "rejected": [],
+            "reason": "threshold selection support insufficient; keeping current threshold",
+            "threshold_selection_support": support,
+        }
+    else:
+        selection = _select_threshold_from_search(metrics, current_threshold)
+        selection["threshold_selection_support"] = support
     recommended = float(selection["recommended_threshold"])
     walk_forward = _threshold_walk_forward_results(artifact_path, test_df, current_threshold, recommended, min_rows=min_rows)
     change_recommended = abs(recommended - current_threshold) > 1e-9 and bool(walk_forward.get("consistent")) and bool(walk_forward.get("threshold_stable"))
@@ -1086,6 +1127,8 @@ def _threshold_optimizer_report(artifact_path: str, metrics: dict[str, Any], tes
         "threshold_change_reason": reason,
         "selected_threshold_metrics": selection.get("selected"),
         "flat_optimum": selection.get("flat_optimum"),
+        "threshold_selection_support": selection.get("threshold_selection_support"),
+        "threshold_selection_sufficient": bool((selection.get("threshold_selection_support") or {}).get("passed")),
         "rejected_thresholds": selection.get("rejected"),
         "threshold_walk_forward_results": walk_forward,
         "deployable_model_config": {"model_path": artifact_path, "decision_threshold": round(recommended if change_recommended else current_threshold, 6)},
