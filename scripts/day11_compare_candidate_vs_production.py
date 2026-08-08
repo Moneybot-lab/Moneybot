@@ -193,6 +193,9 @@ def _selected_concentration_metrics(usable: pd.DataFrame, preds: np.ndarray) -> 
             "date_selection_concentration": None,
             "symbol_utility_concentration": None,
             "date_utility_concentration": None,
+            "selected_trade_unique_symbols": 0,
+            "selected_trade_unique_dates": 0,
+            "selected_trade_unique_symbol_dates": 0,
         }
     selected["_absolute_return"] = pd.to_numeric(selected["return_5d"], errors="coerce").abs().fillna(0.0)
 
@@ -216,6 +219,11 @@ def _selected_concentration_metrics(usable: pd.DataFrame, preds: np.ndarray) -> 
         "date_selection_concentration": round(date_selection, 4) if date_selection is not None else None,
         "symbol_utility_concentration": round(symbol_utility, 4) if symbol_utility is not None else None,
         "date_utility_concentration": round(date_utility, 4) if date_utility is not None else None,
+        "selected_trade_unique_symbols": int(symbol_group.fillna("unknown").astype(str).nunique()) if symbol_group is not None else 0,
+        "selected_trade_unique_dates": int(date_group.fillna("unknown").astype(str).nunique()) if date_group is not None else 0,
+        "selected_trade_unique_symbol_dates": int(
+            pd.DataFrame({"symbol": symbol_group, "date": date_group}).fillna("unknown").drop_duplicates().shape[0]
+        ) if symbol_group is not None and date_group is not None else 0,
     }
 
 
@@ -1069,7 +1077,12 @@ def _threshold_walk_forward_results(artifact_path: str, test_df: pd.DataFrame, c
     }
 
 
-def _threshold_selection_support(frame: pd.DataFrame, threshold_search: list[dict[str, Any]]) -> dict[str, Any]:
+def _threshold_selection_support(
+    frame: pd.DataFrame,
+    threshold_search: list[dict[str, Any]],
+    *,
+    selected_metrics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     positive_counts = [int(item.get("positive_predictions") or 0) for item in threshold_search]
     returns = pd.to_numeric(frame.get("return_5d", pd.Series(np.nan, index=frame.index)), errors="coerce")
     big_gain_rows = returns >= 0.03
@@ -1080,42 +1093,47 @@ def _threshold_selection_support(frame: pd.DataFrame, threshold_search: list[dic
     symbols = frame["symbol"].fillna("").astype(str).str.upper() if "symbol" in frame.columns else pd.Series("unknown", index=frame.index)
     independent_dates = int(dates[dates != "unknown"].nunique()) if len(dates) else 0
     unique_symbols = int(symbols.nunique()) if len(symbols) else 0
-    selected_item = max(threshold_search, key=lambda item: float(item.get("utility_score") if item.get("utility_score") is not None else -999.0), default={})
+    # Support describes the artifact's currently selected decision threshold,
+    # not the evaluation-set prevalence and not the best row in the search
+    # grid.  In particular, ``big_gain_rows`` is a denominator and must never
+    # be used as the selected-trade big-gain count.
+    selected_item = selected_metrics or {}
     selected_positive = int(selected_item.get("positive_predictions") or 0)
-    selected_big_gain = int(selected_item.get("big_gain_predictions") or selected_item.get("big_gain_rows") or 0)
+    selected_big_gain = int(selected_item.get("big_gain_predictions") or 0)
     selected_big_loss = int(selected_item.get("big_loss_predictions") or 0)
+    selected_big_gain_capture = float(selected_item.get("big_gain_capture_rate") or 0.0)
     selected_utility = selected_item.get("utility_score_after_big_loss_penalty", selected_item.get("utility_score"))
     selected_utility_value = float(selected_utility) if selected_utility is not None else None
     symbol_concentration = selected_item.get("symbol_selection_concentration")
     concentration_value = float(symbol_concentration) if symbol_concentration is not None else 0.0
     checks = {
-        "positive_predictions_passed": max(positive_counts, default=0) >= MIN_THRESHOLD_POSITIVE_PREDICTIONS,
+        "positive_predictions_passed": selected_positive >= MIN_THRESHOLD_POSITIVE_PREDICTIONS,
         "big_gain_examples_passed": total_big_gain_rows >= MIN_THRESHOLD_SELECTION_BIG_GAIN_EXAMPLES,
         "independent_dates_passed": independent_dates >= MIN_THRESHOLD_SELECTION_INDEPENDENT_DATES,
         "unique_symbols_passed": unique_symbols >= MIN_THRESHOLD_SELECTION_UNIQUE_SYMBOLS,
-        "selected_big_gain_capture_passed": selected_big_gain > 0,
+        "selected_big_gain_capture_passed": selected_big_gain > 0 and selected_big_gain_capture > 0.0,
         "selected_utility_nonnegative_passed": selected_utility_value is not None and selected_utility_value >= 0.0,
         "selected_concentration_passed": concentration_value <= MAX_SYMBOL_UTILITY_CONCENTRATION if concentration_value else True,
     }
     max_positive = max(positive_counts, default=0)
-    symbol_dates = pd.Series(symbols.to_numpy() + "|" + dates.to_numpy()) if len(dates) else pd.Series([], dtype=str)
     return {
         "passed": all(checks.values()),
         "rows": int(len(frame)),
         "minimum_positive_predictions": MIN_THRESHOLD_POSITIVE_PREDICTIONS,
         "maximum_positive_predictions": max_positive,
-        "positive_predictions": max_positive,
+        "positive_predictions": selected_positive,
         "minimum_big_gain_examples": MIN_THRESHOLD_SELECTION_BIG_GAIN_EXAMPLES,
         "big_gain_examples": total_big_gain_rows,
         "big_gain_rows": total_big_gain_rows,
         "total_big_gain_rows": total_big_gain_rows,
         "total_big_loss_rows": total_big_loss_rows,
-        "big_gain_predictions": max((int(item.get("big_gain_predictions") or item.get("big_gain_rows") or 0) for item in threshold_search), default=0),
-        "big_gain_capture_rate": round(max((float(item.get("big_gain_capture_rate") or 0.0) for item in threshold_search), default=0.0), 6),
+        "big_gain_predictions": selected_big_gain,
+        "big_gain_capture_rate": round(selected_big_gain_capture, 6),
         "selected_trade_big_gain_count": selected_big_gain,
         "selected_trade_big_loss_count": selected_big_loss,
-        "selected_trade_unique_symbols": unique_symbols if selected_positive else 0,
-        "selected_trade_unique_symbol_dates": min(selected_positive, int(symbol_dates.nunique())) if selected_positive and len(symbol_dates) else 0,
+        "selected_trade_unique_symbols": int(selected_item.get("selected_trade_unique_symbols") or 0),
+        "selected_trade_unique_dates": int(selected_item.get("selected_trade_unique_dates") or 0),
+        "selected_trade_unique_symbol_dates": int(selected_item.get("selected_trade_unique_symbol_dates") or 0),
         "selected_threshold_utility": selected_utility_value,
         "selected_threshold_symbol_date_concentration": concentration_value,
         "minimum_independent_dates": MIN_THRESHOLD_SELECTION_INDEPENDENT_DATES,
@@ -1132,7 +1150,11 @@ def _threshold_optimizer_report(artifact_path: str, metrics: dict[str, Any], tes
         current_threshold = float(load_artifact(artifact_path).decision_threshold)
     if current_threshold is None:
         return {"current_threshold": None, "recommended_threshold": None, "threshold_change_recommended": False, "threshold_change_reason": "artifact unavailable", "threshold_walk_forward_results": {}}
-    support = _threshold_selection_support(test_df, list(metrics.get("threshold_search") or []))
+    support = _threshold_selection_support(
+        test_df,
+        list(metrics.get("threshold_search") or []),
+        selected_metrics=metrics,
+    )
     if not support["passed"]:
         selection = {
             "recommended_threshold": float(current_threshold),
@@ -1196,6 +1218,10 @@ ALLOWED_LAGGED_RETURN_FEATURES = [
     "feature_return_5d_lagged",
     "feature_return_10d_lagged",
     "feature_return_20d_lagged",
+]
+MANIFEST_PROVEN_ASOF_RETURN_FEATURES = [
+    "feature_sector_relative_return_5d",
+    "feature_spy_return_5d",
 ]
 BLOCKED_UNLAGGED_FUTURE_FEATURES = [
     "feature_return_5d",
@@ -1605,12 +1631,25 @@ def _production_comparison_status(comparison_scope: dict[str, Any], production_m
     }
 
 
-def _feature_leakage_name_value_audit(candidate_model_path: str, production_model_path: str, value_audit: dict[str, Any], comparison_scope: dict[str, Any]) -> dict[str, Any]:
+def _feature_leakage_name_value_audit(
+    candidate_model_path: str,
+    production_model_path: str,
+    value_audit: dict[str, Any],
+    comparison_scope: dict[str, Any],
+    training_source: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     candidate_features = load_artifact(candidate_model_path).feature_columns if Path(candidate_model_path).exists() else []
     production_features = load_artifact(production_model_path).feature_columns if Path(production_model_path).exists() else []
     blocked = set(BLOCKED_UNLAGGED_FUTURE_FEATURES)
     allowed_lagged = set(ALLOWED_LAGGED_RETURN_FEATURES)
-    candidate_name_violations = [f for f in candidate_features if f in blocked or ("return_5d" in f and f not in allowed_lagged)]
+    # Unlike the general Phase-1 helper's backwards-compatible default, an
+    # as-of name exemption requires affirmative Massive-manifest evidence.
+    asof_manifest_proven = bool(training_source) and _training_source_phase1_passed(training_source)
+    allowed_asof = set(MANIFEST_PROVEN_ASOF_RETURN_FEATURES) if asof_manifest_proven else set()
+    candidate_name_violations = [
+        f for f in candidate_features
+        if f in blocked or ("return_5d" in f and f not in allowed_lagged and f not in allowed_asof)
+    ]
     production_future_like = [f for f in production_features if f in blocked or ("return_5d" in f and f not in allowed_lagged)]
     candidate_name_passed = not candidate_name_violations
     value_passed = bool(value_audit.get("passed"))
@@ -1620,6 +1659,8 @@ def _feature_leakage_name_value_audit(candidate_model_path: str, production_mode
         "future_feature_leakage_passed": bool(candidate_name_passed and value_passed),
         "candidate_future_feature_leakage_passed": bool(candidate_name_passed and value_passed),
         "allowed_lagged_return_features": ALLOWED_LAGGED_RETURN_FEATURES,
+        "manifest_proven_asof_return_features": sorted(allowed_asof),
+        "asof_feature_timing_proven_by_manifest": asof_manifest_proven,
         "blocked_unlagged_future_features": BLOCKED_UNLAGGED_FUTURE_FEATURES,
         "candidate_name_violations": candidate_name_violations,
         "value_violations": value_audit.get("violations") or [],
@@ -1861,7 +1902,13 @@ def main() -> None:
     production_preds_for_status, production_probs_for_status = _artifact_predictions(args.production_model, test_df.copy())
     production_feature_compatibility_report = _production_comparison_status(comparison_scope_report, production_metrics, production_probs_for_status)
     candidate_feature_coverage_segmented_report = _candidate_feature_coverage_segmented_report(candidate_feature_availability)
-    feature_leakage_name_value_audit = _feature_leakage_name_value_audit(args.candidate_model, args.production_model, feature_leakage_value_audit, comparison_scope_report)
+    feature_leakage_name_value_audit = _feature_leakage_name_value_audit(
+        args.candidate_model,
+        args.production_model,
+        feature_leakage_value_audit,
+        comparison_scope_report,
+        training_source,
+    )
     duplicate_weighting_report = _duplicate_weighting_report(test_df.copy())
     paired_bootstrap = _paired_date_bootstrap_utility_delta(args.candidate_model, args.production_model, test_df.copy())
     production_promotion_gates = _production_promotion_gates(

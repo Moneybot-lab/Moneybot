@@ -132,6 +132,46 @@ def test_feature_name_value_audit_allows_lagged_returns_but_reports_production_f
     assert report["production_schema_comparison_invalid"] is True
 
 
+def test_feature_name_value_audit_allows_asof_market_returns_only_with_manifest_proof(tmp_path):
+    candidate_path = tmp_path / "candidate.json"
+    production_path = tmp_path / "production.json"
+    save_artifact(
+        BaselineModelArtifact(
+            version="candidate",
+            feature_columns=["feature_sector_relative_return_5d", "feature_spy_return_5d"],
+            means=[0.0, 0.0],
+            stds=[1.0, 1.0],
+            weights=[1.0, 1.0],
+            bias=0.0,
+            decision_threshold=0.55,
+        ),
+        candidate_path,
+    )
+    training_source = {
+        "uses_massive_canonical_input": True,
+        "manifest_loaded": True,
+        "leakage_safe": True,
+        "schema_version": "massive-decision-training-rows.v1",
+        "join_policy": "features on or before decision; labels strictly after decision",
+        "leakage_guard_values": ["features_asof_market_close_labels_after_decision"],
+    }
+
+    without_proof = _feature_leakage_name_value_audit(
+        str(candidate_path), str(production_path), {"passed": True, "violations": []}, {"comparison_valid": False}
+    )
+    with_proof = _feature_leakage_name_value_audit(
+        str(candidate_path), str(production_path), {"passed": True, "violations": []}, {"comparison_valid": False}, training_source
+    )
+
+    assert without_proof["future_feature_name_audit_passed"] is False
+    assert with_proof["future_feature_name_audit_passed"] is True
+    assert with_proof["asof_feature_timing_proven_by_manifest"] is True
+    assert with_proof["manifest_proven_asof_return_features"] == [
+        "feature_sector_relative_return_5d",
+        "feature_spy_return_5d",
+    ]
+
+
 def test_promotion_decision_labels_promote_hold_watch_and_no_op_clone():
     assert _promotion_decision(True, False, True, True, True) == "PROMOTE"
     assert _promotion_decision(False, True, True, True, True) == "NO_OP_CLONE"
@@ -158,6 +198,14 @@ def test_threshold_optimizer_keeps_current_threshold_when_support_is_too_thin(tm
     artifact_path = tmp_path / "candidate.json"
     _artifact(artifact_path, threshold=0.55)
     metrics = {
+        "positive_predictions": 1,
+        "big_gain_predictions": 1,
+        "big_gain_capture_rate": 1.0,
+        "big_loss_predictions": 0,
+        "utility_score": 0.20,
+        "selected_trade_unique_symbols": 1,
+        "selected_trade_unique_dates": 1,
+        "selected_trade_unique_symbol_dates": 1,
         "threshold_search": [
             {"threshold": 0.55, "utility_score": 0.20, "positive_predictions": 1, "big_loss_predictions": 0, "big_loss_prediction_rate": 0.0, "big_gain_capture_rate": 1.0},
             {"threshold": 0.70, "utility_score": None, "positive_predictions": 0, "big_loss_predictions": 0, "big_loss_prediction_rate": 0.0, "big_gain_capture_rate": 0.0},
@@ -181,6 +229,47 @@ def test_threshold_optimizer_keeps_current_threshold_when_support_is_too_thin(tm
     assert report["threshold_selection_support"]["positive_predictions"] == 1
     assert report["threshold_selection_support"]["big_gain_rows"] == 1
     assert "support insufficient" in report["threshold_change_reason"]
+
+
+def test_threshold_support_never_substitutes_total_big_gain_rows_for_selected_trades(tmp_path):
+    artifact_path = tmp_path / "candidate.json"
+    _artifact(artifact_path, threshold=0.55)
+    frame = pd.DataFrame({
+        "event_date": [f"2026-07-{(index % 20) + 1:02d}" for index in range(2000)],
+        "symbol": [f"SYM{index % 20}" for index in range(2000)],
+        "feature_signal": [0.0] * 2000,
+        "return_5d": [0.04] * 1706 + [-0.04] * 294,
+    })
+    metrics = {
+        "positive_predictions": 151,
+        "big_gain_rows": 1706,
+        "big_gain_predictions": 0,
+        "big_gain_capture_rate": 0.0,
+        "big_loss_predictions": 148,
+        "utility_score": -0.2414,
+        "symbol_selection_concentration": 0.9669,
+        "threshold_search": [
+            {
+                "threshold": 0.55,
+                "positive_predictions": 151,
+                "big_gain_rows": 1706,
+                "big_gain_predictions": 0,
+                "big_gain_capture_rate": 0.0,
+                "big_loss_predictions": 148,
+                "utility_score": -0.2414,
+            }
+        ],
+    }
+
+    report = _threshold_optimizer_report(str(artifact_path), metrics, frame, min_rows=200)
+    support = report["threshold_selection_support"]
+
+    assert support["total_big_gain_rows"] == 1706
+    assert support["selected_trade_big_gain_count"] == 0
+    assert support["big_gain_predictions"] == 0
+    assert support["big_gain_capture_rate"] == 0.0
+    assert support["checks"]["selected_big_gain_capture_passed"] is False
+    assert report["threshold_selection_sufficient"] is False
 
 
 def test_flat_optimum_keeps_current_threshold_inside_near_optimal_plateau():
