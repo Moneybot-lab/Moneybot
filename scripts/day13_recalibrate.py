@@ -11,7 +11,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from moneybot.services.runtime_paths import day13_calibration_report_path, day13_recalibration_plan_path
+from moneybot.services.runtime_paths import (
+    day13_calibration_report_path,
+    day13_recalibration_plan_path,
+)
 
 
 def build_recalibration_plan(
@@ -22,19 +25,39 @@ def build_recalibration_plan(
     max_intercept_step: float = 0.75,
     max_slope_step: float = 0.5,
     min_rows: int = 30,
+    canary: bool = True,
+    rollout_percentage: float = 0.0,
 ) -> dict:
     rows = int(report.get("rows") or 0)
-    recommendation = report.get("recommended") if isinstance(report.get("recommended"), dict) else {}
+    recommendation = (
+        report.get("recommended") if isinstance(report.get("recommended"), dict) else {}
+    )
     intercept_delta = float(recommendation.get("intercept_delta") or 0.0)
     slope_delta = float(recommendation.get("slope_delta") or 0.0)
-    bounded_intercept_delta = max(-max_intercept_step, min(max_intercept_step, intercept_delta))
+    bounded_intercept_delta = max(
+        -max_intercept_step, min(max_intercept_step, intercept_delta)
+    )
     bounded_slope_delta = max(-max_slope_step, min(max_slope_step, slope_delta))
     raw_brier = report.get("brier_score_raw", report.get("brier_score"))
     calibrated_brier = report.get("calibrated_brier_score")
-    effective_brier = report.get("effective_brier_score", calibrated_brier if calibrated_brier is not None else raw_brier)
-    apply_change = rows >= min_rows
-    next_slope = float(current_slope + bounded_slope_delta) if apply_change else float(current_slope)
-    next_intercept = float(current_intercept + bounded_intercept_delta) if apply_change else float(current_intercept)
+    effective_brier = report.get(
+        "effective_brier_score",
+        calibrated_brier if calibrated_brier is not None else raw_brier,
+    )
+    eligible_for_change = rows >= min_rows
+    apply_change = bool(
+        eligible_for_change and not canary and float(rollout_percentage) > 0.0
+    )
+    next_slope = (
+        float(current_slope + bounded_slope_delta)
+        if apply_change
+        else float(current_slope)
+    )
+    next_intercept = (
+        float(current_intercept + bounded_intercept_delta)
+        if apply_change
+        else float(current_intercept)
+    )
     return {
         "schema_version": "calibration_recalibration_plan.v1",
         "computed_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -43,7 +66,14 @@ def build_recalibration_plan(
         "calibrated_brier_score": calibrated_brier,
         "effective_brier_score": effective_brier,
         "apply_change": apply_change,
-        "current": {"slope": float(current_slope), "intercept": float(current_intercept)},
+        "canary_mode": bool(canary),
+        "eligible_for_change": eligible_for_change,
+        "rollout_percentage": round(max(0.0, min(100.0, float(rollout_percentage))), 4),
+        "enforcement": "plan_only" if canary else "staged_rollout",
+        "current": {
+            "slope": float(current_slope),
+            "intercept": float(current_intercept),
+        },
         "recommended_delta": {
             "slope_delta": round(slope_delta, 6),
             "bounded_slope_delta": round(bounded_slope_delta, 6),
@@ -55,7 +85,9 @@ def build_recalibration_plan(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create Day-13 deterministic recalibration plan from report JSON.")
+    parser = argparse.ArgumentParser(
+        description="Create Day-13 deterministic recalibration plan from report JSON."
+    )
     parser.add_argument("--report", default=str(day13_calibration_report_path()))
     parser.add_argument("--output", default=str(day13_recalibration_plan_path()))
     parser.add_argument("--current-slope", type=float, default=1.0)
@@ -63,6 +95,25 @@ def main() -> None:
     parser.add_argument("--max-intercept-step", type=float, default=0.75)
     parser.add_argument("--max-slope-step", type=float, default=0.5)
     parser.add_argument("--min-rows", type=int, default=30)
+    parser.add_argument(
+        "--canary",
+        dest="canary",
+        action="store_true",
+        default=True,
+        help="Write a plan only; do not mark it for global enforcement.",
+    )
+    parser.add_argument(
+        "--no-canary",
+        dest="canary",
+        action="store_false",
+        help="Allow staged rollout when --rollout-percentage is greater than zero.",
+    )
+    parser.add_argument(
+        "--rollout-percentage",
+        type=float,
+        default=0.0,
+        help="Staged rollout percentage for non-canary enforcement.",
+    )
     args = parser.parse_args()
 
     report = json.loads(Path(args.report).read_text(encoding="utf-8"))
@@ -73,6 +124,8 @@ def main() -> None:
         max_intercept_step=max(0.01, abs(args.max_intercept_step)),
         max_slope_step=max(0.01, abs(args.max_slope_step)),
         min_rows=max(1, args.min_rows),
+        canary=bool(args.canary),
+        rollout_percentage=args.rollout_percentage,
     )
     serialized = json.dumps(plan, indent=2, sort_keys=True)
     print(serialized)
