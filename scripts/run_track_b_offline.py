@@ -23,27 +23,51 @@ def build_track_b_commands(
     output_dir: Path,
     production_model: str = "data/day1_baseline_model.json",
     dataset_limit: int | None = 50000,
+    training_source: str = "massive",
 ) -> list[list[str]]:
     scripts_dir = project_root / "scripts"
-    dataset_path = output_dir / "decision_training_snapshot_track_b.jsonl"
+    legacy_dataset_path = output_dir / "decision_training_snapshot_track_b.jsonl"
+    massive_dataset_path = output_dir / "decision_training_snapshot_massive.jsonl"
+    dataset_path = massive_dataset_path if training_source == "massive" else legacy_dataset_path
     candidate_model_path = output_dir / "candidate_model_track_b.json"
     comparison_report_path = output_dir / "model_comparison_track_b.json"
-    build_dataset_command = [
-        python_executable,
-        str(scripts_dir / "day8_build_decision_training_dataset.py"),
-        "--input",
-        input_log,
-        "--output",
-        str(dataset_path),
-    ]
-    if dataset_limit is not None:
-        build_dataset_command.extend(["--limit", str(max(1, int(dataset_limit)))])
+    massive_baseline_path = output_dir / "massive_baseline_model_v1.json"
 
-    return [
-        build_dataset_command,
-        [python_executable, str(scripts_dir / "day10_train_candidate_model.py"), "--input", str(dataset_path), "--output-model", str(candidate_model_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
-        [python_executable, str(scripts_dir / "day11_compare_candidate_vs_production.py"), "--input", str(dataset_path), "--candidate-model", str(candidate_model_path), "--production-model", str(production_model), "--output", str(comparison_report_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
-    ]
+    commands: list[list[str]] = []
+    if training_source != "massive":
+        build_dataset_command = [
+            python_executable,
+            str(scripts_dir / "day8_build_decision_training_dataset.py"),
+            "--input",
+            input_log,
+            "--output",
+            str(dataset_path),
+        ]
+        if dataset_limit is not None:
+            build_dataset_command.extend(["--limit", str(max(1, int(dataset_limit)))])
+        commands.append(build_dataset_command)
+    else:
+        quality_dir = output_dir / "training_quality"
+        commands.append([
+            python_executable,
+            str(scripts_dir / "train_massive_baseline_model.py"),
+            "--train", str(quality_dir / "cleaned_train.jsonl"),
+            "--test", str(quality_dir / "cleaned_test.jsonl"),
+            "--all-cleaned", str(quality_dir / "cleaned_all.jsonl"),
+            "--output", str(massive_baseline_path),
+        ])
+
+    if training_source == "massive":
+        commands.extend([
+            [python_executable, str(scripts_dir / "day10_train_candidate_model.py"), "--cleaned-train", str(output_dir / "training_quality" / "cleaned_train.jsonl"), "--cleaned-test", str(output_dir / "training_quality" / "cleaned_test.jsonl"), "--cleaned-all", str(output_dir / "training_quality" / "cleaned_all.jsonl"), "--model-version", "candidate_market_no_echo_v1", "--output-model", str(candidate_model_path), "--min-rows", str(min_rows)],
+            [python_executable, str(scripts_dir / "day11_compare_candidate_vs_production.py"), "--input", str(output_dir / "training_quality" / "cleaned_test.jsonl"), "--input-is-holdout", "--candidate-model", str(candidate_model_path), "--production-model", str(production_model), "--massive-baseline-model", str(massive_baseline_path), "--output", str(comparison_report_path), "--min-rows", str(min_rows)],
+        ])
+    else:
+        commands.extend([
+            [python_executable, str(scripts_dir / "day10_train_candidate_model.py"), "--input", str(dataset_path), "--output-model", str(candidate_model_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
+            [python_executable, str(scripts_dir / "day11_compare_candidate_vs_production.py"), "--input", str(dataset_path), "--candidate-model", str(candidate_model_path), "--production-model", str(production_model), "--output", str(comparison_report_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
+        ])
+    return commands
 
 
 def main() -> None:
@@ -59,6 +83,7 @@ def main() -> None:
         default=50000,
         help="Decision-event rows to pass through to the dataset builder. Defaults to the workflow export size so mature rows are not truncated to day8's smaller standalone default.",
     )
+    parser.add_argument("--training-source", choices=("massive", "legacy"), default="massive", help="Use Massive-backed training rows by default; legacy rebuilds the older yfinance/day8 snapshot.")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -74,6 +99,7 @@ def main() -> None:
         output_dir=output_dir,
         production_model=args.production_model,
         dataset_limit=max(1, int(args.dataset_limit)),
+        training_source=args.training_source,
     )
 
     started_at = datetime.now(timezone.utc).isoformat()
@@ -84,6 +110,9 @@ def main() -> None:
         "output_dir": str(output_dir),
         "dry_run": bool(args.dry_run),
         "dataset_limit": max(1, int(args.dataset_limit)),
+        "training_source": args.training_source,
+        "canonical_training_input": str(output_dir / ("training_quality/cleaned_all.jsonl" if args.training_source == "massive" else "decision_training_snapshot_track_b.jsonl")),
+        "canonical_holdout_input": str(output_dir / "training_quality/cleaned_test.jsonl") if args.training_source == "massive" else None,
         "commands": commands,
         "steps": [],
         "success": False,
@@ -92,6 +121,19 @@ def main() -> None:
     if args.dry_run:
         print(json.dumps(summary, indent=2))
         return
+
+    if args.training_source == "massive":
+        required_quality_inputs = [
+            output_dir / "training_quality" / "cleaned_train.jsonl",
+            output_dir / "training_quality" / "cleaned_test.jsonl",
+            output_dir / "training_quality" / "cleaned_all.jsonl",
+        ]
+        missing_quality_inputs = [str(path) for path in required_quality_inputs if not path.exists()]
+        if missing_quality_inputs:
+            raise SystemExit(
+                "Track B massive training requires cleaned training-quality inputs: "
+                + ", ".join(missing_quality_inputs)
+            )
 
     for command in commands:
         completed = subprocess.run(command, cwd=str(PROJECT_ROOT), capture_output=True, text=True, check=False)
