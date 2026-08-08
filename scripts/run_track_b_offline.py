@@ -31,6 +31,7 @@ def build_track_b_commands(
     dataset_path = massive_dataset_path if training_source == "massive" else legacy_dataset_path
     candidate_model_path = output_dir / "candidate_model_track_b.json"
     comparison_report_path = output_dir / "model_comparison_track_b.json"
+    massive_baseline_path = output_dir / "massive_baseline_model_v1.json"
 
     commands: list[list[str]] = []
     if training_source != "massive":
@@ -45,11 +46,21 @@ def build_track_b_commands(
         if dataset_limit is not None:
             build_dataset_command.extend(["--limit", str(max(1, int(dataset_limit)))])
         commands.append(build_dataset_command)
+    else:
+        quality_dir = output_dir / "training_quality"
+        commands.append([
+            python_executable,
+            str(scripts_dir / "train_massive_baseline_model.py"),
+            "--train", str(quality_dir / "cleaned_train.jsonl"),
+            "--test", str(quality_dir / "cleaned_test.jsonl"),
+            "--all-cleaned", str(quality_dir / "cleaned_all.jsonl"),
+            "--output", str(massive_baseline_path),
+        ])
 
     commands.extend(
         [
             [python_executable, str(scripts_dir / "day10_train_candidate_model.py"), "--input", str(dataset_path), "--output-model", str(candidate_model_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
-            [python_executable, str(scripts_dir / "day11_compare_candidate_vs_production.py"), "--input", str(dataset_path), "--candidate-model", str(candidate_model_path), "--production-model", str(production_model), "--output", str(comparison_report_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
+            [python_executable, str(scripts_dir / "day11_compare_candidate_vs_production.py"), "--input", str(dataset_path), "--candidate-model", str(candidate_model_path), "--production-model", str(production_model), "--massive-baseline-model", str(massive_baseline_path), "--output", str(comparison_report_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
         ]
     )
     return commands

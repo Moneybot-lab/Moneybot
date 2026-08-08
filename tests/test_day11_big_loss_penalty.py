@@ -14,7 +14,9 @@ def _metrics(**overrides):
         "downside_risk": 0.0,
         "big_loss_predictions": 0,
         "big_loss_prediction_rate": 0.0,
+        "big_gain_predictions": 10,
         "big_gain_capture_rate": 0.2,
+        "best_ranking_backtest": {"total_return": 0.20, "max_drawdown": 0.05},
     }
     base.update(overrides)
     return base
@@ -117,7 +119,13 @@ def test_production_promotion_requires_every_conservative_gate(tmp_path):
     )
     candidate = _metrics(brier_score=0.05, avg_return=0.20, big_loss_predictions=0, big_loss_prediction_rate=0.0)
     candidate["utility_score_after_big_loss_penalty"] = 0.22
-    production = _metrics(brier_score=0.10, avg_return=0.10, big_loss_predictions=0, big_loss_prediction_rate=0.0)
+    production = _metrics(
+        brier_score=0.10,
+        avg_return=0.10,
+        big_loss_predictions=0,
+        big_loss_prediction_rate=0.0,
+        best_ranking_backtest={"total_return": 0.10, "max_drawdown": 0.10},
+    )
     common = {
         "candidate_model_path": str(candidate_path),
         "candidate_metrics": candidate,

@@ -1577,6 +1577,9 @@ def _comparison_scope_report(
     frame: pd.DataFrame,
     candidate_availability: dict[str, Any],
     production_availability: dict[str, Any],
+    *,
+    target_columns_match: bool = True,
+    duplicate_weighting_policy_match: bool = True,
 ) -> dict[str, Any]:
     dates = _event_date_series(frame) if len(frame) else pd.Series([], dtype=str)
     symbols = frame["symbol"].fillna("unknown").astype(str).str.upper() if "symbol" in frame.columns else pd.Series("unknown", index=frame.index)
@@ -1585,7 +1588,8 @@ def _comparison_scope_report(
     candidate_passed = _coverage_passed(candidate_availability)
     feature_schema_compatible = bool(production_passed and candidate_passed)
     scope = "narrow_diagnostic" if len(frame) < 1000 else "holdout-only"
-    promotion_eligible = bool(scope != "narrow_diagnostic" and feature_schema_compatible)
+    apples_to_apples = bool(feature_schema_compatible and target_columns_match and duplicate_weighting_policy_match)
+    promotion_eligible = bool(scope != "narrow_diagnostic" and apples_to_apples)
     invalid_reasons: list[str] = []
     if scope == "narrow_diagnostic":
         invalid_reasons.append("comparison row count is too narrow to override full-suite backtest")
@@ -1593,6 +1597,10 @@ def _comparison_scope_report(
         invalid_reasons.append("production model used missing/fill/default values for one or more features")
     if not candidate_passed:
         invalid_reasons.append("candidate feature coverage is incomplete")
+    if not target_columns_match:
+        invalid_reasons.append("candidate and comparator target columns do not match")
+    if not duplicate_weighting_policy_match:
+        invalid_reasons.append("candidate and comparator duplicate-weighting policies do not match")
     return {
         "source_file_used": input_path,
         "row_count": int(len(frame)),
@@ -1602,7 +1610,9 @@ def _comparison_scope_report(
         "scope": scope,
         "promotion_eligible_evidence": promotion_eligible,
         "allowed_uses": ["promotion_evidence"] if promotion_eligible else ["diagnostic_only"],
-        "apples_to_apples_scoring": feature_schema_compatible,
+        "apples_to_apples_scoring": apples_to_apples,
+        "target_columns_match": bool(target_columns_match),
+        "duplicate_weighting_policy_match": bool(duplicate_weighting_policy_match),
         "production_scoring_mode": "native_or_valid_adapter" if production_passed else "fill_or_default_values",
         "production_feature_mode": "native_massive_features" if production_passed else "fill_or_default_values",
         "production_feature_coverage_passed": production_passed,
@@ -1612,6 +1622,53 @@ def _comparison_scope_report(
         "comparison_invalid_reason": "; ".join(invalid_reasons) if invalid_reasons else None,
         "narrow_comparison_can_override_full_backtest": False,
     }
+
+
+def _artifact_lineage_value(model_path: str, key: str) -> Any:
+    if not Path(model_path).exists():
+        return None
+    lineage = load_artifact(model_path).lineage or {}
+    return lineage.get(key)
+
+
+def _resolve_massive_comparator(input_path: str, production_model: str, massive_baseline_model: str) -> dict[str, Any]:
+    massive_input = "massive" in Path(input_path).name.lower() or "training_quality" in Path(input_path).parts
+    baseline = Path(massive_baseline_model)
+    if massive_input and baseline.exists():
+        return {
+            "model_path": str(baseline),
+            "comparator_kind": "massive_baseline_model_v1",
+            "production_scoring_mode": "native_or_valid_adapter",
+            "legacy_production_comparison_skipped": True,
+        }
+    return {
+        "model_path": production_model,
+        "comparator_kind": "legacy_production",
+        "production_scoring_mode": "legacy_native_or_default_fill",
+        "legacy_production_comparison_skipped": False,
+    }
+
+
+def _comparison_promotion_evidence(
+    comparison_scope: dict[str, Any],
+    *,
+    leakage_passed: bool,
+    threshold_support_passed: bool,
+    concentration_passed: bool,
+) -> dict[str, Any]:
+    checks = {
+        "comparison_valid": bool(comparison_scope.get("comparison_valid")),
+        "apples_to_apples_scoring": bool(comparison_scope.get("apples_to_apples_scoring")),
+        "leakage_audit_passed": bool(leakage_passed),
+        "feature_coverage_passed": bool(
+            comparison_scope.get("production_feature_coverage_passed")
+            and comparison_scope.get("candidate_feature_coverage_passed")
+        ),
+        "threshold_support_passed": bool(threshold_support_passed),
+        "concentration_checks_passed": bool(concentration_passed),
+    }
+    eligible = all(checks.values()) and comparison_scope.get("scope") != "narrow_diagnostic"
+    return {"promotion_eligible_evidence": eligible, "promotion_evidence_checks": checks}
 
 
 def _production_comparison_status(comparison_scope: dict[str, Any], production_metrics: dict[str, Any], production_probs: np.ndarray) -> dict[str, Any]:
@@ -1758,6 +1815,14 @@ def _production_promotion_gates(
     production_brier = _numeric_metric(production_metrics, "brier_score")
     candidate_utility = _numeric_metric(candidate_metrics, "utility_score_after_big_loss_penalty")
     production_utility = _utility_score(production_metrics)
+    candidate_avg_return = _numeric_metric(candidate_metrics, "avg_return")
+    candidate_big_gain_predictions = _numeric_metric(candidate_metrics, "big_gain_predictions") or 0.0
+    candidate_ranking = candidate_metrics.get("best_ranking_backtest") or {}
+    production_ranking = production_metrics.get("best_ranking_backtest") or {}
+    candidate_ranking_return = _numeric_metric(candidate_ranking, "total_return")
+    production_ranking_return = _numeric_metric(production_ranking, "total_return")
+    candidate_drawdown = _numeric_metric(candidate_ranking, "max_drawdown")
+    production_drawdown = _numeric_metric(production_ranking, "max_drawdown")
     threshold_change = bool(threshold_optimizer.get("threshold_change_recommended"))
     threshold_results = threshold_optimizer.get("threshold_walk_forward_results") or {}
     threshold_safe = not threshold_change or bool(
@@ -1778,6 +1843,10 @@ def _production_promotion_gates(
         "paired_bootstrap_utility_passed": bool(bootstrap.get("passed")),
         "brier_improved": candidate_brier is not None and production_brier is not None and candidate_brier < production_brier,
         "profit_utility_improved": candidate_utility is not None and production_utility is not None and candidate_utility > production_utility,
+        "candidate_selected_return_nonnegative": candidate_avg_return is not None and candidate_avg_return >= 0.0,
+        "candidate_captures_big_gains": candidate_big_gain_predictions > 0.0,
+        "ranking_return_not_worse": candidate_ranking_return is not None and production_ranking_return is not None and candidate_ranking_return >= production_ranking_return,
+        "drawdown_not_worse": candidate_drawdown is not None and production_drawdown is not None and candidate_drawdown <= production_drawdown,
         "candidate_only_big_loss_false_positives_zero": int(report_examples.get("big_loss_false_positive_count") or 0) == 0,
         "big_loss_predictions_not_worse": candidate_big_loss_predictions == 0.0 or candidate_big_loss_predictions <= production_big_loss_predictions,
         "big_loss_rate_not_worse": candidate_big_loss_rate <= production_big_loss_rate,
@@ -1796,6 +1865,10 @@ def _production_promotion_gates(
         "paired_bootstrap_utility_passed": "paired date-block bootstrap did not prove positive utility delta",
         "brier_improved": "candidate Brier score did not improve production",
         "profit_utility_improved": "candidate penalized profit utility did not improve production",
+        "candidate_selected_return_nonnegative": "candidate average selected return is negative or unavailable",
+        "candidate_captures_big_gains": "candidate captures zero big gains",
+        "ranking_return_not_worse": "candidate top-k ranking return is worse than the comparator",
+        "drawdown_not_worse": "candidate drawdown exceeds the comparator",
         "candidate_only_big_loss_false_positives_zero": "candidate introduced one or more production-avoided big-loss signals",
         "big_loss_predictions_not_worse": "candidate big-loss predictions exceeded production",
         "big_loss_rate_not_worse": "candidate big-loss prediction rate exceeded production",
@@ -1817,6 +1890,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Compare candidate model against production model on same holdout.")
     parser.add_argument("--input", default="data/decision_training_snapshot.jsonl")
     parser.add_argument("--production-model", default="data/day1_baseline_model.json")
+    parser.add_argument("--massive-baseline-model", default="data/track_b/massive_baseline_model_v1.json")
     parser.add_argument("--candidate-model", default="data/candidate_model.json")
     parser.add_argument("--output", default="data/model_comparison_report.json")
     parser.add_argument("--train-ratio", type=float, default=0.8)
@@ -1827,6 +1901,8 @@ def main() -> None:
     if df.empty:
         raise SystemExit("No rows available for model comparison")
     training_source = _training_source_report(args.input, df)
+    comparator = _resolve_massive_comparator(args.input, args.production_model, args.massive_baseline_model)
+    comparator_model = str(comparator["model_path"])
 
     development_df, test_df = _chronological_split(df, args.train_ratio)
     _, test_df, temporal_split = purged_embargoed_split(
@@ -1838,13 +1914,13 @@ def main() -> None:
     if test_df.empty:
         raise ValueError("purging/embargo leaves no final comparison rows")
     candidate_metrics = _evaluate(args.candidate_model, test_df.copy())
-    production_metrics = _evaluate(args.production_model, test_df.copy())
-    clone_detection = _clone_detection(args.candidate_model, args.production_model, test_df.copy())
+    production_metrics = _evaluate(comparator_model, test_df.copy())
+    clone_detection = _clone_detection(args.candidate_model, comparator_model, test_df.copy())
     no_op_clone = bool(clone_detection.get("no_op_clone"))
     candidate_feature_risk = _feature_risk_audit(args.candidate_model, test_df.copy())
-    production_feature_risk = _feature_risk_audit(args.production_model, test_df.copy())
+    production_feature_risk = _feature_risk_audit(comparator_model, test_df.copy())
     candidate_feature_availability = _feature_availability_report(args.candidate_model, test_df.copy())
-    production_feature_availability = _feature_availability_report(args.production_model, test_df.copy())
+    production_feature_availability = _feature_availability_report(comparator_model, test_df.copy())
     candidate_metrics["feature_risk_audit"] = candidate_feature_risk
     production_metrics["feature_risk_audit"] = production_feature_risk
     if no_op_clone:
@@ -1859,22 +1935,22 @@ def main() -> None:
             "reason": "no-op clone detected before full promotion evaluation",
             "windows": [],
             "candidate_recipe_fingerprint": _artifact_config_fingerprint(args.candidate_model),
-            "production_recipe_fingerprint": _artifact_config_fingerprint(args.production_model),
-            "recipe_reproduction_passed": bool(_artifact_config_fingerprint(args.candidate_model) and _artifact_config_fingerprint(args.production_model)),
+            "production_recipe_fingerprint": _artifact_config_fingerprint(comparator_model),
+            "recipe_reproduction_passed": bool(_artifact_config_fingerprint(args.candidate_model) and _artifact_config_fingerprint(comparator_model)),
         }
     else:
         decision_win, decision_reasons = _decide(candidate_metrics, production_metrics, min_rows=max(1, args.min_rows))
         ranking_win, ranking_reasons, ranking_metrics = _ranking_lane_decide(candidate_metrics, production_metrics)
-        walk_forward = _walk_forward_validation(args.candidate_model, args.production_model, test_df.copy(), min_rows=max(1, args.min_rows))
+        walk_forward = _walk_forward_validation(args.candidate_model, comparator_model, test_df.copy(), min_rows=max(1, args.min_rows))
     walk_forward_consistent = bool(walk_forward.get("consistent"))
-    report_examples = _prediction_error_examples(args.candidate_model, args.production_model, test_df.copy())
-    production_threshold_optimizer = _threshold_optimizer_report(args.production_model, production_metrics, test_df.copy(), min_rows=max(1, args.min_rows))
+    report_examples = _prediction_error_examples(args.candidate_model, comparator_model, test_df.copy())
+    production_threshold_optimizer = _threshold_optimizer_report(comparator_model, production_metrics, test_df.copy(), min_rows=max(1, args.min_rows))
     candidate_threshold_optimizer = _threshold_optimizer_report(args.candidate_model, candidate_metrics, test_df.copy(), min_rows=max(1, args.min_rows))
     candidate_win = decision_win and ranking_win and not no_op_clone and walk_forward_consistent
     promotion_decision = _promotion_decision(candidate_win, no_op_clone, decision_win, ranking_win, walk_forward_consistent)
     detailed_phase_1_certification = _phase_1_certification(
         candidate_model_path=args.candidate_model,
-        production_model_path=args.production_model,
+        production_model_path=comparator_model,
         test_df=test_df.copy(),
         min_rows=max(1, args.min_rows),
         candidate_metrics=candidate_metrics,
@@ -1886,7 +1962,7 @@ def main() -> None:
     )
     phase_1_gate = _phase_1_gate(
         candidate_model_path=args.candidate_model,
-        production_model_path=args.production_model,
+        production_model_path=comparator_model,
         detailed_certification=detailed_phase_1_certification,
         walk_forward=walk_forward,
         clone_detection=clone_detection,
@@ -1898,19 +1974,76 @@ def main() -> None:
     )
     phase_1_leakage_audit = ((detailed_phase_1_certification.get("diagnostics") or {}).get("future_feature_leakage_audit") or {})
     feature_leakage_value_audit = _feature_leakage_value_audit(phase_1_leakage_audit)
-    comparison_scope_report = _comparison_scope_report(args.input, test_df.copy(), candidate_feature_availability, production_feature_availability)
-    production_preds_for_status, production_probs_for_status = _artifact_predictions(args.production_model, test_df.copy())
-    production_feature_compatibility_report = _production_comparison_status(comparison_scope_report, production_metrics, production_probs_for_status)
+    candidate_target = _artifact_lineage_value(args.candidate_model, "target_column")
+    comparator_target = _artifact_lineage_value(comparator_model, "target_column")
+    candidate_weighting = _artifact_lineage_value(args.candidate_model, "sample_weight_policy")
+    comparator_weighting = _artifact_lineage_value(comparator_model, "sample_weight_policy")
+    comparison_scope_report = _comparison_scope_report(
+        args.input,
+        test_df.copy(),
+        candidate_feature_availability,
+        production_feature_availability,
+        target_columns_match=bool(candidate_target and candidate_target == comparator_target),
+        duplicate_weighting_policy_match=bool(candidate_weighting and candidate_weighting == comparator_weighting),
+    )
+    comparison_scope_report.update({
+        "comparator_kind": comparator["comparator_kind"],
+        "comparator_model_path": comparator_model,
+        "candidate_target_column": candidate_target,
+        "comparator_target_column": comparator_target,
+        "same_evaluation_horizon": candidate_target == comparator_target == "label_up_5d",
+        "production_scoring_mode": comparator["production_scoring_mode"] if comparison_scope_report["comparison_valid"] else comparison_scope_report["production_scoring_mode"],
+    })
+    production_preds_for_status, production_probs_for_status = _artifact_predictions(comparator_model, test_df.copy())
     candidate_feature_coverage_segmented_report = _candidate_feature_coverage_segmented_report(candidate_feature_availability)
     feature_leakage_name_value_audit = _feature_leakage_name_value_audit(
         args.candidate_model,
-        args.production_model,
+        comparator_model,
         feature_leakage_value_audit,
         comparison_scope_report,
         training_source,
     )
+    threshold_support_passed = bool((candidate_threshold_optimizer.get("threshold_selection_support") or {}).get("passed"))
+    symbol_concentration = _numeric_metric(candidate_metrics, "symbol_utility_concentration")
+    date_concentration = _numeric_metric(candidate_metrics, "date_utility_concentration")
+    concentration_passed = bool(
+        (symbol_concentration is None or symbol_concentration <= MAX_SYMBOL_UTILITY_CONCENTRATION)
+        and (date_concentration is None or date_concentration <= MAX_DATE_UTILITY_CONCENTRATION)
+    )
+    evidence = _comparison_promotion_evidence(
+        comparison_scope_report,
+        leakage_passed=bool(feature_leakage_name_value_audit["future_feature_leakage_passed"]),
+        threshold_support_passed=threshold_support_passed,
+        concentration_passed=concentration_passed,
+    )
+    comparison_scope_report.update(evidence)
+    comparison_scope_report["allowed_uses"] = ["promotion_evidence"] if comparison_scope_report["promotion_eligible_evidence"] else ["diagnostic_only"]
+    production_feature_compatibility_report = {
+        "comparator_kind": comparator["comparator_kind"],
+        "comparator_model_path": comparator_model,
+        "production_feature_coverage_passed": comparison_scope_report["production_feature_coverage_passed"],
+        "candidate_feature_coverage_passed": comparison_scope_report["candidate_feature_coverage_passed"],
+        "feature_schema_compatible": comparison_scope_report["feature_schema_compatible"],
+        "target_columns_match": comparison_scope_report["target_columns_match"],
+        "duplicate_weighting_policy_match": comparison_scope_report["duplicate_weighting_policy_match"],
+        "apples_to_apples_scoring": comparison_scope_report["apples_to_apples_scoring"],
+        "comparison_valid": comparison_scope_report["comparison_valid"],
+        "comparison_invalid_reason": comparison_scope_report["comparison_invalid_reason"],
+        "promotion_eligible_evidence": comparison_scope_report["promotion_eligible_evidence"],
+        "promotion_evidence_checks": evidence["promotion_evidence_checks"],
+        **_production_comparison_status(comparison_scope_report, production_metrics, production_probs_for_status),
+    }
     duplicate_weighting_report = _duplicate_weighting_report(test_df.copy())
-    paired_bootstrap = _paired_date_bootstrap_utility_delta(args.candidate_model, args.production_model, test_df.copy())
+    baseline_report_path = Path(comparator_model).with_name("massive_baseline_model_report.json")
+    if comparator["comparator_kind"] == "massive_baseline_model_v1" and baseline_report_path.exists():
+        massive_baseline_model_report = json.loads(baseline_report_path.read_text(encoding="utf-8"))
+    else:
+        massive_baseline_model_report = {
+            "available": False,
+            "model_version": "massive_baseline_model_v1",
+            "reason": "Massive baseline artifact/report unavailable; legacy comparison remains diagnostic-only",
+        }
+    paired_bootstrap = _paired_date_bootstrap_utility_delta(args.candidate_model, comparator_model, test_df.copy())
     production_promotion_gates = _production_promotion_gates(
         candidate_model_path=args.candidate_model,
         candidate_metrics=candidate_metrics,
@@ -1942,6 +2075,13 @@ def main() -> None:
         production_promotion_gates["blocking_issues"] = sorted(set(production_promotion_gates["blocking_issues"]))
         decision_win = False
         ranking_win = False
+    elif not comparison_scope_report.get("promotion_eligible_evidence"):
+        production_promotion_gates["promotion_allowed"] = False
+        production_promotion_gates.setdefault("gate_results", {})["promotion_eligible_evidence_passed"] = False
+        production_promotion_gates.setdefault("blocking_issues", []).append(
+            "comparison did not pass leakage, feature coverage, threshold support, and concentration evidence gates"
+        )
+        production_promotion_gates["blocking_issues"] = sorted(set(production_promotion_gates["blocking_issues"]))
     candidate_win = bool(production_promotion_gates["promotion_allowed"])
     promotion_decision = _promotion_decision(candidate_win, no_op_clone, decision_win, ranking_win, walk_forward_consistent)
     candidate_behavior = _candidate_behavior(candidate_metrics, production_metrics)
@@ -1959,6 +2099,7 @@ def main() -> None:
 
     report = {
         "training_source": training_source,
+        "comparator": comparator,
         "training_source_report": training_source,
         "massive_training_enabled": bool(training_source.get("uses_massive_canonical_input")),
         "feature_leakage_value_audit": feature_leakage_value_audit,
@@ -1971,7 +2112,7 @@ def main() -> None:
         "production_positive_predictions": production_feature_compatibility_report["production_positive_predictions"],
         "production_probability_constant": production_feature_compatibility_report["production_probability_constant"],
         "production_metric_validity": production_feature_compatibility_report["production_metric_validity"],
-        "massive_baseline_model_report": {"available": False, "model_version": "massive_baseline_model_v1", "reason": "not yet trained; invalid production comparator remains diagnostic-only"},
+        "massive_baseline_model_report": massive_baseline_model_report,
         "duplicate_weighting_report": duplicate_weighting_report,
         "production_feature_coverage_passed": comparison_scope_report["production_feature_coverage_passed"],
         "candidate_feature_coverage_passed": comparison_scope_report["candidate_feature_coverage_passed"],
