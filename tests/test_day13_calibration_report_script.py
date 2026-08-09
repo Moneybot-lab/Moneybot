@@ -111,9 +111,27 @@ def test_calibration_rows_exclude_null_probability_and_quote_only(monkeypatch):
     )
     profile = calibration_script.calibration_input_profile(events, horizon_days=5)
     segments = calibration_script.segmented_calibration_summaries(rows, bins=4)
+    input_segments = calibration_script.calibration_input_segments(events, horizon_days=5)
 
     assert [row["symbol"] for row in rows] == ["NVDA"]
     assert profile["null_probability_rows"] == 1
     assert profile["portfolio_quote_only_rows"] == 1
     assert segments["endpoint"]["quick_ask"]["rows"] == 1
     assert segments["signal_completeness"]["full_signal"]["rows"] == 1
+    assert input_segments["probability_presence"]["null"]["excluded_rows"] == 1
+    assert input_segments["provider"]["portfolio_quote_only"]["excluded_rows"] == 1
+    assert input_segments["endpoint"]["quick_ask"]["rows_scanned"] == 2
+
+
+def test_mixed_decision_warning_uses_all_scanned_types():
+    events = [
+        {"endpoint": "quick_ask", "decision_source": "deterministic_model", "payload": {"probability_up": 0.8, "model_version": "v1", "features": {"rsi": 55}}},
+        {"endpoint": "user_watchlist", "decision_source": "rule_based", "payload": {"probability_up": None, "provider": "portfolio_quote_only"}},
+    ]
+    profile = calibration_script.calibration_input_profile(events)
+    input_segments = calibration_script.calibration_input_segments(events)
+
+    warnings = calibration_script._mixed_decision_warnings([], profile, input_segments)
+
+    assert any("mixes endpoint" in warning for warning in warnings)
+    assert any("probability_up=null" in warning for warning in warnings)

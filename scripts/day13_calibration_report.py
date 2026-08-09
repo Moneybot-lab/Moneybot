@@ -139,8 +139,44 @@ def _segment_key(row: dict, segment: str):
     return row.get(segment)
 
 
+CALIBRATION_SEGMENTS = (
+    "endpoint",
+    "decision_source",
+    "model_version",
+    "forecast_horizon",
+    "signal_completeness",
+    "probability_presence",
+    "provider",
+)
+
+
+def calibration_input_segments(events: list[dict], *, horizon_days: int = 5) -> dict:
+    """Describe every scanned decision, including rows ineligible for calibration."""
+    segments = {name: {} for name in CALIBRATION_SEGMENTS}
+    for event in events:
+        payload = _event_payload(event)
+        snapshot = _event_snapshot(event)
+        provider = _event_provider(event, payload, snapshot)
+        probability_present = _probability_up(payload, snapshot) is not None
+        values = {
+            "endpoint": _text_or_unknown(event.get("endpoint")),
+            "decision_source": _text_or_unknown(event.get("decision_source") or payload.get("decision_source")),
+            "model_version": _text_or_unknown(payload.get("model_version") or snapshot.get("model_version")),
+            "forecast_horizon": _text_or_unknown(payload.get("forecast_horizon") or snapshot.get("forecast_horizon") or f"{int(horizon_days)}d"),
+            "signal_completeness": _signal_completeness(payload, snapshot, provider),
+            "probability_presence": "present" if probability_present else "null",
+            "provider": provider,
+        }
+        eligible = probability_present and provider != "portfolio_quote_only"
+        for name, value in values.items():
+            bucket = segments[name].setdefault(value, {"rows_scanned": 0, "model_calibration_eligible_rows": 0, "excluded_rows": 0})
+            bucket["rows_scanned"] += 1
+            bucket["model_calibration_eligible_rows" if eligible else "excluded_rows"] += 1
+    return segments
+
+
 def _mixed_decision_warnings(
-    rows: list[dict], scanned_profile: dict | None = None
+    rows: list[dict], scanned_profile: dict | None = None, input_segments: dict | None = None
 ) -> list[str]:
     warnings: list[str] = []
     fields = [
@@ -152,16 +188,24 @@ def _mixed_decision_warnings(
         "probability_presence",
     ]
     for field in fields:
-        values = {str(row.get(field)) for row in rows if row.get(field) is not None}
+        values = set((input_segments or {}).get(field, {}))
+        if not values:
+            values = {str(row.get(field)) for row in rows if row.get(field) is not None}
         if len(values) > 1:
             warnings.append(f"Calibration input mixes {field}: {sorted(values)[:8]}")
-    if any(row.get("provider") == "portfolio_quote_only" for row in rows):
+    if any(row.get("provider") == "portfolio_quote_only" for row in rows) or (
+        scanned_profile and scanned_profile.get("portfolio_quote_only_rows")
+    ):
         warnings.append(
             "portfolio_quote_only rows are reported separately and excluded from model probability calibration"
         )
     if scanned_profile and scanned_profile.get("null_probability_rows"):
         warnings.append(
             "Rows with probability_up=null were scanned but excluded from model calibration"
+        )
+    if len(rows) < 30:
+        warnings.append(
+            f"Only {len(rows)} model-probability rows are mature; calibration is diagnostic and must not drive strong/global enforcement"
         )
     return warnings
 
@@ -223,7 +267,11 @@ def calibration_rows_from_events(
                 "model_version": _text_or_unknown(
                     payload.get("model_version") or snapshot.get("model_version")
                 ),
-                "forecast_horizon": f"{int(horizon_days)}d",
+                "forecast_horizon": _text_or_unknown(
+                    payload.get("forecast_horizon")
+                    or snapshot.get("forecast_horizon")
+                    or f"{int(horizon_days)}d"
+                ),
                 "provider": provider,
                 "signal_completeness": signal_completeness,
                 "probability_presence": "present",
@@ -256,15 +304,7 @@ def calibration_input_profile(events: list[dict], *, horizon_days: int = 5) -> d
 
 def segmented_calibration_summaries(rows: list[dict], *, bins: int = 10) -> dict:
     segments: dict[str, dict] = {}
-    for segment in [
-        "endpoint",
-        "decision_source",
-        "model_version",
-        "forecast_horizon",
-        "signal_completeness",
-        "probability_presence",
-        "provider",
-    ]:
+    for segment in CALIBRATION_SEGMENTS:
         grouped: dict[str, list[dict]] = {}
         for row in rows:
             grouped.setdefault(_text_or_unknown(_segment_key(row, segment)), []).append(
@@ -447,7 +487,10 @@ def main() -> None:
     input_profile = calibration_input_profile(
         events, horizon_days=max(1, args.horizon_days)
     )
-    warnings = _mixed_decision_warnings(rows, input_profile)
+    input_segments = calibration_input_segments(
+        events, horizon_days=max(1, args.horizon_days)
+    )
+    warnings = _mixed_decision_warnings(rows, input_profile, input_segments)
     payload = {
         "schema_version": "calibration_report.v1",
         "computed_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -461,6 +504,7 @@ def main() -> None:
             "portfolio_quote_only": "excluded_from_model_calibration_reported_separately",
         },
         "input_profile": input_profile,
+        "input_segments": input_segments,
         "warnings": warnings,
         "segments": segmented_calibration_summaries(rows, bins=max(2, args.bins)),
         **summary,
