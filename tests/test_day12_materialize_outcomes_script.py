@@ -76,6 +76,7 @@ def test_day12_materializer_uses_history_cache_for_repeated_symbol_date(tmp_path
             "10",
             "--rows-limit",
             "2",
+            "--no-prefer-massive",
         ],
     )
 
