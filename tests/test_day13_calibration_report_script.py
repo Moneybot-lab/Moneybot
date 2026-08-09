@@ -262,7 +262,10 @@ def test_day13_massive_first_outcome_and_diagnostics(monkeypatch):
         def get_massive_aggregates(self, *args, **kwargs):
             return {
                 "bars": [
-                    {"date": f"2026-01-0{day}", "close": price}
+                    {
+                        "start_timestamp": f"2026-01-0{day}T04:00:00+00:00",
+                        "close": price,
+                    }
                     for day, price in (
                         (2, 100),
                         (3, 101),

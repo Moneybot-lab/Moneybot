@@ -30,10 +30,21 @@ def test_massive_preferred_history_uses_massive_before_yfinance(monkeypatch):
 
     class FakeService:
         def get_massive_aggregates(self, *args, **kwargs):
-            return {"bars": [{"date": "2026-01-02", "close": 101.5}, {"date": "2026-01-05", "close": 103.0}]}
+            return {
+                "bars": [
+                    {"start_timestamp": "2026-01-02T04:00:00+00:00", "close": 101.5},
+                    {"start_timestamp": "2026-01-05T04:00:00+00:00", "close": 103.0},
+                ]
+            }
 
     download.service = FakeService()
-    monkeypatch.setattr(materializer.yf, "download", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("yfinance fallback should not run")))
+    monkeypatch.setattr(
+        materializer.yf,
+        "download",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("yfinance fallback should not run")
+        ),
+    )
 
     frame = download("AAPL", start="2026-01-02", end="2026-01-06")
 
@@ -42,8 +53,9 @@ def test_massive_preferred_history_uses_massive_before_yfinance(monkeypatch):
     assert download.diagnostics_payload()["yfinance_history_fallbacks"] == 0
 
 
-
-def test_day12_materializer_uses_history_cache_for_repeated_symbol_date(tmp_path, monkeypatch):
+def test_day12_materializer_uses_history_cache_for_repeated_symbol_date(
+    tmp_path, monkeypatch
+):
     input_path = tmp_path / "decision_events.jsonl"
     output_path = tmp_path / "decision_outcomes_snapshot.json"
     event = {
@@ -53,7 +65,9 @@ def test_day12_materializer_uses_history_cache_for_repeated_symbol_date(tmp_path
         "decision_source": "deterministic_model",
         "payload": {"recommendation": "BUY"},
     }
-    input_path.write_text("\n".join(json.dumps(event) for _ in range(3)) + "\n", encoding="utf-8")
+    input_path.write_text(
+        "\n".join(json.dumps(event) for _ in range(3)) + "\n", encoding="utf-8"
+    )
     calls = []
 
     def fake_download(symbol, **kwargs):
