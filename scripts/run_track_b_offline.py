@@ -29,6 +29,7 @@ def alpha_atlas_v3_summary(output_dir: Path) -> dict:
     report = _load_json(v3_dir / "alpha_atlas_v3_model_report.json")
     certification = _load_json(v3_dir / "production_servability_certification.json")
     recovery = _load_json(v3_dir / "alpha_atlas_v3_recovery_rebaseline_report.json")
+    generation = _load_json(v3_dir / "v3_generation_status.json")
     metrics = report.get("duplicate_weighted_metrics") or {}
     row_counts = report.get("row_counts") or {}
     threshold = report.get("threshold_selection") or {}
@@ -36,8 +37,8 @@ def alpha_atlas_v3_summary(output_dir: Path) -> dict:
     return {
         "candidate_generated": bool(candidate),
         "candidate_source_version": candidate.get("version") or candidate.get("model_version"),
-        "target_name": candidate.get("target_name") or report.get("target_column"),
-        "forecast_horizon": candidate.get("forecast_horizon"),
+        "target_name": candidate.get("target_name") or report.get("target_column") or generation.get("target_name"),
+        "forecast_horizon": candidate.get("forecast_horizon") or generation.get("forecast_horizon"),
         "training_rows": row_counts.get("train"),
         "final_test_rows": row_counts.get("test"),
         "brier_score": metrics.get("brier_score"),
@@ -46,7 +47,9 @@ def alpha_atlas_v3_summary(output_dir: Path) -> dict:
         "big_loss_rate": metrics.get("big_loss_false_positive_rate"),
         "big_gain_capture_rate": metrics.get("big_gain_capture_rate"),
         "servability_certification_passed": certification.get("passed") is True,
-        "comparison_mode": recovery.get("comparison_mode"),
+        "comparison_mode": recovery.get("comparison_mode") or generation.get("comparison_mode"),
+        "generation_status": generation.get("status") or ("generated" if candidate else "not_generated"),
+        "blocking_reason": generation.get("blocking_reason"),
         "automatic_promotion": False,
     }
 

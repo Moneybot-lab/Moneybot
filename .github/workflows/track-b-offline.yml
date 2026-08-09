@@ -209,7 +209,31 @@ jobs:
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
         run: |
           set -euo pipefail
-          test -n "$MASSIVE_API_KEY" || (echo "Missing secret: MASSIVE_API_KEY; refusing to generate an uncertified V3 candidate" && exit 1)
+          if [ -z "$MASSIVE_API_KEY" ]; then
+            echo "MASSIVE_API_KEY is not configured; skipping V3 candidate generation while allowing the base Track B challenger run to continue."
+            mkdir -p data/track_b/alpha_atlas_v3
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          status = {
+              "schema_version": "moneybot-alpha-atlas-v3-generation-status.v1",
+              "candidate_generated": False,
+              "certification_generated": False,
+              "status": "skipped_missing_massive_api_key",
+              "blocking_reason": "MASSIVE_API_KEY is not configured for real serving dry runs",
+              "target_name": "label_up_5d",
+              "forecast_horizon": "5d",
+              "comparison_mode": "recovery_rebaseline",
+              "automatic_promotion": False,
+          }
+          Path("data/track_b/alpha_atlas_v3/v3_generation_status.json").write_text(
+              json.dumps(status, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+            exit 0
+          fi
           python3 scripts/train_alpha_atlas_v3_candidate.py \
             --train data/track_b/training_quality/cleaned_train.jsonl \
             --test data/track_b/training_quality/cleaned_test.jsonl \
@@ -239,6 +263,7 @@ jobs:
             data/track_b/alpha_atlas_v3/alpha_atlas_v3_representative_serving_dry_runs.json
             data/track_b/alpha_atlas_v3/production_servability_certification.json
             data/track_b/alpha_atlas_v3/alpha_atlas_v3_recovery_rebaseline_report.json
+            data/track_b/alpha_atlas_v3/v3_generation_status.json
             data/decision_events.jsonl
             data/_response_headers.txt
             data/track_b/_production_model_headers.txt

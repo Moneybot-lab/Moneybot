@@ -137,6 +137,12 @@ def test_track_b_workflow_runs_v3_after_cleaning_and_uploads_all_outputs():
 
     assert clean_position < backtest_position < v3_position < upload_position
     assert "MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}" in workflow
+    assert (
+        "skipping V3 candidate generation while allowing the base Track B challenger run to continue"
+        in workflow
+    )
+    assert "v3_generation_status.json" in workflow
+    assert "exit 0" in workflow
     assert "scripts/train_alpha_atlas_v3_candidate.py" in workflow
     assert "--train data/track_b/training_quality/cleaned_train.jsonl" in workflow
     assert "--test data/track_b/training_quality/cleaned_test.jsonl" in workflow
@@ -212,5 +218,34 @@ def test_track_b_summary_surfaces_real_v3_review_metrics(tmp_path):
         "big_gain_capture_rate": 0.31,
         "servability_certification_passed": True,
         "comparison_mode": "recovery_rebaseline",
+        "generation_status": "generated",
+        "blocking_reason": None,
         "automatic_promotion": False,
     }
+
+
+def test_track_b_summary_reports_missing_key_skip_without_fake_candidate(tmp_path):
+    output = tmp_path / "track_b"
+    v3_dir = output / "alpha_atlas_v3"
+    v3_dir.mkdir(parents=True)
+    (v3_dir / "v3_generation_status.json").write_text(
+        json.dumps(
+            {
+                "status": "skipped_missing_massive_api_key",
+                "blocking_reason": "MASSIVE_API_KEY is not configured for real serving dry runs",
+                "target_name": TARGET_NAME,
+                "forecast_horizon": "5d",
+                "comparison_mode": "recovery_rebaseline",
+                "automatic_promotion": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = alpha_atlas_v3_summary(output)
+
+    assert summary["candidate_generated"] is False
+    assert summary["servability_certification_passed"] is False
+    assert summary["generation_status"] == "skipped_missing_massive_api_key"
+    assert summary["blocking_reason"].startswith("MASSIVE_API_KEY")
+    assert summary["automatic_promotion"] is False

@@ -56,6 +56,9 @@ python scripts/train_alpha_atlas_v3_candidate.py \
 
 The command requires configured Massive history because certification dry-runs
 use `MarketDataService.get_price_history_data()` for representative symbols.
+In GitHub Actions, a missing `MASSIVE_API_KEY` skips only the V3 review
+candidate and writes `v3_generation_status.json`; the base Track B challenger
+run continues. No candidate or certification is synthesized in that case.
 It writes:
 
 * `candidate_alpha_atlas_v3_clean.json`
