@@ -155,12 +155,15 @@ def main() -> None:
     next_generation_manifest = output_dir / "next_generation" / "next_generation_challenger_manifest.json"
     if next_generation_manifest.exists():
         next_generation = json.loads(next_generation_manifest.read_text(encoding="utf-8"))
+        scoreboard_path = output_dir / "challenger_vs_massive_baseline_report.json"
+        scoreboard = json.loads(scoreboard_path.read_text(encoding="utf-8")) if scoreboard_path.exists() else {}
         summary["next_generation_challengers"] = {
             "generated": True,
             "count": len(next_generation.get("challengers") or []),
             "promotion_allowed": False,
             "routing_allowed": False,
             "manifest": str(next_generation_manifest),
+            "leaderboard": scoreboard.get("leaderboard"),
         }
     summary["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
     (output_dir / "track_b_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")

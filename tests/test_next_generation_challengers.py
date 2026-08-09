@@ -69,6 +69,8 @@ def test_generates_five_distinct_research_only_families(tmp_path):
     assert all(item["promotion_ready"] is False for item in manifest["challengers"])
     assert all(item["routing_allowed"] is False for item in manifest["challengers"])
     assert all(item["same_cleaned_holdout_rows"] is True for item in manifest["challengers"])
+    assert all(item["selection_gates"]["no_op_clone_check_passed"] is True for item in manifest["challengers"])
+    assert all("no_op_clone" not in item["selection_gates"] for item in manifest["challengers"])
     for model_version in expected:
         assert (output_dir / f"{model_version}.json").exists()
     for filename in (
@@ -81,6 +83,13 @@ def test_generates_five_distinct_research_only_families(tmp_path):
         "regime_split_report.json",
     ):
         assert (output_dir / filename).exists()
+    scoreboard = json.loads((output_dir / "challenger_vs_massive_baseline_report.json").read_text(encoding="utf-8"))
+    assert scoreboard["leaderboard"]["baseline"]["model_version"] == "massive_baseline_model_v1"
+    assert {item["model_version"] for item in scoreboard["leaderboard"]["challengers"]} == expected
+    assert all("duplicate_weighted_utility" in item for item in scoreboard["leaderboard"]["challengers"])
+    support = json.loads((output_dir / "threshold_support_report.json").read_text(encoding="utf-8"))
+    assert {item["model_version"] for item in support["next_generation_challengers"]} == expected
+    assert all(item["source"] == "next_generation" for item in support["next_generation_challengers"])
 
 
 def test_generation_refuses_invalid_comparison(tmp_path):

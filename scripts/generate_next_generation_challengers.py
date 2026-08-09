@@ -235,7 +235,7 @@ def _candidate_record(
     materially_higher_return = candidate_return is not None and baseline_return is not None and candidate_return >= baseline_return + 0.02
     selection_gates = {
         "comparison_valid": True,
-        "no_op_clone": not clone["no_op_clone"],
+        "no_op_clone_check_passed": not clone["no_op_clone"],
         "threshold_support_passed": _supported(metrics),
         "avg_selected_return_beats_baseline": candidate_return is not None and baseline_return is not None and candidate_return > baseline_return,
         "duplicate_weighted_utility_beats_baseline": metrics.get("duplicate_weighted_utility") is not None and baseline_metrics.get("duplicate_weighted_utility") is not None and metrics["duplicate_weighted_utility"] > baseline_metrics["duplicate_weighted_utility"],
@@ -421,6 +421,32 @@ def generate(
     }
     (output_dir / "next_generation_challenger_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     (output_dir.parent / "next_generation_challenger_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    metric_fields = (
+        "avg_selected_return",
+        "duplicate_weighted_utility",
+        "big_loss_prediction_rate",
+        "big_gain_capture_rate",
+        "max_drawdown",
+    )
+    leaderboard = {
+        "baseline": {
+            "model_version": "massive_baseline_model_v1",
+            **{field: baseline_metrics.get(field) for field in metric_fields},
+            "clone_status": False,
+            "promotion_ready": False,
+            "research_winner": False,
+        },
+        "challengers": [
+            {
+                "model_version": item["model_version"],
+                **{field: item["metrics"].get(field) for field in metric_fields},
+                "clone_status": bool(item["clone_detection"]["no_op_clone"]),
+                "promotion_ready": bool(item["promotion_ready"]),
+                "research_winner": bool(item["research_winner"]),
+            }
+            for item in candidates
+        ],
+    }
     scoreboard = {
         "comparison_valid": True,
         "apples_to_apples_scoring": True,
@@ -428,11 +454,38 @@ def generate(
         "baseline_metrics": baseline_metrics,
         "challengers": candidates,
         "materially_different_candidates": [item["model_version"] for item in candidates if not item["clone_detection"]["no_op_clone"]],
+        "leaderboard": leaderboard,
         "promotion_allowed": False,
         "ready_for_live_routing": False,
     }
     (output_dir / "challenger_vs_massive_baseline_report.json").write_text(json.dumps(scoreboard, indent=2), encoding="utf-8")
     (output_dir.parent / "challenger_vs_massive_baseline_report.json").write_text(json.dumps(scoreboard, indent=2), encoding="utf-8")
+    threshold_support_path = output_dir.parent / "threshold_support_report.json"
+    if threshold_support_path.exists():
+        threshold_support_report = json.loads(threshold_support_path.read_text(encoding="utf-8"))
+    else:
+        threshold_support_report = {"models": []}
+    legacy_models = [
+        item for item in threshold_support_report.get("models", [])
+        if item.get("source") != "next_generation"
+    ]
+    next_generation_support = [
+        {
+            "model_version": item["model_version"],
+            "source": "next_generation",
+            "threshold_support_passed": bool(item["selection_gates"]["threshold_support_passed"]),
+            "positive_predictions": item["metrics"]["positive_predictions"],
+            "selected_unique_symbols": item["metrics"]["selected_unique_symbols"],
+            "selected_unique_dates": item["metrics"]["selected_unique_dates"],
+            "big_gain_predictions": item["metrics"]["big_gain_predictions"],
+            "top_symbol_date_concentration": item["metrics"]["top_symbol_date_concentration"],
+        }
+        for item in candidates
+    ]
+    threshold_support_report["models"] = [*legacy_models, *next_generation_support]
+    threshold_support_report["next_generation_challengers"] = next_generation_support
+    threshold_support_path.write_text(json.dumps(threshold_support_report, indent=2), encoding="utf-8")
+    (output_dir / "threshold_support_report.json").write_text(json.dumps(threshold_support_report, indent=2), encoding="utf-8")
     return manifest
 
 
