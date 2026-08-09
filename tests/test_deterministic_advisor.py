@@ -180,6 +180,29 @@ def test_predict_quick_decision_applies_probability_calibration(tmp_path: Path):
     assert calibrated["calibration_enabled"] is True
 
 
+def test_probability_calibration_canary_rollout_does_not_apply_at_zero_percent(tmp_path: Path):
+    artifact_path = _write_artifact(tmp_path)
+    baseline = DeterministicQuickAdvisor(enabled=True, artifact_path=str(artifact_path))
+    canary = DeterministicQuickAdvisor(
+        enabled=True,
+        artifact_path=str(artifact_path),
+        calibration_enabled=True,
+        calibration_slope=0.5,
+        calibration_intercept=-0.15159,
+        calibration_rollout_percentage=0.0,
+    )
+    signal = {"technical": {"rsi": 45.0, "macd_histogram": 0.2}, "volume_ratio": 1.4}
+    quote = {"price": 50.0, "change_percent": 1.0}
+
+    raw = baseline.predict_quick_decision(signal_data=signal, quote_data=quote, symbol="AAPL")
+    staged = canary.predict_quick_decision(signal_data=signal, quote_data=quote, symbol="AAPL")
+
+    assert raw["probability_up"] == staged["probability_up"]
+    assert staged["calibration_enabled"] is True
+    assert staged["calibration_applied"] is False
+    assert staged["calibration_rollout_percentage"] == 0.0
+
+
 def test_predict_quick_decision_respects_rollout_controls(tmp_path: Path):
     artifact_path = _write_artifact(tmp_path)
     svc = DeterministicQuickAdvisor(
