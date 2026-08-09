@@ -651,6 +651,23 @@ def _get_breakout_radar_items(svc: Any, seed_symbols: dict[str, float] | None = 
     return [item for item in (items or []) if isinstance(item, dict)]
 
 
+def _is_actionable_scanner_row(row: Any, *, require_breakout: bool = False) -> bool:
+    """Defense in depth for dashboard and notification scanner consumers."""
+    if not isinstance(row, dict):
+        return False
+    recommendation = str(row.get("recommendation") or "").strip().upper()
+    try:
+        price = float(row.get("price"))
+    except (TypeError, ValueError):
+        return False
+    if recommendation not in {"BUY", "STRONG BUY"} or not 0.0 < price <= 100.0:
+        return False
+    if require_breakout:
+        snapshot = row.get("intraday_breakout")
+        return isinstance(snapshot, dict) and snapshot.get("status") == "ok" and snapshot.get("qualifies") is True
+    return True
+
+
 def _breakout_scores_from_rows(rows: list[dict[str, Any]]) -> dict[str, float]:
     scores: dict[str, float] = {}
     for row in rows:
@@ -2584,7 +2601,7 @@ def run_notification_triggers():
     except Exception:  # noqa: BLE001
         momentum_items = []
     for row in momentum_items:
-        if not isinstance(row, dict):
+        if not _is_actionable_scanner_row(row):
             continue
         symbol = str(row.get("symbol") or "").strip().upper()
         if not symbol:
@@ -2619,7 +2636,7 @@ def run_notification_triggers():
     current_breakouts: set[str] = set()
     fresh_breakout_rows: list[dict[str, Any]] = []
     for row in breakout_items:
-        if not isinstance(row, dict):
+        if not _is_actionable_scanner_row(row, require_breakout=True):
             continue
         symbol = str(row.get("symbol") or "").strip().upper()
         if not symbol:
@@ -2833,7 +2850,7 @@ def stable_watchlist():
 def hot_momentum_buys():
     svc = current_app.extensions["market_data_service"]
     decision_logger = current_app.extensions.get("decision_logger")
-    items = svc.get_hot_momentum_buys()
+    items = [item for item in svc.get_hot_momentum_buys() if _is_actionable_scanner_row(item)]
     if decision_logger is not None:
         for item in items:
             decision_logger.log(
@@ -2855,7 +2872,7 @@ def hot_momentum_buys():
 def breakout_radar():
     svc = current_app.extensions["market_data_service"]
     seed_scores = _recent_breakout_seed_scores()
-    items = _get_breakout_radar_items(svc, seed_symbols=seed_scores)
+    items = [item for item in _get_breakout_radar_items(svc, seed_symbols=seed_scores) if _is_actionable_scanner_row(item, require_breakout=True)]
     decision_logger = current_app.extensions.get("decision_logger")
     if decision_logger is not None:
         for item in items:

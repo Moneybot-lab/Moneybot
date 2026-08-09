@@ -440,7 +440,9 @@ def create_app() -> Flask:
         DETERMINISTIC_CALIBRATION_ENABLED=(os.environ.get("DETERMINISTIC_CALIBRATION_ENABLED", "false").lower() == "true"),
         DETERMINISTIC_CALIBRATION_SLOPE=float(os.environ.get("DETERMINISTIC_CALIBRATION_SLOPE", "1.0")),
         DETERMINISTIC_CALIBRATION_INTERCEPT=float(os.environ.get("DETERMINISTIC_CALIBRATION_INTERCEPT", "0.0")),
-        DETERMINISTIC_CALIBRATION_AUTO_APPLY_PLAN=(os.environ.get("DETERMINISTIC_CALIBRATION_AUTO_APPLY_PLAN", "true").lower() == "true"),
+        # Recalibration plans are canary artifacts by default. Production must opt in.
+        DETERMINISTIC_CALIBRATION_AUTO_APPLY_PLAN=(os.environ.get("DETERMINISTIC_CALIBRATION_AUTO_APPLY_PLAN", "false").lower() == "true"),
+        DETERMINISTIC_CALIBRATION_ROLLOUT_PERCENTAGE=float(os.environ.get("DETERMINISTIC_CALIBRATION_ROLLOUT_PERCENTAGE", "0.0")),
         DETERMINISTIC_ROLLOUT_PERCENTAGE=float(os.environ.get("DETERMINISTIC_ROLLOUT_PERCENTAGE", "100.0")),
         DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE=float(
             os.environ.get(
@@ -500,6 +502,9 @@ def create_app() -> Flask:
             app.config["DETERMINISTIC_CALIBRATION_ENABLED"] = True
             app.config["DETERMINISTIC_CALIBRATION_SLOPE"] = plan_slope
             app.config["DETERMINISTIC_CALIBRATION_INTERCEPT"] = plan_intercept
+            app.config["DETERMINISTIC_CALIBRATION_ROLLOUT_PERCENTAGE"] = max(
+                0.0, min(100.0, float(plan.get("rollout_percentage") or 0.0))
+            )
             logging.info(
                 "Applied deterministic calibration plan slope=%s intercept=%s effective_brier_score=%s",
                 plan_slope,
@@ -528,6 +533,7 @@ def create_app() -> Flask:
         calibration_enabled=app.config["DETERMINISTIC_CALIBRATION_ENABLED"],
         calibration_slope=app.config["DETERMINISTIC_CALIBRATION_SLOPE"],
         calibration_intercept=app.config["DETERMINISTIC_CALIBRATION_INTERCEPT"],
+        calibration_rollout_percentage=app.config["DETERMINISTIC_CALIBRATION_ROLLOUT_PERCENTAGE"],
         rollout_percentage=app.config["DETERMINISTIC_ROLLOUT_PERCENTAGE"],
         portfolio_rollout_percentage=app.config["DETERMINISTIC_PORTFOLIO_ROLLOUT_PERCENTAGE"],
         rollout_seed=app.config["DETERMINISTIC_ROLLOUT_SEED"],
