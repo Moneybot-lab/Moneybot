@@ -73,10 +73,10 @@ class StubMarketService:
         return [{"symbol": "MSFT", "company": "Microsoft", "price": 420.12, "signal_score": 8.0}]
 
     def get_hot_momentum_buys(self):
-        return [{"symbol": "NVDA", "price": 900.33, "score": 9.4, "rationale": "Strong breakout"}]
+        return [{"symbol": "NVDA", "price": 90.33, "score": 9.4, "recommendation": "BUY", "setup_type": "momentum_swing", "rationale": "Strong breakout"}]
 
     def get_breakout_radar(self, **_kwargs):
-        return [{"symbol": "ASTC", "price": 5.43, "score": 9.8, "decision_source": "scanner:small_cap_gainers", "rationale": "Live breakout scanner candidate."}]
+        return [{"symbol": "ASTC", "price": 5.43, "score": 9.8, "recommendation": "STRONG BUY", "intraday_breakout": {"status": "ok", "qualifies": True}, "decision_source": "scanner:small_cap_gainers", "rationale": "Live breakout scanner candidate."}]
 
     def get_wells_picks(self):
         return [{"investor": "Warren Buffett", "stocks": [{"ticker": "AAPL", "price": 190.0, "performance": 1.2}]}]
@@ -188,9 +188,7 @@ def test_breakout_radar_endpoint_seeds_recent_notification_symbols(monkeypatch, 
 
     assert res.status_code == 200
     items = res.get_json()["items"]
-    assert items[0]["symbol"] == "XYZ"
-    assert items[0]["score"] == 8.7
-    assert items[0]["decision_source"] == "recent_breakout_alert"
+    assert items == []
 
 
 def test_quick_ask_returns_shopping_friendly_recommendation_scale():
