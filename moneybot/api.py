@@ -2912,14 +2912,17 @@ def promote_track_b_candidate():
 
     comparison_file = request.files.get("comparison_report")
     candidate_file = request.files.get("candidate_model")
-    if comparison_file is None or candidate_file is None:
-        return jsonify({"error": "comparison_report and candidate_model files are required", "request_id": g.request_id}), 400
+    certification_file = request.files.get("servability_certification")
+    if comparison_file is None or candidate_file is None or certification_file is None:
+        return jsonify({"error": "comparison_report, candidate_model, and servability_certification files are required", "request_id": g.request_id}), 400
 
     try:
         comparison_bytes = comparison_file.read()
         candidate_bytes = candidate_file.read()
+        certification_bytes = certification_file.read()
         comparison_report = json.loads(comparison_bytes.decode("utf-8"))
         candidate_model = json.loads(candidate_bytes.decode("utf-8"))
+        certification = json.loads(certification_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return jsonify({"error": "uploaded files must be valid JSON", "request_id": g.request_id}), 400
 
@@ -2927,6 +2930,8 @@ def promote_track_b_candidate():
         return jsonify({"error": "comparison_report must be a JSON object", "request_id": g.request_id}), 400
     if not isinstance(candidate_model, dict):
         return jsonify({"error": "candidate_model must be a JSON object", "request_id": g.request_id}), 400
+    if not isinstance(certification, dict):
+        return jsonify({"error": "servability_certification must be a JSON object", "request_id": g.request_id}), 400
 
     force_raw = str(request.form.get("force") or request.args.get("force") or "").strip().lower()
     force = force_raw in {"1", "true", "yes", "y"}
@@ -2965,8 +2970,10 @@ def promote_track_b_candidate():
     track_b_dir.mkdir(parents=True, exist_ok=True)
     comparison_path = track_b_dir / "model_comparison_track_b.json"
     candidate_path = track_b_dir / "candidate_model_track_b.json"
+    certification_path = track_b_dir / "production_servability_certification.json"
     comparison_path.write_bytes(comparison_bytes)
     candidate_path.write_bytes(candidate_bytes)
+    certification_path.write_bytes(certification_bytes)
 
     production_model_path = Path(
         str(current_app.config.get("DETERMINISTIC_MODEL_PATH") or (resolve_runtime_dir() / "day1_baseline_model.json"))
@@ -2980,6 +2987,8 @@ def promote_track_b_candidate():
         str(candidate_path),
         "--production-model",
         str(production_model_path),
+        "--servability-certification",
+        str(certification_path),
     ]
     if force:
         command.append("--force")
@@ -3027,6 +3036,7 @@ def promote_track_b_candidate():
                 "stderr": completed.stderr,
                 "comparison_report_path": str(comparison_path),
                 "candidate_model_path": str(candidate_path),
+                "servability_certification_path": str(certification_path),
                 "production_model_path": str(production_model_path),
             },
             "request_id": g.request_id,

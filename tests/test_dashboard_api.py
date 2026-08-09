@@ -7,6 +7,19 @@ from datetime import datetime, timedelta, timezone
 from flask import current_app
 from moneybot.app_factory import create_app
 from moneybot import api as api_module
+from moneybot.services.production_servability import certify_candidate
+
+
+def _certified_candidate_payload(version="candidate-promoted-v1"):
+    features = ["feature_rsi"]
+    return {"version": version, "model_type": "logistic_regression", "feature_columns": features, "lineage": {"lineage_id": "recipe-test", "recipe_hash": "test-hash"}, "production_feature_contract": {
+        "feature_contract_version": "moneybot-serving-features.v1", "forecast_horizon": "5d", "lane": "decision", "leakage_safe": True,
+        "feature_columns": features, "required_features": features, "optional_features": [],
+        "features": [{"feature_name": "feature_rsi", "source": "market_at_T", "available_at_prediction_time": True, "training_builder": "technical.v1", "serving_builder": "technical.v1", "transformation": "rsi_14", "fill_policy": "training_median", "time_semantics": "at_T"}],
+        "training_transform": {"units": "rsi", "scaling": "artifact"}, "serving_transform": {"units": "rsi", "scaling": "artifact"},
+        "training_fill_policy": "training_median", "serving_fill_policy": "training_median", "fill_values": {"feature_rsi": 50.0},
+        "representative_dry_runs": [{"symbol": symbol, "available_feature_count": 1, "missing_required_features": [], "feature_contract_servable": True, "feature_vector_is_training_mean": False, "raw_probability": probability} for symbol, probability in (("SPY", 0.4), ("IWM", 0.5), ("AAPL", 0.6))],
+    }}
 
 
 
@@ -1997,7 +2010,8 @@ def test_day14_promotion_metadata_uses_alpha_atlas_promotion_version(tmp_path):
     candidate_path = tmp_path / "candidate.json"
     production_path = tmp_path / "production.json"
     comparison_path.write_text(json.dumps({"candidate_win": True, "candidate_metrics": {"rows": 12}, "production_metrics": {"rows": 8}}), encoding="utf-8")
-    candidate_path.write_text(json.dumps({"version": "candidate-logreg-v1-20260710T225011Z", "feature_columns": []}), encoding="utf-8")
+    candidate_path.write_text(json.dumps(_certified_candidate_payload("candidate-logreg-v1-20260710T225011Z")), encoding="utf-8")
+    (tmp_path / "production_servability_certification.json").write_text(json.dumps(certify_candidate(candidate_path)), encoding="utf-8")
 
     old_argv = sys.argv
     try:
@@ -2042,6 +2056,7 @@ def test_promote_track_b_candidate_rejects_losing_report(tmp_path, monkeypatch):
         data={
             "comparison_report": (BytesIO(json.dumps({"candidate_win": False, "reasons": ["not enough"]}).encode()), "model_comparison_track_b.json"),
             "candidate_model": (BytesIO(json.dumps({"version": "candidate"}).encode()), "candidate_model_track_b.json"),
+            "servability_certification": (BytesIO(b"{}"), "production_servability_certification.json"),
         },
         content_type="multipart/form-data",
     )
@@ -2068,6 +2083,7 @@ def test_promote_track_b_candidate_rejects_no_promotable_placeholder(tmp_path, m
                 "candidate_model_track_b.json",
             ),
             "force": "true",
+            "servability_certification": (BytesIO(b"{}"), "production_servability_certification.json"),
         },
         content_type="multipart/form-data",
     )
@@ -2104,13 +2120,17 @@ def test_promote_track_b_candidate_uploads_and_runs_promotion(monkeypatch, tmp_p
     client.application.config["DETERMINISTIC_MODEL_PATH"] = str(tmp_path / "day1_baseline_model.json")
 
     report = {"candidate_win": True, "reasons": ["candidate accuracy exceeds production by at least 0.02"]}
-    candidate = {"version": "candidate-promoted-v1"}
+    candidate = _certified_candidate_payload()
+    candidate_disk = tmp_path / "upload-candidate.json"
+    candidate_disk.write_text(json.dumps(candidate), encoding="utf-8")
+    certification = certify_candidate(candidate_disk)
     res = client.post(
         "/api/promote-track-b-candidate",
         headers={"X-Track-B-Promotion-Token": "promote-token"},
         data={
             "comparison_report": (BytesIO(json.dumps(report).encode()), "model_comparison_track_b.json"),
             "candidate_model": (BytesIO(json.dumps(candidate).encode()), "candidate_model_track_b.json"),
+            "servability_certification": (BytesIO(json.dumps(certification).encode()), "production_servability_certification.json"),
         },
         content_type="multipart/form-data",
     )
@@ -2133,4 +2153,6 @@ def test_promote_track_b_candidate_uploads_and_runs_promotion(monkeypatch, tmp_p
         str(tmp_path / "track_b" / "candidate_model_track_b.json"),
         "--production-model",
         str(tmp_path / "day1_baseline_model.json"),
+        "--servability-certification",
+        str(tmp_path / "track_b" / "production_servability_certification.json"),
     ]

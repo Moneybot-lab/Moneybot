@@ -567,8 +567,9 @@ def test_day14_promotion_only_runs_when_allowed(tmp_path, monkeypatch):
             "--force",
         ],
     )
-    day14_promote.main()
-    assert json.loads(production_path.read_text(encoding="utf-8"))["version"] == "candidate"
+    with pytest.raises(SystemExit, match="servability certification is missing"):
+        day14_promote.main()
+    assert json.loads(production_path.read_text(encoding="utf-8"))["version"] == "production"
 
 
 @pytest.mark.parametrize(

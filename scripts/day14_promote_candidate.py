@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from moneybot.services.model_metadata import append_artifact_history, save_artifact_metadata
+from moneybot.services.production_servability import validate_certification
 
 
 ALPHA_ATLAS_VERSION_RE = re.compile(r"^alpha-atlas-v(?P<number>\d+)$", re.IGNORECASE)
@@ -51,6 +52,7 @@ def main() -> None:
     parser.add_argument("--comparison-report", default="data/model_comparison_report.json")
     parser.add_argument("--candidate-model", default="data/candidate_model.json")
     parser.add_argument("--production-model", default="data/day1_baseline_model.json")
+    parser.add_argument("--servability-certification")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 
@@ -58,6 +60,10 @@ def main() -> None:
     candidate_win = bool(report.get("candidate_win"))
     if not candidate_win and not args.force:
         print("no promotion")
+        return
+    report_gates = report.get("promotion_gates") if isinstance(report.get("promotion_gates"), dict) else {}
+    if (report.get("promotion_ready") is False or report_gates.get("promotion_ready") is False) and not args.force:
+        print("no promotion: offline promotion_ready gate is false")
         return
 
     candidate_path = Path(args.candidate_model)
@@ -69,11 +75,31 @@ def main() -> None:
     if candidate_model.get("promotion_ready") is False or candidate_version == "no-promotable-challenger":
         raise SystemExit("Candidate model is an explicit no-promotion placeholder; refusing promotion even with --force.")
 
+    certification_path = Path(args.servability_certification) if args.servability_certification else candidate_path.with_name("production_servability_certification.json")
+    if not certification_path.exists():
+        raise SystemExit("Production servability certification is missing; structural safety cannot be overridden with --force.")
+    certification = _load_json(str(certification_path))
+    certification_failures = validate_certification(candidate_path, certification)
+    if certification_failures:
+        raise SystemExit("Production servability certification refused promotion (non-overridable): " + ", ".join(certification_failures))
+
     existing_production = _load_json(str(production_path))
     existing_version = str(existing_production.get("version") or existing_production.get("model_version") or "").strip()
     promoted_version = _next_alpha_atlas_version(existing_version)
     candidate_model["version"] = promoted_version
     candidate_model["source_candidate_version"] = candidate_version or None
+    candidate_model["production_servability_certification"] = {
+        "schema_version": certification["schema_version"],
+        "passed": True,
+        "candidate_artifact_sha256": certification["candidate_artifact_sha256"],
+        "feature_contract_version": certification["feature_contract_version"],
+        "forecast_horizon": certification["forecast_horizon"],
+        "feature_columns": certification["feature_columns"],
+        "lineage_id": certification["candidate_lineage_id"],
+        "recipe_hash": certification["candidate_recipe_hash"],
+        "certification_timestamp": certification["certified_at_utc"],
+        "promotion_timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
     production_path.parent.mkdir(parents=True, exist_ok=True)
     if production_path.exists():
@@ -100,6 +126,14 @@ def main() -> None:
         "horizon_days": 5,
         "target_return": 0.0,
         "promotion_reason": "forced" if args.force and not candidate_win else "candidate_win",
+        "candidate_artifact_sha256": certification["candidate_artifact_sha256"],
+        "servability_certification_passed": True,
+        "feature_contract_version": certification["feature_contract_version"],
+        "forecast_horizon": certification["forecast_horizon"],
+        "feature_columns": certification["feature_columns"],
+        "lineage_id": certification["candidate_lineage_id"],
+        "recipe_hash": certification["candidate_recipe_hash"],
+        "certification_timestamp": certification["certified_at_utc"],
     }
     metadata_path = save_artifact_metadata(str(production_path), metadata)
     history_path = append_artifact_history(str(production_path), metadata)

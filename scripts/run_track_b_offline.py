@@ -31,6 +31,7 @@ def build_track_b_commands(
     dataset_path = massive_dataset_path if training_source == "massive" else legacy_dataset_path
     candidate_model_path = output_dir / "candidate_model_track_b.json"
     comparison_report_path = output_dir / "model_comparison_track_b.json"
+    certification_path = output_dir / "production_servability_certification.json"
     massive_baseline_path = output_dir / "massive_baseline_model_v1.json"
 
     commands: list[list[str]] = []
@@ -61,12 +62,14 @@ def build_track_b_commands(
         commands.extend([
             [python_executable, str(scripts_dir / "day10_train_candidate_model.py"), "--cleaned-train", str(output_dir / "training_quality" / "cleaned_train.jsonl"), "--cleaned-test", str(output_dir / "training_quality" / "cleaned_test.jsonl"), "--cleaned-all", str(output_dir / "training_quality" / "cleaned_all.jsonl"), "--model-version", "candidate_market_no_echo_v1", "--output-model", str(candidate_model_path), "--min-rows", str(min_rows)],
             [python_executable, str(scripts_dir / "day11_compare_candidate_vs_production.py"), "--input", str(output_dir / "training_quality" / "cleaned_test.jsonl"), "--input-is-holdout", "--candidate-model", str(candidate_model_path), "--production-model", str(production_model), "--massive-baseline-model", str(massive_baseline_path), "--output", str(comparison_report_path), "--min-rows", str(min_rows)],
+            [python_executable, str(scripts_dir / "certify_production_servability.py"), "--candidate-model", str(candidate_model_path), "--output", str(certification_path), "--comparison-report", str(comparison_report_path)],
             [python_executable, str(scripts_dir / "generate_next_generation_challengers.py"), "--train", str(output_dir / "training_quality" / "cleaned_train.jsonl"), "--test", str(output_dir / "training_quality" / "cleaned_test.jsonl"), "--all-cleaned", str(output_dir / "training_quality" / "cleaned_all.jsonl"), "--baseline-model", str(massive_baseline_path), "--comparison-report", str(comparison_report_path), "--output-dir", str(output_dir / "next_generation")],
         ])
     else:
         commands.extend([
             [python_executable, str(scripts_dir / "day10_train_candidate_model.py"), "--input", str(dataset_path), "--output-model", str(candidate_model_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
             [python_executable, str(scripts_dir / "day11_compare_candidate_vs_production.py"), "--input", str(dataset_path), "--candidate-model", str(candidate_model_path), "--production-model", str(production_model), "--output", str(comparison_report_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
+            [python_executable, str(scripts_dir / "certify_production_servability.py"), "--candidate-model", str(candidate_model_path), "--output", str(certification_path), "--comparison-report", str(comparison_report_path)],
         ])
     return commands
 
@@ -152,6 +155,16 @@ def main() -> None:
             raise SystemExit(completed.returncode)
 
     summary["success"] = True
+    if certification_path.exists():
+        certification = json.loads(certification_path.read_text(encoding="utf-8"))
+        summary["servability_certification"] = {
+            "passed": certification.get("passed") is True,
+            "artifact_sha256": certification.get("candidate_artifact_sha256"),
+            "feature_contract_version": certification.get("feature_contract_version"),
+            "forecast_horizon": certification.get("forecast_horizon"),
+            "blocking_issues": certification.get("blocking_reasons") or [],
+            "certification_path": str(certification_path),
+        }
     next_generation_manifest = output_dir / "next_generation" / "next_generation_challenger_manifest.json"
     if next_generation_manifest.exists():
         next_generation = json.loads(next_generation_manifest.read_text(encoding="utf-8"))
