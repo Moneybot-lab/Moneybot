@@ -35,6 +35,7 @@ class BaselineModelArtifact:
     calibration_slope: float = 1.0
     calibration_intercept: float = 0.0
     lineage: Dict[str, Any] | None = None
+    forecast_horizon: str | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -48,6 +49,7 @@ class BaselineModelArtifact:
             "calibration_slope": self.calibration_slope,
             "calibration_intercept": self.calibration_intercept,
             "lineage": self.lineage,
+            "forecast_horizon": self.forecast_horizon,
         }
 
 
@@ -276,6 +278,7 @@ def load_artifact(path: str | Path) -> BaselineModelArtifact:
         calibration_slope=float(payload.get("calibration_slope", 1.0)),
         calibration_intercept=float(payload.get("calibration_intercept", 0.0)),
         lineage=payload.get("lineage") if isinstance(payload.get("lineage"), dict) else None,
+        forecast_horizon=str(payload["forecast_horizon"]) if payload.get("forecast_horizon") is not None else None,
     )
 
 
