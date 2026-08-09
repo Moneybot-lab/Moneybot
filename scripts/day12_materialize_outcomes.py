@@ -7,6 +7,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pandas as pd
 import yfinance as yf
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from moneybot.services.decision_log import read_decision_events
+from moneybot.services.market_data import MarketDataService
 from moneybot.services.outcome_tracking import (
     OutcomeHistoryCache,
     evaluate_decision_events,
@@ -28,25 +30,93 @@ from moneybot.services.outcome_tracking import (
 from moneybot.services.runtime_paths import resolve_runtime_dir
 
 
-def select_visible_rows(rows: list[dict], evaluated_rows: list[dict], rows_limit: int, *, horizon: str | None = None) -> list[dict]:
+class MassivePreferredHistoryDownload:
+    def __init__(self) -> None:
+        self.service = MarketDataService()
+        self.massive_requests = 0
+        self.massive_successes = 0
+        self.yfinance_fallbacks = 0
+
+    def __call__(self, symbol: str, *, start: str, end: str, **kwargs):
+        self.massive_requests += 1
+        try:
+            payload = self.service.get_massive_aggregates(
+                str(symbol).upper(),
+                multiplier=1,
+                timespan="day",
+                start=start,
+                end=end,
+                adjusted=True,
+            )
+            bars = payload.get("bars") if isinstance(payload, dict) else []
+            rows = []
+            for bar in bars or []:
+                date_value = bar.get("date") or bar.get("timestamp_utc") or bar.get("t")
+                close = bar.get("close") or bar.get("c")
+                if date_value is None or close is None:
+                    continue
+                rows.append((pd.Timestamp(date_value).date(), float(close)))
+            if rows:
+                self.massive_successes += 1
+                index = pd.to_datetime([row[0] for row in rows])
+                return pd.DataFrame({"Close": [row[1] for row in rows]}, index=index)
+        except Exception:  # noqa: BLE001
+            pass
+        self.yfinance_fallbacks += 1
+        return yf.download(symbol, start=start, end=end, **kwargs)
+
+    def diagnostics_payload(self) -> dict:
+        return {
+            "outcome_history_preferred_provider": "massive",
+            "outcome_history_fallback_provider": "yfinance",
+            "massive_history_requests": self.massive_requests,
+            "massive_history_successes": self.massive_successes,
+            "yfinance_history_fallbacks": self.yfinance_fallbacks,
+        }
+
+
+def select_visible_rows(
+    rows: list[dict],
+    evaluated_rows: list[dict],
+    rows_limit: int,
+    *,
+    horizon: str | None = None,
+) -> list[dict]:
     source_rows = evaluated_rows if evaluated_rows else rows
     return select_recent_unique_rows(source_rows, limit=rows_limit, horizon=horizon)
 
 
 def summarize_horizon(rows: list[dict], horizon: str) -> dict:
     if horizon == "5d":
-        return summarize_outcome_rows([{**row, "return_1d": row.get("return_5d")} for row in rows])
+        return summarize_outcome_rows(
+            [{**row, "return_1d": row.get("return_5d")} for row in rows]
+        )
     return summarize_outcome_rows(rows)
-
 
 
 def main() -> None:
     base_dir = resolve_runtime_dir()
-    parser = argparse.ArgumentParser(description="Materialize decision outcomes to a snapshot JSON file.")
+    parser = argparse.ArgumentParser(
+        description="Materialize decision outcomes to a snapshot JSON file."
+    )
     parser.add_argument("--input", default=str(base_dir / "decision_events.jsonl"))
-    parser.add_argument("--output", default=str(base_dir / "decision_outcomes_snapshot.json"))
+    parser.add_argument(
+        "--output", default=str(base_dir / "decision_outcomes_snapshot.json")
+    )
     parser.add_argument("--limit", type=int, default=5000)
     parser.add_argument("--rows-limit", type=int, default=20)
+    parser.add_argument(
+        "--prefer-massive",
+        action="store_true",
+        default=True,
+        help="Prefer Massive aggregate bars before yfinance fallback.",
+    )
+    parser.add_argument(
+        "--no-prefer-massive",
+        dest="prefer_massive",
+        action="store_false",
+        help="Use legacy yfinance-only outcome materialization.",
+    )
     args = parser.parse_args()
 
     events = read_decision_events(args.input, limit=max(1, args.limit))
@@ -55,7 +125,10 @@ def main() -> None:
         for event in events
         if isinstance(event, dict) and isinstance(event.get("ts"), int)
     ]
-    history_cache = OutcomeHistoryCache(download=yf.download)
+    history_download = (
+        MassivePreferredHistoryDownload() if args.prefer_massive else yf.download
+    )
+    history_cache = OutcomeHistoryCache(download=history_download)
     history_cache.preload_events(events)
     rows = evaluate_decision_events(
         events,
@@ -68,9 +141,23 @@ def main() -> None:
     evaluated_rows = rows_with_any_horizon_return(rows)
     actionable_rows_1d = rows_with_horizon_accuracy_outcome(rows, "1d")
     actionable_rows_5d = rows_with_horizon_accuracy_outcome(rows, "5d")
-    visible_rows_1d = select_visible_rows(rows, actionable_rows_1d or evaluated_rows_1d, args.rows_limit, horizon="1d") if evaluated_rows_1d else []
-    visible_rows_5d = select_visible_rows(rows, actionable_rows_5d or evaluated_rows_5d, args.rows_limit, horizon="5d") if evaluated_rows_5d else []
-    visible_rows = merge_recent_rows(visible_rows_1d, visible_rows_5d, limit=args.rows_limit)
+    visible_rows_1d = (
+        select_visible_rows(
+            rows, actionable_rows_1d or evaluated_rows_1d, args.rows_limit, horizon="1d"
+        )
+        if evaluated_rows_1d
+        else []
+    )
+    visible_rows_5d = (
+        select_visible_rows(
+            rows, actionable_rows_5d or evaluated_rows_5d, args.rows_limit, horizon="5d"
+        )
+        if evaluated_rows_5d
+        else []
+    )
+    visible_rows = merge_recent_rows(
+        visible_rows_1d, visible_rows_5d, limit=args.rows_limit
+    )
     if not visible_rows and rows:
         visible_rows = select_visible_rows(rows, [], args.rows_limit)
     visible_pnl_rows = merge_recent_rows(
@@ -100,17 +187,28 @@ def main() -> None:
             "aggregate_events_available": None,
             "aggregate_events_scanned": len(events),
             "aggregate_scan_cap_reached": len(events) >= max(1, args.limit),
-            "aggregate_oldest_event_ts": min(event_ts_values) if event_ts_values else None,
+            "aggregate_oldest_event_ts": (
+                min(event_ts_values) if event_ts_values else None
+            ),
             "evaluated_rows_available": len(evaluated_rows),
             "evaluated_rows_1d_available": len(evaluated_rows_1d),
             "evaluated_rows_5d_available": len(evaluated_rows_5d),
             "used_unevaluated_fallback": len(evaluated_rows) == 0 and bool(rows),
-            "oldest_event_ts_scanned": min(event_ts_values) if event_ts_values else None,
-            "newest_event_ts_scanned": max(event_ts_values) if event_ts_values else None,
+            "oldest_event_ts_scanned": (
+                min(event_ts_values) if event_ts_values else None
+            ),
+            "newest_event_ts_scanned": (
+                max(event_ts_values) if event_ts_values else None
+            ),
             "read_cap": max(1, args.limit),
             "scan_cap_reached": len(events) >= max(1, args.limit),
             "all_available_events_read": len(events) < max(1, args.limit),
             **history_cache.diagnostics_payload(),
+            **(
+                history_download.diagnostics_payload()
+                if hasattr(history_download, "diagnostics_payload")
+                else {"outcome_history_preferred_provider": "yfinance"}
+            ),
             "lookup_cache_hits": history_cache.diagnostics.history_cache_hits,
             "lookup_cache_misses": history_cache.diagnostics.history_cache_misses,
             "lookup_cache_size": history_cache.cache_size,
@@ -120,7 +218,9 @@ def main() -> None:
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    output_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
+    )
     print(f"Wrote outcomes snapshot -> {output_path}")
 
 
