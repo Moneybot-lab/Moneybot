@@ -24,6 +24,10 @@ from moneybot.services.deterministic_model import (
     train_logistic_baseline,
 )
 from moneybot.services.temporal_validation import purge_embargo_periods
+from moneybot.services.alpha_atlas_v3_features import (
+    ALPHA_ATLAS_V3_FEATURES,
+    validate_v3_feature_columns,
+)
 
 VERSION = "massive_baseline_model_v1"
 TARGET_COLUMN = "label_up_5d"
@@ -228,6 +232,7 @@ def train_massive_market_model(
     *,
     model_version: str = VERSION,
     report_prefix: str = "massive_baseline",
+    feature_allowlist: tuple[str, ...] | list[str] | None = None,
 ) -> dict[str, Any]:
     train = _load_jsonl(train_path)
     test = _load_jsonl(test_path)
@@ -237,6 +242,15 @@ def train_massive_market_model(
         if missing:
             raise ValueError(f"{name} input is missing required columns: {sorted(missing)}")
     features = _market_feature_columns(train)
+    if feature_allowlist is not None:
+        requested = [str(feature) for feature in feature_allowlist]
+        forbidden = validate_v3_feature_columns(requested)
+        if forbidden:
+            raise ValueError(f"V3 feature allowlist contains unsupported or unsafe fields: {forbidden}")
+        missing = [feature for feature in requested if feature not in features]
+        if missing:
+            raise ValueError(f"Canonical Massive input is missing V3 features: {missing}")
+        features = requested
     if not features:
         raise ValueError("No leakage-safe Massive market features are available")
     periods, boundaries = _temporal_train_periods(train)
@@ -249,6 +263,7 @@ def train_massive_market_model(
         sample_weight=fit_weights,
     )
     model = _artifact(base, features, version=model_version)
+    model.forecast_horizon = "5d"
     raw_calibration_probs = predict_proba(model, calibration[features].to_numpy(dtype=float))
     calibration_report = fit_probability_calibration(raw_calibration_probs, pd.to_numeric(calibration[TARGET_COLUMN], errors="coerce").to_numpy(dtype=float))
     model.calibration_slope = float(calibration_report["slope"])
@@ -261,6 +276,8 @@ def train_massive_market_model(
         "feature_subset": features,
         "sample_weight_policy": "1 / count(symbol, event_date, endpoint, decision_source)",
         "calibration": calibration_report,
+        "forecast_horizon": "5d",
+        "feature_fill_values": fills,
         "decision_threshold": float(model.decision_threshold),
         "abstention": {"enabled": False, "margin": 0.0},
         "target_column": TARGET_COLUMN,
@@ -283,6 +300,7 @@ def train_massive_market_model(
         "feature_policy": "massive_market_only_no_model_echo_v1",
         "sample_weight_policy": "1 / count(symbol, event_date, endpoint, decision_source)",
         "calibration": calibration_report,
+        "feature_fill_values": fills,
         "threshold_selection": threshold_report,
     }
     save_artifact(model, output_path)
@@ -291,6 +309,8 @@ def train_massive_market_model(
     # additive fields while Day11 reads them for schema matching.
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     payload.update({
+        "model_type": "logistic_regression",
+        "candidate_lane": "decision",
         "model_version": model_version,
         "target_column": TARGET_COLUMN,
         "evaluation_return_column": RETURN_COLUMN,
@@ -302,6 +322,8 @@ def train_massive_market_model(
         "threshold_selection_sufficient": bool(threshold_report["threshold_selection_sufficient"]),
         "selected_threshold": float(model.decision_threshold),
         "calibration": calibration_report,
+        "forecast_horizon": "5d",
+        "feature_fill_values": fills,
     })
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     holdout_probs = predict_proba(model, holdout[features].to_numpy(dtype=float))
@@ -328,6 +350,7 @@ def train_massive_market_model(
         "target_column": TARGET_COLUMN,
         "evaluation_return_column": RETURN_COLUMN,
         "feature_columns": features,
+        "feature_fill_values": fills,
         "sample_weight_policy": model.lineage["sample_weight_policy"],
         "duplicate_weighting_applied": True,
         "training_inputs": {"train": str(train_path), "test": str(test_path), "all_cleaned": str(all_path)},

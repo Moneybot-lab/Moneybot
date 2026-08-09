@@ -574,6 +574,9 @@ def create_app() -> Flask:
         deterministic_quick_advisor=app.extensions["deterministic_quick_advisor"],
         deterministic_momentum_enabled=app.config["DETERMINISTIC_MOMENTUM_ENABLED"],
     )
+    app.extensions["deterministic_quick_advisor"].set_market_history_service(
+        app.extensions["market_data_service"]
+    )
 
     with app.app_context():
         db.create_all()

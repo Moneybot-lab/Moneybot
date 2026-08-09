@@ -15,6 +15,11 @@ from .alpha_atlas_feature_contract import (
     NON_SERVABLE_V2_FEATURES,
     build_alpha_atlas_event_features,
 )
+from .alpha_atlas_v3_features import (
+    ALPHA_ATLAS_V3_FEATURES,
+    FEATURE_ENGINE_VERSION,
+    build_alpha_atlas_v3_features,
+)
 
 
 def display_model_name(version: str | None) -> str:
@@ -58,6 +63,7 @@ class DeterministicQuickAdvisor:
         self.artifact_metadata: Dict[str, Any] | None = None
         self.load_error: str | None = None
         self.last_feature_contract_diagnostics: Dict[str, Any] | None = None
+        self.market_history_service: Any | None = None
 
         self.quick_buy_threshold = quick_buy_threshold
         self.quick_strong_buy_threshold = float(quick_strong_buy_threshold)
@@ -93,6 +99,10 @@ class DeterministicQuickAdvisor:
         """Reload the model artifact from disk and report whether it is usable."""
         self._load_artifact()
         return self.artifact is not None
+
+    def set_market_history_service(self, service: Any) -> None:
+        """Attach the existing MarketDataService after app construction."""
+        self.market_history_service = service
 
     def _load_artifact(self) -> None:
         try:
@@ -135,6 +145,7 @@ class DeterministicQuickAdvisor:
         quote_data: Dict[str, Any],
         *,
         endpoint: str = "quick_ask",
+        symbol: str | None = None,
     ) -> tuple[np.ndarray, list[str], Dict[str, Any]]:
         assert self.artifact is not None
 
@@ -174,6 +185,34 @@ class DeterministicQuickAdvisor:
                 )
             )
 
+        is_v3_contract = set(self.artifact.feature_columns) == set(
+            ALPHA_ATLAS_V3_FEATURES
+        )
+        history_diagnostics: Dict[str, Any] = {}
+        if is_v3_contract:
+            symbol_history: Dict[str, Any] = {}
+            spy_history: Dict[str, Any] = {}
+            if self.market_history_service is not None and symbol:
+                symbol_history = self.market_history_service.get_price_history_data(
+                    symbol, days=90
+                )
+                spy_history = self.market_history_service.get_price_history_data(
+                    "SPY", days=90
+                )
+            raw_values.update(
+                build_alpha_atlas_v3_features(
+                    symbol_bars=symbol_history.get("bars") or [],
+                    spy_bars=spy_history.get("bars") or [],
+                )
+            )
+            history_diagnostics = {
+                "symbol_history_source": symbol_history.get("source"),
+                "spy_history_source": spy_history.get("source"),
+                "history_adjusted_for_splits": symbol_history.get(
+                    "adjusted_for_splits"
+                ),
+            }
+
         means = np.asarray(self.artifact.means, dtype=float)
         row = np.zeros(len(self.artifact.feature_columns), dtype=float)
         imputed: list[str] = []
@@ -190,17 +229,36 @@ class DeterministicQuickAdvisor:
             "feature_contract_available_count": len(self.artifact.feature_columns) - len(imputed),
             "feature_contract_imputed_count": len(imputed),
             "feature_contract_missing_features": list(imputed),
-            "feature_contract_source": "day8_decision_event_contract" if is_v2_contract else "legacy_day1_contract",
-            "feature_contract_version": "alpha-atlas-v2-event-v1" if is_v2_contract else "day1-v1",
-            "feature_contract_servable": not is_v2_contract,
+            "feature_contract_source": (
+                FEATURE_ENGINE_VERSION
+                if is_v3_contract
+                else "day8_decision_event_contract"
+                if is_v2_contract
+                else "legacy_day1_contract"
+            ),
+            "feature_contract_version": (
+                FEATURE_ENGINE_VERSION
+                if is_v3_contract
+                else "alpha-atlas-v2-event-v1"
+                if is_v2_contract
+                else "day1-v1"
+            ),
+            "feature_contract_servable": (
+                len(imputed) <= 2 and len(imputed) < len(self.artifact.feature_columns)
+                if is_v3_contract
+                else not is_v2_contract
+            ),
             "feature_contract_blocking_features": sorted(
                 set(self.artifact.feature_columns).intersection(NON_SERVABLE_V2_FEATURES)
             ) if is_v2_contract else [],
             "feature_contract_reason": (
                 "v2 was trained with same-event probability/recommendation/source and post-event return features; serving would be circular or leak future outcomes"
                 if is_v2_contract
+                else "V3 requires adjusted normalized daily symbol and SPY bars; too many required features were unavailable"
+                if is_v3_contract and len(imputed) > 2
                 else None
             ),
+            **history_diagnostics,
         }
         return row, imputed, diagnostics
 
@@ -261,7 +319,7 @@ class DeterministicQuickAdvisor:
             return None
 
         row, imputed, contract = self._build_feature_row_with_diagnostics(
-            signal_data, quote_data
+            signal_data, quote_data, symbol=symbol
         )
         self.last_feature_contract_diagnostics = contract
         if not contract["feature_contract_servable"]:
@@ -323,6 +381,16 @@ class DeterministicQuickAdvisor:
             "calibration_enabled": self.calibration_enabled,
             "calibration_applied": calibration_applied,
             "calibration_rollout_percentage": self.calibration_rollout_percentage,
+            "feature_contract_servable": contract["feature_contract_servable"],
+            "feature_contract_available_count": contract[
+                "feature_contract_available_count"
+            ],
+            "feature_contract_imputed_count": contract[
+                "feature_contract_imputed_count"
+            ],
+            "feature_contract_missing_features": contract[
+                "feature_contract_missing_features"
+            ],
         }
 
     def predict_quick_decision(
@@ -343,8 +411,11 @@ class DeterministicQuickAdvisor:
         *,
         signal_data: Dict[str, Any],
         quote_data: Dict[str, Any],
+        symbol: str | None = None,
     ) -> Dict[str, Any] | None:
-        return self._predict_quick_decision_internal(signal_data=signal_data, quote_data=quote_data)
+        return self._predict_quick_decision_internal(
+            signal_data=signal_data, quote_data=quote_data, symbol=symbol
+        )
 
     def predict_portfolio_position(
         self,
@@ -360,7 +431,9 @@ class DeterministicQuickAdvisor:
         if self._is_in_portfolio_rollout(symbol):
             quick = self.predict_quick_decision(signal_data=signal_data, quote_data=quote_data, symbol=symbol)
         if quick is None and self.rollout_dry_run:
-            quick = self.predict_shadow_decision(signal_data=signal_data, quote_data=quote_data)
+            quick = self.predict_shadow_decision(
+                signal_data=signal_data, quote_data=quote_data, symbol=symbol
+            )
         if quick is None:
             return None
 
