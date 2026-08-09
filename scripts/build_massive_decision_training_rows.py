@@ -14,6 +14,7 @@ from typing import Any, Iterable
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import normalize_action, normalize_unix_ts
 from moneybot.services.alpha_atlas_v3_features import build_alpha_atlas_v3_features
+from moneybot.services.decision_target import TARGET_NAME, label_from_forward_return, target_metadata
 
 SCHEMA_VERSION = "massive-decision-training-rows.v1"
 SECTOR_BENCHMARK_SYMBOLS = {
@@ -567,6 +568,7 @@ def _pct(newer: float, older: float | None) -> float | None:
 
 
 def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: dict[str, list[dict[str, Any]]], *, horizon_days: int = 5) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    label_name = TARGET_NAME if horizon_days == target_metadata()["horizon_days"] else f"label_up_{horizon_days}d"
     rows: list[dict[str, Any]] = []
     summary = {"events_scanned": 0, "rows_joined": 0, "missing_symbol_history": 0, "insufficient_history": 0, "insufficient_forward_window": 0}
     signal_index = _signal_history_index(events)
@@ -768,7 +770,7 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_above_vwap": int(close > vwap) if vwap is not None else None,
             "feature_dollar_volume": round(close * volume, 6) if volume is not None else None,
             f"return_{horizon_days}d": return_fwd,
-            f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
+            label_name: label_from_forward_return(return_fwd),
             "leakage_guard": "features_asof_market_close_on_or_before_decision_date_labels_after_decision_date",
         }
         # The V3 allowlist is always materialized by the shared train/serve
@@ -792,6 +794,15 @@ def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], 
         "output_path": str(path),
         "horizon_days": horizon_days,
         "leakage_safe": True,
+        "decision_target": (
+            target_metadata()
+            if horizon_days == target_metadata()["horizon_days"]
+            else {
+                "target_name": f"label_up_{horizon_days}d",
+                "forecast_horizon": f"{horizon_days}d",
+                "positive_class_semantics": "strictly positive forward return",
+            }
+        ),
         "join_policy": "last_market_row_on_or_before_decision_date; labels strictly after that row",
         **summary,
     }

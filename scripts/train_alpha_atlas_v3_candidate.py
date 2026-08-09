@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -26,6 +27,7 @@ from moneybot.services.alpha_atlas_v3_features import (
 from moneybot.services.deterministic_model import load_artifact, predict_proba
 from moneybot.services.market_data import MarketDataService
 from moneybot.services.production_servability import certify_candidate
+from moneybot.services.decision_target import TARGET_NAME, target_metadata
 from scripts.train_massive_baseline_model import train_massive_market_model
 
 CANDIDATE_VERSION = "candidate-alpha-atlas-v3-clean-v1"
@@ -89,7 +91,14 @@ def build_serving_dry_runs(
             )
             for column in artifact.feature_columns
         ]
-        usable = not missing and all(value is not None for value in values)
+        massive_history = (
+            history.get("source") == "massive" and spy.get("source") == "massive"
+        )
+        usable = (
+            massive_history
+            and not missing
+            and all(value is not None for value in values)
+        )
         probability = (
             float(predict_proba(artifact, np.asarray([values], dtype=float))[0])
             if usable
@@ -111,6 +120,7 @@ def build_serving_dry_runs(
                 ),
                 "history_source": history.get("source"),
                 "spy_history_source": spy.get("source"),
+                "massive_history_required": True,
             }
         )
     return runs
@@ -145,6 +155,7 @@ def attach_v3_contract(
     }
     payload["forecast_horizon"] = FORECAST_HORIZON
     payload["candidate_lane"] = "decision"
+    payload.update(target_metadata())
     candidate_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -203,11 +214,13 @@ def train_v3_candidate(
         "baseline_servability": "failed",
         "baseline_comparison_is_apples_to_apples": False,
         "candidate_version": CANDIDATE_VERSION,
+        "target_name": TARGET_NAME,
         "candidate_servability": "passed" if certification["passed"] else "failed",
         "candidate_win": False,
         "automatic_promotion": False,
         "human_review_required": True,
         "candidate_metrics": report,
+        "decision_target": target_metadata(),
         "servability_certification": certification,
     }
     (output_dir / "alpha_atlas_v3_recovery_rebaseline_report.json").write_text(
@@ -246,6 +259,11 @@ def main() -> None:
     )
     parser.add_argument("--output-dir", default="data/track_b/alpha_atlas_v3")
     args = parser.parse_args()
+    if not str(os.environ.get("MASSIVE_API_KEY") or "").strip():
+        raise SystemExit(
+            "MASSIVE_API_KEY is required for real V3 production serving dry runs; "
+            "no candidate or certification was generated."
+        )
     result = train_v3_candidate(
         train_path=Path(args.train),
         test_path=Path(args.test),

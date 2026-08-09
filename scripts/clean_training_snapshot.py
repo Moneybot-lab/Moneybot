@@ -7,6 +7,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from moneybot.services.decision_target import TARGET_NAME
+
 QUALITY_SCHEMA_VERSION = "moneybot-training-quality-report.v1"
 DEFAULT_REQUIRED_FEATURES = ("feature_close", "feature_return_1d_lagged", "feature_return_5d_lagged", "feature_volume")
 
@@ -90,7 +92,7 @@ def clean_training_snapshot(
     output_dir: Path,
     *,
     required_features: Iterable[str] = DEFAULT_REQUIRED_FEATURES,
-    label_column: str = "label_up_5d",
+    label_column: str = TARGET_NAME,
     max_market_lag_days: int = 3,
     train_ratio: float = 0.8,
 ) -> dict[str, Any]:
@@ -174,7 +176,7 @@ def main() -> None:
     parser.add_argument("--input", default="data/track_b/decision_training_snapshot_massive.jsonl")
     parser.add_argument("--output-dir", default="data/track_b/training_quality")
     parser.add_argument("--required-features", default=",".join(DEFAULT_REQUIRED_FEATURES), help="Comma-separated required feature columns.")
-    parser.add_argument("--label-column", default="label_up_5d")
+    parser.add_argument("--label-column", default=TARGET_NAME)
     parser.add_argument("--max-market-lag-days", type=int, default=3)
     parser.add_argument("--train-ratio", type=float, default=0.8)
     args = parser.parse_args()

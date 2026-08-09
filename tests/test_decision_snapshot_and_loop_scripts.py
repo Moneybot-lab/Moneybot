@@ -388,7 +388,7 @@ def test_day10_trains_when_feature_columns_exist(tmp_path, monkeypatch):
     day10.main()
     assert output_model.exists()
     artifact = json.loads(output_model.read_text(encoding="utf-8"))
-    assert "feature_return_1d" in artifact["feature_columns"]
+    assert "feature_return_1d" not in artifact["feature_columns"]
     assert "feature_price" in artifact["feature_columns"]
     assert "feature_endpoint_quick_ask" not in artifact["feature_columns"]
     assert "feature_rec_buy" not in artifact["feature_columns"]
@@ -396,7 +396,7 @@ def test_day10_trains_when_feature_columns_exist(tmp_path, monkeypatch):
 
 
 
-def test_day10_selects_profit_utility_threshold_above_default():
+def test_day10_keeps_default_threshold_when_support_is_insufficient():
     frame = day10._ensure_return_bucket_labels(
         day10.pd.DataFrame(
             [
@@ -412,9 +412,10 @@ def test_day10_selects_profit_utility_threshold_above_default():
 
     selected = day10._select_profit_threshold(frame, probs)
 
-    assert selected["threshold"] == 0.6
-    assert selected["positive_predictions"] == 2
-    assert selected["utility_score"] > next(item["utility_score"] for item in selected["search"] if item["threshold"] == 0.55)
+    assert selected["threshold"] == 0.55
+    assert selected["positive_predictions"] == 0
+    assert selected["threshold_selection_sufficient"] is False
+    assert selected["selection_status"] == "insufficient_support_keep_current_threshold"
 
 
 def test_day10_trains_with_sparse_feature_columns_no_complete_raw_rows(tmp_path, monkeypatch):
@@ -489,7 +490,7 @@ def test_day11_compare_blocks_worse_tail_bucket_behavior():
     )
 
     assert worse_big_loss is False
-    assert "candidate signals too many big-loss rows versus production" in big_loss_reasons
+    assert "candidate big_loss_prediction_rate exceeds production" in big_loss_reasons
     assert too_little_big_gain is False
     assert "candidate big-gain capture is below minimum (0.0400 < 0.1000)" in big_gain_reasons
 

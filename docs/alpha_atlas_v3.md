@@ -31,6 +31,11 @@ bars later and is never included in the feature allowlist. Same-event
 probabilities, recommendations, decision sources, prior application outputs,
 forward returns, realized outcomes, and labels are forbidden.
 
+`moneybot.services.decision_target` is authoritative for this target across
+the Massive row builder, cleaning, challenger training, challenger backtests,
+and V3 artifact metadata. Return buckets remain profit-utility and tail-risk
+diagnostics rather than an alternative training label.
+
 Fit-period medians are the only fill values learned. They are persisted in the
 artifact and reused unchanged for calibration, threshold selection, final
 test, and serving. The canonical Track B purge uses a five-day label horizon

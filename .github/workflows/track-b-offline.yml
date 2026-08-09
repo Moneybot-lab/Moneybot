@@ -204,6 +204,18 @@ jobs:
             --transaction-cost-bps 5 \
             --slippage-bps 5
 
+      - name: Train and certify Alpha Atlas V3 human-review candidate
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$MASSIVE_API_KEY" || (echo "Missing secret: MASSIVE_API_KEY; refusing to generate an uncertified V3 candidate" && exit 1)
+          python3 scripts/train_alpha_atlas_v3_candidate.py \
+            --train data/track_b/training_quality/cleaned_train.jsonl \
+            --test data/track_b/training_quality/cleaned_test.jsonl \
+            --all-cleaned data/track_b/training_quality/cleaned_all.jsonl \
+            --output-dir data/track_b/alpha_atlas_v3
+
       - name: Prepare manual Render promotion artifacts
         run: |
           python3 scripts/run_track_b_offline.py \
@@ -220,6 +232,13 @@ jobs:
           name: track-b-offline-output
           path: |
             data/track_b/**
+            data/track_b/alpha_atlas_v3/candidate_alpha_atlas_v3_clean.json
+            data/track_b/alpha_atlas_v3/alpha_atlas_v3_model_report.json
+            data/track_b/alpha_atlas_v3/alpha_atlas_v3_feature_coverage_report.json
+            data/track_b/alpha_atlas_v3/alpha_atlas_v3_backtest_report.json
+            data/track_b/alpha_atlas_v3/alpha_atlas_v3_representative_serving_dry_runs.json
+            data/track_b/alpha_atlas_v3/production_servability_certification.json
+            data/track_b/alpha_atlas_v3/alpha_atlas_v3_recovery_rebaseline_report.json
             data/decision_events.jsonl
             data/_response_headers.txt
             data/track_b/_production_model_headers.txt

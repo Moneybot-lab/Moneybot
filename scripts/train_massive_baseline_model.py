@@ -28,10 +28,10 @@ from moneybot.services.alpha_atlas_v3_features import (
     ALPHA_ATLAS_V3_FEATURES,
     validate_v3_feature_columns,
 )
+from moneybot.services.decision_target import RETURN_COLUMN, TARGET_NAME, target_metadata
 
 VERSION = "massive_baseline_model_v1"
-TARGET_COLUMN = "label_up_5d"
-RETURN_COLUMN = "return_5d"
+TARGET_COLUMN = TARGET_NAME
 THRESHOLDS = (0.50, 0.525, 0.55, 0.575, 0.60, 0.625, 0.65, 0.675, 0.70)
 MIN_POSITIVES = 10
 MIN_SYMBOLS = 5
@@ -283,6 +283,7 @@ def train_massive_market_model(
         "target_column": TARGET_COLUMN,
         "evaluation_return_column": RETURN_COLUMN,
         "horizon_days": 5,
+        "decision_target": target_metadata(),
     }
     recipe_hash = hashlib.sha256(json.dumps(deployable_recipe, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     model.lineage = {
@@ -295,6 +296,7 @@ def train_massive_market_model(
         "test_path": str(test_path),
         "all_cleaned_path": str(all_path),
         "target_column": TARGET_COLUMN,
+        "decision_target": target_metadata(),
         "evaluation_return_column": RETURN_COLUMN,
         "horizon_days": 5,
         "feature_policy": "massive_market_only_no_model_echo_v1",
@@ -313,6 +315,10 @@ def train_massive_market_model(
         "candidate_lane": "decision",
         "model_version": model_version,
         "target_column": TARGET_COLUMN,
+        "target_name": TARGET_COLUMN,
+        "target_definition": target_metadata()["target_definition"],
+        "positive_return_buckets": target_metadata()["positive_return_buckets"],
+        "decision_target": target_metadata(),
         "evaluation_return_column": RETURN_COLUMN,
         "horizon_days": 5,
         "training_inputs": {"train": str(train_path), "test": str(test_path), "all_cleaned": str(all_path)},
@@ -348,6 +354,7 @@ def train_massive_market_model(
         "model_version": model_version,
         "model_path": str(output_path),
         "target_column": TARGET_COLUMN,
+        "decision_target": target_metadata(),
         "evaluation_return_column": RETURN_COLUMN,
         "feature_columns": features,
         "feature_fill_values": fills,
