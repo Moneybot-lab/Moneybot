@@ -13,6 +13,7 @@ from typing import Any, Iterable
 
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import normalize_action, normalize_unix_ts
+from moneybot.services.alpha_atlas_v3_features import build_alpha_atlas_v3_features
 
 SCHEMA_VERSION = "massive-decision-training-rows.v1"
 SECTOR_BENCHMARK_SYMBOLS = {
@@ -667,6 +668,11 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         open_price = cached_features["open_price"]
         return_5d_lagged = cached_features["return_5d_lagged"]
         return_20d_lagged = cached_features["return_20d_lagged"]
+        shared_v3_features = build_alpha_atlas_v3_features(
+            symbol_bars=history[: idx + 1],
+            spy_bars=spy_history[: spy_idx + 1] if spy_history and spy_idx is not None else [],
+            asof_date=event_day,
+        )
         spy_return_5d = _lagged_return(spy_history, spy_idx, 5)
         sector_benchmark_symbol = _sector_benchmark_symbol(event, payload, snapshot)
         sector_history = market.get(sector_benchmark_symbol)
@@ -765,6 +771,9 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             f"label_up_{horizon_days}d": int(return_fwd is not None and return_fwd > 0.0),
             "leakage_guard": "features_asof_market_close_on_or_before_decision_date_labels_after_decision_date",
         }
+        # The V3 allowlist is always materialized by the shared train/serve
+        # engine so production cannot drift from these training definitions.
+        row.update(shared_v3_features)
         rows.append(row)
         summary["rows_joined"] += 1
     return rows, summary

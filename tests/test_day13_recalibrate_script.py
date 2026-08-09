@@ -72,3 +72,29 @@ def test_build_recalibration_plan_includes_effective_brier_and_defaults_to_canar
     assert plan["effective_brier_score"] == 0.245
     assert plan["next"]["intercept"] == 0.0
     assert plan["next"]["slope"] == 1.0
+
+
+def test_recalibration_plan_is_horizon_specific_and_keeps_provider_diagnostics():
+    report = {
+        "rows": 40,
+        "requested_calibration_horizon": "5d",
+        "segments": {"model_version": {"v1": {"rows": 40}}},
+        "eligibility_diagnostics": {"calibration_eligible_rows": 42},
+        "warnings": ["limited population"],
+        "outcome_history_preferred_provider": "massive",
+        "yfinance_history_fallbacks": 2,
+        "recommended": {"slope_delta": -0.5, "intercept_delta": -0.15159},
+    }
+
+    plan = build_recalibration_plan(report)
+
+    assert plan["forecast_horizon"] == "5d"
+    assert plan["model_version_population"] == ["v1"]
+    assert plan["eligible_row_count"] == 42
+    assert plan["mature_fitted_row_count"] == 40
+    assert plan["apply_change"] is False
+    assert plan["rollout_percentage"] == 0
+    assert (
+        plan["outcome_provider_diagnostics"]["outcome_history_preferred_provider"]
+        == "massive"
+    )
