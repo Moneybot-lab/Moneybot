@@ -25,6 +25,23 @@ def test_select_visible_rows_falls_back_to_recent_raw_rows():
     assert visible == [{"symbol": "RAW2"}, {"symbol": "RAW3"}]
 
 
+def test_massive_preferred_history_uses_massive_before_yfinance(monkeypatch):
+    download = materializer.MassivePreferredHistoryDownload()
+
+    class FakeService:
+        def get_massive_aggregates(self, *args, **kwargs):
+            return {"bars": [{"date": "2026-01-02", "close": 101.5}, {"date": "2026-01-05", "close": 103.0}]}
+
+    download.service = FakeService()
+    monkeypatch.setattr(materializer.yf, "download", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("yfinance fallback should not run")))
+
+    frame = download("AAPL", start="2026-01-02", end="2026-01-06")
+
+    assert frame["Close"].tolist() == [101.5, 103.0]
+    assert download.diagnostics_payload()["massive_history_successes"] == 1
+    assert download.diagnostics_payload()["yfinance_history_fallbacks"] == 0
+
+
 
 def test_day12_materializer_uses_history_cache_for_repeated_symbol_date(tmp_path, monkeypatch):
     input_path = tmp_path / "decision_events.jsonl"

@@ -37,6 +37,7 @@ class DeterministicQuickAdvisor:
         calibration_enabled: bool = False,
         calibration_slope: float = 1.0,
         calibration_intercept: float = 0.0,
+        calibration_rollout_percentage: float = 100.0,
         rollout_percentage: float = 100.0,
         rollout_seed: str = "moneybot",
         rollout_allowlist: set[str] | None = None,
@@ -58,6 +59,9 @@ class DeterministicQuickAdvisor:
         self.calibration_enabled = bool(calibration_enabled)
         self.calibration_slope = float(calibration_slope)
         self.calibration_intercept = float(calibration_intercept)
+        self.calibration_rollout_percentage = max(
+            0.0, min(100.0, float(calibration_rollout_percentage))
+        )
         self.rollout_percentage = max(0.0, min(100.0, float(rollout_percentage)))
         self.rollout_seed = str(rollout_seed or "moneybot")
         self.rollout_allowlist = {s.strip().upper() for s in (rollout_allowlist or set()) if str(s).strip()}
@@ -160,13 +164,24 @@ class DeterministicQuickAdvisor:
     def _is_in_portfolio_rollout(self, symbol: str | None) -> bool:
         return self._is_in_rollout_with_percentage(symbol, self.portfolio_rollout_percentage)
 
+    def _is_in_calibration_rollout(self, symbol: str | None) -> bool:
+        percentage = self.calibration_rollout_percentage
+        if percentage >= 100.0:
+            return True
+        if percentage <= 0.0:
+            return False
+        normalized = str(symbol or "").strip().upper()
+        key = f"{self.rollout_seed}:calibration:{normalized or '*'}".encode("utf-8")
+        bucket = int(hashlib.sha256(key).hexdigest()[:8], 16) / 0xFFFFFFFF
+        return bucket < (percentage / 100.0)
+
     @staticmethod
     def _sigmoid(value: float) -> float:
         clipped = max(min(value, 35.0), -35.0)
         return 1.0 / (1.0 + math.exp(-clipped))
 
-    def _calibrate_probability(self, prob_up: float) -> float:
-        if not self.calibration_enabled:
+    def _calibrate_probability(self, prob_up: float, *, symbol: str | None = None) -> float:
+        if not self.calibration_enabled or not self._is_in_calibration_rollout(symbol):
             return prob_up
         p = min(max(float(prob_up), 1e-6), 1.0 - 1e-6)
         logit = math.log(p / (1.0 - p))
@@ -178,6 +193,7 @@ class DeterministicQuickAdvisor:
         *,
         signal_data: Dict[str, Any],
         quote_data: Dict[str, Any],
+        symbol: str | None = None,
     ) -> Dict[str, Any] | None:
         if not self.enabled:
             return None
@@ -186,7 +202,11 @@ class DeterministicQuickAdvisor:
 
         row, imputed = self._build_feature_row(signal_data, quote_data)
         raw_prob_up = float(predict_proba(self.artifact, row)[0])
-        prob_up = self._calibrate_probability(raw_prob_up)
+        calibration_applied = bool(
+            self.calibration_enabled
+            and self._is_in_calibration_rollout(symbol)
+        )
+        prob_up = self._calibrate_probability(raw_prob_up, symbol=symbol)
         threshold = float(self.quick_buy_threshold if self.quick_buy_threshold is not None else self.artifact.decision_threshold)
         strong_threshold = max(threshold + 0.15, self.quick_strong_buy_threshold)
 
@@ -202,7 +222,7 @@ class DeterministicQuickAdvisor:
         rationale = (
             f"{model_name} probability-up={prob_up:.2f} vs threshold={threshold:.2f}."
         )
-        if self.calibration_enabled:
+        if calibration_applied:
             rationale += (
                 f" Calibrated from raw={raw_prob_up:.2f} with slope={self.calibration_slope:.2f}"
                 f" intercept={self.calibration_intercept:.2f}."
@@ -226,6 +246,8 @@ class DeterministicQuickAdvisor:
             "imputed_features": imputed,
             "rollout_percentage": self.rollout_percentage,
             "calibration_enabled": self.calibration_enabled,
+            "calibration_applied": calibration_applied,
+            "calibration_rollout_percentage": self.calibration_rollout_percentage,
         }
 
     def predict_quick_decision(
@@ -237,7 +259,9 @@ class DeterministicQuickAdvisor:
     ) -> Dict[str, Any] | None:
         if not self._is_in_rollout(symbol):
             return None
-        return self._predict_quick_decision_internal(signal_data=signal_data, quote_data=quote_data)
+        return self._predict_quick_decision_internal(
+            signal_data=signal_data, quote_data=quote_data, symbol=symbol
+        )
 
     def predict_shadow_decision(
         self,
