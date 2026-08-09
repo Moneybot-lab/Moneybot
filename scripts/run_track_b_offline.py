@@ -13,6 +13,47 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
+def _load_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def alpha_atlas_v3_summary(output_dir: Path) -> dict:
+    v3_dir = output_dir / "alpha_atlas_v3"
+    candidate = _load_json(v3_dir / "candidate_alpha_atlas_v3_clean.json")
+    report = _load_json(v3_dir / "alpha_atlas_v3_model_report.json")
+    certification = _load_json(v3_dir / "production_servability_certification.json")
+    recovery = _load_json(v3_dir / "alpha_atlas_v3_recovery_rebaseline_report.json")
+    generation = _load_json(v3_dir / "v3_generation_status.json")
+    metrics = report.get("duplicate_weighted_metrics") or {}
+    row_counts = report.get("row_counts") or {}
+    threshold = report.get("threshold_selection") or {}
+    selected = threshold.get("selected_metrics") or {}
+    return {
+        "candidate_generated": bool(candidate),
+        "candidate_source_version": candidate.get("version") or candidate.get("model_version"),
+        "target_name": candidate.get("target_name") or report.get("target_column") or generation.get("target_name"),
+        "forecast_horizon": candidate.get("forecast_horizon") or generation.get("forecast_horizon"),
+        "training_rows": row_counts.get("train"),
+        "final_test_rows": row_counts.get("test"),
+        "brier_score": metrics.get("brier_score"),
+        "average_return": metrics.get("avg_selected_return"),
+        "utility_score": selected.get("utility_score"),
+        "big_loss_rate": metrics.get("big_loss_false_positive_rate"),
+        "big_gain_capture_rate": metrics.get("big_gain_capture_rate"),
+        "servability_certification_passed": certification.get("passed") is True,
+        "comparison_mode": recovery.get("comparison_mode") or generation.get("comparison_mode"),
+        "generation_status": generation.get("status") or ("generated" if candidate else "not_generated"),
+        "blocking_reason": generation.get("blocking_reason"),
+        "automatic_promotion": False,
+    }
+
+
 def build_track_b_commands(
     *,
     python_executable: str,
@@ -31,6 +72,7 @@ def build_track_b_commands(
     dataset_path = massive_dataset_path if training_source == "massive" else legacy_dataset_path
     candidate_model_path = output_dir / "candidate_model_track_b.json"
     comparison_report_path = output_dir / "model_comparison_track_b.json"
+    certification_path = output_dir / "production_servability_certification.json"
     massive_baseline_path = output_dir / "massive_baseline_model_v1.json"
 
     commands: list[list[str]] = []
@@ -61,12 +103,14 @@ def build_track_b_commands(
         commands.extend([
             [python_executable, str(scripts_dir / "day10_train_candidate_model.py"), "--cleaned-train", str(output_dir / "training_quality" / "cleaned_train.jsonl"), "--cleaned-test", str(output_dir / "training_quality" / "cleaned_test.jsonl"), "--cleaned-all", str(output_dir / "training_quality" / "cleaned_all.jsonl"), "--model-version", "candidate_market_no_echo_v1", "--output-model", str(candidate_model_path), "--min-rows", str(min_rows)],
             [python_executable, str(scripts_dir / "day11_compare_candidate_vs_production.py"), "--input", str(output_dir / "training_quality" / "cleaned_test.jsonl"), "--input-is-holdout", "--candidate-model", str(candidate_model_path), "--production-model", str(production_model), "--massive-baseline-model", str(massive_baseline_path), "--output", str(comparison_report_path), "--min-rows", str(min_rows)],
+            [python_executable, str(scripts_dir / "certify_production_servability.py"), "--candidate-model", str(candidate_model_path), "--output", str(certification_path), "--comparison-report", str(comparison_report_path)],
             [python_executable, str(scripts_dir / "generate_next_generation_challengers.py"), "--train", str(output_dir / "training_quality" / "cleaned_train.jsonl"), "--test", str(output_dir / "training_quality" / "cleaned_test.jsonl"), "--all-cleaned", str(output_dir / "training_quality" / "cleaned_all.jsonl"), "--baseline-model", str(massive_baseline_path), "--comparison-report", str(comparison_report_path), "--output-dir", str(output_dir / "next_generation")],
         ])
     else:
         commands.extend([
             [python_executable, str(scripts_dir / "day10_train_candidate_model.py"), "--input", str(dataset_path), "--output-model", str(candidate_model_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
             [python_executable, str(scripts_dir / "day11_compare_candidate_vs_production.py"), "--input", str(dataset_path), "--candidate-model", str(candidate_model_path), "--production-model", str(production_model), "--output", str(comparison_report_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
+            [python_executable, str(scripts_dir / "certify_production_servability.py"), "--candidate-model", str(candidate_model_path), "--output", str(certification_path), "--comparison-report", str(comparison_report_path)],
         ])
     return commands
 
@@ -152,6 +196,17 @@ def main() -> None:
             raise SystemExit(completed.returncode)
 
     summary["success"] = True
+    summary["alpha_atlas_v3"] = alpha_atlas_v3_summary(output_dir)
+    if certification_path.exists():
+        certification = json.loads(certification_path.read_text(encoding="utf-8"))
+        summary["servability_certification"] = {
+            "passed": certification.get("passed") is True,
+            "artifact_sha256": certification.get("candidate_artifact_sha256"),
+            "feature_contract_version": certification.get("feature_contract_version"),
+            "forecast_horizon": certification.get("forecast_horizon"),
+            "blocking_issues": certification.get("blocking_reasons") or [],
+            "certification_path": str(certification_path),
+        }
     next_generation_manifest = output_dir / "next_generation" / "next_generation_challenger_manifest.json"
     if next_generation_manifest.exists():
         next_generation = json.loads(next_generation_manifest.read_text(encoding="utf-8"))
