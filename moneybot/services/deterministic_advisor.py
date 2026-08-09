@@ -8,6 +8,8 @@ from typing import Any, Dict
 import numpy as np
 
 from .deterministic_model import BaselineModelArtifact, default_baseline_artifact, load_artifact, predict_proba
+from .forecast_horizon import resolve_forecast_horizon
+from .model_metadata import load_artifact_metadata
 
 
 def display_model_name(version: str | None) -> str:
@@ -48,6 +50,7 @@ class DeterministicQuickAdvisor:
         self.enabled = bool(enabled)
         self.artifact_path = artifact_path
         self.artifact: BaselineModelArtifact | None = None
+        self.artifact_metadata: Dict[str, Any] | None = None
         self.load_error: str | None = None
 
         self.quick_buy_threshold = quick_buy_threshold
@@ -88,9 +91,11 @@ class DeterministicQuickAdvisor:
     def _load_artifact(self) -> None:
         try:
             self.artifact = load_artifact(self.artifact_path)
+            self.artifact_metadata = load_artifact_metadata(self.artifact_path)
             self.load_error = None
         except FileNotFoundError:
             self.artifact = default_baseline_artifact()
+            self.artifact_metadata = None
             self.load_error = (
                 f"Artifact file not found at {self.artifact_path}. "
                 "Using built-in deterministic fallback artifact."
@@ -98,6 +103,7 @@ class DeterministicQuickAdvisor:
             logging.warning("%s", self.load_error)
         except Exception as exc:  # noqa: BLE001
             self.artifact = None
+            self.artifact_metadata = None
             self.load_error = str(exc)
             logging.warning(
                 "Deterministic quick advisor disabled: unable to load artifact %s (%s)",
@@ -239,6 +245,11 @@ class DeterministicQuickAdvisor:
             "quote_diagnostics": quote_data.get("diagnostics"),
             "decision_source": "deterministic_model",
             "model_version": self.artifact.version,
+            "forecast_horizon": resolve_forecast_horizon(
+                artifact=self.artifact,
+                model_version=self.artifact.version,
+                explicit_horizon=(self.artifact_metadata or {}).get("horizon_days"),
+            ),
             "raw_probability_up": round(raw_prob_up, 4),
             "probability_up": round(prob_up, 4),
             "decision_threshold": threshold,
@@ -317,6 +328,7 @@ class DeterministicQuickAdvisor:
             "advice_reason": reason,
             "decision_source": "deterministic_model",
             "model_version": quick.get("model_version"),
+            "forecast_horizon": quick.get("forecast_horizon"),
             "probability_up": round(prob_up, 4),
             "confidence": confidence,
             "position_shares": float(shares),

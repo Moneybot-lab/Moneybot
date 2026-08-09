@@ -1704,6 +1704,8 @@ def user_watchlist():
                     "base_advice": base_advice,
                     "advice": advice,
                     "model_version": (deterministic_portfolio or {}).get("model_version"),
+                    "probability_up": (deterministic_portfolio or {}).get("probability_up"),
+                    "forecast_horizon": (deterministic_portfolio or {}).get("forecast_horizon"),
                     "confidence": (deterministic_portfolio or {}).get("confidence"),
                     "profile_version": decision_context.profile_version,
                     "profile_complete": decision_context.profile_complete,
@@ -1717,6 +1719,7 @@ def user_watchlist():
                     recommendation=str(advice),
                     probability_up=(deterministic_portfolio or {}).get("probability_up"),
                     model_version=(deterministic_portfolio or {}).get("model_version"),
+                    forecast_horizon=(deterministic_portfolio or {}).get("forecast_horizon"),
                     quote=quote,
                     market_data={
                         "quote_source": quote.get("source") or quote.get("quote_source"),
@@ -2242,6 +2245,7 @@ def quick_ask():
                             "shadow_only": True,
                             "recommendation": shadow.get("recommendation"),
                             "model_version": shadow.get("model_version"),
+                            "forecast_horizon": shadow.get("forecast_horizon"),
                             "probability_up": shadow.get("probability_up"),
                             "confidence": shadow.get("confidence"),
                         },
@@ -2252,6 +2256,7 @@ def quick_ask():
                             recommendation=str(shadow.get("recommendation") or "HOLD"),
                             probability_up=shadow.get("probability_up"),
                             model_version=shadow.get("model_version"),
+                            forecast_horizon=shadow.get("forecast_horizon"),
                             quote=quote_data,
                             market_data=market_data_provenance,
                             features=signal_data.get("features") if isinstance(signal_data.get("features"), dict) else {},
@@ -2301,6 +2306,7 @@ def quick_ask():
             payload={
                 "recommendation": decision.get("recommendation"),
                 "model_version": decision.get("model_version"),
+                "forecast_horizon": decision.get("forecast_horizon"),
                 "probability_up": decision.get("probability_up"),
                 "confidence": decision.get("confidence"),
                 "ai_mode": ai_mode,
@@ -2315,6 +2321,7 @@ def quick_ask():
                 recommendation=str(decision.get("recommendation") or "HOLD"),
                 probability_up=decision.get("probability_up"),
                 model_version=decision.get("model_version"),
+                forecast_horizon=decision.get("forecast_horizon"),
                 quote=quote_data,
                 market_data=market_data_provenance,
                 features=signal_data.get("features") if isinstance(signal_data.get("features"), dict) else {},
@@ -2860,6 +2867,7 @@ def hot_momentum_buys():
                 payload={
                     "score": item.get("score"),
                     "model_version": item.get("model_version"),
+                    "forecast_horizon": item.get("forecast_horizon"),
                     "probability_up": item.get("probability_up"),
                     "confidence": item.get("confidence"),
                 },
@@ -2880,7 +2888,13 @@ def breakout_radar():
                 endpoint="breakout_radar",
                 symbol=item.get("symbol"),
                 decision_source=item.get("decision_source") or item.get("candidate_source") or "scanner",
-                payload={"score": item.get("score"), "score_basis": item.get("score_basis")},
+                payload={
+                    "score": item.get("score"),
+                    "score_basis": item.get("score_basis"),
+                    "model_version": item.get("model_version"),
+                    "probability_up": item.get("probability_up"),
+                    "forecast_horizon": item.get("forecast_horizon"),
+                },
             )
     return jsonify({"items": items, "request_id": g.request_id})
 

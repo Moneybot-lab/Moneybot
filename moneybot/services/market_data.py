@@ -1099,6 +1099,7 @@ class MarketDataService:
                 "recommendation": recommendation,
                 "decision_source": str(decision.get("decision_source") or "deterministic_model"),
                 "model_version": decision.get("model_version"),
+                "forecast_horizon": decision.get("forecast_horizon"),
                 "probability_up": self._num_or_none(decision.get("probability_up")),
                 "confidence": self._num_or_none(decision.get("confidence")),
                 "rationale": self._clean_deterministic_rationale(str(decision.get("rationale") or "")),
@@ -1182,6 +1183,7 @@ class MarketDataService:
                 "change_percent": quote.get("change_percent"), "volume_ratio": volume_ratio,
                 "quote_source": quote.get("quote_source"), "live_data_available": bool(quote.get("live_data_available", True)),
                 "decision_source": recommendation["decision_source"], "model_version": recommendation.get("model_version"),
+                "forecast_horizon": recommendation.get("forecast_horizon"),
                 "probability_up": probability, "confidence": recommendation.get("confidence"),
                 "score_basis": "current_live_data", "score_components": components,
             })
@@ -1261,6 +1263,7 @@ class MarketDataService:
                 "decision_source": recommendation["decision_source"],
                 "candidate_source": str(item.get("candidate_source") or "scanner"),
                 "model_version": recommendation.get("model_version"), "probability_up": recommendation.get("probability_up"),
+                "forecast_horizon": recommendation.get("forecast_horizon"),
                 "confidence": recommendation.get("confidence"), "score_basis": "current_breakout_data",
                 "score_components": components, "intraday_breakout": snapshot,
             })

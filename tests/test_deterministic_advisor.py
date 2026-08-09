@@ -288,3 +288,23 @@ def test_predict_portfolio_position_supports_separate_rollout_percentage(tmp_pat
 
     assert quick is not None
     assert out is None
+
+
+def test_prediction_includes_embedded_forecast_horizon_without_changing_probability(tmp_path: Path):
+    artifact_path = _write_artifact(tmp_path, version="custom-1d-model")
+    from moneybot.services.deterministic_model import load_artifact
+    artifact = load_artifact(artifact_path)
+    artifact.forecast_horizon = "1d"
+    save_artifact(artifact, artifact_path)
+    svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(artifact_path))
+    signal = {"technical": {"rsi": 45.0, "macd_histogram": 0.2}, "volume_ratio": 1.4}
+    quote = {"price": 101.2, "change_percent": 1.6, "quote_source": "test", "diagnostics": {}}
+
+    first = svc.predict_quick_decision(signal_data=signal, quote_data=quote, symbol="AAPL")
+    second = svc.predict_quick_decision(signal_data=signal, quote_data=quote, symbol="AAPL")
+
+    assert first["forecast_horizon"] == "1d"
+    assert first["raw_probability_up"] == second["raw_probability_up"]
+    assert first["probability_up"] == second["probability_up"]
+    assert first["recommendation"] == second["recommendation"]
+    assert first["decision_threshold"] == second["decision_threshold"]
