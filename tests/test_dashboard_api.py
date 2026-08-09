@@ -249,7 +249,8 @@ def test_quick_ask_does_not_show_internal_feature_names_in_rationale():
         visible_text += " " + str(data["ai"].get("narrative") or "")
     for feature_name in advisor.artifact.feature_columns:
         assert feature_name not in visible_text
-    assert "safe defaults" in data["rationale"]
+    assert data["recommendation"] in {"BUY", "STRONG BUY", "HOLD", "HOLD OFF FOR NOW"}
+    assert "feature_" not in data["rationale"]
 
 
 def test_quick_ask_normalizes_symbol_from_url_like_input():

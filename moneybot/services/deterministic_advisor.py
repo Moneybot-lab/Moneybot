@@ -10,6 +10,11 @@ import numpy as np
 from .deterministic_model import BaselineModelArtifact, default_baseline_artifact, load_artifact, predict_proba
 from .forecast_horizon import resolve_forecast_horizon
 from .model_metadata import load_artifact_metadata
+from .alpha_atlas_feature_contract import (
+    ALPHA_ATLAS_V2_FEATURES,
+    NON_SERVABLE_V2_FEATURES,
+    build_alpha_atlas_event_features,
+)
 
 
 def display_model_name(version: str | None) -> str:
@@ -52,6 +57,7 @@ class DeterministicQuickAdvisor:
         self.artifact: BaselineModelArtifact | None = None
         self.artifact_metadata: Dict[str, Any] | None = None
         self.load_error: str | None = None
+        self.last_feature_contract_diagnostics: Dict[str, Any] | None = None
 
         self.quick_buy_threshold = quick_buy_threshold
         self.quick_strong_buy_threshold = float(quick_strong_buy_threshold)
@@ -118,6 +124,18 @@ class DeterministicQuickAdvisor:
         return None
 
     def _build_feature_row(self, signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> tuple[np.ndarray, list[str]]:
+        row, imputed, _ = self._build_feature_row_with_diagnostics(
+            signal_data, quote_data
+        )
+        return row, imputed
+
+    def _build_feature_row_with_diagnostics(
+        self,
+        signal_data: Dict[str, Any],
+        quote_data: Dict[str, Any],
+        *,
+        endpoint: str = "quick_ask",
+    ) -> tuple[np.ndarray, list[str], Dict[str, Any]]:
         assert self.artifact is not None
 
         technical = signal_data.get("technical") or {}
@@ -129,13 +147,32 @@ class DeterministicQuickAdvisor:
         if return_5d is None and return_1d is not None:
             return_5d = return_1d * 5.0
 
-        raw_values = {
+        raw_values: Dict[str, float | None] = {
             "return_1d": return_1d,
             "return_5d": return_5d,
             "rsi_14": self._num(technical.get("rsi")),
             "macd_hist": self._num(technical.get("macd_histogram") or signal_data.get("macd_hist")),
             "vol_ratio_20d": self._num(signal_data.get("volume_ratio")),
         }
+        is_v2_contract = set(self.artifact.feature_columns) == set(
+            ALPHA_ATLAS_V2_FEATURES
+        )
+        if is_v2_contract:
+            raw_values.update(
+                build_alpha_atlas_event_features(
+                    endpoint=endpoint,
+                    decision_source=str(
+                        signal_data.get("decision_source") or "rule_based"
+                    ),
+                    recommendation=str(
+                        signal_data.get("action") or signal_data.get("verdict") or ""
+                    ),
+                    quote=quote_data,
+                    signals=signal_data,
+                    # The v2 output must never be fed back into its own input.
+                    prior_probability=self._num(signal_data.get("prior_probability_up")),
+                )
+            )
 
         means = np.asarray(self.artifact.means, dtype=float)
         row = np.zeros(len(self.artifact.feature_columns), dtype=float)
@@ -148,7 +185,24 @@ class DeterministicQuickAdvisor:
             else:
                 row[idx] = float(val)
 
-        return row, imputed
+        diagnostics = {
+            "feature_contract_expected_count": len(self.artifact.feature_columns),
+            "feature_contract_available_count": len(self.artifact.feature_columns) - len(imputed),
+            "feature_contract_imputed_count": len(imputed),
+            "feature_contract_missing_features": list(imputed),
+            "feature_contract_source": "day8_decision_event_contract" if is_v2_contract else "legacy_day1_contract",
+            "feature_contract_version": "alpha-atlas-v2-event-v1" if is_v2_contract else "day1-v1",
+            "feature_contract_servable": not is_v2_contract,
+            "feature_contract_blocking_features": sorted(
+                set(self.artifact.feature_columns).intersection(NON_SERVABLE_V2_FEATURES)
+            ) if is_v2_contract else [],
+            "feature_contract_reason": (
+                "v2 was trained with same-event probability/recommendation/source and post-event return features; serving would be circular or leak future outcomes"
+                if is_v2_contract
+                else None
+            ),
+        }
+        return row, imputed, diagnostics
 
     def _is_in_rollout(self, symbol: str | None) -> bool:
         return self._is_in_rollout_with_percentage(symbol, self.rollout_percentage)
@@ -206,7 +260,17 @@ class DeterministicQuickAdvisor:
         if self.artifact is None:
             return None
 
-        row, imputed = self._build_feature_row(signal_data, quote_data)
+        row, imputed, contract = self._build_feature_row_with_diagnostics(
+            signal_data, quote_data
+        )
+        self.last_feature_contract_diagnostics = contract
+        if not contract["feature_contract_servable"]:
+            logging.error(
+                "Deterministic prediction blocked for %s: %s",
+                self.artifact.version,
+                contract["feature_contract_reason"],
+            )
+            return None
         raw_prob_up = float(predict_proba(self.artifact, row)[0])
         calibration_applied = bool(
             self.calibration_enabled
