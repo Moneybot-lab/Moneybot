@@ -121,3 +121,5 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     assert "buy_and_hold_return" in backtest["benchmark"]
     assert "candidate_win" in promotion_report
     assert (promotion_dir / "candidate_model_track_b.json").exists()
+    assert (promotion_dir / "production_servability_certification.json").exists()
+    assert "servability_certification" in promotion_report

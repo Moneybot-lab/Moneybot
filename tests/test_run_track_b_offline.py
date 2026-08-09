@@ -14,11 +14,12 @@ def test_build_track_b_commands_uses_offline_artifacts_only():
         production_model="data/track_b/production_model.json",
     )
 
-    assert len(commands) == 4
+    assert len(commands) == 5
     assert commands[0][:2] == ["python3", "/tmp/Moneybot/scripts/train_massive_baseline_model.py"]
     assert commands[1][:2] == ["python3", "/tmp/Moneybot/scripts/day10_train_candidate_model.py"]
     assert commands[2][:2] == ["python3", "/tmp/Moneybot/scripts/day11_compare_candidate_vs_production.py"]
-    assert commands[3][:2] == ["python3", "/tmp/Moneybot/scripts/generate_next_generation_challengers.py"]
+    assert commands[3][:2] == ["python3", "/tmp/Moneybot/scripts/certify_production_servability.py"]
+    assert commands[4][:2] == ["python3", "/tmp/Moneybot/scripts/generate_next_generation_challengers.py"]
 
     flat = " ".join(" ".join(cmd) for cmd in commands)
     assert "day8_build_decision_training_dataset.py" not in flat
@@ -53,4 +54,5 @@ def test_build_track_b_commands_can_skip_dataset_limit():
     assert commands[0][:2] == ["python3", "/tmp/Moneybot/scripts/day8_build_decision_training_dataset.py"]
     assert "--limit" not in commands[0]
     assert "--cleaned-train" not in commands[1]
+    assert commands[3][:2] == ["python3", "/tmp/Moneybot/scripts/certify_production_servability.py"]
     assert any(value.endswith("decision_training_snapshot_track_b.jsonl") for value in commands[1])
