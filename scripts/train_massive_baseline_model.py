@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -128,9 +129,9 @@ def _fill_from_fit(fit: pd.DataFrame, others: list[pd.DataFrame], features: list
     return fit_out, outputs, fills
 
 
-def _artifact(base: BaselineModelArtifact, features: list[str], *, threshold: float | None = None) -> BaselineModelArtifact:
+def _artifact(base: BaselineModelArtifact, features: list[str], *, version: str = VERSION, threshold: float | None = None) -> BaselineModelArtifact:
     return BaselineModelArtifact(
-        version=VERSION,
+        version=version,
         feature_columns=features,
         means=base.means,
         stds=base.stds,
@@ -219,7 +220,15 @@ def _select_threshold(frame: pd.DataFrame, probs: np.ndarray) -> dict[str, Any]:
     }
 
 
-def train_massive_baseline(train_path: Path, test_path: Path, all_path: Path, output_path: Path) -> dict[str, Any]:
+def train_massive_market_model(
+    train_path: Path,
+    test_path: Path,
+    all_path: Path,
+    output_path: Path,
+    *,
+    model_version: str = VERSION,
+    report_prefix: str = "massive_baseline",
+) -> dict[str, Any]:
     train = _load_jsonl(train_path)
     test = _load_jsonl(test_path)
     all_cleaned = _load_jsonl(all_path)
@@ -239,7 +248,7 @@ def train_massive_baseline(train_path: Path, test_path: Path, all_path: Path, ou
         pd.to_numeric(fit[TARGET_COLUMN], errors="coerce").to_numpy(dtype=float),
         sample_weight=fit_weights,
     )
-    model = _artifact(base, features)
+    model = _artifact(base, features, version=model_version)
     raw_calibration_probs = predict_proba(model, calibration[features].to_numpy(dtype=float))
     calibration_report = fit_probability_calibration(raw_calibration_probs, pd.to_numeric(calibration[TARGET_COLUMN], errors="coerce").to_numpy(dtype=float))
     model.calibration_slope = float(calibration_report["slope"])
@@ -247,24 +256,59 @@ def train_massive_baseline(train_path: Path, test_path: Path, all_path: Path, ou
     threshold_probs = predict_proba(model, threshold[features].to_numpy(dtype=float))
     threshold_report = _select_threshold(threshold, threshold_probs)
     model.decision_threshold = float(threshold_report["selected_threshold"])
+    deployable_recipe = {
+        "model_family": "logistic_regression",
+        "feature_subset": features,
+        "sample_weight_policy": "1 / count(symbol, event_date, endpoint, decision_source)",
+        "calibration": calibration_report,
+        "decision_threshold": float(model.decision_threshold),
+        "abstention": {"enabled": False, "margin": 0.0},
+        "target_column": TARGET_COLUMN,
+        "evaluation_return_column": RETURN_COLUMN,
+        "horizon_days": 5,
+    }
+    recipe_hash = hashlib.sha256(json.dumps(deployable_recipe, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     model.lineage = {
+        "schema_version": "moneybot-challenger-lineage.v1",
+        "lineage_id": f"recipe-{recipe_hash[:16]}",
+        "recipe_hash": recipe_hash,
+        "recipe": deployable_recipe,
         "training_source": "cleaned_massive_training_quality",
         "train_path": str(train_path),
         "test_path": str(test_path),
         "all_cleaned_path": str(all_path),
         "target_column": TARGET_COLUMN,
         "evaluation_return_column": RETURN_COLUMN,
+        "horizon_days": 5,
         "feature_policy": "massive_market_only_no_model_echo_v1",
         "sample_weight_policy": "1 / count(symbol, event_date, endpoint, decision_source)",
         "calibration": calibration_report,
         "threshold_selection": threshold_report,
     }
     save_artifact(model, output_path)
+    # Keep deployment-critical configuration visible without requiring lineage
+    # interpretation. The deterministic artifact loader safely ignores these
+    # additive fields while Day11 reads them for schema matching.
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    payload.update({
+        "model_version": model_version,
+        "target_column": TARGET_COLUMN,
+        "evaluation_return_column": RETURN_COLUMN,
+        "horizon_days": 5,
+        "training_inputs": {"train": str(train_path), "test": str(test_path), "all_cleaned": str(all_path)},
+        "feature_policy": "massive_market_only_no_model_echo_v1",
+        "sample_weight_policy": model.lineage["sample_weight_policy"],
+        "duplicate_weighting_applied": True,
+        "threshold_selection_sufficient": bool(threshold_report["threshold_selection_sufficient"]),
+        "selected_threshold": float(model.decision_threshold),
+        "calibration": calibration_report,
+    })
+    output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     holdout_probs = predict_proba(model, holdout[features].to_numpy(dtype=float))
     raw_metrics = _score(holdout, holdout_probs, model.decision_threshold)
     weighted_metrics = _score(holdout, holdout_probs, model.decision_threshold, _duplicate_weights(holdout))
     feature_coverage = {
-        "model_version": VERSION,
+        "model_version": model_version,
         "rows": int(len(all_cleaned)),
         "features": {},
         "future_outcome_fields_excluded": True,
@@ -279,7 +323,7 @@ def train_massive_baseline(train_path: Path, test_path: Path, all_path: Path, ou
         }
     report = {
         "available": True,
-        "model_version": VERSION,
+        "model_version": model_version,
         "model_path": str(output_path),
         "target_column": TARGET_COLUMN,
         "evaluation_return_column": RETURN_COLUMN,
@@ -298,10 +342,14 @@ def train_massive_baseline(train_path: Path, test_path: Path, all_path: Path, ou
         "usage_scope": "massive_baseline_comparator",
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    (output_path.parent / "massive_baseline_model_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-    (output_path.parent / "massive_baseline_feature_coverage_report.json").write_text(json.dumps(feature_coverage, indent=2), encoding="utf-8")
-    (output_path.parent / "massive_baseline_backtest_report.json").write_text(json.dumps({"raw_row_metrics": raw_metrics, "duplicate_weighted_metrics": weighted_metrics, "threshold_selection": threshold_report}, indent=2), encoding="utf-8")
+    (output_path.parent / f"{report_prefix}_model_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    (output_path.parent / f"{report_prefix}_feature_coverage_report.json").write_text(json.dumps(feature_coverage, indent=2), encoding="utf-8")
+    (output_path.parent / f"{report_prefix}_backtest_report.json").write_text(json.dumps({"raw_row_metrics": raw_metrics, "duplicate_weighted_metrics": weighted_metrics, "threshold_selection": threshold_report}, indent=2), encoding="utf-8")
     return report
+
+
+def train_massive_baseline(train_path: Path, test_path: Path, all_path: Path, output_path: Path) -> dict[str, Any]:
+    return train_massive_market_model(train_path, test_path, all_path, output_path)
 
 
 def main() -> None:

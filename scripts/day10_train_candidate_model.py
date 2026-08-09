@@ -680,7 +680,28 @@ def main() -> None:
     parser.add_argument("--output-model", default="data/candidate_model.json")
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--min-rows", type=int, default=200)
+    parser.add_argument("--cleaned-train")
+    parser.add_argument("--cleaned-test")
+    parser.add_argument("--cleaned-all")
+    parser.add_argument("--model-version", default="candidate_market_no_echo_v1")
     args = parser.parse_args()
+
+    cleaned_paths = (args.cleaned_train, args.cleaned_test, args.cleaned_all)
+    if any(cleaned_paths):
+        if not all(cleaned_paths):
+            raise SystemExit("--cleaned-train, --cleaned-test, and --cleaned-all must be provided together")
+        from scripts.train_massive_baseline_model import train_massive_market_model
+
+        report = train_massive_market_model(
+            Path(args.cleaned_train),
+            Path(args.cleaned_test),
+            Path(args.cleaned_all),
+            Path(args.output_model),
+            model_version=args.model_version,
+            report_prefix="candidate_market_no_echo_v1",
+        )
+        print(json.dumps(report, indent=2))
+        return
 
     df = _load_jsonl(args.input)
     if df.empty:

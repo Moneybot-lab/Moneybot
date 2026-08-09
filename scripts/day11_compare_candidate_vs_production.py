@@ -63,14 +63,26 @@ def _training_source_report(input_path: str, frame: pd.DataFrame | None = None) 
     leakage_guards: list[str] = []
     if frame is not None and "leakage_guard" in frame.columns:
         leakage_guards = sorted(str(value) for value in frame["leakage_guard"].dropna().astype(str).unique())
-    source_kind = "massive-backed" if path.name == "decision_training_snapshot_massive.jsonl" else "legacy_track_b"
+    quality_report: dict[str, Any] = {}
+    if path.parent.name == "training_quality":
+        quality_path = path.parent / "model_quality_report.json"
+        if quality_path.exists():
+            quality_report = json.loads(quality_path.read_text(encoding="utf-8"))
+            upstream_path = Path(str(quality_report.get("input_path") or ""))
+            upstream_manifest = upstream_path.with_suffix(upstream_path.suffix + ".manifest.json")
+            if upstream_manifest.exists():
+                manifest_path = upstream_manifest
+                manifest = json.loads(upstream_manifest.read_text(encoding="utf-8"))
+    source_kind = "massive-backed" if path.name == "decision_training_snapshot_massive.jsonl" or path.parent.name == "training_quality" else "legacy_track_b"
     return {
         "input_path": str(path),
         "source_kind": source_kind,
         "legacy_track_b": source_kind == "legacy_track_b",
         "massive_backed": source_kind == "massive-backed",
         "canonical_training_input": "data/track_b/decision_training_snapshot_massive.jsonl",
-        "uses_massive_canonical_input": path.name == "decision_training_snapshot_massive.jsonl",
+        "uses_massive_canonical_input": source_kind == "massive-backed",
+        "cleaned_training_quality_input": path.parent.name == "training_quality",
+        "quality_report": quality_report,
         "manifest_path": str(manifest_path),
         "manifest_loaded": bool(manifest),
         "manifest_error": manifest_error,
@@ -227,27 +239,54 @@ def _selected_concentration_metrics(usable: pd.DataFrame, preds: np.ndarray) -> 
     }
 
 
-def _prediction_return_metrics(usable: pd.DataFrame, preds: np.ndarray, probs: np.ndarray) -> dict[str, Any]:
-    y = usable["return_bin_5d"].fillna("").astype(str).isin(TARGET_GAIN_BUCKETS).astype(int).to_numpy()
+def _comparison_duplicate_weights(frame: pd.DataFrame) -> np.ndarray:
+    keys = pd.DataFrame(index=frame.index)
+    for column in ("symbol", "event_date", "endpoint", "decision_source"):
+        keys[column] = frame[column].fillna("unknown").astype(str) if column in frame.columns else "unknown"
+    counts = keys.groupby(list(keys.columns), dropna=False)["symbol"].transform("size").astype(float)
+    return (1.0 / counts).to_numpy(dtype=float)
+
+
+def _prediction_return_metrics(
+    usable: pd.DataFrame,
+    preds: np.ndarray,
+    probs: np.ndarray,
+    sample_weight: np.ndarray | None = None,
+) -> dict[str, Any]:
+    if "label_up_5d" in usable.columns:
+        y = pd.to_numeric(usable["label_up_5d"], errors="coerce").fillna(0.0).astype(int).to_numpy()
+    else:
+        y = usable["return_bin_5d"].fillna("").astype(str).isin(TARGET_GAIN_BUCKETS).astype(int).to_numpy()
+    row_weights = np.ones(len(usable), dtype=float) if sample_weight is None else np.asarray(sample_weight, dtype=float)
+    row_weights = row_weights / row_weights.sum()
     signal_returns = usable.loc[preds == 1, "return_5d"].astype(float)
+    signal_weights = row_weights[preds == 1]
     if signal_returns.empty:
         avg_return = None
         downside_risk = None
     else:
-        avg_return = float(signal_returns.mean())
+        avg_return = float(np.average(signal_returns.to_numpy(dtype=float), weights=signal_weights))
         negative_signal_returns = signal_returns[signal_returns < 0.0]
-        downside_risk = 0.0 if negative_signal_returns.empty else float(abs(negative_signal_returns.mean()))
+        negative_weights = signal_weights[signal_returns.to_numpy(dtype=float) < 0.0]
+        downside_risk = 0.0 if negative_signal_returns.empty else float(abs(np.average(negative_signal_returns.to_numpy(dtype=float), weights=negative_weights)))
     metrics = {
-        "accuracy": round(float((preds == y).mean()), 4),
+        "accuracy": round(float(np.sum(row_weights * (preds == y))), 4),
         "avg_return": round(avg_return, 4) if avg_return is not None else None,
-        "brier_score": round(_brier_score(y.astype(float), probs.astype(float)), 4),
+        "brier_score": round(float(np.sum(row_weights * ((probs.astype(float) - y.astype(float)) ** 2))), 4),
         "downside_risk": round(downside_risk, 4) if downside_risk is not None else None,
         "positive_predictions": int((preds == 1).sum()),
         **_bucket_signal_rates(usable, preds),
         **_selected_concentration_metrics(usable, preds),
     }
+    if sample_weight is not None:
+        bins = usable["return_bin_5d"].fillna("").astype(str).to_numpy()
+        for bucket, rate_key in (("big_loss", "big_loss_prediction_rate"), ("big_gain", "big_gain_capture_rate")):
+            mask = bins == bucket
+            denominator = float(row_weights[mask].sum())
+            metrics[rate_key] = round(float(row_weights[mask & (preds == 1)].sum() / denominator), 4) if denominator > 0 else None
     utility = _utility_score(metrics)
     metrics["utility_score"] = round(utility, 4) if utility is not None else None
+    metrics["weighting_policy"] = "raw_rows" if sample_weight is None else "1 / count(symbol, event_date, endpoint, decision_source)"
     return metrics
 
 
@@ -405,6 +444,7 @@ def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
     ranking_backtests = _ranking_backtests(usable, probs)
     metrics = {
         **_prediction_return_metrics(usable, preds, probs),
+        "duplicate_weighted_metrics": _prediction_return_metrics(usable, preds, probs, _comparison_duplicate_weights(usable)),
         "return_bin_counts": {str(k): int(v) for k, v in sorted(usable["return_bin_5d"].fillna("unknown").astype(str).value_counts().to_dict().items())},
         "bucket_metrics": _bucket_metrics(usable, preds, probs),
         "threshold_search": _threshold_search(usable, probs),
@@ -1579,6 +1619,7 @@ def _comparison_scope_report(
     production_availability: dict[str, Any],
     *,
     target_columns_match: bool = True,
+    evaluation_horizon_match: bool = True,
     duplicate_weighting_policy_match: bool = True,
 ) -> dict[str, Any]:
     dates = _event_date_series(frame) if len(frame) else pd.Series([], dtype=str)
@@ -1588,7 +1629,7 @@ def _comparison_scope_report(
     candidate_passed = _coverage_passed(candidate_availability)
     feature_schema_compatible = bool(production_passed and candidate_passed)
     scope = "narrow_diagnostic" if len(frame) < 1000 else "holdout-only"
-    apples_to_apples = bool(feature_schema_compatible and target_columns_match and duplicate_weighting_policy_match)
+    apples_to_apples = bool(feature_schema_compatible and target_columns_match and evaluation_horizon_match and duplicate_weighting_policy_match)
     promotion_eligible = bool(scope != "narrow_diagnostic" and apples_to_apples)
     invalid_reasons: list[str] = []
     if scope == "narrow_diagnostic":
@@ -1599,6 +1640,8 @@ def _comparison_scope_report(
         invalid_reasons.append("candidate feature coverage is incomplete")
     if not target_columns_match:
         invalid_reasons.append("candidate and comparator target columns do not match")
+    if not evaluation_horizon_match:
+        invalid_reasons.append("candidate and comparator evaluation horizons do not match")
     if not duplicate_weighting_policy_match:
         invalid_reasons.append("candidate and comparator duplicate-weighting policies do not match")
     return {
@@ -1612,6 +1655,7 @@ def _comparison_scope_report(
         "allowed_uses": ["promotion_evidence"] if promotion_eligible else ["diagnostic_only"],
         "apples_to_apples_scoring": apples_to_apples,
         "target_columns_match": bool(target_columns_match),
+        "same_evaluation_horizon": bool(evaluation_horizon_match),
         "duplicate_weighting_policy_match": bool(duplicate_weighting_policy_match),
         "production_scoring_mode": "native_or_valid_adapter" if production_passed else "fill_or_default_values",
         "production_feature_mode": "native_massive_features" if production_passed else "fill_or_default_values",
@@ -1627,8 +1671,28 @@ def _comparison_scope_report(
 def _artifact_lineage_value(model_path: str, key: str) -> Any:
     if not Path(model_path).exists():
         return None
-    lineage = load_artifact(model_path).lineage or {}
+    payload = json.loads(Path(model_path).read_text(encoding="utf-8"))
+    if payload.get(key) is not None:
+        return payload.get(key)
+    lineage = payload.get("lineage") if isinstance(payload.get("lineage"), dict) else {}
     return lineage.get(key)
+
+
+def _holdout_identity_report(frame: pd.DataFrame) -> dict[str, Any]:
+    identity_columns = [column for column in ("row_id", "decision_id", "symbol", "event_date", "endpoint", "decision_source") if column in frame.columns]
+    if not identity_columns:
+        identity = pd.Series(frame.index.astype(str), index=frame.index)
+    else:
+        identity = frame[identity_columns].fillna("unknown").astype(str).agg("|".join, axis=1)
+    hashes = identity.map(lambda value: hashlib.sha256(value.encode("utf-8")).hexdigest())
+    return {
+        "identity_columns": identity_columns,
+        "row_count": int(len(frame)),
+        "unique_row_identity_count": int(hashes.nunique()),
+        "duplicate_row_identity_count": int(len(hashes) - hashes.nunique()),
+        "ordered_identity_fingerprint": hashlib.sha256("\n".join(hashes).encode("utf-8")).hexdigest(),
+        "candidate_and_comparator_rows_identical": True,
+    }
 
 
 def _resolve_massive_comparator(input_path: str, production_model: str, massive_baseline_model: str) -> dict[str, Any]:
@@ -1895,6 +1959,7 @@ def main() -> None:
     parser.add_argument("--output", default="data/model_comparison_report.json")
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--min-rows", type=int, default=200)
+    parser.add_argument("--input-is-holdout", action="store_true")
     args = parser.parse_args()
 
     df = _load_jsonl(args.input)
@@ -1904,13 +1969,30 @@ def main() -> None:
     comparator = _resolve_massive_comparator(args.input, args.production_model, args.massive_baseline_model)
     comparator_model = str(comparator["model_path"])
 
-    development_df, test_df = _chronological_split(df, args.train_ratio)
-    _, test_df, temporal_split = purged_embargoed_split(
-        development_df,
-        test_df,
-        horizon_days=LABEL_HORIZON_DAYS,
-        embargo_days=EMBARGO_DAYS,
-    )
+    if args.input_is_holdout:
+        test_df = df.copy()
+        temporal_split = {
+            "method": "pre_split_cleaned_holdout",
+            "source_file": args.input,
+            "train_rows_before": 0,
+            "train_rows_after": 0,
+            "test_rows_before": int(len(df)),
+            "test_rows_after": int(len(df)),
+            "purged_train_rows": 0,
+            "embargoed_test_rows": 0,
+            "date_overlap_count": 0,
+            "symbol_date_overlap_count": 0,
+            "label_horizon_gap_passed": True,
+            "cleaned_test_untouched": True,
+        }
+    else:
+        development_df, test_df = _chronological_split(df, args.train_ratio)
+        _, test_df, temporal_split = purged_embargoed_split(
+            development_df,
+            test_df,
+            horizon_days=LABEL_HORIZON_DAYS,
+            embargo_days=EMBARGO_DAYS,
+        )
     if test_df.empty:
         raise ValueError("purging/embargo leaves no final comparison rows")
     candidate_metrics = _evaluate(args.candidate_model, test_df.copy())
@@ -1976,6 +2058,8 @@ def main() -> None:
     feature_leakage_value_audit = _feature_leakage_value_audit(phase_1_leakage_audit)
     candidate_target = _artifact_lineage_value(args.candidate_model, "target_column")
     comparator_target = _artifact_lineage_value(comparator_model, "target_column")
+    candidate_horizon = _artifact_lineage_value(args.candidate_model, "horizon_days")
+    comparator_horizon = _artifact_lineage_value(comparator_model, "horizon_days")
     candidate_weighting = _artifact_lineage_value(args.candidate_model, "sample_weight_policy")
     comparator_weighting = _artifact_lineage_value(comparator_model, "sample_weight_policy")
     comparison_scope_report = _comparison_scope_report(
@@ -1984,6 +2068,7 @@ def main() -> None:
         candidate_feature_availability,
         production_feature_availability,
         target_columns_match=bool(candidate_target and candidate_target == comparator_target),
+        evaluation_horizon_match=bool(candidate_horizon == comparator_horizon == 5),
         duplicate_weighting_policy_match=bool(candidate_weighting and candidate_weighting == comparator_weighting),
     )
     comparison_scope_report.update({
@@ -1991,9 +2076,21 @@ def main() -> None:
         "comparator_model_path": comparator_model,
         "candidate_target_column": candidate_target,
         "comparator_target_column": comparator_target,
-        "same_evaluation_horizon": candidate_target == comparator_target == "label_up_5d",
+        "candidate_horizon_days": candidate_horizon,
+        "comparator_horizon_days": comparator_horizon,
+        "same_evaluation_horizon": comparison_scope_report["same_evaluation_horizon"],
+        "same_cleaned_holdout_rows": bool(args.input_is_holdout and Path(args.input).name == "cleaned_test.jsonl"),
+        "same_leakage_guard": bool(_training_source_phase1_passed(training_source)),
         "production_scoring_mode": comparator["production_scoring_mode"] if comparison_scope_report["comparison_valid"] else comparison_scope_report["production_scoring_mode"],
     })
+    if not comparison_scope_report["same_cleaned_holdout_rows"] or not comparison_scope_report["same_leakage_guard"]:
+        extra_reason = "comparison did not use the same leakage-guarded cleaned_test holdout"
+        comparison_scope_report["comparison_valid"] = False
+        comparison_scope_report["apples_to_apples_scoring"] = False
+        existing_reason = comparison_scope_report.get("comparison_invalid_reason")
+        comparison_scope_report["comparison_invalid_reason"] = "; ".join(filter(None, [existing_reason, extra_reason]))
+        comparison_scope_report["promotion_eligible_evidence"] = False
+        comparison_scope_report["allowed_uses"] = ["diagnostic_only"]
     production_preds_for_status, production_probs_for_status = _artifact_predictions(comparator_model, test_df.copy())
     candidate_feature_coverage_segmented_report = _candidate_feature_coverage_segmented_report(candidate_feature_availability)
     feature_leakage_name_value_audit = _feature_leakage_name_value_audit(
@@ -2025,6 +2122,7 @@ def main() -> None:
         "candidate_feature_coverage_passed": comparison_scope_report["candidate_feature_coverage_passed"],
         "feature_schema_compatible": comparison_scope_report["feature_schema_compatible"],
         "target_columns_match": comparison_scope_report["target_columns_match"],
+        "same_evaluation_horizon": comparison_scope_report["same_evaluation_horizon"],
         "duplicate_weighting_policy_match": comparison_scope_report["duplicate_weighting_policy_match"],
         "apples_to_apples_scoring": comparison_scope_report["apples_to_apples_scoring"],
         "comparison_valid": comparison_scope_report["comparison_valid"],
@@ -2034,6 +2132,7 @@ def main() -> None:
         **_production_comparison_status(comparison_scope_report, production_metrics, production_probs_for_status),
     }
     duplicate_weighting_report = _duplicate_weighting_report(test_df.copy())
+    holdout_identity_report = _holdout_identity_report(test_df.copy())
     baseline_report_path = Path(comparator_model).with_name("massive_baseline_model_report.json")
     if comparator["comparator_kind"] == "massive_baseline_model_v1" and baseline_report_path.exists():
         massive_baseline_model_report = json.loads(baseline_report_path.read_text(encoding="utf-8"))
@@ -2114,6 +2213,7 @@ def main() -> None:
         "production_metric_validity": production_feature_compatibility_report["production_metric_validity"],
         "massive_baseline_model_report": massive_baseline_model_report,
         "duplicate_weighting_report": duplicate_weighting_report,
+        "holdout_identity_report": holdout_identity_report,
         "production_feature_coverage_passed": comparison_scope_report["production_feature_coverage_passed"],
         "candidate_feature_coverage_passed": comparison_scope_report["candidate_feature_coverage_passed"],
         "feature_schema_compatible": comparison_scope_report["feature_schema_compatible"],
@@ -2129,6 +2229,19 @@ def main() -> None:
         "candidate_behavior": candidate_behavior,
         "candidate_metrics": candidate_metrics,
         "production_metrics": production_metrics,
+        "comparator_metrics": production_metrics if comparator["comparator_kind"] == "massive_baseline_model_v1" else None,
+        "duplicate_weighted_comparison_metrics": {
+            "candidate": candidate_metrics.get("duplicate_weighted_metrics"),
+            "comparator": production_metrics.get("duplicate_weighted_metrics"),
+            "sample_weight_policy": "1 / count(symbol, event_date, endpoint, decision_source)",
+        },
+        "legacy_production_diagnostic": {
+            "model_path": args.production_model,
+            "comparison_valid": False,
+            "allowed_uses": ["diagnostic_only"],
+            "reason": "legacy production is not scored as the Massive promotion comparator",
+        },
+        "ready_for_live_routing": False,
         "recommended_threshold": production_threshold_optimizer.get("recommended_threshold"),
         "current_threshold": production_threshold_optimizer.get("current_threshold"),
         "threshold_change_recommended": production_threshold_optimizer.get("threshold_change_recommended"),

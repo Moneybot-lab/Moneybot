@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -65,11 +67,20 @@ def test_massive_baseline_trains_from_cleaned_inputs_and_excludes_unsafe_feature
 
     report = train_massive_baseline(train_path, test_path, all_path, output)
     artifact = load_artifact(output)
+    payload = json.loads(output.read_text(encoding="utf-8"))
 
     assert artifact.version == "massive_baseline_model_v1"
     assert artifact.lineage["target_column"] == "label_up_5d"
     assert artifact.lineage["evaluation_return_column"] == "return_5d"
     assert artifact.lineage["sample_weight_policy"] == "1 / count(symbol, event_date, endpoint, decision_source)"
+    assert payload["model_version"] == "massive_baseline_model_v1"
+    assert payload["target_column"] == "label_up_5d"
+    assert payload["evaluation_return_column"] == "return_5d"
+    assert payload["horizon_days"] == 5
+    assert payload["duplicate_weighting_applied"] is True
+    assert payload["selected_threshold"] == artifact.decision_threshold
+    assert isinstance(payload["threshold_selection_sufficient"], bool)
+    assert payload["calibration"] == report["calibration"]
     assert report["training_inputs"] == {"train": str(train_path), "test": str(test_path), "all_cleaned": str(all_path)}
     assert report["temporal_validation"]["cleaned_test_untouched_for_final_holdout"] is True
     assert report["duplicate_weighting_applied"] is True
@@ -90,6 +101,39 @@ def test_duplicate_weights_are_inverse_group_counts():
     ])
 
     assert np.allclose(_duplicate_weights(frame), [0.5, 0.5, 1.0])
+
+
+def test_day10_cleaned_mode_builds_candidate_market_no_echo_v1(tmp_path):
+    quality = tmp_path / "training_quality"
+    train_path = quality / "cleaned_train.jsonl"
+    test_path = quality / "cleaned_test.jsonl"
+    all_path = quality / "cleaned_all.jsonl"
+    train_rows = _rows("2026-01-01", 60)
+    test_rows = _rows("2026-03-10", 12)
+    _write(train_path, train_rows)
+    _write(test_path, test_rows)
+    _write(all_path, train_rows + test_rows)
+    output = tmp_path / "candidate_market_no_echo_v1.json"
+
+    completed = subprocess.run([
+        sys.executable,
+        "scripts/day10_train_candidate_model.py",
+        "--cleaned-train", str(train_path),
+        "--cleaned-test", str(test_path),
+        "--cleaned-all", str(all_path),
+        "--model-version", "candidate_market_no_echo_v1",
+        "--output-model", str(output),
+    ], capture_output=True, text=True, check=False)
+
+    assert completed.returncode == 0, completed.stderr
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["model_version"] == "candidate_market_no_echo_v1"
+    assert payload["target_column"] == "label_up_5d"
+    assert payload["evaluation_return_column"] == "return_5d"
+    assert payload["horizon_days"] == 5
+    assert payload["sample_weight_policy"] == "1 / count(symbol, event_date, endpoint, decision_source)"
+    assert payload["duplicate_weighting_applied"] is True
+    assert not (MODEL_ECHO_FEATURES & set(payload["feature_columns"]))
 
 
 def test_feature_policy_rejects_future_echo_and_endpoint_fields():
