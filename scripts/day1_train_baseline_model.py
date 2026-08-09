@@ -47,6 +47,7 @@ def main() -> None:
 
     X_train, y_train, _ = build_training_matrix(train_df, horizon_days=args.horizon_days)
     artifact = train_logistic_baseline(X_train, y_train)
+    artifact.forecast_horizon = f"{int(args.horizon_days)}d"
 
     X_test = test_df[FEATURE_COLUMNS].to_numpy(dtype=float)
     y_test = test_df[f"label_up_{args.horizon_days}d"].to_numpy(dtype=float)

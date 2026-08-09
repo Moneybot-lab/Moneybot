@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from collections import Counter
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict
+
+from .forecast_horizon import resolve_forecast_horizon
 
 
 def read_decision_events(path: str, *, limit: int | None = None) -> list[Dict[str, Any]]:
@@ -94,15 +97,30 @@ class DecisionLogger:
             self._source_counts[source] = self._source_counts.get(source, 0) + 1
             self._endpoint_counts[ep] = self._endpoint_counts.get(ep, 0) + 1
 
+        payload_record = dict(payload)
+        snapshot_record = dict(snapshot) if isinstance(snapshot, dict) else None
+        probability = payload_record.get("probability_up")
+        if not isinstance(probability, (int, float)) and snapshot_record is not None:
+            probability = snapshot_record.get("probability_up")
+        if isinstance(probability, (int, float)) and not isinstance(probability, bool) and math.isfinite(float(probability)):
+            model_version = payload_record.get("model_version") or (snapshot_record or {}).get("model_version")
+            horizon = resolve_forecast_horizon(
+                model_version=model_version,
+                explicit_horizon=payload_record.get("forecast_horizon") or (snapshot_record or {}).get("forecast_horizon"),
+            )
+            payload_record["forecast_horizon"] = horizon
+            if snapshot_record is not None:
+                snapshot_record["forecast_horizon"] = horizon
+
         record = {
             "ts": int(time.time()),
             "endpoint": ep,
             "symbol": symbol,
             "decision_source": source,
-            "payload": payload,
+            "payload": payload_record,
         }
-        if isinstance(snapshot, dict):
-            record["snapshot"] = snapshot
+        if snapshot_record is not None:
+            record["snapshot"] = snapshot_record
         if isinstance(experiment, dict):
             record["experiment"] = experiment
         try:

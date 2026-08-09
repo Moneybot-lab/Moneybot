@@ -112,7 +112,7 @@ def test_run_notification_triggers_sends_fresh_breakout_push(monkeypatch, tmp_pa
             return []
 
         def get_breakout_radar(self):
-            return [{'symbol': 'ASTC', 'score': 9.3, 'rationale': 'Confirmed intraday breakout.'}]
+            return [{'symbol': 'ASTC', 'price': 5.0, 'score': 9.3, 'recommendation': 'BUY', 'intraday_breakout': {'status': 'ok', 'qualifies': True}, 'rationale': 'Confirmed intraday breakout.'}]
 
         def get_wells_picks(self):
             return []

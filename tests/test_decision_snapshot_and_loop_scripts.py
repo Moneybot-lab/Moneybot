@@ -569,3 +569,49 @@ def test_day14_promotion_only_runs_when_allowed(tmp_path, monkeypatch):
     )
     day14_promote.main()
     assert json.loads(production_path.read_text(encoding="utf-8"))["version"] == "candidate"
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["quick_ask", "user_watchlist", "portfolio", "hot_momentum_buys", "breakout_radar", "quick_ask_shadow"],
+)
+def test_model_probability_event_serializes_consistent_forecast_horizon(tmp_path, endpoint):
+    path = tmp_path / f"{endpoint}.jsonl"
+    logger = DecisionLogger(enabled=True, output_path=str(path))
+    snapshot = build_decision_snapshot(
+        symbol="AAPL", endpoint=endpoint, decision_source="deterministic_model",
+        recommendation="BUY", probability_up=0.0, model_version="alpha-atlas-v2",
+        forecast_horizon="5d",
+    )
+    logger.log(
+        endpoint=endpoint, symbol="AAPL", decision_source="deterministic_model",
+        payload={"model_version": "alpha-atlas-v2", "probability_up": 0.0, "forecast_horizon": "5d"},
+        snapshot=snapshot,
+    )
+
+    event = read_decision_events(str(path))[0]
+    assert event["payload"]["forecast_horizon"] == "5d"
+    assert event["snapshot"]["forecast_horizon"] == "5d"
+    from scripts.day13_calibration_report import _event_forecast_horizon
+    assert _event_forecast_horizon(event["payload"], event["snapshot"]) == "5d"
+    from scripts.day13_calibration_report import calibration_input_profile
+    profile = calibration_input_profile([event], horizon_days=5)
+    assert profile["rows_matching_horizon"] == 1
+    assert profile["rows_excluded_horizon_unknown"] == 0
+
+
+def test_logger_resolves_legacy_model_horizon_but_does_not_label_rule_row(tmp_path):
+    path = tmp_path / "events.jsonl"
+    logger = DecisionLogger(enabled=True, output_path=str(path))
+    logger.log(
+        endpoint="quick_ask", symbol="AAPL", decision_source="deterministic_model",
+        payload={"model_version": "day1-logreg-v1", "probability_up": 0.61},
+    )
+    logger.log(
+        endpoint="quick_ask", symbol="MSFT", decision_source="rule_based",
+        payload={"model_version": None, "probability_up": None},
+    )
+
+    model_event, rule_event = read_decision_events(str(path))
+    assert model_event["payload"]["forecast_horizon"] == "5d"
+    assert "forecast_horizon" not in rule_event["payload"]
