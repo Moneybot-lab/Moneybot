@@ -61,6 +61,7 @@ def build_track_b_commands(
         commands.extend([
             [python_executable, str(scripts_dir / "day10_train_candidate_model.py"), "--cleaned-train", str(output_dir / "training_quality" / "cleaned_train.jsonl"), "--cleaned-test", str(output_dir / "training_quality" / "cleaned_test.jsonl"), "--cleaned-all", str(output_dir / "training_quality" / "cleaned_all.jsonl"), "--model-version", "candidate_market_no_echo_v1", "--output-model", str(candidate_model_path), "--min-rows", str(min_rows)],
             [python_executable, str(scripts_dir / "day11_compare_candidate_vs_production.py"), "--input", str(output_dir / "training_quality" / "cleaned_test.jsonl"), "--input-is-holdout", "--candidate-model", str(candidate_model_path), "--production-model", str(production_model), "--massive-baseline-model", str(massive_baseline_path), "--output", str(comparison_report_path), "--min-rows", str(min_rows)],
+            [python_executable, str(scripts_dir / "generate_next_generation_challengers.py"), "--train", str(output_dir / "training_quality" / "cleaned_train.jsonl"), "--test", str(output_dir / "training_quality" / "cleaned_test.jsonl"), "--all-cleaned", str(output_dir / "training_quality" / "cleaned_all.jsonl"), "--baseline-model", str(massive_baseline_path), "--comparison-report", str(comparison_report_path), "--output-dir", str(output_dir / "next_generation")],
         ])
     else:
         commands.extend([
@@ -151,6 +152,16 @@ def main() -> None:
             raise SystemExit(completed.returncode)
 
     summary["success"] = True
+    next_generation_manifest = output_dir / "next_generation" / "next_generation_challenger_manifest.json"
+    if next_generation_manifest.exists():
+        next_generation = json.loads(next_generation_manifest.read_text(encoding="utf-8"))
+        summary["next_generation_challengers"] = {
+            "generated": True,
+            "count": len(next_generation.get("challengers") or []),
+            "promotion_allowed": False,
+            "routing_allowed": False,
+            "manifest": str(next_generation_manifest),
+        }
     summary["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
     (output_dir / "track_b_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))

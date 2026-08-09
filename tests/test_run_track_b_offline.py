@@ -14,10 +14,11 @@ def test_build_track_b_commands_uses_offline_artifacts_only():
         production_model="data/track_b/production_model.json",
     )
 
-    assert len(commands) == 3
+    assert len(commands) == 4
     assert commands[0][:2] == ["python3", "/tmp/Moneybot/scripts/train_massive_baseline_model.py"]
     assert commands[1][:2] == ["python3", "/tmp/Moneybot/scripts/day10_train_candidate_model.py"]
     assert commands[2][:2] == ["python3", "/tmp/Moneybot/scripts/day11_compare_candidate_vs_production.py"]
+    assert commands[3][:2] == ["python3", "/tmp/Moneybot/scripts/generate_next_generation_challengers.py"]
 
     flat = " ".join(" ".join(cmd) for cmd in commands)
     assert "day8_build_decision_training_dataset.py" not in flat
@@ -34,6 +35,7 @@ def test_build_track_b_commands_uses_offline_artifacts_only():
     assert "candidate_market_no_echo_v1" in flat
     assert "--input-is-holdout" in commands[2]
     assert "model_comparison_track_b.json" in flat
+    assert "next_generation" in flat
 
 
 def test_build_track_b_commands_can_skip_dataset_limit():
