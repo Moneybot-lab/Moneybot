@@ -102,9 +102,17 @@ def test_training_source_report_requires_massive_manifest_and_leakage_guard(tmp_
     input_path = tmp_path / "decision_training_snapshot_massive.jsonl"
     input_path.write_text("{}\n", encoding="utf-8")
     input_path.with_suffix(".jsonl.manifest.json").write_text(json.dumps({
-        "schema_version": "massive-decision-training-rows.v1",
-        "leakage_safe": True,
-        "join_policy": "last_market_row_on_or_before_decision_date; labels strictly after that row",
+            "schema_version": "massive-decision-training-rows.v2",
+            "leakage_safe": True,
+            "join_policy": "last_market_row_on_or_before_decision_date; labels strictly after that row",
+            "corporate_action_normalization_required": True,
+            "corporate_action_normalization_passed": True,
+            "split_metadata_available": True,
+            "split_metadata_hash": "fixture-split-hash",
+            "price_adjustment_policy": "event_time_split_adjusted",
+            "volume_adjustment_policy": "inverse_split_factor",
+            "feature_split_boundary_errors": 0,
+            "label_split_boundary_errors": 0,
     }), encoding="utf-8")
     frame = pd.DataFrame({"leakage_guard": ["features_asof_market_close_on_or_before_decision_date_labels_after_decision_date"]})
 

@@ -48,6 +48,11 @@ MAX_STABLE_THRESHOLD_SPREAD = 0.05
 RAW_PRICE_TOP_CONTRIBUTOR_RATE_LIMIT = 0.25
 PRODUCTION_BOOTSTRAP_RESAMPLES = 1000
 MIN_PRODUCTION_BOOTSTRAP_PROBABILITY_POSITIVE = 0.95
+SUPPORTED_MASSIVE_CANONICAL_SCHEMAS = {"massive-decision-training-rows.v1", "massive-decision-training-rows.v2"}
+CURRENT_MASSIVE_CANONICAL_SCHEMA = "massive-decision-training-rows.v2"
+PRICE_ADJUSTMENT_POLICY = "event_time_split_adjusted"
+VOLUME_ADJUSTMENT_POLICY = "inverse_split_factor"
+CORPORATE_ACTION_LINEAGE_KEYS = ("canonical_dataset_schema_version", "split_metadata_hash", "price_adjustment_policy", "volume_adjustment_policy")
 
 
 def _training_source_report(input_path: str, frame: pd.DataFrame | None = None) -> dict[str, Any]:
@@ -74,6 +79,7 @@ def _training_source_report(input_path: str, frame: pd.DataFrame | None = None) 
                 manifest_path = upstream_manifest
                 manifest = json.loads(upstream_manifest.read_text(encoding="utf-8"))
     source_kind = "massive-backed" if path.name == "decision_training_snapshot_massive.jsonl" or path.parent.name == "training_quality" else "legacy_track_b"
+    corporate_action_evidence = {**manifest, **quality_report}
     return {
         "input_path": str(path),
         "source_kind": source_kind,
@@ -91,6 +97,14 @@ def _training_source_report(input_path: str, frame: pd.DataFrame | None = None) 
         "join_policy": manifest.get("join_policy"),
         "leakage_guard_values": leakage_guards,
         "massive_manifest": manifest,
+        "corporate_action_normalization_required": corporate_action_evidence.get("corporate_action_normalization_required"),
+        "corporate_action_normalization_passed": corporate_action_evidence.get("corporate_action_normalization_passed"),
+        "split_metadata_available": corporate_action_evidence.get("split_metadata_available"),
+        "split_metadata_hash": corporate_action_evidence.get("split_metadata_hash"),
+        "price_adjustment_policy": corporate_action_evidence.get("price_adjustment_policy"),
+        "volume_adjustment_policy": corporate_action_evidence.get("volume_adjustment_policy"),
+        "feature_split_boundary_errors": corporate_action_evidence.get("feature_split_boundary_errors"),
+        "label_split_boundary_errors": corporate_action_evidence.get("label_split_boundary_errors"),
     }
 
 
@@ -101,7 +115,22 @@ def _training_source_phase1_passed(training_source: dict[str, Any] | None) -> bo
         return False
     if not training_source.get("manifest_loaded") or not training_source.get("leakage_safe"):
         return False
-    if str(training_source.get("schema_version") or "") != "massive-decision-training-rows.v1":
+    schema = str(training_source.get("schema_version") or "")
+    if schema not in SUPPORTED_MASSIVE_CANONICAL_SCHEMAS:
+        return False
+    # V1 is retained for historical diagnostics, but is not current canonical evidence.
+    if schema != CURRENT_MASSIVE_CANONICAL_SCHEMA:
+        return False
+    if not (
+        training_source.get("corporate_action_normalization_required") is True
+        and training_source.get("corporate_action_normalization_passed") is True
+        and training_source.get("split_metadata_available") is True
+        and str(training_source.get("split_metadata_hash") or "").strip()
+        and training_source.get("price_adjustment_policy") == PRICE_ADJUSTMENT_POLICY
+        and training_source.get("volume_adjustment_policy") == VOLUME_ADJUSTMENT_POLICY
+        and int(training_source.get("feature_split_boundary_errors") or 0) == 0
+        and int(training_source.get("label_split_boundary_errors") or 0) == 0
+    ):
         return False
     join_policy = str(training_source.get("join_policy") or "").lower()
     normalized_join_policy = join_policy.replace("_", " ")
@@ -1260,8 +1289,10 @@ ALLOWED_LAGGED_RETURN_FEATURES = [
     "feature_return_20d_lagged",
 ]
 MANIFEST_PROVEN_ASOF_RETURN_FEATURES = [
+    "feature_spy_return_1d",
     "feature_sector_relative_return_5d",
     "feature_spy_return_5d",
+    "feature_symbol_minus_spy_5d",
 ]
 BLOCKED_UNLAGGED_FUTURE_FEATURES = [
     "feature_return_5d",
@@ -1557,12 +1588,20 @@ def _phase_1_gate(
         and temporal_split.get("test_rows_before") is not None
         and training_source_passed
     )
+    canonical_pre_split_holdout = bool(
+        temporal_split.get("method") == "pre_split_cleaned_holdout"
+        and temporal_split.get("cleaned_test_untouched")
+        and temporal_split.get("label_horizon_gap_passed")
+        and int(temporal_split.get("date_overlap_count") or 0) == 0
+        and int(temporal_split.get("symbol_date_overlap_count") or 0) == 0
+        and training_source_passed
+    )
     gate_results = {
         "reproducibility_passed": bool(detailed_certification.get("reproducible")),
         "recipe_lineage_passed": recipe_lineage_passed,
         "walk_forward_recipe_reproduction_passed": bool(detailed_certification.get("recipe_reproduction_passed")) and bool(walk_forward.get("recipe_reproduction_passed")),
-        "split_hygiene_passed": bool(detailed_certification.get("split_hygiene_passed")),
-        "purge_embargo_passed": bool(detailed_certification.get("purge_embargo_passed")),
+        "split_hygiene_passed": bool(detailed_certification.get("split_hygiene_passed") or canonical_pre_split_holdout),
+        "purge_embargo_passed": bool(detailed_certification.get("purge_embargo_passed") or canonical_pre_split_holdout),
         "future_feature_leakage_passed": bool(detailed_certification.get("future_feature_leakage_passed")),
         "artifact_scored_mistake_mining_passed": bool(detailed_certification.get("artifact_scored_mistake_mining_passed")),
         "cmi_regression_detection_passed": bool(detailed_certification.get("cmi_regression_test_passed")),
@@ -1621,6 +1660,7 @@ def _comparison_scope_report(
     target_columns_match: bool = True,
     evaluation_horizon_match: bool = True,
     duplicate_weighting_policy_match: bool = True,
+    corporate_action_lineage_match: bool = True,
 ) -> dict[str, Any]:
     dates = _event_date_series(frame) if len(frame) else pd.Series([], dtype=str)
     symbols = frame["symbol"].fillna("unknown").astype(str).str.upper() if "symbol" in frame.columns else pd.Series("unknown", index=frame.index)
@@ -1629,7 +1669,7 @@ def _comparison_scope_report(
     candidate_passed = _coverage_passed(candidate_availability)
     feature_schema_compatible = bool(production_passed and candidate_passed)
     scope = "narrow_diagnostic" if len(frame) < 1000 else "holdout-only"
-    apples_to_apples = bool(feature_schema_compatible and target_columns_match and evaluation_horizon_match and duplicate_weighting_policy_match)
+    apples_to_apples = bool(feature_schema_compatible and target_columns_match and evaluation_horizon_match and duplicate_weighting_policy_match and corporate_action_lineage_match)
     promotion_eligible = bool(scope != "narrow_diagnostic" and apples_to_apples)
     invalid_reasons: list[str] = []
     if scope == "narrow_diagnostic":
@@ -1644,6 +1684,8 @@ def _comparison_scope_report(
         invalid_reasons.append("candidate and comparator evaluation horizons do not match")
     if not duplicate_weighting_policy_match:
         invalid_reasons.append("candidate and comparator duplicate-weighting policies do not match")
+    if not corporate_action_lineage_match:
+        invalid_reasons.append("candidate, comparator, and holdout corporate-action lineage do not match")
     return {
         "source_file_used": input_path,
         "row_count": int(len(frame)),
@@ -1657,6 +1699,7 @@ def _comparison_scope_report(
         "target_columns_match": bool(target_columns_match),
         "same_evaluation_horizon": bool(evaluation_horizon_match),
         "duplicate_weighting_policy_match": bool(duplicate_weighting_policy_match),
+        "corporate_action_lineage_match": bool(corporate_action_lineage_match),
         "production_scoring_mode": "native_or_valid_adapter" if production_passed else "fill_or_default_values",
         "production_feature_mode": "native_massive_features" if production_passed else "fill_or_default_values",
         "production_feature_coverage_passed": production_passed,
@@ -1676,6 +1719,49 @@ def _artifact_lineage_value(model_path: str, key: str) -> Any:
         return payload.get(key)
     lineage = payload.get("lineage") if isinstance(payload.get("lineage"), dict) else {}
     return lineage.get(key)
+
+
+def _artifact_corporate_action_lineage(model_path: str) -> dict[str, Any]:
+    if not Path(model_path).exists():
+        return {key: None for key in CORPORATE_ACTION_LINEAGE_KEYS}
+    payload = json.loads(Path(model_path).read_text(encoding="utf-8"))
+    lineage = payload.get("dataset_lineage")
+    if not isinstance(lineage, dict):
+        artifact_lineage = payload.get("lineage") if isinstance(payload.get("lineage"), dict) else {}
+        lineage = artifact_lineage.get("dataset_lineage")
+        if not isinstance(lineage, dict):
+            recipe = artifact_lineage.get("recipe") if isinstance(artifact_lineage.get("recipe"), dict) else {}
+            lineage = recipe.get("dataset_lineage")
+    lineage = lineage if isinstance(lineage, dict) else {}
+    return {key: lineage.get(key) for key in CORPORATE_ACTION_LINEAGE_KEYS}
+
+
+def _holdout_corporate_action_lineage(frame: pd.DataFrame) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key in CORPORATE_ACTION_LINEAGE_KEYS:
+        values = sorted(set(frame[key].dropna().astype(str))) if key in frame.columns else []
+        result[key] = values[0] if len(values) == 1 else None
+    return result
+
+
+def _corporate_action_lineage_report(candidate_model_path: str, comparator_model_path: str, frame: pd.DataFrame) -> dict[str, Any]:
+    candidate = _artifact_corporate_action_lineage(candidate_model_path)
+    comparator = _artifact_corporate_action_lineage(comparator_model_path)
+    holdout = _holdout_corporate_action_lineage(frame)
+    expected = {
+        "canonical_dataset_schema_version": CURRENT_MASSIVE_CANONICAL_SCHEMA,
+        "price_adjustment_policy": PRICE_ADJUSTMENT_POLICY,
+        "volume_adjustment_policy": VOLUME_ADJUSTMENT_POLICY,
+    }
+    mismatches = []
+    for key in CORPORATE_ACTION_LINEAGE_KEYS:
+        values = {candidate.get(key), comparator.get(key), holdout.get(key)}
+        if None in values or "" in values or len(values) != 1:
+            mismatches.append(f"{key} differs or is missing across candidate, comparator, and holdout")
+    for key, value in expected.items():
+        if candidate.get(key) != value:
+            mismatches.append(f"{key} is not the required canonical value {value}")
+    return {"passed": not mismatches, "candidate": candidate, "comparator": comparator, "holdout": holdout, "mismatches": mismatches}
 
 
 def _holdout_identity_report(frame: pd.DataFrame) -> dict[str, Any]:
@@ -1832,8 +1918,8 @@ def _invalidate_phase_1_for_comparison(phase_1_gate: dict[str, Any], comparison_
     gate = json.loads(json.dumps(phase_1_gate))
     gate_results = gate.setdefault("gate_results", {})
     blocking = list(gate.get("blocking_issues") or [])
+    gate_results["comparison_validity_passed"] = bool(comparison_scope.get("comparison_valid"))
     if not comparison_scope.get("comparison_valid"):
-        gate_results["comparison_validity_passed"] = False
         blocking.extend(["production comparison invalid due missing/default-filled production features", "comparison is not promotion-eligible evidence"])
     symbol_concentration = _numeric_metric(candidate_metrics, "symbol_selection_concentration") or _numeric_metric(candidate_metrics, "symbol_utility_concentration")
     if symbol_concentration is not None and symbol_concentration > MAX_SYMBOL_UTILITY_CONCENTRATION:
@@ -2062,6 +2148,7 @@ def main() -> None:
     comparator_horizon = _artifact_lineage_value(comparator_model, "horizon_days")
     candidate_weighting = _artifact_lineage_value(args.candidate_model, "sample_weight_policy")
     comparator_weighting = _artifact_lineage_value(comparator_model, "sample_weight_policy")
+    corporate_action_lineage = _corporate_action_lineage_report(args.candidate_model, comparator_model, test_df.copy())
     comparison_scope_report = _comparison_scope_report(
         args.input,
         test_df.copy(),
@@ -2070,6 +2157,7 @@ def main() -> None:
         target_columns_match=bool(candidate_target and candidate_target == comparator_target),
         evaluation_horizon_match=bool(candidate_horizon == comparator_horizon == 5),
         duplicate_weighting_policy_match=bool(candidate_weighting and candidate_weighting == comparator_weighting),
+        corporate_action_lineage_match=bool(corporate_action_lineage["passed"]),
     )
     comparison_scope_report.update({
         "comparator_kind": comparator["comparator_kind"],
@@ -2081,6 +2169,7 @@ def main() -> None:
         "same_evaluation_horizon": comparison_scope_report["same_evaluation_horizon"],
         "same_cleaned_holdout_rows": bool(args.input_is_holdout and Path(args.input).name == "cleaned_test.jsonl"),
         "same_leakage_guard": bool(_training_source_phase1_passed(training_source)),
+        "corporate_action_lineage": corporate_action_lineage,
         "production_scoring_mode": comparator["production_scoring_mode"] if comparison_scope_report["comparison_valid"] else comparison_scope_report["production_scoring_mode"],
     })
     if not comparison_scope_report["same_cleaned_holdout_rows"] or not comparison_scope_report["same_leakage_guard"]:
