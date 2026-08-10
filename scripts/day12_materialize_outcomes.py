@@ -7,7 +7,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pandas as pd
 import yfinance as yf
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -15,7 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from moneybot.services.decision_log import read_decision_events
-from moneybot.services.market_data import MarketDataService
+from moneybot.services.outcome_history_provider import MassivePreferredHistoryDownload
 from moneybot.services.outcome_tracking import (
     OutcomeHistoryCache,
     evaluate_decision_events,
@@ -28,51 +27,6 @@ from moneybot.services.outcome_tracking import (
     summarize_paper_pnl_by_action,
 )
 from moneybot.services.runtime_paths import resolve_runtime_dir
-
-
-class MassivePreferredHistoryDownload:
-    def __init__(self) -> None:
-        self.service = MarketDataService()
-        self.massive_requests = 0
-        self.massive_successes = 0
-        self.yfinance_fallbacks = 0
-
-    def __call__(self, symbol: str, *, start: str, end: str, **kwargs):
-        self.massive_requests += 1
-        try:
-            payload = self.service.get_massive_aggregates(
-                str(symbol).upper(),
-                multiplier=1,
-                timespan="day",
-                start=start,
-                end=end,
-                adjusted=True,
-            )
-            bars = payload.get("bars") if isinstance(payload, dict) else []
-            rows = []
-            for bar in bars or []:
-                date_value = bar.get("date") or bar.get("timestamp_utc") or bar.get("t")
-                close = bar.get("close") or bar.get("c")
-                if date_value is None or close is None:
-                    continue
-                rows.append((pd.Timestamp(date_value).date(), float(close)))
-            if rows:
-                self.massive_successes += 1
-                index = pd.to_datetime([row[0] for row in rows])
-                return pd.DataFrame({"Close": [row[1] for row in rows]}, index=index)
-        except Exception:  # noqa: BLE001
-            pass
-        self.yfinance_fallbacks += 1
-        return yf.download(symbol, start=start, end=end, **kwargs)
-
-    def diagnostics_payload(self) -> dict:
-        return {
-            "outcome_history_preferred_provider": "massive",
-            "outcome_history_fallback_provider": "yfinance",
-            "massive_history_requests": self.massive_requests,
-            "massive_history_successes": self.massive_successes,
-            "yfinance_history_fallbacks": self.yfinance_fallbacks,
-        }
 
 
 def select_visible_rows(

@@ -4,9 +4,16 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from moneybot.services.production_servability import certify_candidate
 
 PROMOTION_SCHEMA_VERSION = "moneybot-challenger-promotion.v1"
 
@@ -48,6 +55,7 @@ def prepare_challenger_promotion(*, backtest_report_path: Path, output_dir: Path
     output_dir.mkdir(parents=True, exist_ok=True)
     comparison_path = output_dir / "model_comparison_track_b.json"
     candidate_path = output_dir / "candidate_model_track_b.json"
+    certification_path = output_dir / "production_servability_certification.json"
     eligible = _eligible_challengers(report)
 
     if not eligible:
@@ -78,8 +86,31 @@ def prepare_challenger_promotion(*, backtest_report_path: Path, output_dir: Path
             "prepared_at_utc": datetime.now(timezone.utc).isoformat(),
         }
 
+    certification = certify_candidate(candidate_path)
+    certification_path.write_text(json.dumps(certification, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    comparison["servability_certification"] = {
+        "passed": certification["passed"],
+        "artifact_sha256": certification["candidate_artifact_sha256"],
+        "feature_contract_version": certification["feature_contract_version"],
+        "forecast_horizon": certification["forecast_horizon"],
+        "required_features": len(certification["required_features"]),
+        "servable_features": sum(item["servable"] for item in certification["feature_audit"]),
+        "blocking_issues": certification["blocking_reasons"],
+        "warnings": certification["warnings"],
+        "certification_path": str(certification_path),
+    }
+    comparison["production_promotion_gates"] = {
+        **(comparison.get("production_promotion_gates") or {}),
+        "servability_certification_passed": certification["passed"],
+        "servability_blocking_reasons": certification["blocking_reasons"],
+    }
     comparison_path.write_text(json.dumps(comparison, indent=2, sort_keys=True), encoding="utf-8")
-    return {"comparison_report_path": str(comparison_path), "candidate_model_path": str(candidate_path), **comparison}
+    return {
+        "comparison_report_path": str(comparison_path),
+        "candidate_model_path": str(candidate_path),
+        "servability_certification_path": str(certification_path),
+        **comparison,
+    }
 
 
 def main() -> None:

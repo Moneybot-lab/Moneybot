@@ -27,9 +27,15 @@ from moneybot.services.deterministic_model import (
 )
 from moneybot.services.model_metadata import append_artifact_history, build_artifact_metadata, save_artifact_metadata
 from moneybot.services.temporal_validation import purge_embargo_periods
+from moneybot.services.decision_target import (
+    HORIZON_DAYS,
+    POSITIVE_RETURN_BUCKETS,
+    RETURN_BIN_EDGES,
+    TARGET_NAME,
+    target_metadata,
+)
 
-RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
-TARGET_GAIN_BUCKETS = {"gain", "big_gain"}
+TARGET_GAIN_BUCKETS = set(POSITIVE_RETURN_BUCKETS)
 RETURN_BIN_SAMPLE_WEIGHTS = {
     "big_loss": 3.0,
     "loss": 1.5,
@@ -45,7 +51,7 @@ UTILITY_DOWNSIDE_WEIGHT = 1.0
 UTILITY_BIG_LOSS_WEIGHT = 1.0
 CALIBRATION_FRACTION_OF_DEVELOPMENT = 0.20
 THRESHOLD_FRACTION_OF_DEVELOPMENT = 0.20
-LABEL_HORIZON_DAYS = 5
+LABEL_HORIZON_DAYS = HORIZON_DAYS
 EMBARGO_DAYS = 1
 DEFAULT_DECISION_THRESHOLD = 0.55
 MIN_THRESHOLD_SELECTION_POSITIVE_PREDICTIONS = 10
@@ -723,7 +729,7 @@ def main() -> None:
             raise SystemExit("Missing target column label_up_5d and unable to derive from return_5d")
 
     df = _ensure_return_bucket_labels(df)
-    target_column = "label_gain_5d"
+    target_column = TARGET_NAME
     df[target_column] = pd.to_numeric(df[target_column], errors="coerce")
     filtered_target = df.dropna(subset=[target_column]).copy()
     rows_after_target_filter = len(filtered_target)
@@ -801,6 +807,7 @@ def main() -> None:
             "calibration": calibration,
             "recipe_reproduction": recipe_reproduction,
             "training_source": training_source,
+            "decision_target": target_metadata(),
             "feature_preference_policy": {
                 "preferred_families": ["lagged_returns", "technical", "volume_liquidity", "market_regime", "spy_relative"],
                 "app_signal_features_ranked_after_massive_market_features": True,
@@ -826,6 +833,12 @@ def main() -> None:
     )
 
     save_artifact(artifact, args.output_model)
+    artifact_payload = json.loads(Path(args.output_model).read_text(encoding="utf-8"))
+    artifact_payload.update(target_metadata())
+    Path(args.output_model).write_text(
+        json.dumps(artifact_payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     metadata = build_artifact_metadata(
         model_path=args.output_model,
         model_version=artifact.version,
@@ -857,6 +870,7 @@ def main() -> None:
                 "recipe_reproduction": recipe_reproduction,
                 "training_source": training_source,
                 "feature_preference_policy": metrics["feature_preference_policy"],
+                "decision_target": target_metadata(),
                 "feature_availability_report": metrics["feature_availability_report"],
                 "training_periods": metrics["training_periods"],
             },
