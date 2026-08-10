@@ -71,6 +71,30 @@ def test_forward_split_and_multiple_factors_compose():
     )
 
 
+def test_stock_dividend_with_explicit_ratio_uses_same_share_basis_math():
+    dividend = canonical_splits(
+        [
+            {
+                "ticker": "ABC",
+                "execution_date": "2026-02-01",
+                "adjustment_type": "stock_dividend",
+                "split_from": 1,
+                "split_to": 1.1,
+                "id": "dividend",
+            }
+        ]
+    )
+    assert len(dividend) == 1
+    adjusted = adjust_bars_to_asof(
+        [bar("2026-01-31", 110, 100), bar("2026-02-01", 101, 110)],
+        dividend,
+        "2026-02-01",
+    )
+    assert adjusted[0]["close"] == pytest.approx(100)
+    assert adjusted[0]["volume"] == pytest.approx(110)
+    assert adjusted[0]["close"] * adjusted[0]["volume"] == pytest.approx(11_000)
+
+
 def test_future_split_normalizes_label_but_cannot_change_features():
     events = canonical_splits([split("ABC", "2026-01-08", 1, 2, "future")])
     history = [bar(f"2026-01-{day:02d}", 100 + day) for day in range(1, 8)]

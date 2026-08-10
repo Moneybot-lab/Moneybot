@@ -7,7 +7,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 CORPORATE_ACTION_SCHEMA_VERSION = "moneybot-corporate-actions.v1"
-SUPPORTED_ADJUSTMENT_TYPES = {"forward_split", "reverse_split"}
+# Massive represents stock dividends in the splits feed with the same explicit
+# split_from/split_to share-basis ratio. They are safe to normalize when (and
+# only when) both positive ratio fields are present, exactly like other splits.
+SUPPORTED_ADJUSTMENT_TYPES = {"forward_split", "reverse_split", "stock_dividend"}
 
 
 def normalize_split(raw: dict[str, Any]) -> dict[str, Any] | None:

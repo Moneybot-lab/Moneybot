@@ -16,7 +16,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from moneybot.services.corporate_actions import (
     CORPORATE_ACTION_SCHEMA_VERSION,
+    SUPPORTED_ADJUSTMENT_TYPES,
     canonical_splits,
+    normalize_split,
     split_source_hash,
 )
 from moneybot.services.decision_log import read_decision_events
@@ -107,9 +109,22 @@ def materialize(
             for item in raw
             if str(item.get("ticker") or "").strip().upper() in wanted
             and str(item.get("adjustment_type") or "").strip().lower()
-            not in {"forward_split", "reverse_split"}
+            not in SUPPORTED_ADJUSTMENT_TYPES
         }
     )
+    invalid_share_actions = [
+        {
+            "ticker": str(item.get("ticker") or "").strip().upper(),
+            "execution_date": str(item.get("execution_date") or "")[:10],
+            "adjustment_type": str(item.get("adjustment_type") or "unknown"),
+            "id": str(item.get("id") or ""),
+        }
+        for item in raw
+        if str(item.get("ticker") or "").strip().upper() in wanted
+        and str(item.get("adjustment_type") or "").strip().lower()
+        in SUPPORTED_ADJUSTMENT_TYPES
+        and normalize_split(item) is None
+    ]
     output_dir.mkdir(parents=True, exist_ok=True)
     cache = output_dir / "massive_splits.jsonl"
     cache.write_text(
@@ -129,15 +144,17 @@ def materialize(
         "response_page_count": pages,
         "source_hash": split_source_hash(splits),
         "unsupported_adjustment_types_audited_not_applied": unsupported_types,
-        "corporate_action_normalization_passed": not unsupported_types,
+        "invalid_share_actions": invalid_share_actions,
+        "corporate_action_normalization_passed": not unsupported_types
+        and not invalid_share_actions,
     }
     (output_dir / "split_adjustment_manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    if unsupported_types:
+    if unsupported_types or invalid_share_actions:
         raise ValueError(
             "Unsupported share-count corporate actions require explicit semantics: "
-            + ", ".join(unsupported_types)
+            + ", ".join(unsupported_types or ["malformed split_from/split_to"])
         )
     return manifest
 
