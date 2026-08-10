@@ -231,6 +231,23 @@ def main() -> None:
             raise SystemExit(completed.returncode)
 
     summary["success"] = True
+    corporate_audit = _load_json(output_dir / "training_quality" / "corporate_action_audit.json")
+    split_manifest = _load_json(output_dir / "corporate_actions" / "split_adjustment_manifest.json")
+    before_after = _load_json(output_dir / "training_quality" / "split_adjustment_before_after_report.json")
+    quality_report = _load_json(output_dir / "training_quality" / "model_quality_report.json")
+    summary["corporate_action_normalization"] = {
+        "required": True,
+        "passed": quality_report.get("corporate_action_normalization_passed") is True,
+        "source": "massive",
+        "policy": "event_time_split_adjusted",
+        "split_event_count": corporate_audit.get("split_events_loaded"),
+        "affected_symbols": corporate_audit.get("symbols_with_splits"),
+        "affected_feature_rows": corporate_audit.get("affected_feature_rows"),
+        "affected_label_rows": corporate_audit.get("affected_label_rows"),
+        "split_metadata_hash": corporate_audit.get("split_metadata_hash"),
+        "suspicious_rows_before": before_after.get("suspicious_rows_before"),
+        "suspicious_rows_after": before_after.get("suspicious_rows_after"),
+    }
     summary["alpha_atlas_v3"] = alpha_atlas_v3_summary(output_dir)
     summary["alpha_atlas_v31"] = alpha_atlas_v31_summary(output_dir)
     if certification_path.exists():

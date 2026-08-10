@@ -90,7 +90,9 @@ def test_exact_backward_market_calculations_and_order():
 def test_training_builder_uses_same_shared_values_and_future_return_only_as_label():
     market = {"AAPL": _bars("AAPL"), "SPY": _bars("SPY", base=100, slope=0.1)}
     event = _event("2026-02-20")
-    rows, summary = build_training_rows_from_raw_market([event], market, horizon_days=5)
+    rows, summary = build_training_rows_from_raw_market(
+        [event], market, horizon_days=5, split_events=[]
+    )
     assert summary["rows_joined"] == 1
     row = rows[0]
     asof_bars = [

@@ -97,7 +97,34 @@ def _load_jsonl(path: Path) -> pd.DataFrame:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    return pd.DataFrame(rows)
+    frame = pd.DataFrame(rows)
+    if path.name.startswith("cleaned_"):
+        required = {
+            "canonical_dataset_schema_version",
+            "split_metadata_hash",
+            "price_adjustment_policy",
+        }
+        missing = required.difference(frame.columns)
+        if missing:
+            raise ValueError(
+                f"Cleaned Massive input lacks corporate-action lineage: {sorted(missing)}"
+            )
+        if set(frame["canonical_dataset_schema_version"].dropna().astype(str)) != {
+            "massive-decision-training-rows.v2"
+        }:
+            raise ValueError(
+                "Cleaned Massive input uses a stale canonical dataset schema"
+            )
+        if set(frame["price_adjustment_policy"].dropna().astype(str)) != {
+            "event_time_split_adjusted"
+        }:
+            raise ValueError("Cleaned Massive input is not event-time split adjusted")
+        hashes = set(frame["split_metadata_hash"].dropna().astype(str))
+        if len(hashes) != 1 or not next(iter(hashes), ""):
+            raise ValueError(
+                "Cleaned Massive input has inconsistent split metadata lineage"
+            )
+    return frame
 
 
 def _market_feature_columns(frame: pd.DataFrame) -> list[str]:
@@ -377,6 +404,18 @@ def train_massive_market_model(
     train = _load_jsonl(train_path)
     test = _load_jsonl(test_path)
     all_cleaned = _load_jsonl(all_path)
+    dataset_lineage = {
+        "canonical_dataset_schema_version": str(
+            train["canonical_dataset_schema_version"].iloc[0]
+        ),
+        "split_metadata_hash": str(train["split_metadata_hash"].iloc[0]),
+        "price_adjustment_policy": str(train["price_adjustment_policy"].iloc[0]),
+        "volume_adjustment_policy": str(
+            train.get(
+                "volume_adjustment_policy", pd.Series(["inverse_split_factor"])
+            ).iloc[0]
+        ),
+    }
     for name, frame in (("train", train), ("test", test)):
         missing = {TARGET_COLUMN, RETURN_COLUMN}.difference(frame.columns)
         if missing:
@@ -446,6 +485,7 @@ def train_massive_market_model(
         "evaluation_return_column": RETURN_COLUMN,
         "horizon_days": 5,
         "decision_target": target_metadata(),
+        "dataset_lineage": dataset_lineage,
     }
     recipe_hash = hashlib.sha256(
         json.dumps(deployable_recipe, sort_keys=True, separators=(",", ":")).encode(
@@ -470,6 +510,7 @@ def train_massive_market_model(
         "calibration": calibration_report,
         "feature_fill_values": fills,
         "threshold_selection": threshold_report,
+        "dataset_lineage": dataset_lineage,
     }
     save_artifact(model, output_path)
     # Keep deployment-critical configuration visible without requiring lineage
@@ -507,6 +548,7 @@ def train_massive_market_model(
             "calibration": calibration_report,
             "forecast_horizon": "5d",
             "feature_fill_values": fills,
+            "dataset_lineage": dataset_lineage,
         }
     )
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -544,6 +586,7 @@ def train_massive_market_model(
         "evaluation_return_column": RETURN_COLUMN,
         "feature_columns": features,
         "feature_fill_values": fills,
+        "dataset_lineage": dataset_lineage,
         "sample_weight_policy": model.lineage["sample_weight_policy"],
         "duplicate_weighting_applied": True,
         "training_inputs": {

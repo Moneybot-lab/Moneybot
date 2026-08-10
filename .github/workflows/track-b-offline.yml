@@ -160,6 +160,16 @@ jobs:
           fi
           python3 scripts/ingest_massive_flatfiles.py "${args[@]}"
 
+      - name: Materialize point-in-time Massive split metadata
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$MASSIVE_API_KEY" || (echo "Missing secret: MASSIVE_API_KEY; canonical Track B requires corporate-action metadata" && exit 1)
+          python3 scripts/fetch_massive_splits.py \
+            --decision-log data/decision_events.jsonl \
+            --output-dir data/track_b/corporate_actions
+
       - name: Build leakage-safe Massive decision training rows
         run: |
           set -euo pipefail
@@ -167,6 +177,7 @@ jobs:
             --raw-root data/raw/massive_flatfiles \
             --decision-log data/decision_events.jsonl \
             --output data/track_b/decision_training_snapshot_massive.jsonl \
+            --split-cache data/track_b/corporate_actions/massive_splits.jsonl \
             --limit 50000 \
             --horizon-days 5
           echo "Training-row manifest:"

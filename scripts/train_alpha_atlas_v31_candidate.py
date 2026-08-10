@@ -502,6 +502,13 @@ def train_v31(
     _require_inputs([train_path, test_path, all_path])
     output_dir.mkdir(parents=True, exist_ok=True)
     train = _load_jsonl(train_path)
+    dataset_lineage = {
+        "canonical_dataset_schema_version": str(
+            train["canonical_dataset_schema_version"].iloc[0]
+        ),
+        "split_metadata_hash": str(train["split_metadata_hash"].iloc[0]),
+        "price_adjustment_policy": str(train["price_adjustment_policy"].iloc[0]),
+    }
     periods, boundaries = _temporal_train_periods(train)
     fit_raw, calibration_raw, threshold_raw = periods
     _write(
@@ -596,6 +603,7 @@ def train_v31(
         "selection_input": str(train_path),
         "holdout_input": None,
         "recipe_frozen_before_holdout": True,
+        "dataset_lineage": dataset_lineage,
     }
     recipe_hash = hashlib.sha256(
         json.dumps(recipe, sort_keys=True, separators=(",", ":")).encode()
@@ -621,6 +629,7 @@ def train_v31(
         "train_path": str(train_path),
         "test_path": str(test_path),
         "all_cleaned_path": str(all_path),
+        "dataset_lineage": dataset_lineage,
     }
     candidate_path = output_dir / "candidate_alpha_atlas_v31_clean.json"
     save_artifact(model, candidate_path)

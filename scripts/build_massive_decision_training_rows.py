@@ -14,9 +14,22 @@ from typing import Any, Iterable
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import normalize_action, normalize_unix_ts
 from moneybot.services.alpha_atlas_v3_features import build_alpha_atlas_v3_features
-from moneybot.services.decision_target import TARGET_NAME, label_from_forward_return, target_metadata
+from moneybot.services.decision_target import (
+    TARGET_NAME,
+    label_from_forward_return,
+    target_metadata,
+)
+from moneybot.services.corporate_actions import (
+    CORPORATE_ACTION_SCHEMA_VERSION,
+    adjust_bars_to_asof,
+    index_splits,
+    load_split_cache,
+    price_factor_between,
+    split_adjusted_forward_return,
+    split_source_hash,
+)
 
-SCHEMA_VERSION = "massive-decision-training-rows.v1"
+SCHEMA_VERSION = "massive-decision-training-rows.v2"
 SECTOR_BENCHMARK_SYMBOLS = {
     "communication services": "XLC",
     "consumer discretionary": "XLY",
@@ -68,8 +81,18 @@ def _market_date(raw: Any) -> str | None:
 
 
 def _normalize_market_row(row: dict[str, Any]) -> dict[str, Any] | None:
-    symbol = str(row.get("ticker") or row.get("symbol") or row.get("T") or "").strip().upper()
-    day = _market_date(row.get("date") or row.get("day") or row.get("window_start") or row.get("timestamp") or row.get("t"))
+    symbol = (
+        str(row.get("ticker") or row.get("symbol") or row.get("T") or "")
+        .strip()
+        .upper()
+    )
+    day = _market_date(
+        row.get("date")
+        or row.get("day")
+        or row.get("window_start")
+        or row.get("timestamp")
+        or row.get("t")
+    )
     close = _coerce_float(row.get("close") or row.get("c") or row.get("Close"))
     if not symbol or not day or close is None:
         return None
@@ -125,12 +148,21 @@ def load_market_history(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    wanted = {str(symbol).strip().upper() for symbol in symbols or set() if str(symbol).strip()}
+    wanted = {
+        str(symbol).strip().upper()
+        for symbol in symbols or set()
+        if str(symbol).strip()
+    }
     by_symbol: dict[str, dict[str, dict[str, Any]]] = {}
     for path in sorted(raw_root.rglob("*")):
         if not path.is_file() or path.name.startswith("_"):
             continue
-        if not (path.name.endswith(".csv") or path.name.endswith(".csv.gz") or path.name.endswith(".jsonl") or path.name.endswith(".jsonl.gz")):
+        if not (
+            path.name.endswith(".csv")
+            or path.name.endswith(".csv.gz")
+            or path.name.endswith(".jsonl")
+            or path.name.endswith(".jsonl.gz")
+        ):
             continue
         path_day = _path_market_date(path)
         if path_day and start_date and path_day < start_date:
@@ -147,10 +179,15 @@ def load_market_history(
             if end_date and day > end_date:
                 continue
             by_symbol.setdefault(symbol, {})[day] = row
-    return {symbol: [rows[day] for day in sorted(rows)] for symbol, rows in by_symbol.items()}
+    return {
+        symbol: [rows[day] for day in sorted(rows)]
+        for symbol, rows in by_symbol.items()
+    }
 
 
-def _market_load_window(events: list[dict[str, Any]], *, horizon_days: int, history_lag_days: int = 70) -> tuple[set[str], str | None, str | None]:
+def _market_load_window(
+    events: list[dict[str, Any]], *, horizon_days: int, history_lag_days: int = 70
+) -> tuple[set[str], str | None, str | None]:
     symbols: set[str] = set()
     event_days = []
     for event in events:
@@ -170,13 +207,19 @@ def _market_load_window(events: list[dict[str, Any]], *, horizon_days: int, hist
     return symbols, start.isoformat(), end.isoformat()
 
 
-def _symbol_signal_counts(events: list[dict[str, Any]], symbol: str, ts: int, *, window_days: int = 7) -> dict[str, int]:
+def _symbol_signal_counts(
+    events: list[dict[str, Any]], symbol: str, ts: int, *, window_days: int = 7
+) -> dict[str, int]:
     window_start = ts - (max(1, window_days) * 86_400)
     counts = {"signals": 0, "buys": 0, "sells": 0}
     for event in events:
         event_symbol = str(event.get("symbol") or "").strip().upper()
         event_ts = normalize_unix_ts(event.get("ts"))
-        if event_symbol != symbol or event_ts is None or not (window_start <= event_ts < ts):
+        if (
+            event_symbol != symbol
+            or event_ts is None
+            or not (window_start <= event_ts < ts)
+        ):
             continue
         action = normalize_action(event)
         counts["signals"] += 1
@@ -197,7 +240,9 @@ def _event_probability_up(event: dict[str, Any]) -> float | None:
     return None
 
 
-def _previous_symbol_signal(events: list[dict[str, Any]], symbol: str, ts: int) -> dict[str, Any] | None:
+def _previous_symbol_signal(
+    events: list[dict[str, Any]], symbol: str, ts: int
+) -> dict[str, Any] | None:
     previous: dict[str, Any] | None = None
     previous_ts: int | None = None
     for event in events:
@@ -218,7 +263,9 @@ def _signal_history_index(events: list[dict[str, Any]]) -> dict[str, dict[str, A
         event_ts = normalize_unix_ts(event.get("ts"))
         if not symbol or event_ts is None:
             continue
-        grouped.setdefault(symbol, []).append((event_ts, normalize_action(event), _event_probability_up(event), event))
+        grouped.setdefault(symbol, []).append(
+            (event_ts, normalize_action(event), _event_probability_up(event), event)
+        )
     signal_index: dict[str, dict[str, Any]] = {}
     for symbol, entries in grouped.items():
         entries.sort(key=lambda item: item[0])
@@ -262,15 +309,21 @@ def _indexed_signal_context(
     }
     if current_pos <= 0:
         return counts, None, None, None, None
-    previous_ts, previous_action, previous_probability, previous_event = entries[current_pos - 1]
+    previous_ts, previous_action, previous_probability, previous_event = entries[
+        current_pos - 1
+    ]
     return counts, previous_event, previous_ts, previous_action, previous_probability
 
 
 def _market_date_index(market: dict[str, list[dict[str, Any]]]) -> dict[str, list[str]]:
-    return {symbol: [str(row["date"]) for row in rows] for symbol, rows in market.items()}
+    return {
+        symbol: [str(row["date"]) for row in rows] for symbol, rows in market.items()
+    }
 
 
-def _row_before_or_on_indexed(date_index: dict[str, list[str]], symbol: str, day: str) -> int | None:
+def _row_before_or_on_indexed(
+    date_index: dict[str, list[str]], symbol: str, day: str
+) -> int | None:
     dates = date_index.get(symbol)
     if not dates:
         return None
@@ -299,10 +352,14 @@ def _mean(values: list[float]) -> float | None:
     return sum(clean) / len(clean)
 
 
-def _rolling_close_mean(rows: list[dict[str, Any]], idx: int, window: int) -> float | None:
+def _rolling_close_mean(
+    rows: list[dict[str, Any]], idx: int, window: int
+) -> float | None:
     if idx + 1 < window:
         return None
-    closes = [_coerce_float(row.get("close")) for row in rows[idx - window + 1 : idx + 1]]
+    closes = [
+        _coerce_float(row.get("close")) for row in rows[idx - window + 1 : idx + 1]
+    ]
     if any(value is None for value in closes):
         return None
     return round(float(sum(closes)) / window, 6)
@@ -360,12 +417,16 @@ def _ema_values(values: list[float], span: int) -> float | None:
     return ema
 
 
-def _macd_components_at(rows: list[dict[str, Any]], idx: int) -> tuple[float | None, float | None, float | None]:
+def _macd_components_at(
+    rows: list[dict[str, Any]], idx: int
+) -> tuple[float | None, float | None, float | None]:
     macd_line = _macd_line_at(rows, idx)
     macd_values = [_macd_line_at(rows, pos) for pos in range(idx + 1)]
     clean = [float(value) for value in macd_values if value is not None]
     signal = _ema_values(clean, 9)
-    hist = (macd_line - signal) if macd_line is not None and signal is not None else None
+    hist = (
+        (macd_line - signal) if macd_line is not None and signal is not None else None
+    )
     return (
         round(macd_line, 6) if macd_line is not None else None,
         round(signal, 6) if signal is not None else None,
@@ -383,12 +444,16 @@ def _atr_at(rows: list[dict[str, Any]], idx: int, window: int = 14) -> float | N
         prev_close = _coerce_float(rows[pos - 1].get("close"))
         if high is None or low is None or prev_close is None:
             return None
-        true_ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+        true_ranges.append(
+            max(high - low, abs(high - prev_close), abs(low - prev_close))
+        )
     atr = _mean(true_ranges)
     return round(atr, 6) if atr is not None else None
 
 
-def _lagged_return(rows: list[dict[str, Any]] | None, idx: int | None, days: int) -> float | None:
+def _lagged_return(
+    rows: list[dict[str, Any]] | None, idx: int | None, days: int
+) -> float | None:
     if rows is None or idx is None or idx < days:
         return None
     close = _coerce_float(rows[idx].get("close"))
@@ -405,7 +470,12 @@ def _beta_to_benchmark(
     benchmark_idx: int | None,
     window: int = 20,
 ) -> float | None:
-    if benchmark_rows is None or benchmark_idx is None or symbol_idx < window or benchmark_idx < window:
+    if (
+        benchmark_rows is None
+        or benchmark_idx is None
+        or symbol_idx < window
+        or benchmark_idx < window
+    ):
         return None
     symbol_returns: list[float] = []
     benchmark_returns: list[float] = []
@@ -420,21 +490,26 @@ def _beta_to_benchmark(
         benchmark_returns.append(benchmark_return)
     symbol_mean = sum(symbol_returns) / window
     benchmark_mean = sum(benchmark_returns) / window
-    benchmark_variance = sum((ret - benchmark_mean) ** 2 for ret in benchmark_returns) / window
+    benchmark_variance = (
+        sum((ret - benchmark_mean) ** 2 for ret in benchmark_returns) / window
+    )
     if benchmark_variance == 0.0:
         return None
     covariance = (
         sum(
             (symbol_return - symbol_mean) * (benchmark_return - benchmark_mean)
-            for symbol_return, benchmark_return in zip(symbol_returns, benchmark_returns)
+            for symbol_return, benchmark_return in zip(
+                symbol_returns, benchmark_returns
+            )
         )
         / window
     )
     return round(covariance / benchmark_variance, 6)
 
 
-
-def _sector_benchmark_symbol(event: dict[str, Any], payload: dict[str, Any], snapshot: dict[str, Any]) -> str:
+def _sector_benchmark_symbol(
+    event: dict[str, Any], payload: dict[str, Any], snapshot: dict[str, Any]
+) -> str:
     for source in (snapshot, payload, event):
         for key in ("sector_etf", "sector_benchmark", "sector_benchmark_symbol"):
             value = str(source.get(key) or "").strip().upper()
@@ -446,7 +521,9 @@ def _sector_benchmark_symbol(event: dict[str, Any], payload: dict[str, Any], sna
     return "SPY"
 
 
-def _market_regime_risk_on(spy_history: list[dict[str, Any]] | None, spy_idx: int | None) -> int | None:
+def _market_regime_risk_on(
+    spy_history: list[dict[str, Any]] | None, spy_idx: int | None
+) -> int | None:
     if spy_history is None or spy_idx is None:
         return None
     spy_return_5d = _lagged_return(spy_history, spy_idx, 5)
@@ -456,7 +533,10 @@ def _market_regime_risk_on(spy_history: list[dict[str, Any]] | None, spy_idx: in
         return None
     return int(spy_return_5d > 0.0 and spy_close >= spy_sma_20)
 
-def _rolling_vwap(rows: list[dict[str, Any]], idx: int, window: int = 20) -> float | None:
+
+def _rolling_vwap(
+    rows: list[dict[str, Any]], idx: int, window: int = 20
+) -> float | None:
     if idx + 1 < window:
         return None
     total_dollar_volume = 0.0
@@ -473,10 +553,15 @@ def _rolling_vwap(rows: list[dict[str, Any]], idx: int, window: int = 20) -> flo
     return round(total_dollar_volume / total_volume, 6)
 
 
-def _vwap_slope(rows: list[dict[str, Any]], idx: int, window: int = 10, vwap_window: int = 20) -> float | None:
+def _vwap_slope(
+    rows: list[dict[str, Any]], idx: int, window: int = 10, vwap_window: int = 20
+) -> float | None:
     if idx + 1 < window + vwap_window - 1:
         return None
-    values = [_rolling_vwap(rows, pos, vwap_window) for pos in range(idx - window + 1, idx + 1)]
+    values = [
+        _rolling_vwap(rows, pos, vwap_window)
+        for pos in range(idx - window + 1, idx + 1)
+    ]
     if any(value is None for value in values):
         return None
     y = [float(value) for value in values]
@@ -485,45 +570,61 @@ def _vwap_slope(rows: list[dict[str, Any]], idx: int, window: int = 10, vwap_win
     denom = sum((pos - x_mean) ** 2 for pos in range(window))
     if denom == 0.0 or y[0] == 0.0:
         return None
-    slope = sum((pos - x_mean) * (value - y_mean) for pos, value in enumerate(y)) / denom
+    slope = (
+        sum((pos - x_mean) * (value - y_mean) for pos, value in enumerate(y)) / denom
+    )
     return round(slope / y[0], 6)
 
 
-def _rolling_numeric_mean(rows: list[dict[str, Any]], idx: int, window: int, column: str) -> float | None:
+def _rolling_numeric_mean(
+    rows: list[dict[str, Any]], idx: int, window: int, column: str
+) -> float | None:
     if idx + 1 < window:
         return None
-    values = [_coerce_float(row.get(column)) for row in rows[idx - window + 1 : idx + 1]]
+    values = [
+        _coerce_float(row.get(column)) for row in rows[idx - window + 1 : idx + 1]
+    ]
     if any(value is None for value in values):
         return None
     return round(sum(float(value) for value in values) / window, 6)
 
 
-def _rolling_zscore(rows: list[dict[str, Any]], idx: int, window: int, column: str) -> float | None:
+def _rolling_zscore(
+    rows: list[dict[str, Any]], idx: int, window: int, column: str
+) -> float | None:
     current = _coerce_float(rows[idx].get(column)) if idx < len(rows) else None
     if current is None or idx + 1 < window:
         return None
-    values = [_coerce_float(row.get(column)) for row in rows[idx - window + 1 : idx + 1]]
+    values = [
+        _coerce_float(row.get(column)) for row in rows[idx - window + 1 : idx + 1]
+    ]
     if any(value is None for value in values):
         return None
     clean = [float(value) for value in values]
     avg = sum(clean) / window
     variance = sum((value - avg) ** 2 for value in clean) / window
-    std = variance ** 0.5
+    std = variance**0.5
     if std == 0.0:
         return 0.0
     return round((float(current) - avg) / std, 6)
 
 
-def _rolling_extreme(rows: list[dict[str, Any]], idx: int, window: int, column: str, *, high: bool) -> float | None:
+def _rolling_extreme(
+    rows: list[dict[str, Any]], idx: int, window: int, column: str, *, high: bool
+) -> float | None:
     if idx + 1 < window:
         return None
-    values = [_coerce_float(row.get(column)) for row in rows[idx - window + 1 : idx + 1]]
+    values = [
+        _coerce_float(row.get(column)) for row in rows[idx - window + 1 : idx + 1]
+    ]
     if any(value is None for value in values):
         return None
     return round(max(values) if high else min(values), 6)
 
 
-def _return_volatility(rows: list[dict[str, Any]] | None, idx: int | None, window: int) -> float | None:
+def _return_volatility(
+    rows: list[dict[str, Any]] | None, idx: int | None, window: int
+) -> float | None:
     if rows is None or idx is None or idx < window:
         return None
     returns: list[float] = []
@@ -536,13 +637,15 @@ def _return_volatility(rows: list[dict[str, Any]] | None, idx: int | None, windo
         returns.append(ret)
     avg = sum(returns) / len(returns)
     variance = sum((ret - avg) ** 2 for ret in returns) / len(returns)
-    return round(variance ** 0.5, 6)
+    return round(variance**0.5, 6)
 
 
 def _trend_slope(rows: list[dict[str, Any]], idx: int, window: int) -> float | None:
     if idx + 1 < window:
         return None
-    closes = [_coerce_float(row.get("close")) for row in rows[idx - window + 1 : idx + 1]]
+    closes = [
+        _coerce_float(row.get("close")) for row in rows[idx - window + 1 : idx + 1]
+    ]
     if any(value is None for value in closes):
         return None
     y = [float(value) for value in closes]
@@ -551,7 +654,9 @@ def _trend_slope(rows: list[dict[str, Any]], idx: int, window: int) -> float | N
     denom = sum((pos - x_mean) ** 2 for pos in range(window))
     if denom == 0.0 or y[0] == 0.0:
         return None
-    slope = sum((pos - x_mean) * (value - y_mean) for pos, value in enumerate(y)) / denom
+    slope = (
+        sum((pos - x_mean) * (value - y_mean) for pos, value in enumerate(y)) / denom
+    )
     return round(slope / y[0], 6)
 
 
@@ -567,10 +672,40 @@ def _pct(newer: float, older: float | None) -> float | None:
     return round((newer / float(older)) - 1.0, 6)
 
 
-def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: dict[str, list[dict[str, Any]]], *, horizon_days: int = 5) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    label_name = TARGET_NAME if horizon_days == target_metadata()["horizon_days"] else f"label_up_{horizon_days}d"
+def build_training_rows_from_raw_market(
+    events: list[dict[str, Any]],
+    market: dict[str, list[dict[str, Any]]],
+    *,
+    horizon_days: int = 5,
+    split_events: list[dict[str, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    label_name = (
+        TARGET_NAME
+        if horizon_days == target_metadata()["horizon_days"]
+        else f"label_up_{horizon_days}d"
+    )
     rows: list[dict[str, Any]] = []
-    summary = {"events_scanned": 0, "rows_joined": 0, "missing_symbol_history": 0, "insufficient_history": 0, "insufficient_forward_window": 0}
+    if split_events is None:
+        raise ValueError("Canonical Massive rows require normalized split metadata")
+    splits_by_symbol = index_splits(split_events)
+    metadata_hash = split_source_hash(split_events)
+    summary = {
+        "events_scanned": 0,
+        "rows_joined": 0,
+        "missing_symbol_history": 0,
+        "insufficient_history": 0,
+        "insufficient_forward_window": 0,
+        "split_events_loaded": len(split_events),
+        "training_rows_affected": 0,
+        "feature_windows_crossing_splits": 0,
+        "label_windows_crossing_splits": 0,
+        "bars_adjusted": 0,
+        "price_values_adjusted": 0,
+        "volume_values_adjusted": 0,
+        "affected_feature_rows": 0,
+        "affected_label_rows": 0,
+        "split_provenance": [],
+    }
     signal_index = _signal_history_index(events)
     date_index = _market_date_index(market)
     feature_cache: dict[tuple[str, int], dict[str, Any]] = {}
@@ -581,16 +716,39 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         if not symbol or ts is None or symbol not in market:
             summary["missing_symbol_history"] += 1
             continue
-        signal_counts_7d, previous_signal, previous_signal_ts, previous_action, previous_probability = _indexed_signal_context(
+        (
+            signal_counts_7d,
+            previous_signal,
+            previous_signal_ts,
+            previous_action,
+            previous_probability,
+        ) = _indexed_signal_context(
             signal_index,
             symbol,
             ts,
             window_days=7,
         )
         event_day = _event_day(ts)
-        history = market[symbol]
-        spy_history = market.get("SPY")
-        spy_idx = _row_before_or_on_indexed(date_index, "SPY", event_day) if spy_history else None
+        raw_history = market[symbol]
+        history = adjust_bars_to_asof(
+            raw_history, splits_by_symbol.get(symbol, []), event_day, audit=summary
+        )
+        raw_spy_history = market.get("SPY")
+        spy_history = (
+            adjust_bars_to_asof(
+                raw_spy_history,
+                splits_by_symbol.get("SPY", []),
+                event_day,
+                audit=summary,
+            )
+            if raw_spy_history
+            else None
+        )
+        spy_idx = (
+            _row_before_or_on_indexed(date_index, "SPY", event_day)
+            if spy_history
+            else None
+        )
         idx = _row_before_or_on_indexed(date_index, symbol, event_day)
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
@@ -601,18 +759,73 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             continue
 
         asof = history[idx]
+        raw_asof = raw_history[idx]
         prev1 = history[idx - 1]
         prev5 = history[idx - 5]
         prev10 = history[idx - 10] if idx >= 10 else {}
         prev20 = history[idx - 20] if idx >= 20 else {}
-        future = history[label_idx]
+        future = raw_history[label_idx]
         close = float(asof["close"])
-        return_fwd = _pct(float(future["close"]), close)
+        label_factor = price_factor_between(
+            splits_by_symbol.get(symbol, []), str(raw_asof["date"]), str(future["date"])
+        )
+        return_fwd = round(
+            split_adjusted_forward_return(
+                float(raw_asof["close"]),
+                float(future["close"]),
+                str(raw_asof["date"]),
+                str(future["date"]),
+                splits_by_symbol.get(symbol, []),
+            ),
+            6,
+        )
+        feature_split_ids = sorted(
+            {
+                split_id
+                for bar in history[: idx + 1]
+                for split_id in bar.get("_applicable_split_ids", [])
+                if split_id
+            }
+        )
+        label_split_ids = [
+            str(item.get("id") or "")
+            for item in splits_by_symbol.get(symbol, [])
+            if str(raw_asof["date"]) < item["execution_date"] <= str(future["date"])
+        ]
+        if feature_split_ids:
+            summary["feature_windows_crossing_splits"] += 1
+            summary["affected_feature_rows"] += 1
+        if label_factor != 1.0:
+            summary["label_windows_crossing_splits"] += 1
+            summary["affected_label_rows"] += 1
+        if feature_split_ids or label_factor != 1.0:
+            summary["training_rows_affected"] += 1
+            source_start = max(0, idx - 20)
+            summary["split_provenance"].append(
+                {
+                    "symbol": symbol,
+                    "event_date": event_day,
+                    "source_bar_dates": [
+                        bar["date"] for bar in raw_history[source_start : idx + 1]
+                    ],
+                    "raw_closes": [
+                        bar["close"] for bar in raw_history[source_start : idx + 1]
+                    ],
+                    "adjusted_closes": [
+                        bar["close"] for bar in history[source_start : idx + 1]
+                    ],
+                    "applicable_split_ids": feature_split_ids,
+                    "label_split_ids": label_split_ids,
+                    "label_cumulative_adjustment_factor": label_factor,
+                }
+            )
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
+        snapshot = (
+            event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
+        )
         current_action = normalize_action(event)
         current_probability = _event_probability_up(event)
-        cache_key = (symbol, idx)
+        cache_key = (symbol, idx, event_day)
         cached_features = feature_cache.get(cache_key)
         if cached_features is None:
             sma_10_cached = _rolling_close_mean(history, idx, 10)
@@ -620,7 +833,9 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             sma_50_cached = _rolling_close_mean(history, idx, 50)
             high_20_cached = _rolling_extreme(history, idx, 20, "high", high=True)
             low_20_cached = _rolling_extreme(history, idx, 20, "low", high=False)
-            macd_line_cached, macd_signal_cached, macd_hist_cached = _macd_components_at(history, idx)
+            macd_line_cached, macd_signal_cached, macd_hist_cached = (
+                _macd_components_at(history, idx)
+            )
             volume_cached = _coerce_float(asof.get("volume"))
             volume_avg_5_cached = _rolling_numeric_mean(history, idx, 5, "volume")
             volume_avg_20_cached = _rolling_numeric_mean(history, idx, 20, "volume")
@@ -672,25 +887,55 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
         return_20d_lagged = cached_features["return_20d_lagged"]
         shared_v3_features = build_alpha_atlas_v3_features(
             symbol_bars=history[: idx + 1],
-            spy_bars=spy_history[: spy_idx + 1] if spy_history and spy_idx is not None else [],
+            spy_bars=(
+                spy_history[: spy_idx + 1]
+                if spy_history and spy_idx is not None
+                else []
+            ),
             asof_date=event_day,
         )
         spy_return_5d = _lagged_return(spy_history, spy_idx, 5)
         sector_benchmark_symbol = _sector_benchmark_symbol(event, payload, snapshot)
-        sector_history = market.get(sector_benchmark_symbol)
-        sector_idx = _row_before_or_on_indexed(date_index, sector_benchmark_symbol, event_day) if sector_history else None
+        raw_sector_history = market.get(sector_benchmark_symbol)
+        sector_history = (
+            adjust_bars_to_asof(
+                raw_sector_history,
+                splits_by_symbol.get(sector_benchmark_symbol, []),
+                event_day,
+                audit=summary,
+            )
+            if raw_sector_history
+            else None
+        )
+        sector_idx = (
+            _row_before_or_on_indexed(date_index, sector_benchmark_symbol, event_day)
+            if sector_history
+            else None
+        )
         sector_return_5d = _lagged_return(sector_history, sector_idx, 5)
         row = {
             "ts": ts,
             "event_date": event_day,
             "market_asof_date": asof["date"],
             "label_asof_date": future["date"],
+            "corporate_action_schema_version": CORPORATE_ACTION_SCHEMA_VERSION,
+            "canonical_dataset_schema_version": SCHEMA_VERSION,
+            "split_metadata_hash": metadata_hash,
+            "price_adjustment_policy": "event_time_split_adjusted",
+            "volume_adjustment_policy": "inverse_split_factor",
+            "feature_split_ids": feature_split_ids,
+            "label_split_ids": label_split_ids,
+            "label_split_adjustment_factor": label_factor,
             "symbol": symbol,
             "endpoint": str(event.get("endpoint") or "unknown"),
             "decision_source": str(event.get("decision_source") or "unknown"),
             "recommendation": normalize_action(event),
-            "probability_up": snapshot.get("probability_up", payload.get("probability_up")),
-            "model_version": snapshot.get("model_version", payload.get("model_version")),
+            "probability_up": snapshot.get(
+                "probability_up", payload.get("probability_up")
+            ),
+            "model_version": snapshot.get(
+                "model_version", payload.get("model_version")
+            ),
             "feature_close": close,
             "feature_symbol_signal_count_7d": signal_counts_7d["signals"],
             "feature_symbol_buy_count_7d": signal_counts_7d["buys"],
@@ -743,14 +988,20 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
                 if return_5d_lagged is not None and spy_return_5d is not None
                 else None
             ),
-            "feature_symbol_beta_20d": _beta_to_benchmark(history, spy_history, idx, spy_idx, 20),
+            "feature_symbol_beta_20d": _beta_to_benchmark(
+                history, spy_history, idx, spy_idx, 20
+            ),
             "feature_sector_relative_return_5d": (
                 round(return_5d_lagged - sector_return_5d, 6)
                 if return_5d_lagged is not None and sector_return_5d is not None
                 else None
             ),
-            "feature_market_regime_risk_on": _market_regime_risk_on(spy_history, spy_idx),
-            "feature_market_volatility_proxy": _return_volatility(spy_history, spy_idx, 20),
+            "feature_market_regime_risk_on": _market_regime_risk_on(
+                spy_history, spy_idx
+            ),
+            "feature_market_volatility_proxy": _return_volatility(
+                spy_history, spy_idx, 20
+            ),
             "feature_return_1d_lagged": cached_features["return_1d_lagged"],
             "feature_return_5d_lagged": return_5d_lagged,
             "feature_return_10d_lagged": cached_features["return_10d_lagged"],
@@ -768,7 +1019,9 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
             "feature_price_vs_vwap": _pct(close, vwap),
             "feature_vwap_slope": cached_features["vwap_slope"],
             "feature_above_vwap": int(close > vwap) if vwap is not None else None,
-            "feature_dollar_volume": round(close * volume, 6) if volume is not None else None,
+            "feature_dollar_volume": (
+                round(close * volume, 6) if volume is not None else None
+            ),
             f"return_{horizon_days}d": return_fwd,
             label_name: label_from_forward_return(return_fwd),
             "leakage_guard": "features_asof_market_close_on_or_before_decision_date_labels_after_decision_date",
@@ -781,7 +1034,16 @@ def build_training_rows_from_raw_market(events: list[dict[str, Any]], market: di
     return rows, summary
 
 
-def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], *, raw_root: Path, decision_log: Path, horizon_days: int) -> dict[str, Any]:
+def write_rows(
+    path: Path,
+    rows: list[dict[str, Any]],
+    summary: dict[str, Any],
+    *,
+    raw_root: Path,
+    decision_log: Path,
+    horizon_days: int,
+    split_metadata_hash: str,
+) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as fh:
         for row in rows:
@@ -794,6 +1056,13 @@ def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], 
         "output_path": str(path),
         "horizon_days": horizon_days,
         "leakage_safe": True,
+        "corporate_action_normalization_required": True,
+        "corporate_action_normalization_passed": True,
+        "price_adjustment_policy": "event_time_split_adjusted",
+        "volume_adjustment_policy": "inverse_split_factor",
+        "split_source": "massive",
+        "split_metadata_hash": split_metadata_hash,
+        "corporate_action_schema_version": CORPORATE_ACTION_SCHEMA_VERSION,
         "decision_target": (
             target_metadata()
             if horizon_days == target_metadata()["horizon_days"]
@@ -804,28 +1073,114 @@ def write_rows(path: Path, rows: list[dict[str, Any]], summary: dict[str, int], 
             }
         ),
         "join_policy": "last_market_row_on_or_before_decision_date; labels strictly after that row",
-        **summary,
+        **{key: value for key, value in summary.items() if key != "split_provenance"},
     }
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
-    manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
+    )
     return manifest
 
 
+def _distribution(rows: list[dict[str, Any]], fields: list[str]) -> dict[str, Any]:
+    report = {}
+    for field in fields:
+        values = sorted(
+            float(row[field])
+            for row in rows
+            if _coerce_float(row.get(field)) is not None
+        )
+        if not values:
+            report[field] = {}
+            continue
+
+        def percentile(q: float) -> float:
+            return values[min(len(values) - 1, int((len(values) - 1) * q))]
+
+        report[field] = {
+            "count": len(values),
+            "min": values[0],
+            "max": values[-1],
+            "mean": sum(values) / len(values),
+            "median": percentile(0.5),
+            "p99": percentile(0.99),
+            "p99.5": percentile(0.995),
+            "p99.9": percentile(0.999),
+        }
+    return report
+
+
+def _suspicious_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    thresholds = {
+        "feature_return_1d_lagged": 1.0,
+        "feature_return_5d_lagged": 3.0,
+        "feature_return_20d_lagged": 5.0,
+    }
+    output = []
+    for row in rows:
+        for field, threshold in thresholds.items():
+            value = _coerce_float(row.get(field))
+            if value is not None and abs(value) > threshold:
+                output.append(
+                    {
+                        "symbol": row.get("symbol"),
+                        "date": row.get("event_date"),
+                        "field": field,
+                        "adjusted_return": value,
+                        "known_split_in_window": bool(row.get("feature_split_ids")),
+                        "split_ids": row.get("feature_split_ids") or [],
+                    }
+                )
+    return output
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Join immutable Massive raw market files with MoneyBot decision logs into leakage-safe training rows.")
+    parser = argparse.ArgumentParser(
+        description="Join immutable Massive raw market files with MoneyBot decision logs into leakage-safe training rows."
+    )
     parser.add_argument("--raw-root", default="data/raw/massive_flatfiles")
     parser.add_argument("--decision-log", default="data/decision_events.jsonl")
     parser.add_argument("--output", default="data/decision_training_snapshot.jsonl")
     parser.add_argument("--limit", type=int, default=5000)
     parser.add_argument("--horizon-days", type=int, default=5)
+    parser.add_argument(
+        "--split-cache", default="data/track_b/corporate_actions/massive_splits.jsonl"
+    )
     args = parser.parse_args()
     decision_log = Path(args.decision_log)
     events = read_decision_events(decision_log, limit=max(1, args.limit))
     raw_root = Path(args.raw_root)
     horizon_days = max(1, args.horizon_days)
-    symbols, start_date, end_date = _market_load_window(events, horizon_days=horizon_days)
-    market = load_market_history(raw_root, symbols=symbols, start_date=start_date, end_date=end_date)
-    rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=horizon_days)
+    symbols, start_date, end_date = _market_load_window(
+        events, horizon_days=horizon_days
+    )
+    market = load_market_history(
+        raw_root, symbols=symbols, start_date=start_date, end_date=end_date
+    )
+    split_events = load_split_cache(Path(args.split_cache))
+    split_manifest_path = (
+        Path(args.split_cache).parent / "split_adjustment_manifest.json"
+    )
+    if not split_manifest_path.is_file():
+        raise SystemExit("Canonical split metadata manifest is required")
+    try:
+        split_manifest = json.loads(split_manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit("Canonical split metadata manifest is corrupt") from exc
+    if (
+        split_manifest.get("schema_version") != CORPORATE_ACTION_SCHEMA_VERSION
+        or split_manifest.get("source_hash") != split_source_hash(split_events)
+        or split_manifest.get("corporate_action_normalization_passed") is not True
+    ):
+        raise SystemExit(
+            "Canonical split metadata cache does not match its manifest/hash"
+        )
+    raw_rows, _ = build_training_rows_from_raw_market(
+        events, market, horizon_days=horizon_days, split_events=[]
+    )
+    rows, summary = build_training_rows_from_raw_market(
+        events, market, horizon_days=horizon_days, split_events=split_events
+    )
     summary.update(
         {
             "market_symbols_requested": len(symbols),
@@ -834,7 +1189,83 @@ def main() -> None:
             "market_end_date": end_date,
         }
     )
-    manifest = write_rows(Path(args.output), rows, summary, raw_root=raw_root, decision_log=decision_log, horizon_days=horizon_days)
+    metadata_hash = split_source_hash(split_events)
+    output_path = Path(args.output)
+    manifest = write_rows(
+        output_path,
+        rows,
+        summary,
+        raw_root=raw_root,
+        decision_log=decision_log,
+        horizon_days=horizon_days,
+        split_metadata_hash=metadata_hash,
+    )
+    quality_dir = output_path.parent / "training_quality"
+    quality_dir.mkdir(parents=True, exist_ok=True)
+    provenance = summary.get("split_provenance", [])
+    audited_events = []
+    for event in split_events:
+        split_id = str(event.get("id") or "")
+        audited_events.append(
+            {
+                **event,
+                "affected_feature_rows": sum(
+                    split_id in item.get("applicable_split_ids", [])
+                    for item in provenance
+                ),
+                "affected_label_rows": sum(
+                    split_id in item.get("label_split_ids", []) for item in provenance
+                ),
+            }
+        )
+    audit = {
+        "schema_version": CORPORATE_ACTION_SCHEMA_VERSION,
+        "split_metadata_hash": metadata_hash,
+        "split_events_loaded": len(split_events),
+        "symbols_with_splits": len({item["ticker"] for item in split_events}),
+        **{
+            key: summary.get(key, 0)
+            for key in (
+                "training_rows_affected",
+                "feature_windows_crossing_splits",
+                "label_windows_crossing_splits",
+                "bars_adjusted",
+                "price_values_adjusted",
+                "volume_values_adjusted",
+                "affected_feature_rows",
+                "affected_label_rows",
+            )
+        },
+        "events": audited_events,
+        "split_provenance": provenance,
+    }
+    (quality_dir / "corporate_action_audit.json").write_text(
+        json.dumps(audit, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    fields = [
+        "feature_return_1d_lagged",
+        "feature_return_5d_lagged",
+        "feature_return_20d_lagged",
+        f"return_{horizon_days}d",
+        "feature_volatility_20d",
+        "feature_price_vs_sma_20",
+        "feature_macd_hist",
+    ]
+    suspicious_before = _suspicious_rows(raw_rows)
+    suspicious_after = _suspicious_rows(rows)
+    before_after = {
+        "schema_version": CORPORATE_ACTION_SCHEMA_VERSION,
+        "split_metadata_hash": metadata_hash,
+        "before": _distribution(raw_rows, fields),
+        "after": _distribution(rows, fields),
+        "suspicious_rows_before": len(suspicious_before),
+        "suspicious_rows_after": len(suspicious_after),
+        "suspicious_before": suspicious_before,
+        "suspicious_after": suspicious_after,
+    }
+    (quality_dir / "split_adjustment_before_after_report.json").write_text(
+        json.dumps(before_after, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     print(json.dumps(manifest, indent=2, sort_keys=True))
 
 

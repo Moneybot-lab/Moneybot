@@ -44,7 +44,16 @@ def test_recipe_selection_has_no_holdout_argument():
 
 def test_holdout_cannot_open_before_recipe_freeze(tmp_path):
     holdout = tmp_path / "cleaned_test.jsonl"
-    holdout.write_text("{}\n")
+    holdout.write_text(
+        json.dumps(
+            {
+                "canonical_dataset_schema_version": "massive-decision-training-rows.v2",
+                "split_metadata_hash": "fixture-split-hash",
+                "price_adjustment_policy": "event_time_split_adjusted",
+            }
+        )
+        + "\n"
+    )
     with pytest.raises(RuntimeError, match="before the V3.1 recipe is frozen"):
         trainer._load_holdout_after_freeze(holdout, tmp_path / "missing.json")
     frozen = tmp_path / "frozen.json"
@@ -124,6 +133,9 @@ def _canonical_rows(start, dates, symbols):
                 "decision_source": "deterministic_model",
                 "label_up_5d": float((day + symbol_index) % 3 != 0),
                 "return_5d": (-0.04 if day % 7 == 0 else 0.01 * ((day % 5) - 1)),
+                "canonical_dataset_schema_version": "massive-decision-training-rows.v2",
+                "split_metadata_hash": "fixture-split-hash",
+                "price_adjustment_policy": "event_time_split_adjusted",
             }
             for feature_index, feature in enumerate(ALPHA_ATLAS_V3_FEATURES):
                 row[feature] = scale * (feature_index + 1) / 1000.0
