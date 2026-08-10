@@ -18,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from moneybot.services.deterministic_model import fit_probability_calibration, load_artifact, predict_proba, summarize_binary_predictions, train_logistic_baseline
 from moneybot.services.temporal_validation import purged_embargoed_split
+from moneybot.services.decision_target import HORIZON_DAYS, TARGET_NAME, target_metadata
 from scripts.day10_train_candidate_model import _backtest_compatible_feature_columns, _chronological_split, _fill_feature_gaps, _future_safe_feature_columns, _prepare_frame, _select_feature_columns
 
 SUITE_SCHEMA_VERSION = "moneybot-challenger-suite.v2"
@@ -700,12 +701,13 @@ def _load_jsonl(path: Path) -> pd.DataFrame:
 
 
 def _target(df: pd.DataFrame, horizon_days: int) -> str:
-    col = f"label_up_{horizon_days}d"
-    if col in df.columns:
-        return col
-    if "label_up_5d" in df.columns:
-        return "label_up_5d"
-    raise ValueError(f"Missing target label {col}")
+    if horizon_days != HORIZON_DAYS:
+        raise ValueError(
+            f"Decision-lane target is fixed at {HORIZON_DAYS}d; got {horizon_days}d"
+        )
+    if TARGET_NAME in df.columns:
+        return TARGET_NAME
+    raise ValueError(f"Missing canonical decision-lane target {TARGET_NAME}")
 
 
 def _write_artifact(path: Path, payload: dict[str, Any]) -> None:
@@ -2794,6 +2796,19 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
     _add_shallow_tree_challengers(challengers, output_dir=output_dir, train_df=train_df, test_df=test_df, y_train=y_train, y_test=y_test, feature_columns=feature_columns, test_returns=test_returns, return_col=return_col)
     _add_specialized_challengers(challengers, output_dir=output_dir, train_df=train_df, test_df=test_df, y_train=y_train, y_test=y_test, feature_columns=feature_columns, return_col=return_col, test_returns=test_returns)
     _add_baseline_challengers(challengers, output_dir=output_dir, y_train=y_train, y_test=y_test, test_returns=test_returns)
+    dataset_lineage = None
+    if {"canonical_dataset_schema_version", "split_metadata_hash", "price_adjustment_policy"}.issubset(clean.columns):
+        dataset_lineage = {
+            "canonical_dataset_schema_version": str(clean["canonical_dataset_schema_version"].iloc[0]),
+            "split_metadata_hash": str(clean["split_metadata_hash"].iloc[0]),
+            "price_adjustment_policy": str(clean["price_adjustment_policy"].iloc[0]),
+        }
+        for challenger in challengers:
+            challenger["lineage"]["dataset_lineage"] = dataset_lineage
+            model_path = Path(str(challenger["model_path"]))
+            payload = json.loads(model_path.read_text(encoding="utf-8"))
+            payload.setdefault("lineage", {})["dataset_lineage"] = dataset_lineage
+            _write_artifact(model_path, payload)
     walk_forward_folds = _walk_forward_splits(clean)
     _apply_walk_forward_metrics(
         challengers,
@@ -2867,6 +2882,8 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         "temporal_validation_policy": {"purged": True, "label_horizon_days": int(horizon_days), "embargo_days": EMBARGO_DAYS},
         "walk_forward_windows": walk_forward_windows,
         "target_column": target_col,
+        "decision_target": target_metadata(),
+        "dataset_lineage": dataset_lineage,
         "ranking_selection_policy": "rank by walk-forward pass status across multiple windows, then walk-forward top-K capped-exposure ranking_objective, holdout ranking objective, top-K average return, then accuracy",
         "promotion_policy": "prefer candidates with positive ranking_objective in at least two walk-forward windows before promotion",
         "ranking_metric_names": ["top_k_precision", "top_k_avg_return", "pairwise_ranking_loss", "big_gain_capture", "big_loss_demotion", "ranking_objective", "walk_forward_ranking_objective", "walk_forward_passed"],

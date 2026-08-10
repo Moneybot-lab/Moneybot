@@ -651,6 +651,23 @@ def _get_breakout_radar_items(svc: Any, seed_symbols: dict[str, float] | None = 
     return [item for item in (items or []) if isinstance(item, dict)]
 
 
+def _is_actionable_scanner_row(row: Any, *, require_breakout: bool = False) -> bool:
+    """Defense in depth for dashboard and notification scanner consumers."""
+    if not isinstance(row, dict):
+        return False
+    recommendation = str(row.get("recommendation") or "").strip().upper()
+    try:
+        price = float(row.get("price"))
+    except (TypeError, ValueError):
+        return False
+    if recommendation not in {"BUY", "STRONG BUY"} or not 0.0 < price <= 100.0:
+        return False
+    if require_breakout:
+        snapshot = row.get("intraday_breakout")
+        return isinstance(snapshot, dict) and snapshot.get("status") == "ok" and snapshot.get("qualifies") is True
+    return True
+
+
 def _breakout_scores_from_rows(rows: list[dict[str, Any]]) -> dict[str, float]:
     scores: dict[str, float] = {}
     for row in rows:
@@ -1687,6 +1704,8 @@ def user_watchlist():
                     "base_advice": base_advice,
                     "advice": advice,
                     "model_version": (deterministic_portfolio or {}).get("model_version"),
+                    "probability_up": (deterministic_portfolio or {}).get("probability_up"),
+                    "forecast_horizon": (deterministic_portfolio or {}).get("forecast_horizon"),
                     "confidence": (deterministic_portfolio or {}).get("confidence"),
                     "profile_version": decision_context.profile_version,
                     "profile_complete": decision_context.profile_complete,
@@ -1700,6 +1719,7 @@ def user_watchlist():
                     recommendation=str(advice),
                     probability_up=(deterministic_portfolio or {}).get("probability_up"),
                     model_version=(deterministic_portfolio or {}).get("model_version"),
+                    forecast_horizon=(deterministic_portfolio or {}).get("forecast_horizon"),
                     quote=quote,
                     market_data={
                         "quote_source": quote.get("source") or quote.get("quote_source"),
@@ -2225,6 +2245,7 @@ def quick_ask():
                             "shadow_only": True,
                             "recommendation": shadow.get("recommendation"),
                             "model_version": shadow.get("model_version"),
+                            "forecast_horizon": shadow.get("forecast_horizon"),
                             "probability_up": shadow.get("probability_up"),
                             "confidence": shadow.get("confidence"),
                         },
@@ -2235,6 +2256,7 @@ def quick_ask():
                             recommendation=str(shadow.get("recommendation") or "HOLD"),
                             probability_up=shadow.get("probability_up"),
                             model_version=shadow.get("model_version"),
+                            forecast_horizon=shadow.get("forecast_horizon"),
                             quote=quote_data,
                             market_data=market_data_provenance,
                             features=signal_data.get("features") if isinstance(signal_data.get("features"), dict) else {},
@@ -2284,6 +2306,7 @@ def quick_ask():
             payload={
                 "recommendation": decision.get("recommendation"),
                 "model_version": decision.get("model_version"),
+                "forecast_horizon": decision.get("forecast_horizon"),
                 "probability_up": decision.get("probability_up"),
                 "confidence": decision.get("confidence"),
                 "ai_mode": ai_mode,
@@ -2298,6 +2321,7 @@ def quick_ask():
                 recommendation=str(decision.get("recommendation") or "HOLD"),
                 probability_up=decision.get("probability_up"),
                 model_version=decision.get("model_version"),
+                forecast_horizon=decision.get("forecast_horizon"),
                 quote=quote_data,
                 market_data=market_data_provenance,
                 features=signal_data.get("features") if isinstance(signal_data.get("features"), dict) else {},
@@ -2584,7 +2608,7 @@ def run_notification_triggers():
     except Exception:  # noqa: BLE001
         momentum_items = []
     for row in momentum_items:
-        if not isinstance(row, dict):
+        if not _is_actionable_scanner_row(row):
             continue
         symbol = str(row.get("symbol") or "").strip().upper()
         if not symbol:
@@ -2619,7 +2643,7 @@ def run_notification_triggers():
     current_breakouts: set[str] = set()
     fresh_breakout_rows: list[dict[str, Any]] = []
     for row in breakout_items:
-        if not isinstance(row, dict):
+        if not _is_actionable_scanner_row(row, require_breakout=True):
             continue
         symbol = str(row.get("symbol") or "").strip().upper()
         if not symbol:
@@ -2833,7 +2857,7 @@ def stable_watchlist():
 def hot_momentum_buys():
     svc = current_app.extensions["market_data_service"]
     decision_logger = current_app.extensions.get("decision_logger")
-    items = svc.get_hot_momentum_buys()
+    items = [item for item in svc.get_hot_momentum_buys() if _is_actionable_scanner_row(item)]
     if decision_logger is not None:
         for item in items:
             decision_logger.log(
@@ -2843,6 +2867,7 @@ def hot_momentum_buys():
                 payload={
                     "score": item.get("score"),
                     "model_version": item.get("model_version"),
+                    "forecast_horizon": item.get("forecast_horizon"),
                     "probability_up": item.get("probability_up"),
                     "confidence": item.get("confidence"),
                 },
@@ -2855,7 +2880,7 @@ def hot_momentum_buys():
 def breakout_radar():
     svc = current_app.extensions["market_data_service"]
     seed_scores = _recent_breakout_seed_scores()
-    items = _get_breakout_radar_items(svc, seed_symbols=seed_scores)
+    items = [item for item in _get_breakout_radar_items(svc, seed_symbols=seed_scores) if _is_actionable_scanner_row(item, require_breakout=True)]
     decision_logger = current_app.extensions.get("decision_logger")
     if decision_logger is not None:
         for item in items:
@@ -2863,7 +2888,13 @@ def breakout_radar():
                 endpoint="breakout_radar",
                 symbol=item.get("symbol"),
                 decision_source=item.get("decision_source") or item.get("candidate_source") or "scanner",
-                payload={"score": item.get("score"), "score_basis": item.get("score_basis")},
+                payload={
+                    "score": item.get("score"),
+                    "score_basis": item.get("score_basis"),
+                    "model_version": item.get("model_version"),
+                    "probability_up": item.get("probability_up"),
+                    "forecast_horizon": item.get("forecast_horizon"),
+                },
             )
     return jsonify({"items": items, "request_id": g.request_id})
 
@@ -2881,14 +2912,17 @@ def promote_track_b_candidate():
 
     comparison_file = request.files.get("comparison_report")
     candidate_file = request.files.get("candidate_model")
-    if comparison_file is None or candidate_file is None:
-        return jsonify({"error": "comparison_report and candidate_model files are required", "request_id": g.request_id}), 400
+    certification_file = request.files.get("servability_certification")
+    if comparison_file is None or candidate_file is None or certification_file is None:
+        return jsonify({"error": "comparison_report, candidate_model, and servability_certification files are required", "request_id": g.request_id}), 400
 
     try:
         comparison_bytes = comparison_file.read()
         candidate_bytes = candidate_file.read()
+        certification_bytes = certification_file.read()
         comparison_report = json.loads(comparison_bytes.decode("utf-8"))
         candidate_model = json.loads(candidate_bytes.decode("utf-8"))
+        certification = json.loads(certification_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return jsonify({"error": "uploaded files must be valid JSON", "request_id": g.request_id}), 400
 
@@ -2896,6 +2930,8 @@ def promote_track_b_candidate():
         return jsonify({"error": "comparison_report must be a JSON object", "request_id": g.request_id}), 400
     if not isinstance(candidate_model, dict):
         return jsonify({"error": "candidate_model must be a JSON object", "request_id": g.request_id}), 400
+    if not isinstance(certification, dict):
+        return jsonify({"error": "servability_certification must be a JSON object", "request_id": g.request_id}), 400
 
     force_raw = str(request.form.get("force") or request.args.get("force") or "").strip().lower()
     force = force_raw in {"1", "true", "yes", "y"}
@@ -2934,8 +2970,10 @@ def promote_track_b_candidate():
     track_b_dir.mkdir(parents=True, exist_ok=True)
     comparison_path = track_b_dir / "model_comparison_track_b.json"
     candidate_path = track_b_dir / "candidate_model_track_b.json"
+    certification_path = track_b_dir / "production_servability_certification.json"
     comparison_path.write_bytes(comparison_bytes)
     candidate_path.write_bytes(candidate_bytes)
+    certification_path.write_bytes(certification_bytes)
 
     production_model_path = Path(
         str(current_app.config.get("DETERMINISTIC_MODEL_PATH") or (resolve_runtime_dir() / "day1_baseline_model.json"))
@@ -2949,6 +2987,8 @@ def promote_track_b_candidate():
         str(candidate_path),
         "--production-model",
         str(production_model_path),
+        "--servability-certification",
+        str(certification_path),
     ]
     if force:
         command.append("--force")
@@ -2996,6 +3036,7 @@ def promote_track_b_candidate():
                 "stderr": completed.stderr,
                 "comparison_report_path": str(comparison_path),
                 "candidate_model_path": str(candidate_path),
+                "servability_certification_path": str(certification_path),
                 "production_model_path": str(production_model_path),
             },
             "request_id": g.request_id,
