@@ -54,6 +54,11 @@ def alpha_atlas_v3_summary(output_dir: Path) -> dict:
     }
 
 
+def servability_certification_path(output_dir: Path) -> Path:
+    """Return the canonical certification emitted by the Track B command chain."""
+    return output_dir / "production_servability_certification.json"
+
+
 def build_track_b_commands(
     *,
     python_executable: str,
@@ -72,7 +77,7 @@ def build_track_b_commands(
     dataset_path = massive_dataset_path if training_source == "massive" else legacy_dataset_path
     candidate_model_path = output_dir / "candidate_model_track_b.json"
     comparison_report_path = output_dir / "model_comparison_track_b.json"
-    certification_path = output_dir / "production_servability_certification.json"
+    certification_path = servability_certification_path(output_dir)
     massive_baseline_path = output_dir / "massive_baseline_model_v1.json"
 
     commands: list[list[str]] = []
@@ -134,6 +139,7 @@ def main() -> None:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    certification_path = servability_certification_path(output_dir)
 
     commands = build_track_b_commands(
         python_executable=sys.executable,
