@@ -62,6 +62,20 @@ def build_recalibration_plan(
         "schema_version": "calibration_recalibration_plan.v1",
         "computed_at_utc": datetime.now(timezone.utc).isoformat(),
         "rows": rows,
+        "forecast_horizon": report.get("requested_calibration_horizon")
+        or report.get("forecast_horizon")
+        or f"{int(report.get('horizon_days') or 0)}d",
+        "model_version_population": sorted(
+            str(value)
+            for value in ((report.get("segments") or {}).get("model_version") or {})
+        ),
+        "eligible_row_count": int(
+            (report.get("eligibility_diagnostics") or {}).get(
+                "calibration_eligible_rows"
+            )
+            or rows
+        ),
+        "mature_fitted_row_count": rows,
         "brier_score_raw": raw_brier,
         "calibrated_brier_score": calibrated_brier,
         "effective_brier_score": effective_brier,
@@ -70,6 +84,20 @@ def build_recalibration_plan(
         "eligible_for_change": eligible_for_change,
         "rollout_percentage": round(max(0.0, min(100.0, float(rollout_percentage))), 4),
         "enforcement": "plan_only" if canary else "staged_rollout",
+        "enforcement_enabled": apply_change,
+        "warnings": list(report.get("warnings") or []),
+        "outcome_provider_diagnostics": {
+            key: report.get(key)
+            for key in (
+                "outcome_history_preferred_provider",
+                "outcome_history_fallback_provider",
+                "massive_history_requests",
+                "massive_history_successes",
+                "yfinance_history_fallbacks",
+                "calibration_rows_by_outcome_provider",
+            )
+            if key in report
+        },
         "current": {
             "slope": float(current_slope),
             "intercept": float(current_intercept),
@@ -79,6 +107,10 @@ def build_recalibration_plan(
             "bounded_slope_delta": round(bounded_slope_delta, 6),
             "intercept_delta": round(intercept_delta, 6),
             "bounded_intercept_delta": round(bounded_intercept_delta, 6),
+        },
+        "recommended_transform": {
+            "slope": round(float(current_slope + bounded_slope_delta), 6),
+            "intercept": round(float(current_intercept + bounded_intercept_delta), 6),
         },
         "next": {"slope": round(next_slope, 6), "intercept": round(next_intercept, 6)},
     }

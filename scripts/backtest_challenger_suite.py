@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from moneybot.services.decision_target import HORIZON_DAYS, TARGET_NAME
 from scripts.day10_train_candidate_model import _future_safe_feature_columns, _prepare_frame
 
 BACKTEST_SCHEMA_VERSION = "moneybot-challenger-backtest.v1"
@@ -439,7 +440,11 @@ def backtest_challenger_suite(
         raw = raw.sort_values("ts")
     raw = raw.reset_index(drop=True)
     return_col = _return_column(raw, horizon_days)
-    label_col = f"label_up_{horizon_days}d" if f"label_up_{horizon_days}d" in raw.columns else "label_up_5d"
+    if horizon_days != HORIZON_DAYS:
+        raise ValueError(f"Decision-lane backtest requires the canonical {HORIZON_DAYS}d horizon")
+    label_col = TARGET_NAME
+    if label_col not in raw.columns:
+        raise ValueError(f"Missing canonical decision-lane target {label_col}")
     features = _feature_columns(raw, suite)
     frame = _prepare_features(raw.dropna(subset=[return_col, label_col]).copy(), features, suite.get("feature_fill_values") or {})
     labels = pd.to_numeric(frame[label_col], errors="coerce").fillna(0).to_numpy(dtype=float)
