@@ -54,6 +54,35 @@ def alpha_atlas_v3_summary(output_dir: Path) -> dict:
     }
 
 
+def alpha_atlas_v31_summary(output_dir: Path) -> dict:
+    v31_dir = output_dir / "alpha_atlas_v31"
+    candidate = _load_json(v31_dir / "candidate_alpha_atlas_v31_clean.json")
+    frozen = _load_json(v31_dir / "alpha_atlas_v31_frozen_recipe.json")
+    report = _load_json(v31_dir / "alpha_atlas_v31_model_report.json")
+    certification = _load_json(v31_dir / "production_servability_certification.json")
+    metrics = report.get("duplicate_weighted_metrics") or {}
+    rows = report.get("row_counts") or {}
+    return {
+        "candidate_generated": bool(candidate),
+        "candidate_source_version": candidate.get("version") or candidate.get("model_version"),
+        "recipe_frozen_before_holdout": frozen.get("recipe_frozen_before_holdout") is True,
+        "feature_count": len(candidate.get("feature_columns") or []),
+        "scaler_type": frozen.get("scaler_type"),
+        "l2": frozen.get("l2"),
+        "calibration_applied": frozen.get("calibration_applied"),
+        "decision_threshold": frozen.get("decision_threshold"),
+        "training_rows": rows.get("train"),
+        "final_test_rows": rows.get("test"),
+        "brier_score": metrics.get("brier_score"),
+        "avg_selected_return": metrics.get("avg_selected_return"),
+        "big_gain_capture_rate": metrics.get("big_gain_capture_rate"),
+        "big_loss_false_positive_rate": metrics.get("big_loss_false_positive_rate"),
+        "servability_certification_passed": certification.get("passed") is True,
+        "promotion_candidate": report.get("promotion_candidate") is True,
+        "automatic_promotion": False,
+    }
+
+
 def servability_certification_path(output_dir: Path) -> Path:
     """Return the canonical certification emitted by the Track B command chain."""
     return output_dir / "production_servability_certification.json"
@@ -203,6 +232,7 @@ def main() -> None:
 
     summary["success"] = True
     summary["alpha_atlas_v3"] = alpha_atlas_v3_summary(output_dir)
+    summary["alpha_atlas_v31"] = alpha_atlas_v31_summary(output_dir)
     if certification_path.exists():
         certification = json.loads(certification_path.read_text(encoding="utf-8"))
         summary["servability_certification"] = {

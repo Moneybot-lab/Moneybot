@@ -240,6 +240,21 @@ jobs:
             --all-cleaned data/track_b/training_quality/cleaned_all.jsonl \
             --output-dir data/track_b/alpha_atlas_v3
 
+      - name: Train Alpha Atlas V3.1 human-review candidate
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MASSIVE_API_KEY" ]; then
+            echo "MASSIVE_API_KEY is not configured; skipping V3.1 without generating a candidate or certification."
+            exit 0
+          fi
+          python3 scripts/train_alpha_atlas_v31_candidate.py \
+            --train data/track_b/training_quality/cleaned_train.jsonl \
+            --test data/track_b/training_quality/cleaned_test.jsonl \
+            --all-cleaned data/track_b/training_quality/cleaned_all.jsonl \
+            --output-dir data/track_b/alpha_atlas_v31
+
       - name: Prepare manual Render promotion artifacts
         run: |
           python3 scripts/run_track_b_offline.py \
@@ -264,6 +279,7 @@ jobs:
             data/track_b/alpha_atlas_v3/production_servability_certification.json
             data/track_b/alpha_atlas_v3/alpha_atlas_v3_recovery_rebaseline_report.json
             data/track_b/alpha_atlas_v3/v3_generation_status.json
+            data/track_b/alpha_atlas_v31/**
             data/decision_events.jsonl
             data/_response_headers.txt
             data/track_b/_production_model_headers.txt
