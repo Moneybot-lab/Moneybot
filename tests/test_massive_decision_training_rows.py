@@ -1,7 +1,11 @@
 import json
 from datetime import date, datetime, timedelta, timezone
 
-from scripts.build_massive_decision_training_rows import build_training_rows_from_raw_market, load_market_history, write_rows
+from scripts.build_massive_decision_training_rows import (
+    build_training_rows_from_raw_market,
+    load_market_history,
+    write_rows,
+)
 
 
 def _ts(day: str) -> int:
@@ -13,12 +17,24 @@ def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):
     raw.mkdir(parents=True)
     csv_rows = ["ticker,date,open,high,low,close,volume"]
     for idx, close in enumerate([10, 11, 12, 13, 14, 15, 16, 18, 21, 20, 22], start=1):
-        csv_rows.append(f"AAPL,2026-01-{idx:02d},{close},{close},{close},{close},{1000 + idx}")
+        csv_rows.append(
+            f"AAPL,2026-01-{idx:02d},{close},{close},{close},{close},{1000 + idx}"
+        )
     (raw / "aapl.csv").write_text("\n".join(csv_rows) + "\n", encoding="utf-8")
     market = load_market_history(tmp_path / "raw")
-    events = [{"ts": _ts("2026-01-06"), "symbol": "AAPL", "endpoint": "quick_ask", "decision_source": "deterministic", "payload": {"recommendation": "BUY"}}]
+    events = [
+        {
+            "ts": _ts("2026-01-06"),
+            "symbol": "AAPL",
+            "endpoint": "quick_ask",
+            "decision_source": "deterministic",
+            "payload": {"recommendation": "BUY"},
+        }
+    ]
 
-    rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=3)
+    rows, summary = build_training_rows_from_raw_market(
+        events, market, horizon_days=3, split_events=[]
+    )
 
     assert summary["rows_joined"] == 1
     row = rows[0]
@@ -70,9 +86,18 @@ def test_build_training_rows_adds_phase_1_technical_features(tmp_path):
             for idx in range(1, 61)
         ],
     }
-    events = [{"ts": _ts("2026-02-25"), "symbol": "AAPL", "endpoint": "quick_ask", "payload": {"recommendation": "BUY", "sector_etf": "XLK"}}]
+    events = [
+        {
+            "ts": _ts("2026-02-25"),
+            "symbol": "AAPL",
+            "endpoint": "quick_ask",
+            "payload": {"recommendation": "BUY", "sector_etf": "XLK"},
+        }
+    ]
 
-    rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=3)
+    rows, summary = build_training_rows_from_raw_market(
+        events, market, horizon_days=3, split_events=[]
+    )
 
     assert summary["rows_joined"] == 1
     row = rows[0]
@@ -100,10 +125,14 @@ def test_build_training_rows_adds_phase_1_technical_features(tmp_path):
     expected_spy_return_5d = round(228.0 / 225.5 - 1, 6)
     assert row["feature_spy_return_1d"] == round(228.0 / 227.5 - 1, 6)
     assert row["feature_spy_return_5d"] == expected_spy_return_5d
-    assert row["feature_symbol_minus_spy_5d"] == round(row["feature_return_5d_lagged"] - expected_spy_return_5d, 6)
+    assert row["feature_symbol_minus_spy_5d"] == round(
+        row["feature_return_5d_lagged"] - expected_spy_return_5d, 6
+    )
     assert row["feature_symbol_beta_20d"] is not None
     expected_sector_return_5d = round(342.0 / 338.25 - 1, 6)
-    assert row["feature_sector_relative_return_5d"] == round(row["feature_return_5d_lagged"] - expected_sector_return_5d, 6)
+    assert row["feature_sector_relative_return_5d"] == round(
+        row["feature_return_5d_lagged"] - expected_sector_return_5d, 6
+    )
     assert row["feature_market_regime_risk_on"] == 1
     assert row["feature_market_volatility_proxy"] is not None
     assert row["feature_return_10d_lagged"] == round(156 / 146 - 1, 6)
@@ -155,12 +184,29 @@ def test_build_training_rows_adds_symbol_signal_history_counts():
             "endpoint": "quick_ask",
             "payload": {"recommendation": "BUY", "probability_up": 0.60},
         },
-        {"ts": _ts("2026-02-20"), "symbol": "AAPL", "endpoint": "quick_ask", "payload": {"recommendation": "SELL"}},
-        {"ts": _ts("2026-02-10"), "symbol": "AAPL", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}},
-        {"ts": _ts("2026-02-24"), "symbol": "MSFT", "endpoint": "quick_ask", "payload": {"recommendation": "BUY"}},
+        {
+            "ts": _ts("2026-02-20"),
+            "symbol": "AAPL",
+            "endpoint": "quick_ask",
+            "payload": {"recommendation": "SELL"},
+        },
+        {
+            "ts": _ts("2026-02-10"),
+            "symbol": "AAPL",
+            "endpoint": "quick_ask",
+            "payload": {"recommendation": "BUY"},
+        },
+        {
+            "ts": _ts("2026-02-24"),
+            "symbol": "MSFT",
+            "endpoint": "quick_ask",
+            "payload": {"recommendation": "BUY"},
+        },
     ]
 
-    rows, summary = build_training_rows_from_raw_market(events, market, horizon_days=3)
+    rows, summary = build_training_rows_from_raw_market(
+        events, market, horizon_days=3, split_events=[]
+    )
 
     assert summary["rows_joined"] == 4
     row = next(item for item in rows if item["event_date"] == "2026-02-25")
@@ -182,14 +228,18 @@ def test_write_rows_creates_reproducible_join_manifest(tmp_path):
         raw_root=tmp_path / "raw",
         decision_log=tmp_path / "decision_events.jsonl",
         horizon_days=5,
+        split_metadata_hash="test-hash",
     )
 
     assert out.exists()
     manifest_path = out.with_suffix(out.suffix + ".manifest.json")
     saved = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["schema_version"] == "massive-decision-training-rows.v1"
+    assert manifest["schema_version"] == "massive-decision-training-rows.v2"
     assert saved["leakage_safe"] is True
-    assert saved["join_policy"] == "last_market_row_on_or_before_decision_date; labels strictly after that row"
+    assert (
+        saved["join_policy"]
+        == "last_market_row_on_or_before_decision_date; labels strictly after that row"
+    )
 
 
 def test_load_market_history_normalizes_massive_nanosecond_window_start(tmp_path):
@@ -218,7 +268,12 @@ def test_load_market_history_filters_to_decision_symbols_and_date_window(tmp_pat
         encoding="utf-8",
     )
 
-    market = load_market_history(tmp_path / "raw", symbols={"AAPL"}, start_date="2026-01-01", end_date="2026-01-31")
+    market = load_market_history(
+        tmp_path / "raw",
+        symbols={"AAPL"},
+        start_date="2026-01-01",
+        end_date="2026-01-31",
+    )
 
     assert list(market) == ["AAPL"]
     assert len(market["AAPL"]) == 1
@@ -240,6 +295,11 @@ def test_load_market_history_skips_out_of_window_dated_paths(tmp_path):
         encoding="utf-8",
     )
 
-    market = load_market_history(tmp_path / "raw", symbols={"AAPL"}, start_date="2026-01-01", end_date="2026-01-31")
+    market = load_market_history(
+        tmp_path / "raw",
+        symbols={"AAPL"},
+        start_date="2026-01-01",
+        end_date="2026-01-31",
+    )
 
     assert [row["date"] for row in market["AAPL"]] == ["2026-01-02"]

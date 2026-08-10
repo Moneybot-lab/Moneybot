@@ -2,52 +2,40 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
-import io
 import json
 import math
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import yfinance as yf
-
 from moneybot.services.decision_log import read_decision_events
-from moneybot.services.outcome_tracking import close_values
+from moneybot.services.outcome_history_provider import MassivePreferredHistoryDownload
+from moneybot.services.outcome_tracking import OutcomeHistoryCache
 from moneybot.services.runtime_paths import (
     day13_calibration_report_path,
     decision_events_log_path,
 )
 
+_outcome_history_download: MassivePreferredHistoryDownload | None = None
+_outcome_history_cache: OutcomeHistoryCache | None = None
+
+
+def _configure_outcome_history(events: list[dict]) -> None:
+    global _outcome_history_download, _outcome_history_cache
+    _outcome_history_download = MassivePreferredHistoryDownload()
+    _outcome_history_cache = OutcomeHistoryCache(download=_outcome_history_download)
+    _outcome_history_cache.preload_events(events, benchmark_symbol="SPY")
+
 
 def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
-    if int(start_ts) > int(datetime.now(timezone.utc).timestamp()):
+    """Compatibility seam used by tests; production is configured Massive-first."""
+    if _outcome_history_cache is None:
         return None
-    start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
-    end_dt = start_dt + timedelta(days=max(days + 3, 7))
-    capture = io.StringIO()
-    with contextlib.redirect_stderr(capture), contextlib.redirect_stdout(capture):
-        history = yf.download(
-            symbol,
-            start=start_dt.strftime("%Y-%m-%d"),
-            end=end_dt.strftime("%Y-%m-%d"),
-            interval="1d",
-            progress=False,
-            auto_adjust=False,
-            threads=False,
-        )
-    closes = close_values(history)
-    if len(closes) <= days:
-        return None
-    start_price = float(closes[0])
-    end_price = float(closes[days])
-    if start_price == 0:
-        return None
-    return (end_price - start_price) / start_price
+    return _outcome_history_cache.future_return(symbol, start_ts, days)
 
 
 def _text_or_unknown(value) -> str:
@@ -76,6 +64,17 @@ def _probability_up(payload: dict, snapshot: dict):
         if isinstance(value, (int, float)) and not isinstance(value, bool)
         else None
     )
+
+
+def _event_forecast_horizon(payload: dict, snapshot: dict) -> str:
+    raw = payload.get("forecast_horizon") or snapshot.get("forecast_horizon")
+    text = str(raw or "").strip().lower().replace(" ", "")
+    aliases = {"1": "1d", "1day": "1d", "5": "5d", "5day": "5d"}
+    if text in aliases:
+        return aliases[text]
+    if text.endswith("d") and text[:-1].isdigit():
+        return f"{int(text[:-1])}d"
+    return "unknown"
 
 
 def _event_provider(event: dict, payload: dict, snapshot: dict) -> str:
@@ -112,20 +111,35 @@ def _signal_completeness(payload: dict, snapshot: dict, provider: str) -> str:
         if isinstance(snapshot.get("market_data"), dict)
         else {}
     )
-    signal_values = [
-        payload.get("rsi"),
-        payload.get("macd"),
-        payload.get("volume"),
-        market_data.get("rsi"),
-        market_data.get("macd"),
-        market_data.get("volume"),
-    ]
     if provider == "portfolio_quote_only":
         return "quote_only"
-    if isinstance(features, dict) and features:
+
+    feature_data = features if isinstance(features, dict) else {}
+
+    def finite_value(*keys: str) -> bool:
+        for source in (feature_data, payload, market_data):
+            for key in keys:
+                value = source.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    if math.isfinite(float(value)):
+                        return True
+        return False
+
+    groups_present = sum(
+        (
+            finite_value("return_1d", "feature_return_1d"),
+            finite_value("return_5d", "feature_return_5d"),
+            finite_value("rsi", "rsi_14", "feature_rsi", "feature_rsi_14"),
+            finite_value(
+                "macd", "macd_hist", "macd_histogram", "feature_macd_histogram"
+            ),
+            finite_value("volume_ratio", "vol_ratio_20d", "feature_volume_ratio"),
+        )
+    )
+    if groups_present >= 3:
         return "full_signal"
-    if any(value is not None for value in signal_values):
-        return "full_signal"
+    if groups_present > 0:
+        return "partial_signal"
     return "quote_only"
 
 
@@ -139,8 +153,73 @@ def _segment_key(row: dict, segment: str):
     return row.get(segment)
 
 
+CALIBRATION_SEGMENTS = (
+    "endpoint",
+    "decision_source",
+    "model_version",
+    "forecast_horizon",
+    "signal_completeness",
+    "probability_presence",
+    "provider",
+)
+
+
+def calibration_input_segments(events: list[dict], *, horizon_days: int = 5) -> dict:
+    """Describe every scanned decision, including rows ineligible for calibration."""
+    segments = {name: {} for name in CALIBRATION_SEGMENTS}
+    for event in events:
+        payload = _event_payload(event)
+        snapshot = _event_snapshot(event)
+        provider = _event_provider(event, payload, snapshot)
+        probability_present = _probability_up(payload, snapshot) is not None
+        values = {
+            "endpoint": _text_or_unknown(event.get("endpoint")),
+            "decision_source": _text_or_unknown(
+                event.get("decision_source") or payload.get("decision_source")
+            ),
+            "model_version": _text_or_unknown(
+                payload.get("model_version") or snapshot.get("model_version")
+            ),
+            "forecast_horizon": _event_forecast_horizon(payload, snapshot),
+            "signal_completeness": _signal_completeness(payload, snapshot, provider),
+            "probability_presence": "present" if probability_present else "null",
+            "provider": provider,
+        }
+        eligible = (
+            probability_present
+            and provider != "portfolio_quote_only"
+            and values["forecast_horizon"] == f"{int(horizon_days)}d"
+        )
+        for name, value in values.items():
+            bucket = segments[name].setdefault(
+                value,
+                {
+                    "rows_scanned": 0,
+                    "model_calibration_eligible_rows": 0,
+                    "excluded_rows": 0,
+                    "mature_fitted_rows": 0,
+                },
+            )
+            bucket["rows_scanned"] += 1
+            bucket[
+                "model_calibration_eligible_rows" if eligible else "excluded_rows"
+            ] += 1
+    return segments
+
+
+def add_mature_segment_counts(input_segments: dict, rows: list[dict]) -> None:
+    for row in rows:
+        for segment in CALIBRATION_SEGMENTS:
+            value = _text_or_unknown(_segment_key(row, segment))
+            bucket = input_segments.get(segment, {}).get(value)
+            if bucket is not None:
+                bucket["mature_fitted_rows"] += 1
+
+
 def _mixed_decision_warnings(
-    rows: list[dict], scanned_profile: dict | None = None
+    rows: list[dict],
+    scanned_profile: dict | None = None,
+    input_segments: dict | None = None,
 ) -> list[str]:
     warnings: list[str] = []
     fields = [
@@ -152,16 +231,37 @@ def _mixed_decision_warnings(
         "probability_presence",
     ]
     for field in fields:
-        values = {str(row.get(field)) for row in rows if row.get(field) is not None}
+        values = set((input_segments or {}).get(field, {}))
+        if not values:
+            values = {str(row.get(field)) for row in rows if row.get(field) is not None}
         if len(values) > 1:
             warnings.append(f"Calibration input mixes {field}: {sorted(values)[:8]}")
-    if any(row.get("provider") == "portfolio_quote_only" for row in rows):
+    if any(row.get("provider") == "portfolio_quote_only" for row in rows) or (
+        scanned_profile and scanned_profile.get("portfolio_quote_only_rows")
+    ):
         warnings.append(
             "portfolio_quote_only rows are reported separately and excluded from model probability calibration"
         )
     if scanned_profile and scanned_profile.get("null_probability_rows"):
         warnings.append(
             "Rows with probability_up=null were scanned but excluded from model calibration"
+        )
+    if len(rows) < 30:
+        warnings.append(
+            f"Only {len(rows)} model-probability rows are mature; calibration is diagnostic and must not drive strong/global enforcement"
+        )
+    elif len(rows) < 100:
+        warnings.append(
+            f"Only {len(rows)} clean mature rows are available; evidence is early and limited to manually reviewed canary evaluation"
+        )
+    elif len(rows) < 200:
+        warnings.append(
+            f"{len(rows)} clean mature rows support serious canary evaluation, but not unreviewed broad calibration rollout"
+        )
+    mismatch = int((scanned_profile or {}).get("rows_excluded_horizon_mismatch") or 0)
+    if mismatch:
+        warnings.append(
+            f"Excluded {mismatch} probability-event candidates because their recorded forecast horizon did not match the calibration target"
         )
     return warnings
 
@@ -181,6 +281,7 @@ def calibration_rows_from_events(
     min_prob: float = 0.0,
     now_ts: int | None = None,
     include_quote_only: bool = False,
+    eligibility_diagnostics: dict | None = None,
 ) -> list[dict]:
     out: list[dict] = []
     lookup_cache: dict[tuple[str, int, int], float | None] = {}
@@ -189,10 +290,26 @@ def calibration_rows_from_events(
         snapshot = _event_snapshot(event)
         provider = _event_provider(event, payload, snapshot)
         signal_completeness = _signal_completeness(payload, snapshot, provider)
+        recorded_horizon = _event_forecast_horizon(payload, snapshot)
+        target_horizon = f"{int(horizon_days)}d"
+        if recorded_horizon == "unknown":
+            if eligibility_diagnostics is not None:
+                eligibility_diagnostics["rows_excluded_horizon_unknown"] += 1
+            continue
+        if recorded_horizon != target_horizon:
+            if eligibility_diagnostics is not None:
+                eligibility_diagnostics["rows_excluded_horizon_mismatch"] += 1
+            continue
+        if eligibility_diagnostics is not None:
+            eligibility_diagnostics["rows_matching_horizon"] += 1
         prob = _probability_up(payload, snapshot)
         if prob is None:
+            if eligibility_diagnostics is not None:
+                eligibility_diagnostics["rows_excluded_probability_null"] += 1
             continue
         if provider == "portfolio_quote_only" and not include_quote_only:
+            if eligibility_diagnostics is not None:
+                eligibility_diagnostics["rows_excluded_portfolio_quote_only"] += 1
             continue
         prob_f = float(prob)
         if prob_f < min_prob:
@@ -202,14 +319,27 @@ def calibration_rows_from_events(
         if not symbol or not isinstance(ts, int):
             continue
         if not _is_mature_event(ts, horizon_days=horizon_days, now_ts=now_ts):
+            if eligibility_diagnostics is not None:
+                eligibility_diagnostics["rows_excluded_immature"] += 1
             continue
+        if eligibility_diagnostics is not None:
+            eligibility_diagnostics["calibration_eligible_rows"] += 1
 
         cache_key = (symbol, int(ts), int(horizon_days))
         if cache_key not in lookup_cache:
             lookup_cache[cache_key] = _future_return(symbol, ts, horizon_days)
         future_ret = lookup_cache[cache_key]
         if future_ret is None:
+            if eligibility_diagnostics is not None:
+                eligibility_diagnostics["rows_excluded_outcome_unavailable"] += 1
             continue
+        if eligibility_diagnostics is not None:
+            eligibility_diagnostics["mature_fitted_rows"] += 1
+        outcome_provider = (
+            _outcome_history_download.provider_for_symbol(symbol)
+            if _outcome_history_download is not None
+            else "test_or_custom"
+        )
         out.append(
             {
                 "symbol": symbol,
@@ -223,7 +353,8 @@ def calibration_rows_from_events(
                 "model_version": _text_or_unknown(
                     payload.get("model_version") or snapshot.get("model_version")
                 ),
-                "forecast_horizon": f"{int(horizon_days)}d",
+                "forecast_horizon": recorded_horizon,
+                "outcome_provider": outcome_provider,
                 "provider": provider,
                 "signal_completeness": signal_completeness,
                 "probability_presence": "present",
@@ -239,12 +370,23 @@ def calibration_input_profile(events: list[dict], *, horizon_days: int = 5) -> d
         "portfolio_quote_only_rows": 0,
         "full_signal_rows": 0,
         "quote_only_rows": 0,
+        "partial_signal_rows": 0,
+        "rows_matching_horizon": 0,
+        "rows_excluded_horizon_mismatch": 0,
+        "rows_excluded_horizon_unknown": 0,
     }
     for event in events:
         payload = _event_payload(event)
         snapshot = _event_snapshot(event)
         provider = _event_provider(event, payload, snapshot)
         signal = _signal_completeness(payload, snapshot, provider)
+        recorded_horizon = _event_forecast_horizon(payload, snapshot)
+        if recorded_horizon == "unknown":
+            profile["rows_excluded_horizon_unknown"] += 1
+        elif recorded_horizon == f"{int(horizon_days)}d":
+            profile["rows_matching_horizon"] += 1
+        else:
+            profile["rows_excluded_horizon_mismatch"] += 1
         if _probability_up(payload, snapshot) is None:
             profile["null_probability_rows"] += 1
         if provider == "portfolio_quote_only":
@@ -256,15 +398,7 @@ def calibration_input_profile(events: list[dict], *, horizon_days: int = 5) -> d
 
 def segmented_calibration_summaries(rows: list[dict], *, bins: int = 10) -> dict:
     segments: dict[str, dict] = {}
-    for segment in [
-        "endpoint",
-        "decision_source",
-        "model_version",
-        "forecast_horizon",
-        "signal_completeness",
-        "probability_presence",
-        "provider",
-    ]:
+    for segment in CALIBRATION_SEGMENTS:
         grouped: dict[str, list[dict]] = {}
         for row in rows:
             grouped.setdefault(_text_or_unknown(_segment_key(row, segment)), []).append(
@@ -336,6 +470,7 @@ def calibration_summary(rows: list[dict], *, bins: int = 10) -> dict:
     if not rows:
         return {
             "rows": 0,
+            "mature_fitted_rows": 0,
             "brier_score": None,
             "avg_predicted": None,
             "avg_observed": None,
@@ -402,6 +537,7 @@ def calibration_summary(rows: list[dict], *, bins: int = 10) -> dict:
 
     return {
         "rows": len(rows),
+        "mature_fitted_rows": len(rows),
         "brier_score": round(float(brier), 6),
         "brier_score_raw": round(float(brier), 6),
         "calibrated_brier_score": round(float(calibrated_brier), 6),
@@ -435,10 +571,25 @@ def main() -> None:
     read_limit = min(max(1, int(args.limit)), read_cap)
     events = []
     rows: list[dict] = []
+    eligibility_diagnostics: dict[str, int] = {}
     while True:
         events = read_decision_events(args.input, limit=read_limit)
+        _configure_outcome_history(events)
+        eligibility_diagnostics = {
+            "rows_matching_horizon": 0,
+            "rows_excluded_horizon_mismatch": 0,
+            "rows_excluded_horizon_unknown": 0,
+            "rows_excluded_probability_null": 0,
+            "rows_excluded_portfolio_quote_only": 0,
+            "rows_excluded_immature": 0,
+            "rows_excluded_outcome_unavailable": 0,
+            "calibration_eligible_rows": 0,
+            "mature_fitted_rows": 0,
+        }
         rows = calibration_rows_from_events(
-            events, horizon_days=max(1, args.horizon_days)
+            events,
+            horizon_days=max(1, args.horizon_days),
+            eligibility_diagnostics=eligibility_diagnostics,
         )
         if rows or read_limit >= read_cap:
             break
@@ -447,7 +598,11 @@ def main() -> None:
     input_profile = calibration_input_profile(
         events, horizon_days=max(1, args.horizon_days)
     )
-    warnings = _mixed_decision_warnings(rows, input_profile)
+    input_segments = calibration_input_segments(
+        events, horizon_days=max(1, args.horizon_days)
+    )
+    add_mature_segment_counts(input_segments, rows)
+    warnings = _mixed_decision_warnings(rows, input_profile, input_segments)
     payload = {
         "schema_version": "calibration_report.v1",
         "computed_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -456,14 +611,26 @@ def main() -> None:
         "scan_limit_used": read_limit,
         "scan_cap": read_cap,
         "horizon_days": max(1, args.horizon_days),
+        "requested_calibration_horizon": f"{max(1, args.horizon_days)}d",
         "model_calibration_exclusions": {
             "probability_up_null": "excluded",
             "portfolio_quote_only": "excluded_from_model_calibration_reported_separately",
         },
         "input_profile": input_profile,
+        "eligibility_diagnostics": eligibility_diagnostics,
+        "input_segments": input_segments,
         "warnings": warnings,
         "segments": segmented_calibration_summaries(rows, bins=max(2, args.bins)),
         **summary,
+        **(
+            _outcome_history_download.diagnostics_payload()
+            if _outcome_history_download is not None
+            else {}
+        ),
+        "calibration_rows_by_outcome_provider": {
+            provider: sum(1 for row in rows if row.get("outcome_provider") == provider)
+            for provider in sorted({str(row.get("outcome_provider")) for row in rows})
+        },
     }
     serialized = json.dumps(payload, indent=2, sort_keys=True)
     print(serialized)
