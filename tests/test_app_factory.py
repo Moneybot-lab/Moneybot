@@ -365,11 +365,13 @@ def test_create_app_auto_applies_recalibration_plan(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
     monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("DETERMINISTIC_CALIBRATION_ENABLED", raising=False)
+    monkeypatch.setenv("DETERMINISTIC_CALIBRATION_AUTO_APPLY_PLAN", "true")
     plan_path = tmp_path / "day13_recalibration_plan.json"
     plan_path.write_text(
         json.dumps(
             {
                 "apply_change": True,
+                "rollout_percentage": 10.0,
                 "effective_brier_score": 0.245,
                 "next": {"slope": 0.646989, "intercept": 0.666503},
             }
@@ -384,6 +386,24 @@ def test_create_app_auto_applies_recalibration_plan(tmp_path, monkeypatch):
     assert advisor.calibration_enabled is True
     assert advisor.calibration_slope == 0.646989
     assert advisor.calibration_intercept == 0.666503
+    assert advisor.calibration_rollout_percentage == 10.0
+
+
+def test_create_app_does_not_auto_apply_recalibration_plan_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv("MONEYBOT_SECRET_KEY", "test-secret")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("DETERMINISTIC_CALIBRATION_ENABLED", raising=False)
+    monkeypatch.delenv("DETERMINISTIC_CALIBRATION_AUTO_APPLY_PLAN", raising=False)
+    (tmp_path / "day13_recalibration_plan.json").write_text(
+        json.dumps({"apply_change": True, "rollout_percentage": 100, "next": {"slope": 0.5, "intercept": -0.15159}}),
+        encoding="utf-8",
+    )
+
+    app = create_app()
+
+    assert app.config["DETERMINISTIC_CALIBRATION_ENABLED"] is False
+    assert app.extensions["deterministic_quick_advisor"].calibration_enabled is False
 
 
 def test_portfolio_page_uses_base_items_when_enrichment_is_empty(monkeypatch):

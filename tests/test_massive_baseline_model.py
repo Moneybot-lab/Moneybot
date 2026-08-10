@@ -77,6 +77,9 @@ def test_massive_baseline_trains_from_cleaned_inputs_and_excludes_unsafe_feature
     assert payload["target_column"] == "label_up_5d"
     assert payload["evaluation_return_column"] == "return_5d"
     assert payload["horizon_days"] == 5
+    assert payload["target_name"] == "label_up_5d"
+    assert payload["target_definition"] == "1 when close(T+5 trading bars) / close(T) - 1 > 0; otherwise 0"
+    assert payload["decision_target"] == report["decision_target"]
     assert payload["duplicate_weighting_applied"] is True
     assert payload["selected_threshold"] == artifact.decision_threshold
     assert isinstance(payload["threshold_selection_sufficient"], bool)
