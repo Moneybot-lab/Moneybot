@@ -29,6 +29,17 @@ def target_metadata() -> dict[str, Any]:
         "target_name": TARGET_NAME,
         "target_definition": TARGET_DEFINITION,
         "positive_class_semantics": POSITIVE_CLASS_SEMANTICS,
+        "binary_positive_class": {
+            "return_column": RETURN_COLUMN,
+            "operator": ">",
+            "value": 0.0,
+        },
+        "evaluation_return_buckets": {
+            "names": list(RETURN_BUCKETS),
+            "edges": list(RETURN_BIN_EDGES),
+        },
+        # Compatibility-only economic evaluation metadata; it does not define
+        # label_up_5d because small positive `flat` returns are also label 1.
         "positive_return_buckets": list(POSITIVE_RETURN_BUCKETS),
         "return_bucket_edges": list(RETURN_BIN_EDGES),
         "forecast_horizon": FORECAST_HORIZON,
