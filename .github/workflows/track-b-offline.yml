@@ -160,6 +160,16 @@ jobs:
           fi
           python3 scripts/ingest_massive_flatfiles.py "${args[@]}"
 
+      - name: Materialize point-in-time Massive split metadata
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$MASSIVE_API_KEY" || (echo "Missing secret: MASSIVE_API_KEY; canonical Track B requires corporate-action metadata" && exit 1)
+          python3 scripts/fetch_massive_splits.py \
+            --decision-log data/decision_events.jsonl \
+            --output-dir data/track_b/corporate_actions
+
       - name: Build leakage-safe Massive decision training rows
         run: |
           set -euo pipefail
@@ -167,6 +177,7 @@ jobs:
             --raw-root data/raw/massive_flatfiles \
             --decision-log data/decision_events.jsonl \
             --output data/track_b/decision_training_snapshot_massive.jsonl \
+            --split-cache data/track_b/corporate_actions/massive_splits.jsonl \
             --limit 50000 \
             --horizon-days 5
           echo "Training-row manifest:"
@@ -204,6 +215,57 @@ jobs:
             --transaction-cost-bps 5 \
             --slippage-bps 5
 
+      - name: Train and certify Alpha Atlas V3 human-review candidate
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MASSIVE_API_KEY" ]; then
+            echo "MASSIVE_API_KEY is not configured; skipping V3 candidate generation while allowing the base Track B challenger run to continue."
+            mkdir -p data/track_b/alpha_atlas_v3
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          status = {
+              "schema_version": "moneybot-alpha-atlas-v3-generation-status.v1",
+              "candidate_generated": False,
+              "certification_generated": False,
+              "status": "skipped_missing_massive_api_key",
+              "blocking_reason": "MASSIVE_API_KEY is not configured for real serving dry runs",
+              "target_name": "label_up_5d",
+              "forecast_horizon": "5d",
+              "comparison_mode": "recovery_rebaseline",
+              "automatic_promotion": False,
+          }
+          Path("data/track_b/alpha_atlas_v3/v3_generation_status.json").write_text(
+              json.dumps(status, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+            exit 0
+          fi
+          python3 scripts/train_alpha_atlas_v3_candidate.py \
+            --train data/track_b/training_quality/cleaned_train.jsonl \
+            --test data/track_b/training_quality/cleaned_test.jsonl \
+            --all-cleaned data/track_b/training_quality/cleaned_all.jsonl \
+            --output-dir data/track_b/alpha_atlas_v3
+
+      - name: Train Alpha Atlas V3.1 human-review candidate
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$MASSIVE_API_KEY" ]; then
+            echo "MASSIVE_API_KEY is not configured; skipping V3.1 without generating a candidate or certification."
+            exit 0
+          fi
+          python3 scripts/train_alpha_atlas_v31_candidate.py \
+            --train data/track_b/training_quality/cleaned_train.jsonl \
+            --test data/track_b/training_quality/cleaned_test.jsonl \
+            --all-cleaned data/track_b/training_quality/cleaned_all.jsonl \
+            --output-dir data/track_b/alpha_atlas_v31
+
       - name: Prepare manual Render promotion artifacts
         run: |
           python3 scripts/run_track_b_offline.py \
@@ -220,6 +282,15 @@ jobs:
           name: track-b-offline-output
           path: |
             data/track_b/**
+            data/track_b/alpha_atlas_v3/candidate_alpha_atlas_v3_clean.json
+            data/track_b/alpha_atlas_v3/alpha_atlas_v3_model_report.json
+            data/track_b/alpha_atlas_v3/alpha_atlas_v3_feature_coverage_report.json
+            data/track_b/alpha_atlas_v3/alpha_atlas_v3_backtest_report.json
+            data/track_b/alpha_atlas_v3/alpha_atlas_v3_representative_serving_dry_runs.json
+            data/track_b/alpha_atlas_v3/production_servability_certification.json
+            data/track_b/alpha_atlas_v3/alpha_atlas_v3_recovery_rebaseline_report.json
+            data/track_b/alpha_atlas_v3/v3_generation_status.json
+            data/track_b/alpha_atlas_v31/**
             data/decision_events.jsonl
             data/_response_headers.txt
             data/track_b/_production_model_headers.txt

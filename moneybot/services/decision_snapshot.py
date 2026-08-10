@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from .forecast_horizon import resolve_forecast_horizon
+
 
 def _as_str(value: Any) -> str | None:
     if value is None:
@@ -39,6 +41,7 @@ def build_decision_snapshot(
     recommendation: str,
     probability_up: float | None = None,
     model_version: str | None = None,
+    forecast_horizon: str | None = None,
     calibration_version: str | None = None,
     quote: Dict[str, Any] | None = None,
     features: Dict[str, Any] | None = None,
@@ -50,14 +53,18 @@ def build_decision_snapshot(
     quote_raw = _as_dict(quote)
     explanation_raw = _as_dict(explanation)
 
+    probability = _as_float(probability_up)
     return {
         "schema_version": "decision_snapshot.v1",
         "symbol": str(symbol).strip().upper(),
         "endpoint": str(endpoint or "unknown"),
         "decision_source": str(decision_source or "unknown"),
         "recommendation": str(recommendation).strip().upper(),
-        "probability_up": _as_float(probability_up),
+        "probability_up": probability,
         "model_version": _as_str(model_version),
+        "forecast_horizon": resolve_forecast_horizon(
+            model_version=model_version, explicit_horizon=forecast_horizon
+        ) if probability is not None else None,
         "calibration_version": _as_str(calibration_version),
         "quote": {
             "price": _as_float(quote_raw.get("price")),

@@ -151,9 +151,17 @@ def test_feature_name_value_audit_allows_asof_market_returns_only_with_manifest_
         "uses_massive_canonical_input": True,
         "manifest_loaded": True,
         "leakage_safe": True,
-        "schema_version": "massive-decision-training-rows.v1",
+        "schema_version": "massive-decision-training-rows.v2",
         "join_policy": "features on or before decision; labels strictly after decision",
         "leakage_guard_values": ["features_asof_market_close_labels_after_decision"],
+        "corporate_action_normalization_required": True,
+        "corporate_action_normalization_passed": True,
+        "split_metadata_available": True,
+        "split_metadata_hash": "fixture-hash",
+        "price_adjustment_policy": "event_time_split_adjusted",
+        "volume_adjustment_policy": "inverse_split_factor",
+        "feature_split_boundary_errors": 0,
+        "label_split_boundary_errors": 0,
     }
 
     without_proof = _feature_leakage_name_value_audit(
@@ -168,7 +176,9 @@ def test_feature_name_value_audit_allows_asof_market_returns_only_with_manifest_
     assert with_proof["asof_feature_timing_proven_by_manifest"] is True
     assert with_proof["manifest_proven_asof_return_features"] == [
         "feature_sector_relative_return_5d",
+        "feature_spy_return_1d",
         "feature_spy_return_5d",
+        "feature_symbol_minus_spy_5d",
     ]
 
 

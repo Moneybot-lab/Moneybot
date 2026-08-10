@@ -384,7 +384,9 @@ def generate(
     candidates[-1]["artifact"] = {"baseline_model_path": str(baseline_path), "regime_overlay": candidates[-1]["recipe"]}
 
     baseline_hash = str((baseline.lineage or {}).get("recipe_hash") or "")
+    dataset_lineage = dict((baseline.lineage or {}).get("dataset_lineage") or {})
     for candidate in candidates:
+        candidate["dataset_lineage"] = dataset_lineage
         if candidate["recipe_hash"] == baseline_hash:
             raise AssertionError(f"{candidate['model_version']} duplicated baseline recipe hash")
         if candidate["clone_detection"]["no_op_clone"]:
@@ -413,6 +415,7 @@ def generate(
         "evaluation_return_column": RETURN_COLUMN,
         "horizon_days": HORIZON_DAYS,
         "sample_weight_policy": "1 / count(symbol, event_date, endpoint, decision_source)",
+        "dataset_lineage": dataset_lineage,
         "temporal_boundaries": boundaries,
         "baseline_metrics": baseline_metrics,
         "challengers": candidates,

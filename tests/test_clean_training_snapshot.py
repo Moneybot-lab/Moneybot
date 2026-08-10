@@ -1,6 +1,17 @@
 import json
+import pytest
 
 from scripts.clean_training_snapshot import clean_training_snapshot
+
+
+def test_clean_training_snapshot_rejects_stale_unadjusted_schema(tmp_path):
+    input_path = tmp_path / "rows.jsonl"
+    input_path.write_text("{}\n")
+    input_path.with_suffix(input_path.suffix + ".manifest.json").write_text(
+        json.dumps({"schema_version": "massive-decision-training-rows.v1"})
+    )
+    with pytest.raises(ValueError, match="Stale unadjusted"):
+        clean_training_snapshot(input_path, tmp_path / "quality")
 
 
 def test_clean_training_snapshot_drops_bad_rows_and_writes_quality_outputs(tmp_path):
@@ -16,6 +27,9 @@ def test_clean_training_snapshot_drops_bad_rows_and_writes_quality_outputs(tmp_p
         "feature_return_1d_lagged": 0.01,
         "feature_return_5d_lagged": 0.03,
         "feature_volume": 1000,
+        "canonical_dataset_schema_version": "massive-decision-training-rows.v2",
+        "split_metadata_hash": "fixture-hash",
+        "price_adjustment_policy": "event_time_split_adjusted",
     }
     rows = [
         good,
@@ -25,9 +39,24 @@ def test_clean_training_snapshot_drops_bad_rows_and_writes_quality_outputs(tmp_p
         {**good, "ts": 4, "event_date": "2026-01-10", "market_asof_date": "2026-01-01"},
         {**good, "ts": 5, "probability_up": None},
     ]
-    input_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    input_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
+    )
+    input_path.with_suffix(input_path.suffix + ".manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "massive-decision-training-rows.v2",
+                "corporate_action_normalization_passed": True,
+                "split_metadata_hash": "fixture-hash",
+                "split_events_loaded": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
 
-    report = clean_training_snapshot(input_path, tmp_path / "quality", train_ratio=0.5, max_market_lag_days=3)
+    report = clean_training_snapshot(
+        input_path, tmp_path / "quality", train_ratio=0.5, max_market_lag_days=3
+    )
 
     assert report["raw_rows"] == 6
     assert report["drop_counts"]["duplicates"] == 1

@@ -316,19 +316,6 @@ class MarketDataService:
                 return text[marker_index:].strip().capitalize()
         return text
 
-    def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
-        return [
-            {"symbol": "SOFI", "price": 9.84, "score": 9.4, "rationale": "Member growth trend and improving margins."},
-            {"symbol": "PLUG", "price": 3.72, "score": 9.1, "rationale": "High-volume breakout setup in clean-energy swing."},
-            {"symbol": "LCID", "price": 2.98, "score": 8.9, "rationale": "Speculative EV rebound momentum."},
-            {"symbol": "NIO", "price": 4.31, "score": 8.6, "rationale": "Delivery stabilization and trend reversal watch."},
-            {"symbol": "RIOT", "price": 11.42, "score": 8.3, "rationale": "Crypto-beta momentum with strong intraday ranges."},
-            {"symbol": "MARA", "price": 17.38, "score": 8.1, "rationale": "Bitcoin-linked upside bursts."},
-            {"symbol": "AAL", "price": 13.24, "score": 7.8, "rationale": "Airline demand strength and technical continuation."},
-            {"symbol": "UAL", "price": 43.12, "score": 7.6, "rationale": "Sector relative strength with improving trend."},
-            {"symbol": "F", "price": 12.55, "score": 7.4, "rationale": "Low-priced cyclical with renewed momentum interest."},
-            {"symbol": "PFE", "price": 28.77, "score": 7.2, "rationale": "Defensive rotation candidate near support."},
-        ]
 
 
     @staticmethod
@@ -397,53 +384,6 @@ class MarketDataService:
         self.history_cache.set(cache_key, payload)
         return payload
 
-    def get_breakout_radar(self) -> list[Dict[str, Any]]:
-        candidates = self._dynamic_hot_momentum_candidates(screeners=("small_cap_gainers", "day_gainers"))
-        enriched: list[Dict[str, Any]] = []
-        for item in candidates:
-            quote = self.get_quote(item["symbol"])
-            signal = self.get_signal(item["symbol"])
-            merged = dict(item)
-            if isinstance(quote.get("price"), (int, float)):
-                merged["price"] = round(float(quote["price"]), 2)
-            base_score, score_basis, base_components = self._hot_momentum_base_score(item, signal)
-            score, score_components = self._hot_momentum_score_components(
-                base_score=base_score,
-                score_basis=score_basis,
-                base_components=base_components,
-                quote=quote,
-                signal=signal,
-            )
-            if score is not None:
-                merged["score"] = score
-            merged["score_basis"] = score_basis
-            merged["score_components"] = score_components
-            merged["rationale"] = self._early_momentum_reason(
-                self._reason_from_signal(signal, str(item.get("rationale") or "Live breakout scanner candidate.")),
-                quote,
-                signal,
-            )
-            merged["change_percent"] = quote.get("change_percent", item.get("change_percent"))
-            merged["quote_source"] = quote.get("quote_source")
-            merged["live_data_available"] = bool(quote.get("live_data_available"))
-            merged["decision_source"] = str(item.get("candidate_source") or "scanner")
-            intraday_breakout = self._intraday_breakout_snapshot(item["symbol"])
-            merged["intraday_breakout"] = intraday_breakout
-            if intraday_breakout.get("qualifies") is False:
-                continue
-            if intraday_breakout.get("status") == "ok":
-                merged["rationale"] = (
-                    f"Confirmed intraday breakout: price is up "
-                    f"{intraday_breakout.get('intraday_change_percent')}% from today's open and "
-                    f"within {intraday_breakout.get('pullback_from_high_percent')}% of today's high. "
-                    f"{merged['rationale']}"
-                )
-            enriched.append(merged)
-        return sorted(
-            enriched,
-            key=lambda x: (float(x.get("score") or 0.0), self._change_percent_sort_value(x.get("change_percent"))),
-            reverse=True,
-        )[:20]
 
     def get_wells_picks(self) -> list[Dict[str, Any]]:
         return [
@@ -788,67 +728,7 @@ class MarketDataService:
                 return text[marker_index:].strip().capitalize()
         return text
 
-    def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
-        return [
-            {"symbol": "SOFI", "price": 9.84, "score": 9.4, "rationale": "Member growth trend and improving margins."},
-            {"symbol": "PLUG", "price": 3.72, "score": 9.1, "rationale": "High-volume breakout setup in clean-energy swing."},
-            {"symbol": "LCID", "price": 2.98, "score": 8.9, "rationale": "Speculative EV rebound momentum."},
-            {"symbol": "NIO", "price": 4.31, "score": 8.6, "rationale": "Delivery stabilization and trend reversal watch."},
-            {"symbol": "RIOT", "price": 11.42, "score": 8.3, "rationale": "Crypto-beta momentum with strong intraday ranges."},
-            {"symbol": "MARA", "price": 17.38, "score": 8.1, "rationale": "Bitcoin-linked upside bursts."},
-            {"symbol": "AAL", "price": 13.24, "score": 7.8, "rationale": "Airline demand strength and technical continuation."},
-            {"symbol": "UAL", "price": 43.12, "score": 7.6, "rationale": "Sector relative strength with improving trend."},
-            {"symbol": "F", "price": 12.55, "score": 7.4, "rationale": "Low-priced cyclical with renewed momentum interest."},
-            {"symbol": "PFE", "price": 28.77, "score": 7.2, "rationale": "Defensive rotation candidate near support."},
-        ]
 
-    def get_breakout_radar(self) -> list[Dict[str, Any]]:
-        candidates = self._dynamic_hot_momentum_candidates(screeners=("small_cap_gainers", "day_gainers"))
-        enriched: list[Dict[str, Any]] = []
-        for item in candidates:
-            quote = self.get_quote(item["symbol"])
-            signal = self.get_signal(item["symbol"])
-            merged = dict(item)
-            if isinstance(quote.get("price"), (int, float)):
-                merged["price"] = round(float(quote["price"]), 2)
-            base_score, score_basis, base_components = self._hot_momentum_base_score(item, signal)
-            score, score_components = self._hot_momentum_score_components(
-                base_score=base_score,
-                score_basis=score_basis,
-                base_components=base_components,
-                quote=quote,
-                signal=signal,
-            )
-            if score is not None:
-                merged["score"] = score
-            merged["score_basis"] = score_basis
-            merged["score_components"] = score_components
-            merged["rationale"] = self._early_momentum_reason(
-                self._reason_from_signal(signal, str(item.get("rationale") or "Live breakout scanner candidate.")),
-                quote,
-                signal,
-            )
-            merged["change_percent"] = quote.get("change_percent", item.get("change_percent"))
-            merged["quote_source"] = quote.get("quote_source")
-            merged["live_data_available"] = bool(quote.get("live_data_available"))
-            merged["decision_source"] = str(item.get("candidate_source") or "scanner")
-            intraday_breakout = self._intraday_breakout_snapshot(item["symbol"])
-            merged["intraday_breakout"] = intraday_breakout
-            if intraday_breakout.get("qualifies") is False:
-                continue
-            if intraday_breakout.get("status") == "ok":
-                merged["rationale"] = (
-                    f"Confirmed intraday breakout: price is up "
-                    f"{intraday_breakout.get('intraday_change_percent')}% from today's open and "
-                    f"within {intraday_breakout.get('pullback_from_high_percent')}% of today's high. "
-                    f"{merged['rationale']}"
-                )
-            enriched.append(merged)
-        return sorted(
-            enriched,
-            key=lambda x: (float(x.get("score") or 0.0), self._change_percent_sort_value(x.get("change_percent"))),
-            reverse=True,
-        )[:20]
 
     def get_wells_picks(self) -> list[Dict[str, Any]]:
         return [
@@ -992,6 +872,7 @@ class MarketDataService:
         self,
         limit: int = 30,
         screeners: tuple[str, ...] = ("small_cap_gainers", "day_gainers", "most_actives"),
+        min_change_percent: float = 8.0,
     ) -> list[Dict[str, Any]]:
         candidates: list[Dict[str, Any]] = []
         seen: set[str] = set()
@@ -1024,9 +905,9 @@ class MarketDataService:
                 )
                 if price is None or price <= 0:
                     continue
-                if price > 100.0 and (change_percent is None or change_percent < 50.0):
+                if price > 100.0:
                     continue
-                if change_percent is None or change_percent < 8.0:
+                if change_percent is None or change_percent < float(min_change_percent):
                     continue
 
                 score = 6.2
@@ -1193,215 +1074,200 @@ class MarketDataService:
                 return text[marker_index:].strip().capitalize()
         return text
 
-    def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
-        candidates = [
-            {"symbol": "SOFI", "price": 9.84, "score": 9.4, "rationale": "Member growth trend and improving margins."},
-            {"symbol": "APLD", "price": 7.38, "score": 9.2, "rationale": "AI infrastructure demand and breakout continuation setup."},
-            {"symbol": "OKLO", "price": 13.42, "score": 9.0, "rationale": "Nuclear-energy theme with strong high-beta momentum."},
-            {"symbol": "PLUG", "price": 3.72, "score": 9.1, "rationale": "High-volume breakout setup in clean-energy swing."},
-            {"symbol": "LCID", "price": 2.98, "score": 8.9, "rationale": "Speculative EV rebound momentum."},
-            {"symbol": "NIO", "price": 4.31, "score": 8.6, "rationale": "Delivery stabilization and trend reversal watch."},
-            {"symbol": "RIOT", "price": 11.42, "score": 8.3, "rationale": "Crypto-beta momentum with strong intraday ranges."},
-            {"symbol": "MARA", "price": 17.38, "score": 8.1, "rationale": "Bitcoin-linked upside bursts."},
-            {"symbol": "AAL", "price": 13.24, "score": 7.8, "rationale": "Airline demand strength and technical continuation."},
-            {"symbol": "UAL", "price": 43.12, "score": 7.6, "rationale": "Sector relative strength with improving trend."},
-            {"symbol": "F", "price": 12.55, "score": 7.4, "rationale": "Low-priced cyclical with renewed momentum interest."},
-            {"symbol": "PFE", "price": 28.77, "score": 7.2, "rationale": "Defensive rotation candidate near support."},
-            {"symbol": "CCL", "price": 16.1, "score": 7.1, "rationale": "Travel beta with strong volume participation."},
-            {"symbol": "RUN", "price": 13.5, "score": 7.0, "rationale": "High-beta clean energy momentum candidate."},
-            {"symbol": "SOUN", "price": 5.82, "score": 8.7, "rationale": "AI voice momentum with elevated volume."},
-            {"symbol": "RKLB", "price": 6.11, "score": 8.4, "rationale": "Small-cap space momentum setup."},
-            {"symbol": "JOBY", "price": 5.02, "score": 7.7, "rationale": "eVTOL speculation trend continuation."},
-            {"symbol": "ACHR", "price": 4.26, "score": 7.6, "rationale": "Aerospace momentum with strong social chatter."},
-            {"symbol": "IONQ", "price": 12.14, "score": 8.2, "rationale": "Quantum-theme momentum flow."},
-            {"symbol": "ASTS", "price": 10.53, "score": 8.0, "rationale": "Satellite connectivity beta with breakout profile."},
-            {"symbol": "HIMS", "price": 14.22, "score": 7.9, "rationale": "Direct-to-consumer healthcare trend strength."},
-            {"symbol": "HOOD", "price": 19.72, "score": 7.8, "rationale": "Retail trading beta in risk-on sessions."},
-            {"symbol": "AFRM", "price": 34.8, "score": 7.7, "rationale": "Fintech momentum with high-vol ranges."},
-            {"symbol": "UPST", "price": 25.6, "score": 7.6, "rationale": "Credit AI theme with speculative bid."},
-            {"symbol": "OPEN", "price": 3.11, "score": 7.4, "rationale": "High-beta housing rebound candidate."},
-            {"symbol": "RIVN", "price": 11.92, "score": 7.4, "rationale": "EV swing momentum in news-heavy periods."},
-            {"symbol": "CHPT", "price": 1.89, "score": 7.3, "rationale": "Charging infrastructure speculative rotation."},
-            {"symbol": "BTBT", "price": 2.77, "score": 7.2, "rationale": "Crypto miner beta with intraday momentum."},
-            {"symbol": "CLSK", "price": 18.42, "score": 7.5, "rationale": "Mining efficiency narrative with risk-on flow."},
-            {"symbol": "T", "price": 17.11, "score": 6.9, "rationale": "Low-vol telecom catch-up swing candidate."},
-            {"symbol": "WBD", "price": 8.64, "score": 7.0, "rationale": "Media re-rating momentum setup."},
-            {"symbol": "SMCI", "price": 72.4, "score": 8.9, "rationale": "AI server demand and trend-following strength."},
-            {"symbol": "CIFR", "price": 5.68, "score": 8.2, "rationale": "Bitcoin mining beta with high relative volume."},
-            {"symbol": "IONA", "price": 4.82, "score": 7.1, "rationale": "Small-cap momentum rotation candidate."},
-            {"symbol": "LUNR", "price": 6.94, "score": 7.8, "rationale": "Space-theme momentum with event-driven catalyst flow."},
-            {"symbol": "SATS", "price": 3.44, "score": 6.8, "rationale": "Speculative turnaround with improving tape behavior."},
-            {"symbol": "ASTC", "price": 3.0, "score": 8.8, "rationale": "Nano-cap space/security-tech breakout watch with squeeze potential.", "candidate_source": "explosive_watchlist"},
-        ]
 
-        enriched: list[Dict[str, Any]] = []
-        for item in candidates:
-            quote = self.get_quote(item["symbol"])
-            signal = self.get_signal(item["symbol"])
-            merged = dict(item)
-            if isinstance(quote.get("price"), (int, float)):
-                merged["price"] = float(quote["price"])
-            base_score, score_basis, base_components = self._hot_momentum_base_score(item, signal)
-            rule_score, score_components = self._hot_momentum_score_components(
-                base_score=base_score,
-                score_basis=score_basis,
-                base_components=base_components,
-                quote=quote,
-                signal=signal,
-            )
-            rule_rationale = self._early_momentum_reason(
-                self._reason_from_signal(signal, item["rationale"]),
-                quote,
-                signal,
-            )
-            merged["score"] = rule_score
-            merged["score_basis"] = score_basis
-            merged["score_components"] = score_components
-            merged["rationale"] = rule_rationale
-            merged["change_percent"] = quote.get("change_percent")
-            merged["quote_source"] = quote.get("quote_source")
-            merged["live_data_available"] = bool(quote.get("live_data_available"))
 
-            deterministic_decision = None
-            if self.deterministic_momentum_enabled and self.deterministic_quick_advisor is not None:
-                deterministic_decision = self.deterministic_quick_advisor.predict_quick_decision(
-                    signal_data=signal,
-                    quote_data=quote,
-                    symbol=item["symbol"],
+    def _resolve_actionable_recommendation(
+        self, *, symbol: str, signal: Dict[str, Any], quote: Dict[str, Any]
+    ) -> Dict[str, Any] | None:
+        """Resolve the one production recommendation used by actionable scanners."""
+        decision: Dict[str, Any] | None = None
+        if self.deterministic_momentum_enabled and self.deterministic_quick_advisor is not None:
+            try:
+                decision = self.deterministic_quick_advisor.predict_quick_decision(
+                    signal_data=signal, quote_data=quote, symbol=symbol
                 )
-                if (
-                    deterministic_decision is None
-                    and bool(getattr(self.deterministic_quick_advisor, "rollout_dry_run", False))
-                    and hasattr(self.deterministic_quick_advisor, "predict_shadow_decision")
-                ):
-                    deterministic_decision = self.deterministic_quick_advisor.predict_shadow_decision(
-                        signal_data=signal,
-                        quote_data=quote,
-                    )
+            except Exception as exc:  # noqa: BLE001
+                logging.warning("Deterministic momentum decision failed for %s: %s", symbol, exc)
+                return None
+        # A None production decision means disabled/outside rollout. Never consult a
+        # shadow decision here: it is observational and cannot affect eligibility.
+        if decision is not None:
+            recommendation = str(decision.get("recommendation") or "").strip().upper()
+            if recommendation not in {"BUY", "STRONG BUY"}:
+                return None
+            return {
+                "recommendation": recommendation,
+                "decision_source": str(decision.get("decision_source") or "deterministic_model"),
+                "model_version": decision.get("model_version"),
+                "forecast_horizon": decision.get("forecast_horizon"),
+                "probability_up": self._num_or_none(decision.get("probability_up")),
+                "confidence": self._num_or_none(decision.get("confidence")),
+                "rationale": self._clean_deterministic_rationale(str(decision.get("rationale") or "")),
+            }
 
-            if deterministic_decision is not None:
-                prob_up = float(deterministic_decision.get("probability_up") or 0.0)
-                model_score = round(prob_up * 10.0, 2)
-                model_is_buy = self._is_recommendation_buy_like(deterministic_decision)
-                merged["model_version"] = deterministic_decision.get("model_version")
-                merged["probability_up"] = deterministic_decision.get("probability_up")
-                merged["confidence"] = deterministic_decision.get("confidence")
-                if model_is_buy:
-                    model_candidate_score = model_score
-                    if bool(getattr(self.deterministic_quick_advisor, "rollout_dry_run", False)):
-                        adjusted_model_score, _ = self._hot_momentum_score_components(
-                            base_score=model_score,
-                            score_basis="deterministic_model",
-                            base_components=[],
-                            quote=quote,
-                            signal=signal,
-                        )
-                        if adjusted_model_score is not None:
-                            model_candidate_score = adjusted_model_score
-                    merged["score"] = model_candidate_score if rule_score is None else max(rule_score, model_candidate_score)
-                    merged["score_basis"] = "deterministic_model" if rule_score is None or model_candidate_score >= rule_score else score_basis
-                    merged["score_components"] = score_components + [f"model probability score {model_candidate_score:.2f} considered alongside rule score"]
-                    merged["rationale"] = self._clean_deterministic_rationale(str(deterministic_decision.get("rationale") or rule_rationale))
-                    merged["decision_source"] = str(deterministic_decision.get("decision_source") or "deterministic_model")
-                else:
-                    merged["score_components"] = score_components + [f"model recommendation was {str(deterministic_decision.get('recommendation') or 'unknown')} so rule score was kept"]
-                    merged["decision_source"] = "rule_based"
-            else:
-                merged["decision_source"] = "rule_based"
+        recommendation = str(signal.get("action") or signal.get("verdict") or "").strip().upper()
+        if recommendation not in {"BUY", "STRONG BUY"}:
+            return None
+        return {"recommendation": recommendation, "decision_source": "rule_based"}
 
-            numeric_score = self._num_or_none(merged.get("score"))
-            explosive_move = bool(
-                merged["live_data_available"]
-                and self._change_percent_sort_value(merged.get("change_percent")) >= 12.0
-                and numeric_score is not None
-                and numeric_score >= 7.0
-            )
-            fallback_seed = str(merged.get("score_basis") or "") == "watchlist_seed"
-            merged["qualified"] = bool(
-                numeric_score is not None
-                and numeric_score >= 7.0
-                and (self._is_buy_like(signal) or explosive_move or fallback_seed)
-            )
-
-            enriched.append(merged)
-
-        market_change = self.get_quote("SPY").get("change_percent")
-        market_is_down = isinstance(market_change, (int, float)) and float(market_change) < 0.0
-        minimum_score = 0.0 if market_is_down else 7.0
-
-        target_count = 20
-        price_cap = 100.0
-        qualified = [item for item in enriched if item["qualified"]]
-        sorted_pool = sorted(
-            qualified,
-            key=lambda x: (float(x.get("score") or 0.0), self._change_percent_sort_value(x.get("change_percent"))),
-            reverse=True,
+    @staticmethod
+    def _curated_momentum_symbols() -> tuple[str, ...]:
+        # Discovery universe only. No stored price, recommendation, or score is used.
+        return (
+            "SOFI", "APLD", "OKLO", "PLUG", "LCID", "NIO", "RIOT", "MARA", "AAL", "UAL",
+            "F", "PFE", "CCL", "RUN", "SOUN", "RKLB", "JOBY", "ACHR", "IONQ", "ASTS",
+            "HIMS", "HOOD", "AFRM", "UPST", "OPEN", "RIVN", "CHPT", "BTBT", "CLSK", "T",
+            "WBD", "SMCI", "CIFR", "LUNR", "SATS", "ASTC",
         )
-        if minimum_score > 0.0:
-            sorted_pool = [item for item in sorted_pool if float(item.get("score") or 0.0) >= minimum_score]
-        if not sorted_pool:
-            return []
-        under_cap = [item for item in sorted_pool if isinstance(item.get("price"), (int, float)) and float(item["price"]) <= price_cap]
-        if len(under_cap) >= target_count:
-            selected = under_cap[:target_count]
-        else:
-            remainder = [item for item in sorted_pool if item not in under_cap]
-            selected = (under_cap + remainder)[:target_count]
-        for item in selected:
-            item.pop("qualified", None)
-        return selected
+
+    def _actionable_candidate_data(self, item: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]] | None:
+        symbol = str(item.get("symbol") or "").strip().upper()
+        if not symbol:
+            return None
+        quote = self.get_quote(symbol) or {}
+        signal = self.get_signal(symbol) or {}
+        price = self._num_or_none(quote.get("price"))
+        if price is None or not 0.0 < price <= 100.0:
+            return None
+        recommendation = self._resolve_actionable_recommendation(symbol=symbol, signal=signal, quote=quote)
+        if recommendation is None:
+            return None
+        return quote, signal, recommendation
+
+    def get_hot_momentum_buys(self) -> list[Dict[str, Any]]:
+        dynamic = self._dynamic_hot_momentum_candidates()
+        candidates = list(dynamic)
+        seen = {str(item.get("symbol") or "").upper() for item in candidates}
+        for symbol in self._curated_momentum_symbols():
+            if symbol not in seen:
+                candidates.append({"symbol": symbol, "candidate_source": "curated_universe"})
+
+        qualified: list[Dict[str, Any]] = []
+        for item in candidates:
+            current = self._actionable_candidate_data(item)
+            if current is None:
+                continue
+            quote, signal, recommendation = current
+            technical_score = self._num_or_none(signal.get("score"))
+            if technical_score is None:
+                continue
+            score = technical_score
+            components = [f"live technical/sentiment score {technical_score:.2f}"]
+            change = self._num_or_none(quote.get("change_percent"))
+            volume_ratio = self._num_or_none(signal.get("volume_ratio"))
+            probability = recommendation.get("probability_up")
+            if change is not None and change > 0:
+                bonus = min(0.8, change / 25.0)
+                score += bonus
+                components.append(f"+{bonus:.2f} positive price momentum")
+            if volume_ratio is not None and volume_ratio >= 1.5:
+                bonus = min(0.8, 0.25 + (volume_ratio - 1.5) * 0.1)
+                score += bonus
+                components.append(f"+{bonus:.2f} for {volume_ratio:.1f}x relative volume")
+            if probability is not None:
+                bonus = max(-0.25, min(0.75, (float(probability) - 0.5) * 2.5))
+                score += bonus
+                components.append(f"{bonus:+.2f} deterministic probability contribution")
+            score = round(max(0.0, min(10.0, score)), 2)
+            if score < 7.0:
+                continue
+            setup_type = "momentum_swing" if (change or 0.0) >= 8.0 or (volume_ratio or 0.0) >= 2.0 else "quality_swing"
+            rationale = recommendation.get("rationale") or self._early_momentum_reason(
+                self._reason_from_signal(signal, "Current live BUY setup."), quote, signal
+            )
+            components.append(f"final score {score:.2f}")
+            qualified.append({
+                "symbol": str(item["symbol"]).upper(), "price": round(float(quote["price"]), 2),
+                "score": score, "recommendation": recommendation["recommendation"],
+                "setup_type": setup_type, "rationale": rationale,
+                "change_percent": quote.get("change_percent"), "volume_ratio": volume_ratio,
+                "quote_source": quote.get("quote_source"), "live_data_available": bool(quote.get("live_data_available", True)),
+                "decision_source": recommendation["decision_source"], "model_version": recommendation.get("model_version"),
+                "forecast_horizon": recommendation.get("forecast_horizon"),
+                "probability_up": probability, "confidence": recommendation.get("confidence"),
+                "score_basis": "current_live_data", "score_components": components,
+            })
+        return sorted(qualified, key=lambda row: (row["score"], self._change_percent_sort_value(row.get("change_percent"))), reverse=True)[:20]
+
+    def _breakout_score(
+        self, *, quote: Dict[str, Any], signal: Dict[str, Any], recommendation: Dict[str, Any],
+        snapshot: Dict[str, Any]
+    ) -> tuple[float, list[str]]:
+        technical = max(0.0, min(10.0, self._num_or_none(signal.get("score")) or 0.0))
+        score = 2.5 + technical * 0.35
+        components = [f"+2.50 {recommendation['recommendation']} confirmation", f"+{technical * 0.35:.2f} technical momentum"]
+        volume_ratio = self._num_or_none(signal.get("volume_ratio"))
+        if volume_ratio is not None:
+            volume_points = min(2.0, max(0.0, (volume_ratio - 1.0) * 0.45))
+            score += volume_points
+            components.append(f"+{volume_points:.2f} for {volume_ratio:.1f}x relative volume")
+        intraday = self._num_or_none(snapshot.get("intraday_change_percent")) or 0.0
+        acceleration_points = min(1.0, max(0.0, intraday / 10.0))
+        score += acceleration_points
+        components.append(f"+{acceleration_points:.2f} intraday acceleration")
+        pullback = self._num_or_none(snapshot.get("pullback_from_high_percent"))
+        if pullback is not None:
+            proximity_points = max(0.0, 0.75 * (1.0 - pullback / 3.0))
+            score += proximity_points
+            components.append(f"+{proximity_points:.2f} proximity to today's high")
+        probability = recommendation.get("probability_up")
+        if probability is not None:
+            probability_points = max(0.0, min(0.75, (float(probability) - 0.5) * 2.5))
+            score += probability_points
+            components.append(f"+{probability_points:.2f} deterministic probability")
+        price = self._num_or_none(quote.get("price")) or 0.0
+        if price <= 25.0:
+            score += 0.25
+            components.append("+0.25 sub-$25 breakout profile")
+        final = round(max(0.0, min(10.0, score)), 2)
+        components.append(f"final breakout score {final:.2f}")
+        return final, components
 
     def get_breakout_radar(self, seed_symbols: dict[str, float] | None = None) -> list[Dict[str, Any]]:
-        candidates = self._dynamic_hot_momentum_candidates(screeners=("small_cap_gainers", "day_gainers"))
-        seen_symbols = {str(item.get("symbol") or "").upper() for item in candidates}
-        for symbol, score in (seed_symbols or {}).items():
-            normalized_symbol = str(symbol or "").strip().upper()
-            if not normalized_symbol or normalized_symbol in seen_symbols:
-                continue
-            candidates.append(
-                {
-                    "symbol": normalized_symbol,
-                    "price": 0.0,
-                    "score": round(float(score), 2),
-                    "rationale": "Recent breakout notification candidate; keeping it on radar for follow-up research.",
-                    "candidate_source": "recent_breakout_alert",
-                }
-            )
-            seen_symbols.add(normalized_symbol)
-        enriched: list[Dict[str, Any]] = []
+        candidates = self._dynamic_hot_momentum_candidates(
+            screeners=("small_cap_gainers", "day_gainers"), min_change_percent=3.0
+        )
+        seen = {str(item.get("symbol") or "").upper() for item in candidates}
+        for symbol in (seed_symbols or {}):
+            normalized = str(symbol or "").strip().upper()
+            if normalized and normalized not in seen:
+                candidates.append({"symbol": normalized, "candidate_source": "recent_breakout_alert"})
+                seen.add(normalized)
+
+        qualified: list[Dict[str, Any]] = []
         for item in candidates:
-            quote = self.get_quote(item["symbol"])
-            signal = self.get_signal(item["symbol"])
-            merged = dict(item)
-            if isinstance(quote.get("price"), (int, float)):
-                merged["price"] = round(float(quote["price"]), 2)
-            base_score, score_basis, base_components = self._hot_momentum_base_score(item, signal)
-            score, score_components = self._hot_momentum_score_components(
-                base_score=base_score,
-                score_basis=score_basis,
-                base_components=base_components,
-                quote=quote,
-                signal=signal,
+            current = self._actionable_candidate_data(item)
+            if current is None:
+                continue
+            quote, signal, recommendation = current
+            snapshot = self._intraday_breakout_snapshot(str(item["symbol"]))
+            if snapshot.get("status") != "ok" or snapshot.get("qualifies") is not True:
+                continue
+            score, components = self._breakout_score(
+                quote=quote, signal=signal, recommendation=recommendation, snapshot=snapshot
             )
-            if score is not None:
-                merged["score"] = score
-            merged["score_basis"] = score_basis
-            merged["score_components"] = score_components
-            merged["rationale"] = self._early_momentum_reason(
-                self._reason_from_signal(signal, str(item.get("rationale") or "Live breakout scanner candidate.")),
-                quote,
-                signal,
+            if score < 7.5:
+                continue
+            volume_ratio = self._num_or_none(signal.get("volume_ratio"))
+            rationale = (
+                f"Confirmed intraday breakout: up {snapshot.get('intraday_change_percent')}% from today's open "
+                f"and {snapshot.get('pullback_from_high_percent')}% below today's high. "
+                + self._reason_from_signal(signal, "Unusual early breakout momentum with current BUY confirmation.")
             )
-            merged["change_percent"] = quote.get("change_percent", item.get("change_percent"))
-            merged["quote_source"] = quote.get("quote_source")
-            merged["live_data_available"] = bool(quote.get("live_data_available"))
-            merged["decision_source"] = str(item.get("candidate_source") or "scanner")
-            enriched.append(merged)
-        return sorted(
-            enriched,
-            key=lambda x: (float(x.get("score") or 0.0), self._change_percent_sort_value(x.get("change_percent"))),
-            reverse=True,
-        )[:20]
+            qualified.append({
+                "symbol": str(item["symbol"]).upper(), "price": round(float(quote["price"]), 2),
+                "score": score, "recommendation": recommendation["recommendation"],
+                "rationale": rationale, "change_percent": quote.get("change_percent"),
+                "volume_ratio": volume_ratio, "quote_source": quote.get("quote_source"),
+                "live_data_available": bool(quote.get("live_data_available", True)),
+                "decision_source": recommendation["decision_source"],
+                "candidate_source": str(item.get("candidate_source") or "scanner"),
+                "model_version": recommendation.get("model_version"), "probability_up": recommendation.get("probability_up"),
+                "forecast_horizon": recommendation.get("forecast_horizon"),
+                "confidence": recommendation.get("confidence"), "score_basis": "current_breakout_data",
+                "score_components": components, "intraday_breakout": snapshot,
+            })
+        return sorted(qualified, key=lambda row: (row["score"], self._change_percent_sort_value(row.get("change_percent"))), reverse=True)[:20]
 
     def get_wells_picks(self) -> list[Dict[str, Any]]:
         investors = [
