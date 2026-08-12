@@ -3449,6 +3449,18 @@ def decision_outcomes():
     legacy_lookup_hits = 0
     legacy_lookup_misses = 0
 
+    def cached_price_path_lookup(symbol: str, ts: int, days: int) -> list[float]:
+        key = (str(symbol).upper(), int(ts), int(days))
+        if key not in price_path_cache:
+            price_path_cache[key] = _price_path_for_outcomes(symbol, ts, days)
+        return price_path_cache[key]
+
+    def cached_benchmark_return_lookup(ts: int, days: int) -> float | None:
+        key = (int(ts), int(days))
+        if key not in benchmark_cache:
+            benchmark_cache[key] = cached_future_return_lookup("SPY", ts, days)
+        return benchmark_cache[key]
+
     # Read progressively wider windows so the endpoint can still find older evaluated rows
     # when very recent logs are mostly too fresh for 1D / 5D outcomes.
     read_limit = min(max(limit * 10, 200), read_cap)
