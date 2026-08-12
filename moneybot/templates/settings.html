@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Profile &amp; investing preferences · MoneyBot</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #10231a;
+      --muted: #5d6f65;
+      --line: #d9e4dc;
+      --panel: rgba(255, 255, 255, .92);
+      --green: #157347;
+      --green-dark: #0d4f32;
+      --green-soft: #e8f7ef;
+      --amber: #a15c05;
+      --amber-soft: #fff6df;
+      --shadow: 0 24px 70px rgba(30, 70, 49, .12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(87, 196, 132, .20), transparent 32rem),
+        linear-gradient(180deg, #f7fbf8 0%, #eef5f0 100%);
+    }
+    button, input, select { font: inherit; }
+    .page { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 32px 0 64px; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 24px; }
+    .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--ink); font-weight: 900; letter-spacing: -.03em; }
+    .brand-mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 14px; background: var(--green-dark); color: white; box-shadow: 0 10px 24px rgba(13, 79, 50, .22); }
+    .back-link { color: var(--green-dark); text-decoration: none; font-weight: 800; }
+    .hero { display: grid; grid-template-columns: 1.35fr .65fr; gap: 18px; margin-bottom: 18px; }
+    .hero-copy, .profile-status { border: 1px solid rgba(185, 209, 193, .8); border-radius: 24px; background: var(--panel); box-shadow: var(--shadow); }
+    .hero-copy { padding: 30px; }
+    .eyebrow { margin: 0 0 8px; color: var(--green); font-size: .78rem; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 0; max-width: 700px; font-size: clamp(2rem, 5vw, 3.5rem); line-height: 1.02; letter-spacing: -.055em; }
+    .hero-copy > p:last-child { margin: 16px 0 0; max-width: 700px; color: var(--muted); line-height: 1.65; }
+    .profile-status { padding: 24px; display: flex; flex-direction: column; justify-content: space-between; }
+    .status-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .status-pill { display: inline-flex; align-items: center; gap: 7px; border-radius: 999px; padding: 7px 11px; font-size: .82rem; font-weight: 900; background: var(--amber-soft); color: var(--amber); }
+    .status-pill.complete { color: var(--green-dark); background: var(--green-soft); }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+    .progress-track { height: 9px; margin: 18px 0 9px; overflow: hidden; border-radius: 999px; background: #e6ece8; }
+    .progress-fill { width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #1a8a55, #65b881); transition: width .25s ease; }
+    .status-copy { margin: 0; color: var(--muted); font-size: .9rem; line-height: 1.45; }
+    .layout { display: grid; grid-template-columns: minmax(0, .7fr) minmax(0, 1.3fr); gap: 18px; align-items: start; }
+    .card { border: 1px solid var(--line); border-radius: 24px; background: var(--panel); box-shadow: var(--shadow); overflow: hidden; }
+    .card-header { padding: 24px 24px 18px; border-bottom: 1px solid #e8eee9; }
+    .card-header h2 { margin: 0; font-size: 1.25rem; letter-spacing: -.025em; }
+    .card-header p { margin: 7px 0 0; color: var(--muted); line-height: 1.5; font-size: .92rem; }
+    .card-body { padding: 24px; }
+    .avatar-wrap { display: flex; justify-content: center; margin-bottom: 22px; }
+    .avatar-shell { position: relative; width: 132px; height: 132px; }
+    .avatar, .avatar-initials { width: 132px; height: 132px; border-radius: 40px; }
+    .avatar { display: none; object-fit: cover; }
+    .avatar-initials { display: grid; place-items: center; color: white; background: linear-gradient(145deg, #194f36, #55a575); font-size: 2.35rem; font-weight: 900; }
+    .avatar-edit { position: absolute; right: -6px; bottom: -6px; width: 42px; height: 42px; border: 4px solid white; border-radius: 14px; background: var(--ink); color: white; cursor: pointer; }
+    .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .field { display: grid; gap: 7px; }
+    .field.full { grid-column: 1 / -1; }
+    .field span, .toggle-copy strong { font-size: .86rem; font-weight: 850; color: #294739; }
+    .field small, .toggle-copy small { color: var(--muted); line-height: 1.35; }
+    .field input, .field select {
+      width: 100%; min-height: 46px; border: 1px solid #cbdad0; border-radius: 13px; padding: 10px 12px;
+      color: var(--ink); background: #fbfdfb; outline: none;
+    }
+    .field input:focus, .field select:focus { border-color: #58a878; box-shadow: 0 0 0 4px rgba(88, 168, 120, .13); }
+    .section { padding: 22px 0; border-bottom: 1px solid #e8eee9; }
+    .section:first-child { padding-top: 0; }
+    .section:last-child { padding-bottom: 0; border-bottom: 0; }
+    .section-title { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 16px; }
+    .section-number { flex: 0 0 auto; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 10px; color: white; background: var(--green-dark); font-size: .82rem; font-weight: 900; }
+    .section-title h3 { margin: 1px 0 3px; font-size: 1rem; }
+    .section-title p { margin: 0; color: var(--muted); font-size: .86rem; line-height: 1.4; }
+    .toggle-list { display: grid; gap: 10px; margin-top: 14px; }
+    .toggle { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 14px; border: 1px solid #d8e4dc; border-radius: 14px; background: #fbfdfb; }
+    .toggle-copy { display: grid; gap: 3px; }
+    .toggle input { width: 42px; height: 22px; accent-color: var(--green); }
+    .safe-note { display: flex; gap: 11px; margin-top: 18px; padding: 14px; border-radius: 15px; color: #6d4709; background: var(--amber-soft); font-size: .86rem; line-height: 1.45; }
+    .actions { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 22px; }
+    .save-status { min-height: 21px; color: var(--muted); font-size: .88rem; }
+    .save-status.error { color: #b42318; }
+    .save-status.success { color: var(--green-dark); }
+    .button-row { display: flex; gap: 10px; }
+    .button { border: 0; border-radius: 999px; padding: 11px 18px; font-weight: 850; cursor: pointer; }
+    .button.secondary { border: 1px solid #cad8cf; color: var(--ink); background: white; }
+    .button.primary { color: white; background: var(--green-dark); box-shadow: 0 10px 22px rgba(13, 79, 50, .18); }
+    .button:disabled { opacity: .62; cursor: wait; }
+    .modal { display: none; position: fixed; inset: 0; z-index: 10; align-items: center; justify-content: center; padding: 20px; background: rgba(6, 32, 20, .58); }
+    .modal.open { display: flex; }
+    .modal-panel { width: min(430px, 100%); padding: 22px; border-radius: 22px; background: white; box-shadow: var(--shadow); }
+    .avatar-preview { position: relative; width: 180px; height: 180px; margin: 18px auto; overflow: hidden; border-radius: 42px; background: #e5ede8; }
+    .avatar-preview img { position: absolute; left: 50%; top: 50%; width: 100%; height: 100%; object-fit: cover; transform: translate(-50%, -50%); transform-origin: center; }
+    @media (max-width: 860px) { .hero, .layout { grid-template-columns: 1fr; } }
+    @media (max-width: 620px) { .page { width: min(100% - 20px, 1120px); padding-top: 18px; } .hero-copy, .profile-status, .card-header, .card-body { padding: 20px; } .field-grid { grid-template-columns: 1fr; } .field.full { grid-column: auto; } .actions { align-items: stretch; flex-direction: column; } .button-row { justify-content: flex-end; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <nav class="topbar" aria-label="Settings navigation">
+      <a class="brand" href="/"><span class="brand-mark">$</span><span>MoneyBot</span></a>
+      <a class="back-link" href="/">← Back to dashboard</a>
+    </nav>
+
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Personalization foundation</p>
+        <h1>Advice that fits the investor—not just the ticker.</h1>
+        <p>Tell MoneyBot about your goals, timeline, and guardrails. Your market forecast stays objective while your recommended action becomes more suitable for you.</p>
+      </div>
+      <aside class="profile-status" aria-live="polite">
+        <div>
+          <div class="status-row">
+            <strong>Investor profile</strong>
+            <span id="profileStatusPill" class="status-pill"><span class="status-dot"></span><span id="profileStatusLabel">Loading</span></span>
+          </div>
+          <div class="progress-track"><div id="profileProgress" class="progress-fill"></div></div>
+          <p id="profileStatusCopy" class="status-copy">Checking your profile…</p>
+        </div>
+        <p class="status-copy"><strong id="profileVersion">Version —</strong><br>Every meaningful update is recorded so recommendations remain reproducible.</p>
+      </aside>
+    </section>
+
+    <div class="layout">
+      <section class="card" aria-labelledby="accountHeading">
+        <header class="card-header">
+          <h2 id="accountHeading">Account identity</h2>
+          <p>How MoneyBot recognizes you across your dashboard and portfolio.</p>
+        </header>
+        <div class="card-body">
+          <div class="avatar-wrap">
+            <div class="avatar-shell">
+              <img id="avatarImage" class="avatar" alt="Profile image">
+              <div id="avatarInitials" class="avatar-initials">U</div>
+              <button id="avatarEditBtn" class="avatar-edit" type="button" aria-label="Edit profile picture">📷</button>
+              <input id="profileImage" type="file" accept="image/*" hidden>
+            </div>
+          </div>
+          <form id="accountForm">
+            <div class="field-grid">
+              <label class="field full"><span>Display name</span><input id="name" autocomplete="name" required></label>
+              <label class="field full"><span>Username</span><input id="username" autocomplete="username" required></label>
+            </div>
+            <div class="actions">
+              <span id="accountStatus" class="save-status" role="status"></span>
+              <div class="button-row">
+                <button id="cancelAccountBtn" class="button secondary" type="button">Reset</button>
+                <button id="saveAccountBtn" class="button primary" type="submit">Save account</button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="investorHeading">
+        <header class="card-header">
+          <h2 id="investorHeading">Investor profile</h2>
+          <p>These preferences create suitability guardrails. They do not change the underlying market data or promise an outcome.</p>
+        </header>
+        <div class="card-body">
+          <form id="investorProfileForm">
+            <section class="section">
+              <div class="section-title"><span class="section-number">1</span><div><h3>Goal and timeline</h3><p>Set the purpose and expected holding horizon for your decisions.</p></div></div>
+              <div class="field-grid">
+                <label class="field"><span>Primary goal *</span><select id="primaryGoal"><option value="">Choose a goal</option><option value="growth">Long-term growth</option><option value="income">Income</option><option value="preservation">Capital preservation</option><option value="speculation">Speculation</option><option value="learning">Learning / paper investing</option></select></label>
+                <label class="field"><span>Time horizon *</span><select id="timeHorizonYears"><option value="">Choose a horizon</option><option value="1">1 year</option><option value="3">2–3 years</option><option value="5">4–5 years</option><option value="10">6–10 years</option><option value="20">More than 10 years</option></select></label>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-title"><span class="section-number">2</span><div><h3>Risk and resilience</h3><p>Separate your willingness to take risk from your ability to absorb a loss.</p></div></div>
+              <div class="field-grid">
+                <label class="field"><span>Risk tolerance *</span><select id="riskTolerance"><option value="">Choose risk level</option><option value="conservative">Conservative</option><option value="moderate">Moderate</option><option value="aggressive">Aggressive</option></select></label>
+                <label class="field"><span>Maximum tolerable drawdown *</span><input id="lossCapacityPercent" type="number" min="1" max="100" step="1" placeholder="e.g. 20"><small>Percent of invested value you could withstand losing.</small></label>
+                <label class="field"><span>Liquidity need *</span><select id="liquidityNeed"><option value="">Choose liquidity need</option><option value="high">High — may need funds soon</option><option value="medium">Medium</option><option value="low">Low — funds can stay invested</option></select></label>
+                <label class="field"><span>Experience *</span><select id="experienceLevel"><option value="">Choose experience</option><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></label>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-title"><span class="section-number">3</span><div><h3>Portfolio guardrails</h3><p>Limit concentration and restrict ideas that do not fit your plan.</p></div></div>
+              <div class="field-grid">
+                <label class="field"><span>Account type *</span><select id="accountType"><option value="">Choose account type</option><option value="taxable">Taxable brokerage</option><option value="ira">Traditional IRA</option><option value="roth_ira">Roth IRA</option><option value="paper">Paper / educational</option><option value="other">Other</option></select></label>
+                <label class="field"><span>Recommendation style</span><select id="recommendationStyle"><option value="">Use safe default</option><option value="conservative">Conservative</option><option value="balanced">Balanced</option><option value="opportunity_seeking">Opportunity seeking</option></select></label>
+                <label class="field"><span>Maximum single position</span><input id="positionSizeLimitPercent" type="number" min="1" max="100" step=".5" placeholder="e.g. 10"><small>Maximum percent of the portfolio in one ticker.</small></label>
+                <label class="field"><span>Maximum single sector</span><input id="sectorLimitPercent" type="number" min="1" max="100" step=".5" placeholder="e.g. 25"></label>
+                <label class="field full"><span>Excluded sectors</span><input id="excludedSectors" placeholder="e.g. tobacco, gambling"><small>Comma-separated; MoneyBot will normalize duplicate entries.</small></label>
+              </div>
+              <div class="toggle-list">
+                <label class="toggle"><span class="toggle-copy"><strong>Allow penny-stock ideas</strong><small>Permit recommendations involving low-priced, highly volatile stocks.</small></span><input id="pennyStocksAllowed" type="checkbox"></label>
+                <label class="toggle"><span class="toggle-copy"><strong>After-hours alerts</strong><small>Allow notifications outside regular U.S. market hours.</small></span><input id="afterHoursAlerts" type="checkbox"></label>
+              </div>
+            </section>
+
+            <div class="safe-note"><span>🛡️</span><span><strong>Safe until complete.</strong> Missing answers use conservative effective defaults. MoneyBot will never silently treat an incomplete profile as aggressive.</span></div>
+            <div class="safe-note"><span>🕘</span><span><strong>Future decisions only.</strong> Updating this profile changes future recommendations. Historical decision records keep the profile and policy versions originally used.</span></div>
+            <details id="revisionPanel" style="margin-top:18px;border:1px solid #d8e4dc;border-radius:15px;padding:14px;background:#fbfdfb">
+              <summary style="cursor:pointer;font-weight:850;color:#294739">Profile revision history</summary>
+              <div id="profileRevisions" style="display:grid;gap:9px;margin-top:12px;color:#5d6f65;font-size:.86rem">Open to load recent changes.</div>
+            </details>
+            <div class="actions">
+              <span id="investorProfileStatus" class="save-status" role="status"></span>
+              <div class="button-row">
+                <button id="resetInvestorProfileBtn" class="button secondary" type="button">Reset</button>
+                <button id="saveInvestorProfileBtn" class="button primary" type="submit">Save investor profile</button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div id="avatarEditorModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="avatarEditorTitle">
+    <div class="modal-panel">
+      <h2 id="avatarEditorTitle">Adjust profile picture</h2>
+      <div class="avatar-preview"><img id="avatarEditorImage" alt="Adjust profile image"></div>
+      <label class="field"><span>Zoom</span><input id="avatarZoom" type="range" min="1" max="4" step=".01" value="1.35"></label>
+      <label class="field"><span>Horizontal position</span><input id="avatarOffsetX" type="range" min="-120" max="120" step="1" value="0"></label>
+      <label class="field"><span>Vertical position</span><input id="avatarOffsetY" type="range" min="-120" max="120" step="1" value="0"></label>
+      <div class="actions"><span></span><div class="button-row"><button id="cancelAvatarEditBtn" class="button secondary" type="button">Cancel</button><button id="saveAvatarEditBtn" class="button primary" type="button">Use picture</button></div></div>
+    </div>
+  </div>
+  <script src="{{ url_for('static', filename='js/settings.js') }}"></script>
+</body>
+</html>
