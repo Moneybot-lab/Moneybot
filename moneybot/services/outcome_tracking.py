@@ -1,12 +1,65 @@
 from __future__ import annotations
 
+import time
+from collections import OrderedDict
 from statistics import mean
+from threading import Lock
 from typing import Any, Dict
 
 
 POSITIVE_ACTIONS = {"BUY", "STRONG BUY"}
 NEGATIVE_ACTIONS = {"SELL", "HOLD OFF FOR NOW"}
 NEUTRAL_ACTIONS = {"HOLD"}
+PAPER_PNL_HORIZONS = (1, 5, 10, 20)
+PAPER_PNL_BENCHMARK_HORIZON = 20
+
+
+class OutcomeHistoryCache:
+    """Small bounded TTL cache for outcome price-history lookups.
+
+    The API imports this cache during application startup. Keeping the cache in
+    the outcome-tracking service avoids a deployment-breaking API/service
+    version mismatch and gives callers a deterministic, thread-safe cache that
+    never retains entries beyond its configured TTL or capacity.
+    """
+
+    def __init__(self, *, max_entries: int = 512, ttl_seconds: float = 900.0) -> None:
+        self.max_entries = max(1, int(max_entries))
+        self.ttl_seconds = max(0.0, float(ttl_seconds))
+        self._entries: OrderedDict[Any, tuple[float, Any]] = OrderedDict()
+        self._lock = Lock()
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        now = time.monotonic()
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return default
+            created_at, value = entry
+            if now - created_at > self.ttl_seconds:
+                self._entries.pop(key, None)
+                return default
+            self._entries.move_to_end(key)
+            return value
+
+    def set(self, key: Any, value: Any) -> Any:
+        with self._lock:
+            self._entries[key] = (time.monotonic(), value)
+            self._entries.move_to_end(key)
+            while len(self._entries) > self.max_entries:
+                self._entries.popitem(last=False)
+        return value
+
+    def get_or_load(self, key: Any, loader) -> Any:
+        missing = object()
+        cached = self.get(key, missing)
+        if cached is not missing:
+            return cached
+        return self.set(key, loader())
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
 
 
 def normalize_unix_ts(value: Any) -> int | None:
@@ -47,6 +100,40 @@ def normalize_action(event: Dict[str, Any]) -> str | None:
     return action or None
 
 
+def paper_exposure(action: str | None) -> int:
+    if action in POSITIVE_ACTIONS:
+        return 1
+    if action in NEGATIVE_ACTIONS:
+        return -1
+    if action in NEUTRAL_ACTIONS:
+        return 0
+    return 0
+
+
+def action_adjusted_return(action: str | None, future_return: float | None) -> float | None:
+    if future_return is None:
+        return None
+    exposure = paper_exposure(action)
+    if exposure == 0:
+        return 0.0
+    return round(float(future_return) * exposure, 4)
+
+
+def paper_path_extremes(action: str | None, closes: list[float]) -> tuple[float | None, float | None]:
+    if len(closes) < 2:
+        return None, None
+    start_price = float(closes[0])
+    if start_price == 0.0:
+        return None, None
+    exposure = paper_exposure(action)
+    if exposure == 0:
+        return 0.0, 0.0
+    path_returns = [((float(price) - start_price) / start_price) * exposure for price in closes[1:]]
+    if not path_returns:
+        return None, None
+    return round(min(path_returns), 4), round(max(path_returns), 4)
+
+
 def classify_outcome(action: str | None, future_return: float | None) -> str:
     if action is None or future_return is None:
         return "skipped"
@@ -83,6 +170,28 @@ def summarize_outcome_rows(rows: list[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _mean_numeric(rows: list[Dict[str, Any]], key: str) -> float | None:
+    values = [float(row[key]) for row in rows if isinstance(row.get(key), (int, float)) and not isinstance(row.get(key), bool)]
+    return round(mean(values), 4) if values else None
+
+
+def summarize_paper_pnl_by_action(rows: list[Dict[str, Any]]) -> Dict[str, Any]:
+    actions = ["BUY", "SELL", "HOLD", "HOLD OFF FOR NOW", "STRONG BUY"]
+    grouped: Dict[str, Any] = {}
+    for action in actions:
+        action_rows = [row for row in rows if row.get("action") == action]
+        payload: Dict[str, Any] = {"rows": len(action_rows)}
+        for days in PAPER_PNL_HORIZONS:
+            payload[f"avg_return_{days}d"] = _mean_numeric(action_rows, f"return_{days}d")
+            payload[f"avg_paper_return_{days}d"] = _mean_numeric(action_rows, f"paper_return_{days}d")
+        payload["avg_max_drawdown"] = _mean_numeric(action_rows, "max_drawdown")
+        payload["avg_max_favorable_excursion"] = _mean_numeric(action_rows, "max_favorable_excursion")
+        payload["avg_benchmark_return_20d"] = _mean_numeric(action_rows, "benchmark_return_20d")
+        payload["avg_benchmark_relative_return_20d"] = _mean_numeric(action_rows, "benchmark_relative_return_20d")
+        grouped[action] = payload
+    return grouped
+
+
 def _has_numeric_return(row: Dict[str, Any], key: str) -> bool:
     return isinstance(row.get(key), (int, float)) and not isinstance(row.get(key), bool)
 
@@ -98,7 +207,7 @@ def rows_with_any_horizon_return(rows: list[Dict[str, Any]]) -> list[Dict[str, A
     return [
         row
         for row in rows
-        if _has_numeric_return(row, "return_1d") or _has_numeric_return(row, "return_5d")
+        if any(_has_numeric_return(row, f"return_{days}d") for days in PAPER_PNL_HORIZONS)
     ]
 
 
@@ -116,6 +225,8 @@ def merge_recent_rows(*row_groups: list[Dict[str, Any]], limit: int) -> list[Dic
                 row.get("action"),
                 row.get("return_1d"),
                 row.get("return_5d"),
+                row.get("return_10d"),
+                row.get("return_20d"),
             )
             if key in seen:
                 continue
@@ -147,6 +258,8 @@ def evaluate_decision_events(
     events: list[Dict[str, Any]],
     *,
     future_return_lookup,
+    price_path_lookup=None,
+    benchmark_return_lookup=None,
 ) -> list[Dict[str, Any]]:
     rows: list[Dict[str, Any]] = []
     for event in events:
@@ -163,15 +276,36 @@ def evaluate_decision_events(
             "ts": ts,
             "model_version": (event.get("payload") or {}).get("model_version") if isinstance(event.get("payload"), dict) else None,
         }
-        try:
-            row["return_1d"] = future_return_lookup(symbol, ts, 1)
-        except Exception:  # noqa: BLE001
-            row["return_1d"] = None
-        try:
-            row["return_5d"] = future_return_lookup(symbol, ts, 5)
-        except Exception:  # noqa: BLE001
-            row["return_5d"] = None
-        row["outcome_1d"] = classify_outcome(action, row["return_1d"])
-        row["outcome_5d"] = classify_outcome(action, row["return_5d"])
+        for days in PAPER_PNL_HORIZONS:
+            key = f"return_{days}d"
+            try:
+                row[key] = future_return_lookup(symbol, ts, days)
+            except Exception:  # noqa: BLE001
+                row[key] = None
+            row[f"paper_return_{days}d"] = action_adjusted_return(action, row[key])
+        for days in (1, 5):
+            row[f"outcome_{days}d"] = classify_outcome(action, row[f"return_{days}d"])
+
+        closes = []
+        if price_path_lookup is not None:
+            try:
+                closes = price_path_lookup(symbol, ts, max(PAPER_PNL_HORIZONS)) or []
+            except Exception:  # noqa: BLE001
+                closes = []
+        row["max_drawdown"], row["max_favorable_excursion"] = paper_path_extremes(action, closes)
+
+        benchmark_return = None
+        if benchmark_return_lookup is not None:
+            try:
+                benchmark_return = benchmark_return_lookup(ts, PAPER_PNL_BENCHMARK_HORIZON)
+            except Exception:  # noqa: BLE001
+                benchmark_return = None
+        row["benchmark_return_20d"] = benchmark_return
+        paper_return_20d = row.get("paper_return_20d")
+        row["benchmark_relative_return_20d"] = (
+            round(float(paper_return_20d) - float(benchmark_return), 4)
+            if isinstance(paper_return_20d, (int, float)) and isinstance(benchmark_return, (int, float))
+            else None
+        )
         rows.append(row)
     return rows

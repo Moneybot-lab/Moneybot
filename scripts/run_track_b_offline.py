@@ -13,13 +13,51 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
-def build_track_b_commands(*, python_executable: str, project_root: Path, input_log: str, train_ratio: float, min_rows: int, output_dir: Path) -> list[list[str]]:
+NO_CANDIDATE_GENERATION_MARKERS = (
+    "is a no-op clone; generation aborted before publishing reports",
+)
+
+
+def _is_expected_no_candidate_result(stderr: str) -> bool:
+    """Return true when a generator safely declines to publish a clone.
+
+    A next-generation search finding no model distinct from its parent is a
+    valid no-promotion outcome, not an infrastructure failure. The generator
+    deliberately exits non-zero before publishing, so the offline orchestrator
+    must preserve routing safety while allowing diagnostics to be uploaded.
+    """
+
+    message = str(stderr or "").lower()
+    return any(marker in message for marker in NO_CANDIDATE_GENERATION_MARKERS)
+
+
+def build_track_b_commands(
+    *,
+    python_executable: str,
+    project_root: Path,
+    input_log: str,
+    train_ratio: float,
+    min_rows: int,
+    output_dir: Path,
+    dataset_limit: int | None = 50000,
+) -> list[list[str]]:
     scripts_dir = project_root / "scripts"
     dataset_path = output_dir / "decision_training_snapshot_track_b.jsonl"
     candidate_model_path = output_dir / "candidate_model_track_b.json"
     comparison_report_path = output_dir / "model_comparison_track_b.json"
+    build_dataset_command = [
+        python_executable,
+        str(scripts_dir / "day8_build_decision_training_dataset.py"),
+        "--input",
+        input_log,
+        "--output",
+        str(dataset_path),
+    ]
+    if dataset_limit is not None:
+        build_dataset_command.extend(["--limit", str(max(1, int(dataset_limit)))])
+
     return [
-        [python_executable, str(scripts_dir / "day8_build_decision_training_dataset.py"), "--input", input_log, "--output", str(dataset_path)],
+        build_dataset_command,
         [python_executable, str(scripts_dir / "day10_train_candidate_model.py"), "--input", str(dataset_path), "--output-model", str(candidate_model_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
         [python_executable, str(scripts_dir / "day11_compare_candidate_vs_production.py"), "--input", str(dataset_path), "--candidate-model", str(candidate_model_path), "--production-model", "data/day1_baseline_model.json", "--output", str(comparison_report_path), "--train-ratio", str(train_ratio), "--min-rows", str(min_rows)],
     ]
@@ -31,6 +69,12 @@ def main() -> None:
     parser.add_argument("--output-dir", default="data/track_b")
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--min-rows", type=int, default=200)
+    parser.add_argument(
+        "--dataset-limit",
+        type=int,
+        default=50000,
+        help="Decision-event rows to pass through to the dataset builder. Defaults to the workflow export size so mature rows are not truncated to day8's smaller standalone default.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -44,6 +88,7 @@ def main() -> None:
         train_ratio=max(0.1, min(0.95, float(args.train_ratio))),
         min_rows=max(1, int(args.min_rows)),
         output_dir=output_dir,
+        dataset_limit=max(1, int(args.dataset_limit)),
     )
 
     started_at = datetime.now(timezone.utc).isoformat()
@@ -53,6 +98,7 @@ def main() -> None:
         "input_log": args.input_log,
         "output_dir": str(output_dir),
         "dry_run": bool(args.dry_run),
+        "dataset_limit": max(1, int(args.dataset_limit)),
         "commands": commands,
         "steps": [],
         "success": False,
@@ -72,6 +118,14 @@ def main() -> None:
         }
         summary["steps"].append(step)
         if completed.returncode != 0:
+            if _is_expected_no_candidate_result(completed.stderr):
+                step["outcome"] = "no_candidate_generated"
+                summary["success"] = True
+                summary["outcome"] = "no_candidate_generated"
+                summary["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
+                (output_dir / "track_b_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+                print(json.dumps(summary, indent=2))
+                return
             summary["success"] = False
             (output_dir / "track_b_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
             print(json.dumps(summary, indent=2))
