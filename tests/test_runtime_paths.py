@@ -5,6 +5,7 @@ from pathlib import Path
 from moneybot.services.runtime_paths import (
     decision_events_log_path,
     decision_outcomes_snapshot_path,
+    historical_validation_report_path,
     is_durable_runtime_configured,
     resolve_runtime_dir,
 )
@@ -32,6 +33,7 @@ def test_runtime_paths_fall_back_to_runtime_dir(monkeypatch, tmp_path):
     assert resolved.exists()
     assert is_durable_runtime_configured() is True
     assert decision_outcomes_snapshot_path() == runtime / "decision_outcomes_snapshot.json"
+    assert historical_validation_report_path() == runtime / "historical_validation_report.json"
 
 
 def test_runtime_paths_default_to_local_data(monkeypatch):
