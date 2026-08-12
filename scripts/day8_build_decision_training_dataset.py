@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from moneybot.services.decision_log import read_decision_events
+from moneybot.services.alpha_atlas_feature_contract import build_alpha_atlas_event_features
 from moneybot.services.outcome_tracking import classify_outcome, close_values, normalize_action, normalize_unix_ts
 from moneybot.services.runtime_paths import bad_symbol_cache_path, decision_events_log_path
 

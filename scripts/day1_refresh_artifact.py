@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +12,32 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from moneybot.services.runtime_paths import day1_baseline_model_path, day1_training_snapshot_path
+
+
+def existing_model_version(path: str | Path) -> str | None:
+    model_path = Path(path)
+    if not model_path.exists():
+        return None
+    try:
+        payload = json.loads(model_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    version = payload.get("version") or payload.get("model_version")
+    return str(version).strip() if isinstance(version, str) and version.strip() else None
+
+
+def is_promoted_model_version(version: str | None) -> bool:
+    if not version:
+        return False
+    normalized = str(version).strip().lower()
+    if normalized.startswith("candidate-") or normalized.startswith("challenger-"):
+        return True
+    if normalized.startswith("alpha-atlas-v"):
+        suffix = normalized.removeprefix("alpha-atlas-v")
+        return suffix.isdigit() and int(suffix) > 1
+    return False
 
 
 def build_day1_commands(
@@ -75,11 +102,25 @@ def main() -> None:
     parser.add_argument("--target-return", type=float, default=0.0)
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument(
+        "--force-overwrite-promoted",
+        action="store_true",
+        help="Allow Day-1 baseline refresh to overwrite a promoted candidate/challenger production artifact.",
+    )
+    parser.add_argument(
         "--symbols",
         nargs="*",
         default=["AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "GOOGL", "NFLX", "AMD", "JPM"],
     )
     args = parser.parse_args()
+
+    current_version = existing_model_version(args.output_model)
+    if is_promoted_model_version(current_version) and not args.force_overwrite_promoted:
+        print(
+            "Skipping Day-1 baseline refresh: "
+            f"{args.output_model} currently contains promoted model version {current_version}. "
+            "Pass --force-overwrite-promoted to intentionally replace it."
+        )
+        return
 
     commands = build_day1_commands(
         python_executable=sys.executable,
