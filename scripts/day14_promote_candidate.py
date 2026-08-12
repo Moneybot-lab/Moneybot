@@ -44,6 +44,10 @@ def main() -> None:
     production_path = Path(args.production_model)
     if not candidate_path.exists():
         raise SystemExit(f"Candidate model not found: {candidate_path}")
+    candidate_model = _load_json(str(candidate_path))
+    candidate_version = str(candidate_model.get("version") or candidate_model.get("model_version") or "").strip()
+    if candidate_model.get("promotion_ready") is False or candidate_version == "no-promotable-challenger":
+        raise SystemExit("Candidate model is an explicit no-promotion placeholder; refusing promotion even with --force.")
 
     production_path.parent.mkdir(parents=True, exist_ok=True)
     if production_path.exists():

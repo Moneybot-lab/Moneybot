@@ -86,3 +86,55 @@ def test_rows_with_horizon_return_keeps_horizons_separate():
 
     assert [row["symbol"] for row in rows_with_horizon_return(rows, "1d")] == ["AAPL", "MSFT"]
     assert [row["symbol"] for row in rows_with_horizon_return(rows, "5d")] == ["MSFT"]
+
+
+def test_evaluate_decision_events_tracks_live_paper_pnl_fields():
+    events = [
+        {"symbol": "AAPL", "endpoint": "quick_ask", "decision_source": "deterministic_model", "ts": 1, "payload": {"recommendation": "BUY"}},
+        {"symbol": "TSLA", "endpoint": "quick_ask", "decision_source": "deterministic_model", "ts": 2, "payload": {"recommendation": "SELL"}},
+    ]
+
+    returns = {
+        ("AAPL", 1): 0.01,
+        ("AAPL", 5): 0.05,
+        ("AAPL", 10): 0.08,
+        ("AAPL", 20): 0.10,
+        ("TSLA", 1): -0.02,
+        ("TSLA", 5): -0.06,
+        ("TSLA", 10): -0.09,
+        ("TSLA", 20): -0.12,
+    }
+
+    rows = evaluate_decision_events(
+        events,
+        future_return_lookup=lambda symbol, ts, days: returns[(symbol, days)],
+        price_path_lookup=lambda symbol, ts, days: [100, 95, 102, 110] if symbol == "AAPL" else [100, 108, 92, 88],
+        benchmark_return_lookup=lambda ts, days: 0.04,
+    )
+
+    assert rows[0]["return_10d"] == 0.08
+    assert rows[0]["return_20d"] == 0.10
+    assert rows[0]["paper_return_20d"] == 0.10
+    assert rows[0]["max_drawdown"] == -0.05
+    assert rows[0]["max_favorable_excursion"] == 0.10
+    assert rows[0]["benchmark_relative_return_20d"] == 0.06
+    assert rows[1]["paper_return_20d"] == 0.12
+    assert rows[1]["max_drawdown"] == -0.08
+    assert rows[1]["max_favorable_excursion"] == 0.12
+
+
+def test_summarize_paper_pnl_by_action_groups_recommendations():
+    from moneybot.services.outcome_tracking import summarize_paper_pnl_by_action
+
+    rows = [
+        {"action": "BUY", "return_1d": 0.01, "paper_return_1d": 0.01, "return_5d": 0.05, "paper_return_5d": 0.05, "return_10d": 0.07, "paper_return_10d": 0.07, "return_20d": 0.10, "paper_return_20d": 0.10, "max_drawdown": -0.02, "max_favorable_excursion": 0.12, "benchmark_return_20d": 0.04, "benchmark_relative_return_20d": 0.06},
+        {"action": "SELL", "return_1d": -0.02, "paper_return_1d": 0.02, "return_5d": -0.04, "paper_return_5d": 0.04, "return_10d": -0.06, "paper_return_10d": 0.06, "return_20d": -0.08, "paper_return_20d": 0.08, "max_drawdown": -0.01, "max_favorable_excursion": 0.09, "benchmark_return_20d": 0.04, "benchmark_relative_return_20d": 0.04},
+    ]
+
+    summary = summarize_paper_pnl_by_action(rows)
+
+    assert summary["BUY"]["rows"] == 1
+    assert summary["BUY"]["avg_paper_return_20d"] == 0.10
+    assert summary["SELL"]["avg_paper_return_20d"] == 0.08
+    assert summary["SELL"]["avg_benchmark_relative_return_20d"] == 0.04
+    assert summary["HOLD"]["rows"] == 0

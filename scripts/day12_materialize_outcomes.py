@@ -21,6 +21,7 @@ from moneybot.services.outcome_tracking import (
     rows_with_any_horizon_return,
     rows_with_horizon_return,
     summarize_outcome_rows,
+    summarize_paper_pnl_by_action,
 )
 from moneybot.services.runtime_paths import resolve_runtime_dir
 
@@ -67,6 +68,33 @@ def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
     return round((end_price - start_price) / start_price, 4)
 
 
+def _price_path(symbol: str, start_ts: int, days: int) -> list[float]:
+    start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
+    now_utc = datetime.now(timezone.utc)
+    if start_dt >= now_utc:
+        return []
+    if start_dt + timedelta(days=days) > now_utc:
+        return []
+    end_dt = start_dt + timedelta(days=max(days + 3, 7))
+    safe_end_dt = min(end_dt, now_utc + timedelta(days=1))
+    try:
+        history = yf.download(
+            symbol,
+            start=start_dt.strftime("%Y-%m-%d"),
+            end=safe_end_dt.strftime("%Y-%m-%d"),
+            interval="1d",
+            progress=False,
+            auto_adjust=False,
+        )
+    except Exception:  # noqa: BLE001
+        return []
+    return close_values(history)
+
+
+def _benchmark_return(start_ts: int, days: int) -> float | None:
+    return _future_return("SPY", start_ts, days)
+
+
 def main() -> None:
     base_dir = resolve_runtime_dir()
     parser = argparse.ArgumentParser(description="Materialize decision outcomes to a snapshot JSON file.")
@@ -77,7 +105,12 @@ def main() -> None:
     args = parser.parse_args()
 
     events = read_decision_events(args.input, limit=max(1, args.limit))
-    rows = evaluate_decision_events(events, future_return_lookup=_future_return)
+    rows = evaluate_decision_events(
+        events,
+        future_return_lookup=_future_return,
+        price_path_lookup=_price_path,
+        benchmark_return_lookup=_benchmark_return,
+    )
     evaluated_rows_1d = rows_with_horizon_return(rows, "1d")
     evaluated_rows_5d = rows_with_horizon_return(rows, "5d")
     evaluated_rows = rows_with_any_horizon_return(rows)
@@ -95,6 +128,7 @@ def main() -> None:
             "rows_5d": visible_rows_5d,
             "summary_1d": summarize_horizon(visible_rows_1d, "1d"),
             "summary_5d": summarize_horizon(visible_rows_5d, "5d"),
+            "paper_pnl_by_recommendation": summarize_paper_pnl_by_action(rows),
             "include_skipped": False,
             "rows_scanned": len(rows),
             "evaluated_rows_available": len(evaluated_rows),
