@@ -25,3 +25,17 @@ def test_build_day1_commands_uses_absolute_script_paths():
     assert commands[0][-2:] == ["AAPL", "MSFT"]
     assert commands[1][commands[1].index("--input") + 1] == "data/day1_training_snapshot.csv"
     assert commands[1][commands[1].index("--output-model") + 1] == "data/day1_baseline_model.json"
+
+
+def test_existing_model_version_reads_candidate_version(tmp_path):
+    from scripts.day1_refresh_artifact import existing_model_version, is_promoted_model_version
+
+    model = tmp_path / "day1_baseline_model.json"
+    model.write_text('{"version":"candidate-logreg-v1-20260714T120000Z"}', encoding="utf-8")
+
+    version = existing_model_version(model)
+
+    assert version == "candidate-logreg-v1-20260714T120000Z"
+    assert is_promoted_model_version(version) is True
+    assert is_promoted_model_version("alpha-atlas-v1") is False
+    assert is_promoted_model_version("alpha-atlas-v2") is True

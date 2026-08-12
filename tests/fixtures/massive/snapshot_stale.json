@@ -1,0 +1,10 @@
+{
+  "request_id": "snapshot-stale",
+  "status": "OK",
+  "ticker": {
+    "ticker": "AAPL",
+    "lastTrade": {"i": "old-trade", "p": 190.00, "s": 10, "t": 1780925400000000000},
+    "day": {"c": 191.00},
+    "prevDay": {"c": 189.00}
+  }
+}
