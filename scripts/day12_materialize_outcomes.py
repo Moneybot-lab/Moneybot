@@ -102,6 +102,33 @@ def _benchmark_return(start_ts: int, days: int) -> float | None:
     return _future_return("SPY", start_ts, days)
 
 
+def _price_path(symbol: str, start_ts: int, days: int) -> list[float]:
+    start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
+    now_utc = datetime.now(timezone.utc)
+    if start_dt >= now_utc:
+        return []
+    if start_dt + timedelta(days=days) > now_utc:
+        return []
+    end_dt = start_dt + timedelta(days=max(days + 3, 7))
+    safe_end_dt = min(end_dt, now_utc + timedelta(days=1))
+    try:
+        history = yf.download(
+            symbol,
+            start=start_dt.strftime("%Y-%m-%d"),
+            end=safe_end_dt.strftime("%Y-%m-%d"),
+            interval="1d",
+            progress=False,
+            auto_adjust=False,
+        )
+    except Exception:  # noqa: BLE001
+        return []
+    return close_values(history)
+
+
+def _benchmark_return(start_ts: int, days: int) -> float | None:
+    return _future_return("SPY", start_ts, days)
+
+
 def main() -> None:
     base_dir = resolve_runtime_dir()
     parser = argparse.ArgumentParser(

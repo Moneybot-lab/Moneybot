@@ -26,10 +26,14 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  PYTHONPATH: ${{ github.workspace }}
-  MASSIVE_FLATFILES_PREFIX: ${{ inputs.massive_prefix || 'us_stocks_sip/day_aggs_v1' }}
-  MASSIVE_INGEST_DATE: ${{ inputs.dataset_date || '' }}
-  TRACK_B_MIN_ROWS: ${{ inputs.min_rows || '200' }}
+  # Massive exposes an S3-compatible endpoint that does not always return the
+  # optional checksum metadata expected by newer AWS CLI/botocore releases.
+  # Requiring checksums only when the API requires them avoids the opaque
+  # "argument of type 'NoneType' is not iterable" download failure.
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_EC2_METADATA_DISABLED: "true"
 
 jobs:
   run-track-b:

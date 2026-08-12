@@ -5,6 +5,15 @@ from pathlib import Path
 from scripts.run_track_b_offline import _is_expected_no_candidate_result, build_track_b_commands
 
 
+def test_track_b_workflow_configures_s3_compatible_checksum_behavior():
+    workflow = Path(".github/workflows/track-b-offline.yml").read_text(encoding="utf-8")
+
+    assert "AWS_REQUEST_CHECKSUM_CALCULATION: when_required" in workflow
+    assert "AWS_RESPONSE_CHECKSUM_VALIDATION: when_required" in workflow
+    assert "AWS_DEFAULT_REGION: us-east-1" in workflow
+    assert 'AWS_EC2_METADATA_DISABLED: "true"' in workflow
+
+
 def test_build_track_b_commands_uses_offline_artifacts_only():
     commands = build_track_b_commands(
         python_executable="python3",
