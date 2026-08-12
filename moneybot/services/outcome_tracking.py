@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+import time
+from collections import OrderedDict
 from statistics import mean
-from typing import Any, Callable, Dict
-
-import pandas as pd
+from threading import Lock
+from typing import Any, Dict
 
 
 POSITIVE_ACTIONS = {"BUY", "STRONG BUY"}
@@ -13,6 +12,54 @@ NEGATIVE_ACTIONS = {"SELL", "HOLD OFF FOR NOW"}
 NEUTRAL_ACTIONS = {"HOLD"}
 PAPER_PNL_HORIZONS = (1, 5, 10, 20)
 PAPER_PNL_BENCHMARK_HORIZON = 20
+
+
+class OutcomeHistoryCache:
+    """Small bounded TTL cache for outcome price-history lookups.
+
+    The API imports this cache during application startup. Keeping the cache in
+    the outcome-tracking service avoids a deployment-breaking API/service
+    version mismatch and gives callers a deterministic, thread-safe cache that
+    never retains entries beyond its configured TTL or capacity.
+    """
+
+    def __init__(self, *, max_entries: int = 512, ttl_seconds: float = 900.0) -> None:
+        self.max_entries = max(1, int(max_entries))
+        self.ttl_seconds = max(0.0, float(ttl_seconds))
+        self._entries: OrderedDict[Any, tuple[float, Any]] = OrderedDict()
+        self._lock = Lock()
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        now = time.monotonic()
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return default
+            created_at, value = entry
+            if now - created_at > self.ttl_seconds:
+                self._entries.pop(key, None)
+                return default
+            self._entries.move_to_end(key)
+            return value
+
+    def set(self, key: Any, value: Any) -> Any:
+        with self._lock:
+            self._entries[key] = (time.monotonic(), value)
+            self._entries.move_to_end(key)
+            while len(self._entries) > self.max_entries:
+                self._entries.popitem(last=False)
+        return value
+
+    def get_or_load(self, key: Any, loader) -> Any:
+        missing = object()
+        cached = self.get(key, missing)
+        if cached is not missing:
+            return cached
+        return self.set(key, loader())
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
 
 
 def normalize_unix_ts(value: Any) -> int | None:

@@ -103,6 +103,33 @@ APP_SIGNAL_FEATURE_COLUMNS = {
     "feature_source_rule_based",
 }
 
+RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
+TARGET_GAIN_BUCKETS = {"gain", "big_gain"}
+RETURN_BIN_SAMPLE_WEIGHTS = {
+    "big_loss": 3.0,
+    "loss": 1.5,
+    "flat": 0.5,
+    "gain": 1.25,
+    "big_gain": 4.0,
+}
+
+APP_SIGNAL_FEATURE_COLUMNS = {
+    "feature_endpoint_hot_momentum_buys",
+    "feature_endpoint_quick_ask",
+    "feature_endpoint_user_watchlist",
+    "feature_probability_up",
+    "feature_rec_buy",
+    "feature_rec_hold",
+    "feature_rec_hold_off_for_now",
+    "feature_rec_negative",
+    "feature_rec_positive",
+    "feature_rec_sell",
+    "feature_rec_strong_buy",
+    "feature_source_ai_enhanced",
+    "feature_source_deterministic_model",
+    "feature_source_rule_based",
+}
+
 RESERVED_COLUMNS = {
     "ts",
     "symbol",
@@ -277,6 +304,41 @@ def _apply_feature_fill_values(df: pd.DataFrame, feature_columns: list[str], fil
         numeric = pd.to_numeric(out[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
         out[col] = numeric.fillna(float(fill_values.get(col, 0.0))).astype(float)
     return out
+
+
+def _backtest_compatible_feature_columns(feature_columns: list[str], persisted_feature_columns: set[str]) -> list[str]:
+    """Keep derived app-signal features only when they are persisted upstream.
+
+    Day 10 can derive app-signal columns from raw row fields for local
+    experiments, but downstream Track B backtests often read the persisted flat
+    feature store directly. If an artifact is trained on derived columns that
+    were not written to that store, the backtest step raises a KeyError when it
+    indexes the frame by artifact feature names.
+    """
+
+    return [
+        col
+        for col in feature_columns
+        if col not in APP_SIGNAL_FEATURE_COLUMNS or col in persisted_feature_columns
+    ]
+
+
+def _fill_feature_gaps(df: pd.DataFrame, feature_columns: list[str]) -> tuple[pd.DataFrame, dict[str, float]]:
+    """Coerce sparse feature columns to numeric and median-fill missing values.
+
+    Decision logs come from multiple endpoints and app versions, so feature maps are
+    naturally sparse. Requiring every selected feature to be present on the same
+    row can drop an otherwise large labeled dataset to zero rows.
+    """
+    out = df.copy()
+    fill_values: dict[str, float] = {}
+    for col in feature_columns:
+        numeric = pd.to_numeric(out[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        median = numeric.median(skipna=True)
+        fill_value = float(median) if pd.notna(median) else 0.0
+        out[col] = numeric.fillna(fill_value).astype(float)
+        fill_values[col] = fill_value
+    return out, fill_values
 
 
 def _backtest_compatible_feature_columns(feature_columns: list[str], persisted_feature_columns: set[str]) -> list[str]:

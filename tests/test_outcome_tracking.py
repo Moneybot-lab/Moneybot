@@ -1,13 +1,17 @@
 import pandas as pd
 
-from moneybot.services.outcome_tracking import (
-    classify_outcome,
-    close_values,
-    evaluate_decision_events,
-    normalize_action,
-    select_recent_unique_rows,
-    summarize_outcome_rows,
-)
+from moneybot.services.outcome_tracking import OutcomeHistoryCache, classify_outcome, close_values, evaluate_decision_events, normalize_action, summarize_outcome_rows
+
+
+def test_outcome_history_cache_is_importable_and_bounded():
+    cache = OutcomeHistoryCache(max_entries=1, ttl_seconds=60)
+
+    assert cache.get_or_load("AAPL", lambda: [100.0]) == [100.0]
+    assert cache.get_or_load("AAPL", lambda: [999.0]) == [100.0]
+    cache.set("MSFT", [200.0])
+
+    assert cache.get("AAPL") is None
+    assert cache.get("MSFT") == [200.0]
 
 
 def test_normalize_action_reads_recommendation_and_advice():
