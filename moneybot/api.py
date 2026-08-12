@@ -52,6 +52,7 @@ from .services.investor_profile import (
     validate_profile_updates,
 )
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
+from .services.production_servability import validate_certification
 from .services.decision_snapshot import build_decision_snapshot
 from .services.suitability_policy import UserDecisionContext
 from .services.market_stream import register_demand_safely
@@ -500,6 +501,31 @@ def _market_stream_health_payload() -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         logging.exception("Unable to read market-stream health state")
         return {"connection_state": "redis_unavailable"}
+
+
+@api_bp.get("/market-stream-health")
+@login_required
+def market_stream_health():
+    worker = _market_stream_health_payload()
+    worker_state = str(worker.get("connection_state") or "unknown")
+    last_event = worker.get("last_event_at_utc") or worker.get("last_market_event_at_utc")
+    diagnosis = (
+        "no market event has arrived yet"
+        if worker_state == "connected" and not last_event
+        else "market stream health reported by the shadow worker"
+    )
+    config = current_app.config.get("MASSIVE_STREAM_CONFIG")
+    return jsonify(
+        {
+            "data": {
+                "shadow_mode": bool(getattr(config, "shadow_mode", True)),
+                "worker_state": worker_state,
+                "diagnosis": diagnosis,
+                "worker": worker,
+            },
+            "request_id": g.request_id,
+        }
+    )
 
 
 def _is_regular_market_hours(now_utc: datetime | None = None) -> bool:
@@ -2392,7 +2418,7 @@ def run_daily_ops():
         report_diag = _file_diagnostics(calibration_report)
         plan_diag = _file_diagnostics(recalibration_plan)
         day13_stderr = completed.stderr if (completed.returncode != 0 and "day13_" in completed.stderr) else ""
-        return jsonify(
+        response = jsonify(
             {
                 "data": {
                     "success": completed.returncode == 0,
@@ -2408,6 +2434,7 @@ def run_daily_ops():
                 "request_id": g.request_id,
             }
         )
+        return response, (200 if completed.returncode == 0 else 500)
     except Exception as exc:  # noqa: BLE001
         logging.exception("run-daily-ops failed to execute.")
         return jsonify(
@@ -2805,7 +2832,7 @@ def run_weekly_model_refresh():
         )
         report_diag = _file_diagnostics(calibration_report)
         plan_diag = _file_diagnostics(recalibration_plan)
-        return jsonify(
+        response = jsonify(
             {
                 "data": {
                     "success": completed.returncode == 0,
@@ -2823,6 +2850,7 @@ def run_weekly_model_refresh():
                 "request_id": g.request_id,
             }
         )
+        return response, (200 if completed.returncode == 0 else 500)
     except Exception as exc:  # noqa: BLE001
         logging.exception("run-weekly-model-refresh failed to execute.")
         return jsonify(
@@ -2876,6 +2904,29 @@ def hot_momentum_buys():
 
 
 
+@api_bp.get("/breakout-radar")
+def breakout_radar():
+    svc = current_app.extensions["market_data_service"]
+    seed_scores = _recent_breakout_seed_scores()
+    items = [item for item in _get_breakout_radar_items(svc, seed_symbols=seed_scores) if _is_actionable_scanner_row(item, require_breakout=True)]
+    decision_logger = current_app.extensions.get("decision_logger")
+    if decision_logger is not None:
+        for item in items:
+            decision_logger.log(
+                endpoint="breakout_radar",
+                symbol=item.get("symbol"),
+                decision_source=item.get("decision_source") or item.get("candidate_source") or "scanner",
+                payload={
+                    "score": item.get("score"),
+                    "score_basis": item.get("score_basis"),
+                    "model_version": item.get("model_version"),
+                    "probability_up": item.get("probability_up"),
+                    "forecast_horizon": item.get("forecast_horizon"),
+                },
+            )
+    return jsonify({"items": items, "request_id": g.request_id})
+
+
 @api_bp.post("/promote-track-b-candidate")
 def promote_track_b_candidate():
     expected_token = str(
@@ -2889,14 +2940,17 @@ def promote_track_b_candidate():
 
     comparison_file = request.files.get("comparison_report")
     candidate_file = request.files.get("candidate_model")
-    if comparison_file is None or candidate_file is None:
-        return jsonify({"error": "comparison_report and candidate_model files are required", "request_id": g.request_id}), 400
+    certification_file = request.files.get("servability_certification")
+    if comparison_file is None or candidate_file is None or certification_file is None:
+        return jsonify({"error": "comparison_report, candidate_model, and servability_certification files are required", "request_id": g.request_id}), 400
 
     try:
         comparison_bytes = comparison_file.read()
         candidate_bytes = candidate_file.read()
+        certification_bytes = certification_file.read()
         comparison_report = json.loads(comparison_bytes.decode("utf-8"))
         candidate_model = json.loads(candidate_bytes.decode("utf-8"))
+        certification = json.loads(certification_bytes.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return jsonify({"error": "uploaded files must be valid JSON", "request_id": g.request_id}), 400
 
@@ -2904,6 +2958,8 @@ def promote_track_b_candidate():
         return jsonify({"error": "comparison_report must be a JSON object", "request_id": g.request_id}), 400
     if not isinstance(candidate_model, dict):
         return jsonify({"error": "candidate_model must be a JSON object", "request_id": g.request_id}), 400
+    if not isinstance(certification, dict):
+        return jsonify({"error": "servability_certification must be a JSON object", "request_id": g.request_id}), 400
 
     force_raw = str(request.form.get("force") or request.args.get("force") or "").strip().lower()
     force = force_raw in {"1", "true", "yes", "y"}
@@ -2940,10 +2996,34 @@ def promote_track_b_candidate():
     project_root = Path(__file__).resolve().parents[1]
     track_b_dir = resolve_runtime_dir() / "track_b"
     track_b_dir.mkdir(parents=True, exist_ok=True)
+    validation_candidate_path = track_b_dir / f".candidate-upload-{uuid.uuid4().hex}.json"
+    try:
+        validation_candidate_path.write_bytes(candidate_bytes)
+        certification_failures = validate_certification(
+            validation_candidate_path, certification
+        )
+    finally:
+        validation_candidate_path.unlink(missing_ok=True)
+    if certification_failures:
+        return jsonify(
+            {
+                "data": {
+                    "success": False,
+                    "promoted": False,
+                    "candidate_win": candidate_win,
+                    "candidate_model_version": candidate_version,
+                    "certification_failures": certification_failures,
+                    "message": "servability certification validation failed and cannot be overridden",
+                },
+                "request_id": g.request_id,
+            }
+        ), 409
     comparison_path = track_b_dir / "model_comparison_track_b.json"
     candidate_path = track_b_dir / "candidate_model_track_b.json"
+    certification_path = track_b_dir / "production_servability_certification.json"
     comparison_path.write_bytes(comparison_bytes)
     candidate_path.write_bytes(candidate_bytes)
+    certification_path.write_bytes(certification_bytes)
 
     production_model_path = Path(
         str(current_app.config.get("DETERMINISTIC_MODEL_PATH") or (resolve_runtime_dir() / "day1_baseline_model.json"))
@@ -2957,6 +3037,8 @@ def promote_track_b_candidate():
         str(candidate_path),
         "--production-model",
         str(production_model_path),
+        "--servability-certification",
+        str(certification_path),
     ]
     if force:
         command.append("--force")
@@ -3004,6 +3086,7 @@ def promote_track_b_candidate():
                 "stderr": completed.stderr,
                 "comparison_report_path": str(comparison_path),
                 "candidate_model_path": str(candidate_path),
+                "servability_certification_path": str(certification_path),
                 "production_model_path": str(production_model_path),
             },
             "request_id": g.request_id,
@@ -3039,6 +3122,10 @@ def _historical_validation_status() -> dict[str, Any]:
         "mtime_utc": diag["mtime_utc"],
         "summary": None,
         "error": None,
+        "fresh": False,
+        "promotion_ready": False,
+        "evaluated_rows": 0,
+        "rollout_recommendation": "hold_shadow",
     }
     if not diag["exists"]:
         return status
@@ -3050,7 +3137,27 @@ def _historical_validation_status() -> dict[str, Any]:
         return status
 
     if isinstance(payload, dict):
+        metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+        gates = payload.get("promotion_gates") if isinstance(payload.get("promotion_gates"), dict) else {}
+        timestamp_raw = payload.get("computed_at_utc") or payload.get("generated_at_utc")
+        fresh = False
+        if isinstance(timestamp_raw, str):
+            try:
+                timestamp = datetime.fromisoformat(timestamp_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+                age_seconds = (datetime.now(timezone.utc) - timestamp).total_seconds()
+                fresh = 0 <= age_seconds <= int(
+                    current_app.config.get("HISTORICAL_VALIDATION_REPORT_MAX_AGE_SECONDS")
+                    or 604800
+                )
+            except ValueError:
+                fresh = False
         status["available"] = True
+        status["fresh"] = fresh
+        status["promotion_ready"] = gates.get("promotion_ready") is True
+        status["evaluated_rows"] = int(metrics.get("evaluated_rows") or 0)
+        status["rollout_recommendation"] = str(
+            payload.get("rollout_recommendation") or "hold_shadow"
+        )
         status["summary"] = {
             key: payload.get(key)
             for key in (
@@ -3065,6 +3172,22 @@ def _historical_validation_status() -> dict[str, Any]:
             if key in payload
         }
     return status
+
+
+@api_bp.get("/historical-validation")
+def historical_validation_report():
+    expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
+    provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
+    if not expected_token or not provided_token or not hmac.compare_digest(
+        provided_token, expected_token
+    ):
+        return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
+
+    status = _historical_validation_status()
+    if not status.get("available"):
+        return jsonify({"status": status, "request_id": g.request_id}), 404
+    payload = json.loads(Path(str(status["path"])).read_text(encoding="utf-8"))
+    return jsonify({"data": payload, "status": status, "request_id": g.request_id})
 
 
 @api_bp.get("/model-health")
@@ -3281,12 +3404,18 @@ def decision_outcomes():
         snapshot = _load_materialized_outcomes_snapshot(
             str(snapshot_path),
             max_age_seconds=snapshot_max_age_seconds,
-            allow_stale=True,
+            allow_stale=allow_stale_snapshot,
         )
         if snapshot is not None:
             snapshot_data = dict(snapshot["data"] or {})
             if "paper_pnl_by_recommendation" not in snapshot_data:
-                snapshot_data["paper_pnl_by_recommendation"] = summarize_paper_pnl_by_action(snapshot_data.get("rows") or [])
+                snapshot_data["paper_pnl_by_recommendation"] = summarize_paper_pnl_by_action(
+                    snapshot_data.get("rows") or []
+                )
+            if "visible_paper_pnl_by_recommendation" not in snapshot_data:
+                snapshot_data["visible_paper_pnl_by_recommendation"] = summarize_paper_pnl_by_action(
+                    snapshot_data.get("rows") or []
+                )
             return jsonify(
                 {
                     "data": {
@@ -3306,28 +3435,19 @@ def decision_outcomes():
         or current_app.config.get("DECISION_LOG_PATH")
         or _runtime_data_path("decision_events.jsonl")
     )
-    lookup_cache: dict[tuple[str, int, int], float | None] = {}
-    price_path_cache: dict[tuple[str, int, int], list[float]] = {}
-    benchmark_cache: dict[tuple[int, int], float | None] = {}
-    cache_hits = 0
-    cache_misses = 0
-    lookup_errors = 0
-
-    def cached_future_return_lookup(symbol: str, ts: int, days: int) -> float | None:
-        nonlocal cache_hits, cache_misses, lookup_errors
-        key = (str(symbol).upper(), int(ts), int(days))
-        if key in lookup_cache:
-            cache_hits += 1
-            return lookup_cache[key]
-
-        cache_misses += 1
-        try:
-            value = _future_return_for_outcomes(symbol, ts, days)
-        except Exception:  # noqa: BLE001
-            lookup_errors += 1
-            value = None
-        lookup_cache[key] = value
-        return value
+    raw_read_cap = (
+        current_app.config.get("DECISION_OUTCOMES_READ_CAP")
+        or os.environ.get("DECISION_OUTCOMES_READ_CAP")
+        or 50000
+    )
+    try:
+        read_cap = max(1, int(raw_read_cap))
+    except (TypeError, ValueError):
+        read_cap = 50000
+    history_cache = OutcomeHistoryCache(download=yf.download)
+    legacy_lookup_cache: dict[tuple[str, int, int], float | None] = {}
+    legacy_lookup_hits = 0
+    legacy_lookup_misses = 0
 
     def cached_price_path_lookup(symbol: str, ts: int, days: int) -> list[float]:
         key = (str(symbol).upper(), int(ts), int(days))
@@ -3361,11 +3481,49 @@ def decision_outcomes():
     evaluated_rows_5d: list[dict[str, Any]] = []
     while True:
         events = read_decision_events(str(output_path), limit=read_limit)
+        events_read = len(events)
+        all_available_events_read = events_read < read_limit
+        event_ts_values = [
+            int(event["ts"])
+            for event in events
+            if isinstance(event, dict) and isinstance(event.get("ts"), int)
+        ]
+        oldest_event_ts_scanned = min(event_ts_values) if event_ts_values else None
+        newest_event_ts_scanned = max(event_ts_values) if event_ts_values else None
+        def future_return_lookup(symbol: str, ts: int, days: int) -> float | None:
+            nonlocal legacy_lookup_hits, legacy_lookup_misses
+            key = (str(symbol).upper(), int(ts), int(days))
+            if key in legacy_lookup_cache:
+                legacy_lookup_hits += 1
+                return legacy_lookup_cache[key]
+            legacy_lookup_misses += 1
+            try:
+                value = _future_return_for_outcomes(symbol, ts, days, history_cache)
+            except TypeError:
+                value = _future_return_for_outcomes(symbol, ts, days)
+            legacy_lookup_cache[key] = value
+            return value
+
+        def price_path_lookup(symbol: str, ts: int, days: int) -> list[float]:
+            try:
+                return _price_path_for_outcomes(symbol, ts, days, history_cache)
+            except TypeError:
+                return _price_path_for_outcomes(symbol, ts, days)
+
+        def benchmark_return_lookup(ts: int, days: int) -> float | None:
+            return future_return_lookup("SPY", ts, days)
+
+        use_history_preload = (
+            getattr(_future_return_for_outcomes, "__name__", "") == "_future_return_for_outcomes"
+            and getattr(_price_path_for_outcomes, "__name__", "") == "_price_path_for_outcomes"
+        )
+        if use_history_preload:
+            history_cache.preload_events(events)
         rows = evaluate_decision_events(
             events,
-            future_return_lookup=cached_future_return_lookup,
-            price_path_lookup=cached_price_path_lookup,
-            benchmark_return_lookup=cached_benchmark_return_lookup,
+            future_return_lookup=future_return_lookup,
+            price_path_lookup=price_path_lookup,
+            benchmark_return_lookup=benchmark_return_lookup,
         )
         evaluated_rows_1d = rows_with_horizon_return(rows, "1d")
         evaluated_rows_5d = rows_with_horizon_return(rows, "5d")
@@ -3423,6 +3581,9 @@ def decision_outcomes():
                 "summary_1d": summary_1d,
                 "summary_5d": summary_5d,
                 "paper_pnl_by_recommendation": summarize_paper_pnl_by_action(rows),
+                "visible_paper_pnl_by_recommendation": summarize_paper_pnl_by_action(
+                    visible_pnl_rows
+                ),
                 "include_skipped": include_skipped,
                 "decision_source_filter": decision_source_filter or None,
                 "events_read": events_read,
@@ -3461,7 +3622,14 @@ def wells_picks():
     return jsonify({"items": svc.get_wells_picks(), "request_id": g.request_id})
 
 
-def _price_path_for_outcomes(symbol: str, start_ts: int, days: int) -> list[float]:
+def _price_path_for_outcomes(
+    symbol: str,
+    start_ts: int,
+    days: int,
+    history_cache: OutcomeHistoryCache | None = None,
+) -> list[float]:
+    if history_cache is not None:
+        return history_cache.price_path(symbol, start_ts, days)
     start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
     now_utc = datetime.now(timezone.utc)
     if start_dt >= now_utc:
@@ -3485,7 +3653,14 @@ def _price_path_for_outcomes(symbol: str, start_ts: int, days: int) -> list[floa
     return close_values(history)
 
 
-def _future_return_for_outcomes(symbol: str, start_ts: int, days: int) -> float | None:
+def _future_return_for_outcomes(
+    symbol: str,
+    start_ts: int,
+    days: int,
+    history_cache: OutcomeHistoryCache | None = None,
+) -> float | None:
+    if history_cache is not None:
+        return history_cache.future_return(symbol, start_ts, days)
     start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
     now_utc = datetime.now(timezone.utc)
     # Skip network calls when event time is too recent (or future) to have realized horizon returns.

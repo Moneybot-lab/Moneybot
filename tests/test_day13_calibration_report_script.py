@@ -48,6 +48,25 @@ def test_calibration_rows_from_events_skips_non_mature_events(monkeypatch):
     assert rows[0]["symbol"] == "AAPL"
 
 
+def test_history_preload_filters_ineligible_calibration_events():
+    now_ts = 2_000_000_000
+    mature_ts = now_ts - 8 * 86400
+    events = [
+        {"symbol": "GOOD", "ts": mature_ts, "payload": {"probability_up": 0.7, "forecast_horizon": "5d"}},
+        {"symbol": "WRONG", "ts": mature_ts, "payload": {"probability_up": 0.7, "forecast_horizon": "1d"}},
+        {"symbol": "NULL", "ts": mature_ts, "payload": {"probability_up": None, "forecast_horizon": "5d"}},
+        {"symbol": "QUOTE", "ts": mature_ts, "payload": {"probability_up": 0.7, "forecast_horizon": "5d", "provider": "portfolio_quote_only"}},
+        {"symbol": "YOUNG", "ts": now_ts - 86400, "payload": {"probability_up": 0.7, "forecast_horizon": "5d"}},
+        {"symbol": "", "ts": mature_ts, "payload": {"probability_up": 0.7, "forecast_horizon": "5d"}},
+    ]
+
+    eligible = calibration_script.history_eligible_events(
+        events, horizon_days=5, now_ts=now_ts
+    )
+
+    assert [event["symbol"] for event in eligible] == ["GOOD"]
+
+
 def test_calibration_summary_recommends_slope_adjustment_when_overconfident():
     rows = [
         {"predicted": 0.9, "observed": 0.0},

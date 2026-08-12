@@ -41,12 +41,16 @@ jobs:
           find track-b-artifact -maxdepth 6 -type f | sort
           comparison_path="$(find track-b-artifact -type f -name model_comparison_track_b.json | head -n 1)"
           candidate_path="$(find track-b-artifact -type f -name candidate_model_track_b.json | head -n 1)"
+          certification_path="$(find track-b-artifact -type f -name production_servability_certification.json | head -n 1)"
           test -n "$comparison_path" || (echo "Missing model_comparison_track_b.json in downloaded artifact" && exit 1)
           test -n "$candidate_path" || (echo "Missing candidate_model_track_b.json in downloaded artifact" && exit 1)
+          test -n "$certification_path" || (echo "Missing production_servability_certification.json in downloaded artifact" && exit 1)
           test -s "$comparison_path"
           test -s "$candidate_path"
+          test -s "$certification_path"
           echo "COMPARISON_REPORT_PATH=$comparison_path" >> "$GITHUB_ENV"
           echo "CANDIDATE_MODEL_PATH=$candidate_path" >> "$GITHUB_ENV"
+          echo "SERVABILITY_CERTIFICATION_PATH=$certification_path" >> "$GITHUB_ENV"
 
       - name: Validate Track B promotion artifacts
         run: |
@@ -57,6 +61,7 @@ jobs:
           from pathlib import Path
           report = json.loads(Path(os.environ["COMPARISON_REPORT_PATH"]).read_text())
           candidate = json.loads(Path(os.environ["CANDIDATE_MODEL_PATH"]).read_text())
+          certification = json.loads(Path(os.environ["SERVABILITY_CERTIFICATION_PATH"]).read_text())
           print(json.dumps({
               "candidate_win": report.get("candidate_win"),
               "reasons": report.get("reasons"),
@@ -68,6 +73,8 @@ jobs:
           version = str(candidate.get("version") or candidate.get("model_version") or "")
           if candidate.get("promotion_ready") is False or version == "no-promotable-challenger":
               raise SystemExit("candidate_model is an explicit no-promotion placeholder; refusing promotion.")
+          if certification.get("passed") is not True:
+              raise SystemExit("servability certification did not pass; refusing promotion.")
           if not report.get("candidate_win"):
               raise SystemExit("Track B report does not have candidate_win=true; re-run with force only if explicitly approved.")
           PY
@@ -82,6 +89,7 @@ jobs:
           from pathlib import Path
           report = json.loads(Path(os.environ["COMPARISON_REPORT_PATH"]).read_text())
           candidate = json.loads(Path(os.environ["CANDIDATE_MODEL_PATH"]).read_text())
+          certification = json.loads(Path(os.environ["SERVABILITY_CERTIFICATION_PATH"]).read_text())
           print(json.dumps({
               "candidate_win": report.get("candidate_win"),
               "reasons": report.get("reasons"),
@@ -94,6 +102,8 @@ jobs:
           version = str(candidate.get("version") or candidate.get("model_version") or "")
           if candidate.get("promotion_ready") is False or version == "no-promotable-challenger":
               raise SystemExit("candidate_model is an explicit no-promotion placeholder; refusing forced promotion.")
+          if certification.get("passed") is not True:
+              raise SystemExit("servability certification did not pass; --force cannot override structural certification.")
           PY
         if: ${{ inputs.force }}
 
@@ -115,4 +125,5 @@ jobs:
             -H "X-Track-B-Promotion-Token: $TRACK_B_PROMOTION_TOKEN" \
             -F "comparison_report=@$COMPARISON_REPORT_PATH;type=application/json" \
             -F "candidate_model=@$CANDIDATE_MODEL_PATH;type=application/json" \
+            -F "servability_certification=@$SERVABILITY_CERTIFICATION_PATH;type=application/json" \
             -F "force=$force_form"

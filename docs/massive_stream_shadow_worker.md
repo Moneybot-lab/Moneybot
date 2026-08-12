@@ -1,6 +1,6 @@
 # Massive WebSocket + Redis Shadow Worker
 
-**Schema:** `market-stream.v1`  
+**Schema:** `market-stream.v1`
 **Deployment state:** implementation complete; production shadow validation required
 
 ## Architecture

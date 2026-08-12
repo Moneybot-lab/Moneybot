@@ -1,4 +1,5 @@
 import json
+import hashlib
 import sys
 
 import pytest
@@ -200,6 +201,7 @@ def test_day14_requires_certification_even_with_force_and_promotes_next_version(
     certification_path = tmp_path / "certification.json"
     comparison.write_text(json.dumps({"candidate_win": False}), encoding="utf-8")
     production.write_text(json.dumps({"version": "alpha-atlas-v3"}), encoding="utf-8")
+    production_before = hashlib.sha256(production.read_bytes()).hexdigest()
 
     monkeypatch.setattr(
         sys,
@@ -217,10 +219,20 @@ def test_day14_requires_certification_even_with_force_and_promotes_next_version(
     )
     with pytest.raises(SystemExit, match="certification is missing"):
         day14_promote_candidate.main()
+    assert hashlib.sha256(production.read_bytes()).hexdigest() == production_before
+    assert not production.with_suffix(".json.bak").exists()
 
     certification_path.write_text(
         json.dumps(certify_candidate(candidate)), encoding="utf-8"
     )
+    real_replace = day14_promote_candidate.os.replace
+    atomic_replace_calls = []
+
+    def recording_replace(source, destination):
+        atomic_replace_calls.append((source, destination))
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(day14_promote_candidate.os, "replace", recording_replace)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -243,3 +255,4 @@ def test_day14_requires_certification_even_with_force_and_promotes_next_version(
     assert promoted["version"] == "alpha-atlas-v4"
     assert promoted["production_servability_certification"]["passed"] is True
     assert production.with_suffix(".json.bak").exists()
+    assert atomic_replace_calls == [(production.with_suffix(".json.tmp"), production)]

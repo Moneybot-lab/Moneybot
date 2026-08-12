@@ -408,6 +408,12 @@ def create_app() -> Flask:
         AI_TIMEOUT_SECONDS=float(os.environ.get("AI_TIMEOUT_SECONDS", "6.0")),
         AI_FAILURE_COOLDOWN_SECONDS=int(os.environ.get("AI_FAILURE_COOLDOWN_SECONDS", "120")),
         AI_RESPONSE_CACHE_TTL_SECONDS=int(os.environ.get("AI_RESPONSE_CACHE_TTL_SECONDS", "300")),
+        API_RATE_LIMIT_WINDOW_SECONDS=_parse_int_env("API_RATE_LIMIT_WINDOW_SECONDS", 60),
+        API_RATE_LIMIT_MAX_REQUESTS=_parse_int_env("API_RATE_LIMIT_MAX_REQUESTS", 120),
+        LOAD_TEST_RATE_LIMIT_TOKEN=(
+            os.environ.get("LOAD_TEST_RATE_LIMIT_TOKEN")
+            or os.environ.get("MONEYBOT_LOAD_TEST_RATE_LIMIT_TOKEN", "")
+        ),
         EXPERIMENT_ID=os.environ.get("EXPERIMENT_ID", "default"),
         EXPERIMENT_COHORT_DEFAULT=os.environ.get("EXPERIMENT_COHORT_DEFAULT", "control"),
         INVESTOR_PROFILE_ENABLED=(os.environ.get("INVESTOR_PROFILE_ENABLED", "true").lower() == "true"),

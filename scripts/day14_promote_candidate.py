@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import sys
@@ -75,14 +76,48 @@ def main() -> None:
     if candidate_model.get("promotion_ready") is False or candidate_version == "no-promotable-challenger":
         raise SystemExit("Candidate model is an explicit no-promotion placeholder; refusing promotion even with --force.")
 
+    certification_path = Path(args.servability_certification) if args.servability_certification else candidate_path.with_name("production_servability_certification.json")
+    if not certification_path.exists():
+        raise SystemExit("Production servability certification is missing; structural safety cannot be overridden with --force.")
+    certification = _load_json(str(certification_path))
+    certification_failures = validate_certification(candidate_path, certification)
+    if certification_failures:
+        raise SystemExit("Production servability certification refused promotion (non-overridable): " + ", ".join(certification_failures))
+
+    existing_production = _load_json(str(production_path))
+    existing_version = str(existing_production.get("version") or existing_production.get("model_version") or "").strip()
+    promoted_version = _next_alpha_atlas_version(existing_version)
+    candidate_model["version"] = promoted_version
+    candidate_model["source_candidate_version"] = candidate_version or None
+    candidate_model["production_servability_certification"] = {
+        "schema_version": certification["schema_version"],
+        "passed": True,
+        "candidate_artifact_sha256": certification["candidate_artifact_sha256"],
+        "feature_contract_version": certification["feature_contract_version"],
+        "forecast_horizon": certification["forecast_horizon"],
+        "feature_columns": certification["feature_columns"],
+        "lineage_id": certification["candidate_lineage_id"],
+        "recipe_hash": certification["candidate_recipe_hash"],
+        "certification_timestamp": certification["certified_at_utc"],
+        "promotion_timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
     production_path.parent.mkdir(parents=True, exist_ok=True)
     if production_path.exists():
         backup_path = production_path.with_suffix(production_path.suffix + ".bak")
         shutil.copy2(production_path, backup_path)
 
     tmp_path = production_path.with_suffix(production_path.suffix + ".tmp")
-    tmp_path.write_text(json.dumps(candidate_model, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    tmp_path.replace(production_path)
+    serialized = json.dumps(candidate_model, sort_keys=True, indent=2) + "\n"
+    try:
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            handle.write(serialized)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, production_path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
 
     metadata = {
         "recorded_at_utc": datetime.now(timezone.utc).isoformat(),

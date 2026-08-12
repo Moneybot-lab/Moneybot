@@ -31,6 +31,33 @@ def _configure_outcome_history(events: list[dict]) -> None:
     _outcome_history_cache.preload_events(events, benchmark_symbol="SPY")
 
 
+def history_eligible_events(
+    events: list[dict], *, horizon_days: int, now_ts: int | None = None
+) -> list[dict]:
+    """Select only rows that may require a calibration outcome lookup."""
+    eligible: list[dict] = []
+    target_horizon = f"{int(horizon_days)}d"
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        payload = _event_payload(event)
+        snapshot = _event_snapshot(event)
+        if _event_forecast_horizon(payload, snapshot) != target_horizon:
+            continue
+        if _probability_up(payload, snapshot) is None:
+            continue
+        if _event_provider(event, payload, snapshot) == "portfolio_quote_only":
+            continue
+        symbol = str(event.get("symbol") or "").strip().upper()
+        ts = event.get("ts")
+        if not symbol or not isinstance(ts, int):
+            continue
+        if not _is_mature_event(ts, horizon_days=horizon_days, now_ts=now_ts):
+            continue
+        eligible.append(event)
+    return eligible
+
+
 def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
     """Compatibility seam used by tests; production is configured Massive-first."""
     if _outcome_history_cache is None:
@@ -574,7 +601,9 @@ def main() -> None:
     eligibility_diagnostics: dict[str, int] = {}
     while True:
         events = read_decision_events(args.input, limit=read_limit)
-        _configure_outcome_history(events)
+        _configure_outcome_history(
+            history_eligible_events(events, horizon_days=max(1, args.horizon_days))
+        )
         eligibility_diagnostics = {
             "rows_matching_horizon": 0,
             "rows_excluded_horizon_mismatch": 0,

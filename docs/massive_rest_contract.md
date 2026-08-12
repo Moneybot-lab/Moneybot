@@ -1,6 +1,6 @@
 # Massive REST Contract and Operating Rules
 
-**Schema:** `market-data.v1`  
+**Schema:** `market-data.v1`
 **Status:** Page 3 foundation complete on June 7, 2026
 
 ## Provider boundary

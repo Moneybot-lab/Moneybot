@@ -165,6 +165,8 @@ def train_logistic_baseline(
     l2: float = 1e-3,
     decision_threshold: float = 0.55,
     sample_weight: np.ndarray | None = None,
+    scaler_type: str = "legacy_standard",
+    winsor_quantiles: tuple[float, float] | None = None,
 ) -> BaselineModelArtifact:
     """Train deterministic logistic regression using full-batch gradient descent."""
     if X.ndim != 2:

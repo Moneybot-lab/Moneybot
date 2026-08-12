@@ -581,7 +581,7 @@ def test_run_daily_ops_reports_day13_paths_in_runtime_dir_when_files_exist(monke
     client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
     res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token"})
 
-    assert res.status_code == 200
+    assert res.status_code == 500
     payload = res.get_json()["data"]
     assert payload["success"] is False
     assert payload["calibration_report_path"] == str(report_path)
@@ -612,7 +612,7 @@ def test_run_weekly_model_refresh_reports_diagnostics_when_files_exist(monkeypat
     client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
     res = client.post("/api/run-weekly-model-refresh", headers={"X-Daily-Ops-Token": "secret-token"})
 
-    assert res.status_code == 200
+    assert res.status_code == 500
     payload = res.get_json()["data"]
     assert payload["success"] is False
     assert payload["exit_code"] == 1
@@ -844,7 +844,9 @@ def test_decision_outcomes_uses_lookup_cache_for_duplicate_events(tmp_path, monk
     res = client.get("/api/decision-outcomes?limit=10&include_skipped=true")
     assert res.status_code == 200
     data = res.get_json()["data"]
-    assert len(data["rows"]) == 3
+    # Identical decision events are intentionally collapsed in visible rows,
+    # while aggregate accounting and lookup caching still scan all events.
+    assert len(data["rows"]) == 1
     assert calls["count"] == 5
     assert data["lookup_cache_misses"] >= 5
     assert data["lookup_cache_hits"] >= 8
@@ -1128,7 +1130,9 @@ def test_decision_outcomes_aggregate_scan_reaches_older_buy_after_recent_5d_hold
     assert data["events_read"] == 153
     assert data["aggregate_complete"] is True
     assert data["paper_pnl_by_recommendation"]["BUY"]["evaluated_rows_5d"] == 3
-    assert len(data["rows_5d"]) == 100
+    # HOLD rows are neutral and excluded from actionable accuracy rows; the
+    # three older BUY decisions remain visible after the wider aggregate scan.
+    assert len(data["rows_5d"]) == 3
 
 
 def test_decision_outcomes_marks_partial_aggregate_when_read_cap_reached(tmp_path, monkeypatch):
@@ -1253,7 +1257,7 @@ def test_decision_outcomes_uses_daily_snapshot_for_default_ttl(tmp_path, monkeyp
     assert data["snapshot_age_seconds"] >= 24 * 60 * 60
 
 
-def test_decision_outcomes_serves_stale_snapshot_instead_of_live_fanout(tmp_path, monkeypatch):
+def test_decision_outcomes_serves_stale_snapshot_when_allowed(tmp_path, monkeypatch):
     snapshot_path = tmp_path / "decision_outcomes_snapshot.json"
     snapshot_path.write_text(
         json.dumps(
@@ -1274,7 +1278,7 @@ def test_decision_outcomes_serves_stale_snapshot_instead_of_live_fanout(tmp_path
 
     monkeypatch.setattr(api_module, "_future_return_for_outcomes", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("should not fan out live lookups")))
 
-    res = client.get("/api/decision-outcomes?limit=10")
+    res = client.get("/api/decision-outcomes?limit=10&allow_stale_snapshot=true")
 
     assert res.status_code == 200
     data = res.get_json()["data"]
@@ -1443,7 +1447,7 @@ def test_login_accepts_username_identifier():
     signup = client.post("/api/auth/signup", json=_signup_payload("identifier@b.com", password="pw123"))
     assert signup.status_code == 201
 
-    login = client.post("/api/auth/login", json={"email": "testuser", "password": "pw123"})
+    login = client.post("/api/auth/login", json={"email": "identifier", "password": "pw123"})
     assert login.status_code == 200
 
 
@@ -1867,7 +1871,7 @@ def test_user_watchlist_uses_ai_portfolio_advice_when_available():
     assert res.status_code == 200
     enriched = res.get_json()["enriched_items"][0]
     assert enriched["advice"] == "HOLD"
-    assert enriched["quick_alignment_recommendation"] in {"BUY", "STRONG BUY"}
+    assert enriched["quick_alignment_recommendation"] == "HOLD OFF FOR NOW"
     assert enriched["ai_portfolio"]["mode"] == "ai_enhanced"
     assert enriched["ai_portfolio"]["provider"] == "stub"
 
@@ -1885,7 +1889,9 @@ def test_user_watchlist_includes_deterministic_portfolio_advice_when_available()
     res = client.get("/api/user-watchlist")
     assert res.status_code == 200
     enriched = res.get_json()["enriched_items"][0]
-    assert enriched["advice"] == "BUY"
+    assert enriched["deterministic_portfolio"]["advice"] == "BUY"
+    assert enriched["advice"] == "HOLD"
+    assert enriched["quick_alignment_recommendation"] == "HOLD OFF FOR NOW"
     assert enriched["deterministic_portfolio"]["mode"] == "deterministic_model"
     assert enriched["deterministic_portfolio"]["decision_source"] == "deterministic_model"
 
@@ -1903,7 +1909,9 @@ def test_user_watchlist_keeps_deterministic_portfolio_advice_when_ai_is_enabled(
     res = client.get("/api/user-watchlist")
     assert res.status_code == 200
     enriched = res.get_json()["enriched_items"][0]
-    assert enriched["advice"] == "BUY"
+    assert enriched["deterministic_portfolio"]["advice"] == "BUY"
+    assert enriched["advice"] == "HOLD"
+    assert enriched["quick_alignment_recommendation"] == "HOLD OFF FOR NOW"
     assert enriched["deterministic_portfolio"]["decision_source"] == "deterministic_model"
     assert enriched["ai_portfolio"]["mode"] == "ai_enhanced"
 
@@ -1937,6 +1945,33 @@ def test_export_decision_log_returns_ndjson_with_token(tmp_path):
     payload = json.loads(lines[0])
     assert payload['symbol'] == 'TSLA'
 
+
+
+def test_export_production_model_requires_token(tmp_path):
+    client = _client()
+    client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
+    client.application.config["DETERMINISTIC_MODEL_PATH"] = str(tmp_path / "production.json")
+
+    res = client.get("/api/export-production-model")
+
+    assert res.status_code == 401
+    assert res.get_json()["error"] == "unauthorized"
+
+
+def test_export_production_model_returns_current_artifact_with_token(tmp_path):
+    client = _client()
+    production_path = tmp_path / "production.json"
+    production_path.write_text(json.dumps({"version": "alpha-atlas-v7", "feature_columns": []}), encoding="utf-8")
+    client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
+    client.application.config["DETERMINISTIC_MODEL_PATH"] = str(production_path)
+
+    res = client.get("/api/export-production-model", headers={"X-Daily-Ops-Token": "secret-token"})
+
+    assert res.status_code == 200
+    assert "application/json" in (res.headers.get("Content-Type") or "")
+    assert res.headers.get("X-Production-Model-Path") == str(production_path)
+    assert res.headers.get("X-Production-Model-Version") == "alpha-atlas-v7"
+    assert res.get_json()["version"] == "alpha-atlas-v7"
 
 def test_model_health_includes_safe_historical_validation_when_default_missing(tmp_path, monkeypatch):
     monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
@@ -1974,6 +2009,40 @@ def test_model_health_loads_historical_validation_summary(tmp_path):
     assert historical["summary"] == {"generated_at_utc": "2026-06-21T00:00:00+00:00", "rows": 42, "accuracy": 0.72}
 
 
+
+
+def test_day14_promotion_metadata_uses_alpha_atlas_promotion_version(tmp_path):
+    from scripts import day14_promote_candidate
+
+    comparison_path = tmp_path / "comparison.json"
+    candidate_path = tmp_path / "candidate.json"
+    production_path = tmp_path / "production.json"
+    comparison_path.write_text(json.dumps({"candidate_win": True, "candidate_metrics": {"rows": 12}, "production_metrics": {"rows": 8}}), encoding="utf-8")
+    candidate_path.write_text(json.dumps(_certified_candidate_payload("candidate-logreg-v1-20260710T225011Z")), encoding="utf-8")
+    (tmp_path / "production_servability_certification.json").write_text(json.dumps(certify_candidate(candidate_path)), encoding="utf-8")
+
+    old_argv = sys.argv
+    try:
+        sys.argv = [
+            "day14_promote_candidate.py",
+            "--comparison-report",
+            str(comparison_path),
+            "--candidate-model",
+            str(candidate_path),
+            "--production-model",
+            str(production_path),
+        ]
+        day14_promote_candidate.main()
+    finally:
+        sys.argv = old_argv
+
+    metadata = json.loads(production_path.with_suffix(production_path.suffix + ".meta.json").read_text(encoding="utf-8"))
+    promoted = json.loads(production_path.read_text(encoding="utf-8"))
+    assert metadata["model_version"] == "alpha-atlas-v2"
+    assert metadata["source_candidate_version"] == "candidate-logreg-v1-20260710T225011Z"
+    assert promoted["version"] == "alpha-atlas-v2"
+    assert promoted["source_candidate_version"] == "candidate-logreg-v1-20260710T225011Z"
+
 def test_promote_track_b_candidate_requires_token():
     client = _client()
     client.application.config["TRACK_B_PROMOTION_TOKEN"] = "promote-token"
@@ -1995,6 +2064,7 @@ def test_promote_track_b_candidate_rejects_losing_report(tmp_path, monkeypatch):
         data={
             "comparison_report": (BytesIO(json.dumps({"candidate_win": False, "reasons": ["not enough"]}).encode()), "model_comparison_track_b.json"),
             "candidate_model": (BytesIO(json.dumps({"version": "candidate"}).encode()), "candidate_model_track_b.json"),
+            "servability_certification": (BytesIO(b"{}"), "production_servability_certification.json"),
         },
         content_type="multipart/form-data",
     )
@@ -2021,6 +2091,7 @@ def test_promote_track_b_candidate_rejects_no_promotable_placeholder(tmp_path, m
                 "candidate_model_track_b.json",
             ),
             "force": "true",
+            "servability_certification": (BytesIO(b"{}"), "production_servability_certification.json"),
         },
         content_type="multipart/form-data",
     )
@@ -2031,6 +2102,46 @@ def test_promote_track_b_candidate_rejects_no_promotable_placeholder(tmp_path, m
     assert payload["promoted"] is False
     assert payload["candidate_model_version"] == "no-promotable-challenger"
     assert "cannot be promoted" in payload["message"]
+
+
+def test_promote_track_b_candidate_force_cannot_bypass_invalid_certification(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        api_module.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("promotion subprocess must not run")
+        ),
+    )
+    client = _client()
+    client.application.config["TRACK_B_PROMOTION_TOKEN"] = "promote-token"
+    candidate = _certified_candidate_payload()
+
+    res = client.post(
+        "/api/promote-track-b-candidate",
+        headers={"X-Track-B-Promotion-Token": "promote-token"},
+        data={
+            "comparison_report": (
+                BytesIO(json.dumps({"candidate_win": False}).encode()),
+                "model_comparison_track_b.json",
+            ),
+            "candidate_model": (
+                BytesIO(json.dumps(candidate).encode()),
+                "candidate_model_track_b.json",
+            ),
+            "servability_certification": (
+                BytesIO(json.dumps({"passed": True}).encode()),
+                "production_servability_certification.json",
+            ),
+            "force": "true",
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert res.status_code == 409
+    assert res.get_json()["data"]["certification_failures"]
 
 
 def test_promote_track_b_candidate_uploads_and_runs_promotion(monkeypatch, tmp_path):
@@ -2057,13 +2168,17 @@ def test_promote_track_b_candidate_uploads_and_runs_promotion(monkeypatch, tmp_p
     client.application.config["DETERMINISTIC_MODEL_PATH"] = str(tmp_path / "day1_baseline_model.json")
 
     report = {"candidate_win": True, "reasons": ["candidate accuracy exceeds production by at least 0.02"]}
-    candidate = {"version": "candidate-promoted-v1"}
+    candidate = _certified_candidate_payload()
+    candidate_disk = tmp_path / "upload-candidate.json"
+    candidate_disk.write_text(json.dumps(candidate), encoding="utf-8")
+    certification = certify_candidate(candidate_disk)
     res = client.post(
         "/api/promote-track-b-candidate",
         headers={"X-Track-B-Promotion-Token": "promote-token"},
         data={
             "comparison_report": (BytesIO(json.dumps(report).encode()), "model_comparison_track_b.json"),
             "candidate_model": (BytesIO(json.dumps(candidate).encode()), "candidate_model_track_b.json"),
+            "servability_certification": (BytesIO(json.dumps(certification).encode()), "production_servability_certification.json"),
         },
         content_type="multipart/form-data",
     )
@@ -2086,4 +2201,6 @@ def test_promote_track_b_candidate_uploads_and_runs_promotion(monkeypatch, tmp_p
         str(tmp_path / "track_b" / "candidate_model_track_b.json"),
         "--production-model",
         str(tmp_path / "day1_baseline_model.json"),
+        "--servability-certification",
+        str(tmp_path / "track_b" / "production_servability_certification.json"),
     ]
