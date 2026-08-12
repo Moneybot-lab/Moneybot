@@ -139,6 +139,17 @@ def _training_source_phase1_passed(training_source: dict[str, Any] | None) -> bo
     leakage_guards = [str(value).lower() for value in training_source.get("leakage_guard_values") or []]
     return bool(leakage_guards) and all("features_asof" in guard and "labels_after" in guard for guard in leakage_guards)
 
+RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
+TARGET_GAIN_BUCKETS = {"gain", "big_gain"}
+MIN_BIG_GAIN_CAPTURE_RATE = 0.10
+UTILITY_BIG_GAIN_WEIGHT = 0.10
+UTILITY_DOWNSIDE_WEIGHT = 1.0
+UTILITY_BIG_LOSS_WEIGHT = 1.0
+MIN_UTILITY_IMPROVEMENT = 0.0
+THRESHOLD_SEARCH_VALUES = (0.50, 0.525, 0.55, 0.575, 0.60, 0.625, 0.65, 0.675, 0.70)
+RANKING_TOP_K_VALUES = (1, 3, 5)
+RANKING_MAX_EXPOSURE_PER_SIGNAL = 0.10
+
 
 def _load_jsonl(path: str) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
@@ -226,96 +237,26 @@ def _bucket_metrics(usable: pd.DataFrame, preds: np.ndarray, probs: np.ndarray) 
     return dict(sorted(out.items()))
 
 
-def _selected_concentration_metrics(usable: pd.DataFrame, preds: np.ndarray) -> dict[str, float | None]:
-    selected = usable.loc[preds == 1].copy()
-    if selected.empty:
-        return {
-            "symbol_selection_concentration": None,
-            "date_selection_concentration": None,
-            "symbol_utility_concentration": None,
-            "date_utility_concentration": None,
-            "selected_trade_unique_symbols": 0,
-            "selected_trade_unique_dates": 0,
-            "selected_trade_unique_symbol_dates": 0,
-        }
-    selected["_absolute_return"] = pd.to_numeric(selected["return_5d"], errors="coerce").abs().fillna(0.0)
-
-    def concentration(group: pd.Series | None) -> tuple[float | None, float | None]:
-        if group is None:
-            return None, None
-        values = group.fillna("unknown").astype(str)
-        selection_concentration = float(values.value_counts(normalize=True).max())
-        absolute_total = float(selected["_absolute_return"].sum())
-        if absolute_total <= 0.0:
-            return selection_concentration, selection_concentration
-        grouped_return = selected.groupby(values)["_absolute_return"].sum()
-        return selection_concentration, float(grouped_return.max() / absolute_total)
-
-    symbol_group = selected["symbol"] if "symbol" in selected.columns else None
-    date_group = _event_date_series(selected) if "event_date" in selected.columns or "ts" in selected.columns else None
-    symbol_selection, symbol_utility = concentration(symbol_group)
-    date_selection, date_utility = concentration(date_group)
-    return {
-        "symbol_selection_concentration": round(symbol_selection, 4) if symbol_selection is not None else None,
-        "date_selection_concentration": round(date_selection, 4) if date_selection is not None else None,
-        "symbol_utility_concentration": round(symbol_utility, 4) if symbol_utility is not None else None,
-        "date_utility_concentration": round(date_utility, 4) if date_utility is not None else None,
-        "selected_trade_unique_symbols": int(symbol_group.fillna("unknown").astype(str).nunique()) if symbol_group is not None else 0,
-        "selected_trade_unique_dates": int(date_group.fillna("unknown").astype(str).nunique()) if date_group is not None else 0,
-        "selected_trade_unique_symbol_dates": int(
-            pd.DataFrame({"symbol": symbol_group, "date": date_group}).fillna("unknown").drop_duplicates().shape[0]
-        ) if symbol_group is not None and date_group is not None else 0,
-    }
-
-
-def _comparison_duplicate_weights(frame: pd.DataFrame) -> np.ndarray:
-    keys = pd.DataFrame(index=frame.index)
-    for column in ("symbol", "event_date", "endpoint", "decision_source"):
-        keys[column] = frame[column].fillna("unknown").astype(str) if column in frame.columns else "unknown"
-    counts = keys.groupby(list(keys.columns), dropna=False)["symbol"].transform("size").astype(float)
-    return (1.0 / counts).to_numpy(dtype=float)
-
-
-def _prediction_return_metrics(
-    usable: pd.DataFrame,
-    preds: np.ndarray,
-    probs: np.ndarray,
-    sample_weight: np.ndarray | None = None,
-) -> dict[str, Any]:
-    if "label_up_5d" in usable.columns:
-        y = pd.to_numeric(usable["label_up_5d"], errors="coerce").fillna(0.0).astype(int).to_numpy()
-    else:
-        y = usable["return_bin_5d"].fillna("").astype(str).isin(TARGET_GAIN_BUCKETS).astype(int).to_numpy()
-    row_weights = np.ones(len(usable), dtype=float) if sample_weight is None else np.asarray(sample_weight, dtype=float)
-    row_weights = row_weights / row_weights.sum()
+def _prediction_return_metrics(usable: pd.DataFrame, preds: np.ndarray, probs: np.ndarray) -> dict[str, Any]:
+    y = usable["return_bin_5d"].fillna("").astype(str).isin(TARGET_GAIN_BUCKETS).astype(int).to_numpy()
     signal_returns = usable.loc[preds == 1, "return_5d"].astype(float)
-    signal_weights = row_weights[preds == 1]
     if signal_returns.empty:
         avg_return = None
         downside_risk = None
     else:
-        avg_return = float(np.average(signal_returns.to_numpy(dtype=float), weights=signal_weights))
+        avg_return = float(signal_returns.mean())
         negative_signal_returns = signal_returns[signal_returns < 0.0]
-        negative_weights = signal_weights[signal_returns.to_numpy(dtype=float) < 0.0]
-        downside_risk = 0.0 if negative_signal_returns.empty else float(abs(np.average(negative_signal_returns.to_numpy(dtype=float), weights=negative_weights)))
+        downside_risk = 0.0 if negative_signal_returns.empty else float(abs(negative_signal_returns.mean()))
     metrics = {
-        "accuracy": round(float(np.sum(row_weights * (preds == y))), 4),
+        "accuracy": round(float((preds == y).mean()), 4),
         "avg_return": round(avg_return, 4) if avg_return is not None else None,
-        "brier_score": round(float(np.sum(row_weights * ((probs.astype(float) - y.astype(float)) ** 2))), 4),
+        "brier_score": round(_brier_score(y.astype(float), probs.astype(float)), 4),
         "downside_risk": round(downside_risk, 4) if downside_risk is not None else None,
         "positive_predictions": int((preds == 1).sum()),
         **_bucket_signal_rates(usable, preds),
-        **_selected_concentration_metrics(usable, preds),
     }
-    if sample_weight is not None:
-        bins = usable["return_bin_5d"].fillna("").astype(str).to_numpy()
-        for bucket, rate_key in (("big_loss", "big_loss_prediction_rate"), ("big_gain", "big_gain_capture_rate")):
-            mask = bins == bucket
-            denominator = float(row_weights[mask].sum())
-            metrics[rate_key] = round(float(row_weights[mask & (preds == 1)].sum() / denominator), 4) if denominator > 0 else None
     utility = _utility_score(metrics)
     metrics["utility_score"] = round(utility, 4) if utility is not None else None
-    metrics["weighting_policy"] = "raw_rows" if sample_weight is None else "1 / count(symbol, event_date, endpoint, decision_source)"
     return metrics
 
 
@@ -473,7 +414,6 @@ def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
     ranking_backtests = _ranking_backtests(usable, probs)
     metrics = {
         **_prediction_return_metrics(usable, preds, probs),
-        "duplicate_weighted_metrics": _prediction_return_metrics(usable, preds, probs, _comparison_duplicate_weights(usable)),
         "return_bin_counts": {str(k): int(v) for k, v in sorted(usable["return_bin_5d"].fillna("unknown").astype(str).value_counts().to_dict().items())},
         "bucket_metrics": _bucket_metrics(usable, preds, probs),
         "threshold_search": _threshold_search(usable, probs),
@@ -484,158 +424,6 @@ def _evaluate(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
     }
     return metrics
 
-
-
-def _no_op_clone_summary(candidate_preds: np.ndarray, production_preds: np.ndarray, candidate_probs: np.ndarray, production_probs: np.ndarray) -> dict[str, Any]:
-    rows = int(min(len(candidate_preds), len(production_preds), len(candidate_probs), len(production_probs)))
-    if rows <= 0:
-        return {"rows": 0, "prediction_agreement": None, "probability_mae": None, "no_op_clone": False, "candidate_prediction_fingerprint": None, "production_prediction_fingerprint": None, "fingerprints_identical": False}
-    c_preds = candidate_preds[:rows]
-    p_preds = production_preds[:rows]
-    c_probs = candidate_probs[:rows]
-    p_probs = production_probs[:rows]
-    candidate_fingerprint = hashlib.sha256(c_preds.astype(np.int8).tobytes() + np.round(c_probs, 6).astype(np.float64).tobytes()).hexdigest()
-    production_fingerprint = hashlib.sha256(p_preds.astype(np.int8).tobytes() + np.round(p_probs, 6).astype(np.float64).tobytes()).hexdigest()
-    prediction_agreement = float((c_preds == p_preds).mean())
-    probability_mae = float(np.mean(np.abs(c_probs - p_probs)))
-    no_op_clone = prediction_agreement >= NO_OP_CLONE_PREDICTION_AGREEMENT and probability_mae <= NO_OP_CLONE_PROBABILITY_MAE
-    return {
-        "rows": rows,
-        "prediction_agreement": round(prediction_agreement, 4),
-        "probability_mae": round(probability_mae, 4),
-        "no_op_clone": bool(no_op_clone),
-        "candidate_prediction_fingerprint": candidate_fingerprint,
-        "production_prediction_fingerprint": production_fingerprint,
-        "fingerprints_identical": candidate_fingerprint == production_fingerprint,
-        "prediction_agreement_threshold": NO_OP_CLONE_PREDICTION_AGREEMENT,
-        "probability_mae_threshold": NO_OP_CLONE_PROBABILITY_MAE,
-    }
-
-
-def _artifact_predictions(artifact_path: str, test_df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
-    if not Path(artifact_path).exists():
-        return np.array([], dtype=int), np.array([], dtype=float)
-    artifact = load_artifact(artifact_path)
-    usable = test_df.copy()
-    for idx, col in enumerate(artifact.feature_columns):
-        if col not in usable.columns:
-            usable[col] = np.nan
-        numeric = pd.to_numeric(usable[col], errors="coerce").replace([np.inf, -np.inf], np.nan)
-        fallback = float(artifact.means[idx]) if idx < len(artifact.means) else 0.0
-        usable[col] = numeric.fillna(fallback).astype(float)
-    usable["return_5d"] = pd.to_numeric(usable.get("return_5d"), errors="coerce")
-    usable = usable.dropna(subset=["return_5d"]).copy()
-    if usable.empty:
-        return np.array([], dtype=int), np.array([], dtype=float)
-    probs = predict_proba(artifact, usable[artifact.feature_columns].to_numpy(dtype=float))
-    preds = (probs >= artifact.decision_threshold).astype(int)
-    return preds, probs
-
-
-def _artifact_config_fingerprint(artifact_path: str) -> str | None:
-    if not Path(artifact_path).exists():
-        return None
-    artifact = load_artifact(artifact_path)
-    payload = json.dumps(artifact.to_dict(), sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def _clone_detection(candidate_model_path: str, production_model_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
-    candidate_preds, candidate_probs = _artifact_predictions(candidate_model_path, test_df)
-    production_preds, production_probs = _artifact_predictions(production_model_path, test_df)
-    return _no_op_clone_summary(candidate_preds, production_preds, candidate_probs, production_probs)
-
-
-def _paired_date_bootstrap_utility_delta(candidate_model_path: str, production_model_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
-    """Bootstrap paired candidate-minus-production realized return by independent date."""
-    candidate = _artifact_scored_frame(candidate_model_path, test_df, prefix="candidate")
-    production = _artifact_scored_frame(production_model_path, test_df, prefix="production")
-    common = candidate.index.intersection(production.index)
-    if common.empty:
-        return {"passed": False, "reason": "no common scored rows", "independent_date_blocks": 0}
-    work = candidate.loc[common].copy()
-    work["_production_pred"] = production.loc[common, "_production_pred"]
-    work["_event_date"] = _event_date_series(work)
-    returns = pd.to_numeric(work["return_5d"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
-    work["_utility_delta"] = (work["_candidate_pred"].to_numpy(dtype=float) - work["_production_pred"].to_numpy(dtype=float)) * returns
-    daily = work.groupby("_event_date", sort=True)["_utility_delta"].mean().to_numpy(dtype=float)
-    if daily.size == 0:
-        return {"passed": False, "reason": "no independent date blocks", "independent_date_blocks": 0}
-    rng = np.random.default_rng(20260803)
-    samples = daily[rng.integers(0, len(daily), size=(PRODUCTION_BOOTSTRAP_RESAMPLES, len(daily)))].mean(axis=1)
-    lower = float(np.quantile(samples, 0.025))
-    median = float(np.quantile(samples, 0.5))
-    upper = float(np.quantile(samples, 0.975))
-    probability_positive = float((samples > 0.0).mean())
-    passed = lower > 0.0 and median > 0.0 and probability_positive >= MIN_PRODUCTION_BOOTSTRAP_PROBABILITY_POSITIVE
-    return {
-        "passed": bool(passed),
-        "method": "paired_date_block_bootstrap",
-        "resamples": PRODUCTION_BOOTSTRAP_RESAMPLES,
-        "confidence": 0.95,
-        "independent_date_blocks": int(len(daily)),
-        "utility_delta_lower": round(lower, 6),
-        "utility_delta_median": round(median, 6),
-        "utility_delta_upper": round(upper, 6),
-        "probability_positive": round(probability_positive, 6),
-        "minimum_probability_positive": MIN_PRODUCTION_BOOTSTRAP_PROBABILITY_POSITIVE,
-    }
-
-
-def _feature_risk_audit(artifact_path: str, test_df: pd.DataFrame) -> dict[str, Any]:
-    if not Path(artifact_path).exists():
-        return {"available": False, "requires_review": True, "reasons": ["artifact unavailable for feature-risk audit"]}
-    artifact = load_artifact(artifact_path)
-    if "feature_price" not in artifact.feature_columns:
-        return {"available": True, "raw_feature_price_present": False, "requires_review": False, "reasons": []}
-    usable = test_df.copy()
-    for idx, feature in enumerate(artifact.feature_columns):
-        fallback = float(artifact.means[idx]) if idx < len(artifact.means) else 0.0
-        numeric = pd.to_numeric(usable.get(feature, pd.Series(np.nan, index=usable.index)), errors="coerce").replace([np.inf, -np.inf], np.nan)
-        usable[feature] = numeric.fillna(fallback).astype(float)
-    X = usable[artifact.feature_columns].to_numpy(dtype=float)
-    probs = predict_proba(artifact, X)
-    positive_mask = probs >= artifact.decision_threshold
-    means = np.asarray(artifact.means, dtype=float)
-    stds = np.asarray(artifact.stds, dtype=float)
-    stds = np.where(stds == 0.0, 1.0, stds)
-    weights = np.asarray(artifact.weights, dtype=float)
-    contributions = ((X - means) / stds) * weights
-    price_idx = artifact.feature_columns.index("feature_price")
-    price_weight = float(weights[price_idx])
-    positive_rows = np.flatnonzero(positive_mask)
-    top_positive_count = 0
-    examples: list[dict[str, Any]] = []
-    for row_idx in positive_rows:
-        positive_contributions = np.maximum(contributions[row_idx], 0.0)
-        top_idx = int(np.argmax(positive_contributions)) if positive_contributions.size else -1
-        if top_idx == price_idx and positive_contributions[price_idx] > 0.0:
-            top_positive_count += 1
-            row = usable.iloc[row_idx]
-            examples.append({
-                "symbol": row.get("symbol"),
-                "event_date": str(_event_date_series(usable.iloc[[row_idx]]).iloc[0]),
-                "probability": round(float(probs[row_idx]), 6),
-                "feature_price": round(float(X[row_idx, price_idx]), 6),
-                "price_contribution": round(float(contributions[row_idx, price_idx]), 6),
-            })
-    top_rate = float(top_positive_count / len(positive_rows)) if len(positive_rows) else 0.0
-    requires_review = price_weight > 0.0 and top_rate > RAW_PRICE_TOP_CONTRIBUTOR_RATE_LIMIT
-    reasons = []
-    if requires_review:
-        reasons.append(f"raw feature_price is the top positive contributor too often ({top_rate:.4f} > {RAW_PRICE_TOP_CONTRIBUTOR_RATE_LIMIT:.4f})")
-    return {
-        "available": True,
-        "raw_feature_price_present": True,
-        "raw_feature_price_weight": round(price_weight, 6),
-        "positive_predictions": int(len(positive_rows)),
-        "raw_price_top_positive_contributor_count": top_positive_count,
-        "raw_price_top_positive_contributor_rate": round(top_rate, 4),
-        "rate_limit": RAW_PRICE_TOP_CONTRIBUTOR_RATE_LIMIT,
-        "requires_review": requires_review,
-        "reasons": reasons,
-        "examples": examples[:20],
-    }
 
 def _numeric_metric(metrics: dict[str, Any], key: str) -> float | None:
     value = metrics.get(key)
@@ -666,27 +454,6 @@ def _utility_score(metrics: dict[str, Any]) -> float | None:
     )
 
 
-def _candidate_behavior(candidate: dict[str, Any], production: dict[str, Any]) -> str:
-    """Describe candidate selectivity without affecting promotion eligibility."""
-    candidate_positive = _numeric_metric(candidate, "positive_predictions")
-    production_positive = _numeric_metric(production, "positive_predictions")
-    candidate_capture = _numeric_metric(candidate, "big_gain_capture_rate")
-    production_capture = _numeric_metric(production, "big_gain_capture_rate")
-    candidate_utility = _numeric_metric(candidate, "utility_score_after_big_loss_penalty")
-    production_utility = _utility_score(production)
-    low_activity = candidate_positive is not None and (
-        candidate_positive <= 25
-        or (production_positive is not None and candidate_positive <= production_positive * 0.5)
-    )
-    low_recall = candidate_capture is not None and production_capture is not None and candidate_capture < production_capture
-    high_utility = candidate_utility is not None and production_utility is not None and candidate_utility > production_utility
-    if low_activity and low_recall and high_utility:
-        return "high_precision_low_recall"
-    if low_activity:
-        return "abstention_style_candidate"
-    return "balanced_activity_candidate"
-
-
 def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: int = 200) -> tuple[bool, list[str]]:
     reasons: list[str] = []
     rows = int(candidate.get("rows") or 0)
@@ -708,8 +475,6 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
 
     c_big_loss_rate = _numeric_metric(candidate, "big_loss_prediction_rate")
     p_big_loss_rate = _numeric_metric(production, "big_loss_prediction_rate")
-    c_big_loss_predictions = _numeric_metric(candidate, "big_loss_predictions") or 0.0
-    p_big_loss_predictions = _numeric_metric(production, "big_loss_predictions") or 0.0
     c_big_gain_rate = _numeric_metric(candidate, "big_gain_capture_rate")
     c_utility = _utility_score(candidate)
     p_utility = _utility_score(production)
@@ -717,24 +482,13 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
         reasons.append("insufficient comparable utility metrics")
         return False, reasons
 
-    hard_big_loss_false_positive = p_big_loss_predictions == 0.0 and c_big_loss_predictions > 0.0
-    big_loss_false_positive_penalty = HARD_BIG_LOSS_FALSE_POSITIVE_PENALTY if hard_big_loss_false_positive else 0.0
-    c_utility_after_penalty = c_utility - big_loss_false_positive_penalty
-    candidate["big_loss_false_positive_penalty"] = round(big_loss_false_positive_penalty, 4)
-    candidate["utility_score_after_big_loss_penalty"] = round(c_utility_after_penalty, 4)
-
     accuracy_ok = c_acc > p_acc
     brier_ok = c_brier < p_brier
     return_ok = c_return >= p_return
     downside_ok = c_downside <= p_downside
     big_loss_ok = True if c_big_loss_rate is None or p_big_loss_rate is None else c_big_loss_rate <= p_big_loss_rate
     big_gain_floor_ok = (c_big_gain_rate or 0.0) >= MIN_BIG_GAIN_CAPTURE_RATE
-    utility_ok = c_utility_after_penalty > (p_utility + MIN_UTILITY_IMPROVEMENT)
-    symbol_concentration = _numeric_metric(candidate, "symbol_utility_concentration")
-    date_concentration = _numeric_metric(candidate, "date_utility_concentration")
-    symbol_concentration_ok = symbol_concentration is None or symbol_concentration <= MAX_SYMBOL_UTILITY_CONCENTRATION
-    date_concentration_ok = date_concentration is None or date_concentration <= MAX_DATE_UTILITY_CONCENTRATION
-    feature_risk_ok = not bool((candidate.get("feature_risk_audit") or {}).get("requires_review"))
+    utility_ok = c_utility > (p_utility + MIN_UTILITY_IMPROVEMENT)
 
     if not accuracy_ok:
         reasons.append("candidate accuracy is below production, but accuracy is informational when profit utility improves")
@@ -742,22 +496,14 @@ def _decide(candidate: dict[str, Any], production: dict[str, Any], *, min_rows: 
         reasons.append("candidate brier score does not improve production")
     if not (return_ok or downside_ok):
         reasons.append("candidate avg_return is lower and downside_risk is higher than production")
-    if hard_big_loss_false_positive:
-        reasons.append("candidate predicts big-loss rows while production predicts zero; hard false-positive penalty applied")
     if not big_loss_ok:
-        reasons.append("candidate big_loss_prediction_rate exceeds production")
+        reasons.append("candidate signals too many big-loss rows versus production")
     if not big_gain_floor_ok:
         reasons.append(f"candidate big-gain capture is below minimum ({c_big_gain_rate or 0.0:.4f} < {MIN_BIG_GAIN_CAPTURE_RATE:.4f})")
     if not utility_ok:
-        reasons.append("candidate profit utility after big-loss penalty does not exceed production")
-    if not symbol_concentration_ok:
-        reasons.append(f"candidate utility is too concentrated in one symbol ({symbol_concentration:.4f} > {MAX_SYMBOL_UTILITY_CONCENTRATION:.4f})")
-    if not date_concentration_ok:
-        reasons.append(f"candidate utility is too concentrated on one date ({date_concentration:.4f} > {MAX_DATE_UTILITY_CONCENTRATION:.4f})")
-    if not feature_risk_ok:
-        reasons.append("candidate feature-risk audit requires review")
+        reasons.append("candidate profit utility does not exceed production")
 
-    if brier_ok and (return_ok or downside_ok) and big_loss_ok and big_gain_floor_ok and utility_ok and symbol_concentration_ok and date_concentration_ok and feature_risk_ok:
+    if brier_ok and (return_ok or downside_ok) and big_loss_ok and big_gain_floor_ok and utility_ok:
         reasons.append("candidate improves profit utility with acceptable brier, return/downside, big-loss avoidance, and minimum big-gain capture")
         return True, reasons
 

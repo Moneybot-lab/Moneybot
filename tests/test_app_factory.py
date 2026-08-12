@@ -307,13 +307,6 @@ def test_performance_page_uses_empty_outcomes_fallback(monkeypatch):
 
     assert res.status_code == 200
     html = res.get_data(as_text=True)
-    assert "AI Performance" in html
-    assert "AI Backtest Results (Wireframe)" not in html
-    assert "Model Ops Snapshot" in html
-    assert "Training freshness" not in html
-    assert "Recent Decisions and Outcomes" in html
-    assert "Decision Log Health" in html
-    assert "AI decision architecture" in html
     assert "Live decision outcomes unavailable" in html
     assert "summary_1d:{accuracy:null,evaluated_rows:0}" in html
     assert "rows:[{symbol:'AAPL'" not in html

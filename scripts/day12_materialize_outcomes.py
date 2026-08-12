@@ -48,6 +48,33 @@ def summarize_horizon(rows: list[dict], horizon: str) -> dict:
     return summarize_outcome_rows(rows)
 
 
+def _price_path(symbol: str, start_ts: int, days: int) -> list[float]:
+    start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
+    now_utc = datetime.now(timezone.utc)
+    if start_dt >= now_utc:
+        return []
+    if start_dt + timedelta(days=days) > now_utc:
+        return []
+    end_dt = start_dt + timedelta(days=max(days + 3, 7))
+    safe_end_dt = min(end_dt, now_utc + timedelta(days=1))
+    try:
+        history = yf.download(
+            symbol,
+            start=start_dt.strftime("%Y-%m-%d"),
+            end=safe_end_dt.strftime("%Y-%m-%d"),
+            interval="1d",
+            progress=False,
+            auto_adjust=False,
+        )
+    except Exception:  # noqa: BLE001
+        return []
+    return close_values(history)
+
+
+def _benchmark_return(start_ts: int, days: int) -> float | None:
+    return _future_return("SPY", start_ts, days)
+
+
 def main() -> None:
     base_dir = resolve_runtime_dir()
     parser = argparse.ArgumentParser(
@@ -74,21 +101,11 @@ def main() -> None:
     args = parser.parse_args()
 
     events = read_decision_events(args.input, limit=max(1, args.limit))
-    event_ts_values = [
-        int(event["ts"])
-        for event in events
-        if isinstance(event, dict) and isinstance(event.get("ts"), int)
-    ]
-    history_download = (
-        MassivePreferredHistoryDownload() if args.prefer_massive else yf.download
-    )
-    history_cache = OutcomeHistoryCache(download=history_download)
-    history_cache.preload_events(events)
     rows = evaluate_decision_events(
         events,
-        future_return_lookup=history_cache.future_return,
-        price_path_lookup=history_cache.price_path,
-        benchmark_return_lookup=history_cache.benchmark_return,
+        future_return_lookup=_future_return,
+        price_path_lookup=_price_path,
+        benchmark_return_lookup=_benchmark_return,
     )
     evaluated_rows_1d = rows_with_horizon_return(rows, "1d")
     evaluated_rows_5d = rows_with_horizon_return(rows, "5d")
@@ -131,9 +148,6 @@ def main() -> None:
             "summary_1d": summarize_horizon(visible_rows_1d, "1d"),
             "summary_5d": summarize_horizon(visible_rows_5d, "5d"),
             "paper_pnl_by_recommendation": summarize_paper_pnl_by_action(rows),
-            "visible_paper_pnl_by_recommendation": summarize_paper_pnl_by_action(
-                visible_pnl_rows
-            ),
             "include_skipped": False,
             "events_read": len(events),
             "rows_scanned": len(rows),

@@ -271,7 +271,6 @@ jobs:
           python3 scripts/run_track_b_offline.py \
             --input-log data/decision_events.jsonl \
             --output-dir data/track_b \
-            --production-model data/track_b/production_model.json \
             --min-rows 200 \
             --dataset-limit 50000
 

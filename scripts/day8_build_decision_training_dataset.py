@@ -216,11 +216,27 @@ def _extract_feature_columns(
 
 
 def _app_signal_feature_columns(*, recommendation: str, probability_up: float | None, endpoint: str, decision_source: str) -> dict[str, float]:
-    values = build_alpha_atlas_event_features(
-        endpoint=endpoint, decision_source=decision_source, recommendation=recommendation,
-        quote={}, signals={}, prior_probability=probability_up,
-    )
-    return {key: float(value) for key, value in values.items() if value is not None and (key.startswith("feature_rec_") or key.startswith("feature_endpoint_") or key.startswith("feature_source_") or key == "feature_probability_up")}
+    rec = str(recommendation or "").strip().upper()
+    clean_endpoint = str(endpoint or "").strip().lower()
+    clean_source = str(decision_source or "").strip().lower()
+    out = {
+        "feature_rec_buy": float(rec == "BUY"),
+        "feature_rec_sell": float(rec == "SELL"),
+        "feature_rec_hold": float(rec == "HOLD"),
+        "feature_rec_hold_off_for_now": float(rec == "HOLD OFF FOR NOW"),
+        "feature_rec_strong_buy": float(rec == "STRONG BUY"),
+        "feature_rec_positive": float(rec in {"BUY", "STRONG BUY"}),
+        "feature_rec_negative": float(rec in {"SELL", "HOLD OFF FOR NOW"}),
+        "feature_endpoint_quick_ask": float(clean_endpoint == "quick_ask"),
+        "feature_endpoint_hot_momentum_buys": float(clean_endpoint == "hot_momentum_buys"),
+        "feature_endpoint_user_watchlist": float(clean_endpoint == "user_watchlist"),
+        "feature_source_ai_enhanced": float(clean_source == "ai_enhanced"),
+        "feature_source_deterministic_model": float(clean_source == "deterministic_model"),
+        "feature_source_rule_based": float(clean_source == "rule_based"),
+    }
+    if isinstance(probability_up, (int, float)):
+        out["feature_probability_up"] = float(probability_up)
+    return out
 
 
 def _return_bin(value: float | None) -> str | None:
