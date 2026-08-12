@@ -23,6 +23,21 @@ def _is_expected_no_candidate_result(stderr: str) -> bool:
     return any(marker in message for marker in NO_CANDIDATE_GENERATION_MARKERS)
 
 
+def _is_next_generation_command(command: list[str]) -> bool:
+    return any(Path(part).name == "generate_next_generation_challengers.py" for part in command)
+
+
+def _primary_track_b_artifacts_exist(output_dir: Path) -> bool:
+    return all(
+        (output_dir / name).is_file()
+        for name in (
+            "candidate_model_track_b.json",
+            "model_comparison_track_b.json",
+            "production_servability_certification.json",
+        )
+    )
+
+
 def _load_json(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -235,10 +250,22 @@ def main() -> None:
         }
         summary["steps"].append(step)
         if completed.returncode != 0:
-            if _is_expected_no_candidate_result(completed.stderr):
-                step["outcome"] = "no_candidate_generated"
+            if (
+                _is_next_generation_command(command)
+                and _is_expected_no_candidate_result(completed.stderr)
+            ):
+                primary_candidate_generated = _primary_track_b_artifacts_exist(output_dir)
+                outcome = (
+                    "next_generation_no_material_candidate"
+                    if primary_candidate_generated
+                    else "no_candidate_generated"
+                )
+                step["outcome"] = outcome
                 summary["success"] = True
-                summary["outcome"] = "no_candidate_generated"
+                summary["outcome"] = outcome
+                summary["primary_candidate_generated"] = primary_candidate_generated
+                summary["next_generation_candidate_generated"] = False
+                summary["promotion_automatic"] = False
                 summary["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
                 (output_dir / "track_b_summary.json").write_text(
                     json.dumps(summary, indent=2), encoding="utf-8"

@@ -6,6 +6,15 @@ from pathlib import Path
 from scripts.run_daily_ops import _run_daily_ops_command, _tail_text, build_daily_ops_commands
 
 
+def test_daily_ops_workflow_has_layered_bounded_timeouts():
+    workflow = Path(".github/workflows/moneybot-daily-ops.yml").read_text(encoding="utf-8")
+
+    assert "timeout-minutes: 15" in workflow
+    assert "--connect-timeout 15" in workflow
+    assert "--max-time 720" in workflow
+    assert "curl -fsS" in workflow
+
+
 def test_build_daily_ops_commands_includes_autofill_and_expected_scripts():
     commands = build_daily_ops_commands(
         python_executable="python3",

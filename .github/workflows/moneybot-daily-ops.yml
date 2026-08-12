@@ -9,7 +9,7 @@ on:
 jobs:
   trigger-daily-ops:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     concurrency:
       group: moneybot-daily-ops
       cancel-in-progress: false

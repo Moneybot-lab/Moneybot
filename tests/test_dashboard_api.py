@@ -495,11 +495,12 @@ def test_run_daily_ops_executes_and_returns_output(monkeypatch, tmp_path):
         stdout = "ok"
         stderr = ""
 
-    def fake_run(command, cwd, capture_output, text, check):
+    def fake_run(command, cwd, capture_output, text, check, timeout):
         assert command[:3] == ["python3", "scripts/run_daily_ops.py", "--input-log"]
         assert capture_output is True
         assert text is True
         assert check is False
+        assert timeout == 660
         assert cwd.endswith("/Moneybot")
         return Completed()
 
@@ -570,8 +571,9 @@ def test_run_daily_ops_reports_day13_paths_in_runtime_dir_when_files_exist(monke
         stdout = ""
         stderr = "Script stderr (day13_calibration_report.py): boom"
 
-    def fake_run(command, cwd, capture_output, text, check):
+    def fake_run(command, cwd, capture_output, text, check, timeout):
         assert command[-1] == str(tmp_path / "decision_events.jsonl")
+        assert timeout == 660
         return Completed()
 
     monkeypatch.setattr(api_module.subprocess, "run", fake_run)
@@ -589,6 +591,32 @@ def test_run_daily_ops_reports_day13_paths_in_runtime_dir_when_files_exist(monke
     assert payload["recalibration_plan_path"] == str(plan_path)
     assert payload["recalibration_plan_exists"] is True
     assert "day13_calibration_report.py" in payload["day13_stderr"]
+
+
+def test_run_daily_ops_reports_child_timeout(monkeypatch, tmp_path):
+    def fake_run(command, cwd, capture_output, text, check, timeout):
+        assert timeout == 660
+        raise api_module.subprocess.TimeoutExpired(
+            command,
+            timeout,
+            output="partial stdout",
+            stderr="partial stderr",
+        )
+
+    monkeypatch.setattr(api_module.subprocess, "run", fake_run)
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
+
+    client = _client()
+    client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
+    res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token"})
+
+    assert res.status_code == 504
+    payload = res.get_json()["data"]
+    assert payload["success"] is False
+    assert payload["returncode"] == -1
+    assert payload["stdout"] == "partial stdout"
+    assert "daily ops exceeded server execution timeout" in payload["stderr"]
+    assert "partial stderr" in payload["stderr"]
 
 
 def test_run_weekly_model_refresh_reports_diagnostics_when_files_exist(monkeypatch, tmp_path):

@@ -2414,6 +2414,7 @@ def run_daily_ops():
             capture_output=True,
             text=True,
             check=False,
+            timeout=660,
         )
         report_diag = _file_diagnostics(calibration_report)
         plan_diag = _file_diagnostics(recalibration_plan)
@@ -2435,6 +2436,27 @@ def run_daily_ops():
             }
         )
         return response, (200 if completed.returncode == 0 else 500)
+    except subprocess.TimeoutExpired as exc:
+        logging.exception("run-daily-ops exceeded the server execution timeout.")
+
+        def _timeout_text(value):
+            if isinstance(value, bytes):
+                return value.decode("utf-8", errors="replace")
+            return str(value or "")
+
+        captured_stderr = _timeout_text(exc.stderr)
+        diagnostic = "daily ops exceeded server execution timeout"
+        return jsonify(
+            {
+                "data": {
+                    "success": False,
+                    "returncode": -1,
+                    "stdout": _timeout_text(exc.stdout),
+                    "stderr": f"{diagnostic}: {captured_stderr}" if captured_stderr else diagnostic,
+                },
+                "request_id": g.request_id,
+            }
+        ), 504
     except Exception as exc:  # noqa: BLE001
         logging.exception("run-daily-ops failed to execute.")
         return jsonify(
@@ -3448,18 +3470,6 @@ def decision_outcomes():
     legacy_lookup_cache: dict[tuple[str, int, int], float | None] = {}
     legacy_lookup_hits = 0
     legacy_lookup_misses = 0
-
-    def cached_price_path_lookup(symbol: str, ts: int, days: int) -> list[float]:
-        key = (str(symbol).upper(), int(ts), int(days))
-        if key not in price_path_cache:
-            price_path_cache[key] = _price_path_for_outcomes(symbol, ts, days)
-        return price_path_cache[key]
-
-    def cached_benchmark_return_lookup(ts: int, days: int) -> float | None:
-        key = (int(ts), int(days))
-        if key not in benchmark_cache:
-            benchmark_cache[key] = cached_future_return_lookup("SPY", ts, days)
-        return benchmark_cache[key]
 
     # Read progressively wider windows so the endpoint can still find older evaluated rows
     # when very recent logs are mostly too fresh for 1D / 5D outcomes.

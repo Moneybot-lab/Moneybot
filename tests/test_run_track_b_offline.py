@@ -134,6 +134,94 @@ def test_main_records_expected_no_candidate_as_successful_no_promotion(
     assert summary["success"] is True
     assert summary["outcome"] == "no_candidate_generated"
     assert summary["steps"][-1]["outcome"] == "no_candidate_generated"
+    assert summary["primary_candidate_generated"] is False
+    assert summary["next_generation_candidate_generated"] is False
+    assert summary["promotion_automatic"] is False
+
+
+def test_main_preserves_primary_artifacts_when_next_generation_is_no_op(
+    tmp_path, monkeypatch
+):
+    output_dir = tmp_path / "track_b"
+    quality_dir = output_dir / "training_quality"
+    quality_dir.mkdir(parents=True)
+    for name in ("cleaned_train.jsonl", "cleaned_test.jsonl", "cleaned_all.jsonl"):
+        (quality_dir / name).write_text("{}\n", encoding="utf-8")
+    primary_contents = {
+        "candidate_model_track_b.json": '{"version":"candidate"}\n',
+        "model_comparison_track_b.json": '{"candidate_win":false}\n',
+        "production_servability_certification.json": '{"passed":true}\n',
+    }
+    for name, content in primary_contents.items():
+        (output_dir / name).write_text(content, encoding="utf-8")
+
+    class Completed:
+        stdout = ""
+        stderr = ""
+        returncode = 0
+
+    calls = {"count": 0}
+
+    def fake_run(*args, **kwargs):
+        calls["count"] += 1
+        result = Completed()
+        if calls["count"] == 5:
+            result.returncode = 1
+            result.stderr = (
+                "candidate_threshold_sweep_v1 is a no-op clone; "
+                "generation aborted before publishing reports"
+            )
+        return result
+
+    monkeypatch.setattr(run_track_b_offline.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_track_b_offline.py", "--output-dir", str(output_dir)],
+    )
+
+    run_track_b_offline.main()
+
+    summary = json.loads((output_dir / "track_b_summary.json").read_text())
+    assert summary["success"] is True
+    assert summary["outcome"] == "next_generation_no_material_candidate"
+    assert summary["primary_candidate_generated"] is True
+    assert summary["next_generation_candidate_generated"] is False
+    assert summary["promotion_automatic"] is False
+    for name, content in primary_contents.items():
+        assert (output_dir / name).read_text(encoding="utf-8") == content
+
+
+def test_main_does_not_hide_unrelated_command_failure(tmp_path, monkeypatch):
+    output_dir = tmp_path / "track_b"
+    quality_dir = output_dir / "training_quality"
+    quality_dir.mkdir(parents=True)
+    for name in ("cleaned_train.jsonl", "cleaned_test.jsonl", "cleaned_all.jsonl"):
+        (quality_dir / name).write_text("{}\n", encoding="utf-8")
+
+    class Completed:
+        returncode = 1
+        stdout = ""
+        stderr = "unexpected training failure"
+
+    monkeypatch.setattr(
+        run_track_b_offline.subprocess, "run", lambda *args, **kwargs: Completed()
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_track_b_offline.py", "--output-dir", str(output_dir)],
+    )
+
+    try:
+        run_track_b_offline.main()
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("unrelated Track B failures must remain fatal")
+
+    summary = json.loads((output_dir / "track_b_summary.json").read_text())
+    assert summary["success"] is False
 
 
 def test_build_track_b_commands_uses_offline_artifacts_only():
