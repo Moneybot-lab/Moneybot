@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from statistics import mean
-from typing import Any, Dict
+from typing import Any, Callable, Dict
+
+import pandas as pd
 
 
 POSITIVE_ACTIONS = {"BUY", "STRONG BUY"}
@@ -151,6 +155,21 @@ def rows_with_horizon_return(rows: list[Dict[str, Any]], horizon: str) -> list[D
     return [row for row in rows if _has_numeric_return(row, key)]
 
 
+def rows_with_horizon_accuracy_outcome(rows: list[Dict[str, Any]], horizon: str) -> list[Dict[str, Any]]:
+    """Return rows with a realized actionable correct/incorrect outcome for a horizon.
+
+    HOLD rows can have realized returns, but they are classified as neutral and do
+    not contribute to accuracy. Accuracy cards should prefer these actionable rows
+    so a recent block of HOLD decisions does not mask older BUY/SELL 5D outcomes.
+    """
+    outcome_key = f"outcome_{horizon}"
+    return [
+        row
+        for row in rows_with_horizon_return(rows, horizon)
+        if row.get(outcome_key) in {"correct", "incorrect"}
+    ]
+
+
 def rows_with_any_horizon_return(rows: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
     """Return rows that have at least one realized horizon return."""
     return [
@@ -158,6 +177,45 @@ def rows_with_any_horizon_return(rows: list[Dict[str, Any]]) -> list[Dict[str, A
         for row in rows
         if any(_has_numeric_return(row, f"return_{days}d") for days in PAPER_PNL_HORIZONS)
     ]
+
+
+def _visible_row_identity(row: Dict[str, Any], horizon: str | None) -> tuple[Any, ...]:
+    ts = normalize_unix_ts(row.get("ts"))
+    market_date = event_market_date(ts).isoformat() if ts is not None else None
+    return_key = f"return_{horizon}" if horizon else None
+    outcome_key = f"outcome_{horizon}" if horizon else None
+    return (
+        market_date,
+        row.get("symbol"),
+        row.get("endpoint"),
+        row.get("decision_source"),
+        row.get("action"),
+        row.get("model_version"),
+        row.get(return_key) if return_key else tuple(row.get(f"return_{days}d") for days in PAPER_PNL_HORIZONS),
+        row.get(outcome_key) if outcome_key else None,
+    )
+
+
+def select_recent_unique_rows(rows: list[Dict[str, Any]], *, limit: int, horizon: str | None = None) -> list[Dict[str, Any]]:
+    """Return recent rows without repeating identical same-day visible decisions.
+
+    Decision logs can contain many repeated same-symbol checks during a day. The
+    visible UI tables should not spend all rows on identical symbol/action/return
+    entries, while aggregate P&L continues to use every logged decision.
+    """
+    max_rows = max(1, int(limit))
+    selected: list[Dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for row in reversed(rows):
+        key = _visible_row_identity(row, horizon)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(row)
+        if len(selected) >= max_rows:
+            break
+    selected.reverse()
+    return selected
 
 
 def merge_recent_rows(*row_groups: list[Dict[str, Any]], limit: int) -> list[Dict[str, Any]]:
@@ -217,13 +275,23 @@ def evaluate_decision_events(
         ts = event.get("ts")
         if not symbol or action is None or not isinstance(ts, int):
             continue
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        snapshot = event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
+        quote = snapshot.get("quote") if isinstance(snapshot.get("quote"), dict) else {}
+        market_data = snapshot.get("market_data") if isinstance(snapshot.get("market_data"), dict) else {}
+        personalization = snapshot.get("personalization") if isinstance(snapshot.get("personalization"), dict) else {}
         row = {
             "symbol": symbol,
             "endpoint": event.get("endpoint"),
             "decision_source": event.get("decision_source"),
             "action": action,
             "ts": ts,
-            "model_version": (event.get("payload") or {}).get("model_version") if isinstance(event.get("payload"), dict) else None,
+            "model_version": payload.get("model_version") or snapshot.get("model_version"),
+            "probability_up": payload.get("probability_up") if payload.get("probability_up") is not None else snapshot.get("probability_up"),
+            "market_data": market_data,
+            "personalization": personalization,
+            "source_mode": quote.get("source_mode") or market_data.get("source_mode") or market_data.get("quote_source_mode"),
+            "is_stale": quote.get("is_stale") if isinstance(quote.get("is_stale"), bool) else market_data.get("is_stale"),
         }
         for days in PAPER_PNL_HORIZONS:
             key = f"return_{days}d"

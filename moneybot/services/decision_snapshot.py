@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from .forecast_horizon import resolve_forecast_horizon
+
 
 def _as_str(value: Any) -> str | None:
     if value is None:
@@ -39,31 +41,44 @@ def build_decision_snapshot(
     recommendation: str,
     probability_up: float | None = None,
     model_version: str | None = None,
+    forecast_horizon: str | None = None,
     calibration_version: str | None = None,
     quote: Dict[str, Any] | None = None,
     features: Dict[str, Any] | None = None,
     signals: Dict[str, Any] | None = None,
     explanation: Dict[str, Any] | None = None,
+    personalization: Dict[str, Any] | None = None,
+    market_data: Dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     quote_raw = _as_dict(quote)
     explanation_raw = _as_dict(explanation)
 
+    probability = _as_float(probability_up)
     return {
         "schema_version": "decision_snapshot.v1",
         "symbol": str(symbol).strip().upper(),
         "endpoint": str(endpoint or "unknown"),
         "decision_source": str(decision_source or "unknown"),
         "recommendation": str(recommendation).strip().upper(),
-        "probability_up": _as_float(probability_up),
+        "probability_up": probability,
         "model_version": _as_str(model_version),
+        "forecast_horizon": resolve_forecast_horizon(
+            model_version=model_version, explicit_horizon=forecast_horizon
+        ) if probability is not None else None,
         "calibration_version": _as_str(calibration_version),
         "quote": {
             "price": _as_float(quote_raw.get("price")),
             "change_percent": _as_float(quote_raw.get("change_percent")),
-            "source": _as_str(quote_raw.get("source")),
+            "source": _as_str(quote_raw.get("source") or quote_raw.get("quote_source")),
+            "source_mode": _as_str(quote_raw.get("source_mode") or _as_dict(quote_raw.get("diagnostics")).get("source_mode")),
+            "event_timestamp": _as_str(quote_raw.get("event_timestamp")),
+            "is_stale": quote_raw.get("is_stale") if isinstance(quote_raw.get("is_stale"), bool) else None,
+            "quality_flags": list(quote_raw.get("quality_flags") or []) if isinstance(quote_raw.get("quality_flags"), list) else [],
         },
+        "market_data": _as_dict(market_data),
         "features": _as_dict(features),
         "signals": _as_dict(signals),
+        "personalization": _as_dict(personalization),
         "explanation": {
             "rationale": _as_str(explanation_raw.get("rationale")),
             "risk_notes": _as_list_of_str(explanation_raw.get("risk_notes")),
