@@ -16,12 +16,113 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import classify_outcome, close_values, normalize_action, normalize_unix_ts
-from moneybot.services.runtime_paths import decision_events_log_path
+from moneybot.services.runtime_paths import bad_symbol_cache_path, decision_events_log_path
 
 RETURN_BIN_EDGES = (-0.03, -0.005, 0.005, 0.03)
 
 
-def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
+
+COMMON_SYMBOL_NORMALIZATIONS = {
+    "NVDIA": "NVDA",
+    "NVSIA": "NVDA",
+    "APPL": "AAPL",
+    "APPL.": "AAPL",
+    "TSL": "TSLA",
+    "TESLA": "TSLA",
+}
+
+KNOWN_BAD_SYMBOLS = {
+    "OLFS",
+    "REVN",
+    "SDNQ",
+    "ADLX",
+}
+
+KNOWN_FUND_SYMBOLS = {
+    "FDRXX",
+    "SPAXX",
+}
+
+BAD_SYMBOL_FAILURE_THRESHOLD = 2
+
+
+def _empty_bad_symbol_cache() -> dict[str, Any]:
+    return {"symbols": {}}
+
+
+def _load_bad_symbol_cache(path: str | Path | None = None) -> dict[str, Any]:
+    cache_path = Path(path) if path is not None else bad_symbol_cache_path()
+    if not cache_path.exists():
+        return _empty_bad_symbol_cache()
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return _empty_bad_symbol_cache()
+    if not isinstance(payload, dict) or not isinstance(payload.get("symbols"), dict):
+        return _empty_bad_symbol_cache()
+    return payload
+
+
+def _save_bad_symbol_cache(cache: dict[str, Any], path: str | Path | None = None) -> None:
+    cache_path = Path(path) if path is not None else bad_symbol_cache_path()
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps(cache, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _record_bad_symbol(cache: dict[str, Any], symbol: str, reason: str) -> None:
+    clean_symbol = str(symbol or "").strip().upper()
+    if not clean_symbol:
+        return
+    symbols = cache.setdefault("symbols", {})
+    entry = symbols.setdefault(clean_symbol, {"failures": 0, "reason": reason})
+    failures = int(entry.get("failures") or 0) + 1
+    entry.update(
+        {
+            "failures": failures,
+            "reason": reason,
+            "last_seen_utc": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+
+def _bad_symbol_failures(cache: dict[str, Any], symbol: str) -> int:
+    entry = (cache.get("symbols") or {}).get(str(symbol or "").strip().upper())
+    if not isinstance(entry, dict):
+        return 0
+    try:
+        return int(entry.get("failures") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _normalize_symbol_for_training(raw_symbol: str, bad_symbol_cache: dict[str, Any]) -> tuple[str | None, str | None, bool]:
+    symbol = str(raw_symbol or "").strip().upper()
+    if not symbol:
+        return None, "empty_symbol", False
+
+    normalized = COMMON_SYMBOL_NORMALIZATIONS.get(symbol, symbol)
+    changed = normalized != symbol
+    symbol = normalized
+
+    if symbol in KNOWN_BAD_SYMBOLS:
+        return None, "known_bad_symbol", changed
+    if symbol in KNOWN_FUND_SYMBOLS:
+        return None, "fund_or_cash_equivalent_symbol", changed
+    if _bad_symbol_failures(bad_symbol_cache, symbol) >= BAD_SYMBOL_FAILURE_THRESHOLD:
+        return None, "cached_yfinance_failure", changed
+    if "." in symbol:
+        return None, "unsupported_foreign_or_share_class_suffix", changed
+    if "-" in symbol or "=" in symbol or "/" in symbol or symbol.startswith("^"):
+        return None, "unsupported_non_equity_symbol", changed
+    if not symbol.isalpha():
+        return None, "non_alpha_symbol", changed
+    if not (1 <= len(symbol) <= 5):
+        return None, "implausible_equity_symbol_length", changed
+
+    return symbol, None, changed
+
+
+def _future_return(symbol: str, start_ts: int, days: int, bad_symbol_cache: dict[str, Any] | None = None) -> float | None:
     start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
     now_utc = datetime.now(timezone.utc)
     if start_dt >= now_utc:
@@ -41,10 +142,14 @@ def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
             auto_adjust=False,
         )
     except Exception:  # noqa: BLE001
+        if bad_symbol_cache is not None:
+            _record_bad_symbol(bad_symbol_cache, symbol, "yfinance_exception")
         return None
 
     closes = close_values(history)
     if len(closes) <= days:
+        if bad_symbol_cache is not None:
+            _record_bad_symbol(bad_symbol_cache, symbol, "no_price_data")
         return None
     start_price = float(closes[0])
     end_price = float(closes[days])
@@ -109,6 +214,30 @@ def _extract_feature_columns(
     return out
 
 
+def _app_signal_feature_columns(*, recommendation: str, probability_up: float | None, endpoint: str, decision_source: str) -> dict[str, float]:
+    rec = str(recommendation or "").strip().upper()
+    clean_endpoint = str(endpoint or "").strip().lower()
+    clean_source = str(decision_source or "").strip().lower()
+    out = {
+        "feature_rec_buy": float(rec == "BUY"),
+        "feature_rec_sell": float(rec == "SELL"),
+        "feature_rec_hold": float(rec == "HOLD"),
+        "feature_rec_hold_off_for_now": float(rec == "HOLD OFF FOR NOW"),
+        "feature_rec_strong_buy": float(rec == "STRONG BUY"),
+        "feature_rec_positive": float(rec in {"BUY", "STRONG BUY"}),
+        "feature_rec_negative": float(rec in {"SELL", "HOLD OFF FOR NOW"}),
+        "feature_endpoint_quick_ask": float(clean_endpoint == "quick_ask"),
+        "feature_endpoint_hot_momentum_buys": float(clean_endpoint == "hot_momentum_buys"),
+        "feature_endpoint_user_watchlist": float(clean_endpoint == "user_watchlist"),
+        "feature_source_ai_enhanced": float(clean_source == "ai_enhanced"),
+        "feature_source_deterministic_model": float(clean_source == "deterministic_model"),
+        "feature_source_rule_based": float(clean_source == "rule_based"),
+    }
+    if isinstance(probability_up, (int, float)):
+        out["feature_probability_up"] = float(probability_up)
+    return out
+
+
 def _return_bin(value: float | None) -> str | None:
     if not isinstance(value, (int, float)):
         return None
@@ -124,18 +253,28 @@ def _return_bin(value: float | None) -> str | None:
     return "big_gain"
 
 
-def build_rows(events: list[dict[str, Any]], *, horizon_days: int) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def build_rows(events: list[dict[str, Any]], *, horizon_days: int, bad_symbol_cache: dict[str, Any] | None = None) -> tuple[list[dict[str, Any]], dict[str, int]]:
     now_utc = datetime.now(timezone.utc)
     mature_cutoff = now_utc - timedelta(days=max(1, horizon_days + 2))
 
     scanned = 0
     mature = 0
     labeled = 0
+    symbols_normalized = 0
+    symbols_rejected = 0
+    cache = bad_symbol_cache if bad_symbol_cache is not None else _empty_bad_symbol_cache()
     rows: list[dict[str, Any]] = []
 
     for event in events:
         scanned += 1
-        symbol = str(event.get("symbol") or "").strip().upper()
+        raw_symbol = str(event.get("symbol") or "")
+        symbol, reject_reason, normalized = _normalize_symbol_for_training(raw_symbol, cache)
+        if normalized:
+            symbols_normalized += 1
+        if reject_reason is not None:
+            symbols_rejected += 1
+            continue
+
         ts = normalize_unix_ts(event.get("ts"))
         if not symbol or ts is None:
             continue
@@ -152,18 +291,21 @@ def build_rows(events: list[dict[str, Any]], *, horizon_days: int) -> tuple[list
         if not recommendation:
             continue
 
-        ret_1d = _future_return(symbol, ts, 1)
-        ret_5d = _future_return(symbol, ts, max(1, horizon_days))
+        ret_1d = _future_return(symbol, ts, 1, cache)
+        ret_5d = _future_return(symbol, ts, max(1, horizon_days), cache)
         if ret_1d is None and ret_5d is None:
             continue
 
+        endpoint = str(event.get("endpoint") or "unknown")
+        decision_source = str(event.get("decision_source") or "unknown")
+        probability_up = _extract_probability(snapshot, payload)
         row: dict[str, Any] = {
             "ts": ts,
             "symbol": symbol,
-            "endpoint": str(event.get("endpoint") or "unknown"),
-            "decision_source": str(event.get("decision_source") or "unknown"),
+            "endpoint": endpoint,
+            "decision_source": decision_source,
             "recommendation": recommendation,
-            "probability_up": _extract_probability(snapshot, payload),
+            "probability_up": probability_up,
             "model_version": _extract_model_version(snapshot, payload),
             "return_1d": ret_1d,
             "return_5d": ret_5d,
@@ -190,11 +332,27 @@ def build_rows(events: list[dict[str, Any]], *, horizon_days: int) -> tuple[list
                 return_5d=ret_5d,
             )
         )
+        row.update(
+            _app_signal_feature_columns(
+                recommendation=recommendation,
+                probability_up=probability_up,
+                endpoint=endpoint,
+                decision_source=decision_source,
+            )
+        )
 
         rows.append(row)
         labeled += 1
 
-    return rows, {"rows_scanned": scanned, "mature_rows": mature, "labeled_rows": labeled}
+    yfinance_failures = sum(int((entry or {}).get("failures") or 0) for entry in (cache.get("symbols") or {}).values() if isinstance(entry, dict))
+    return rows, {
+        "rows_scanned": scanned,
+        "mature_rows": mature,
+        "labeled_rows": labeled,
+        "symbols_normalized": symbols_normalized,
+        "symbols_rejected": symbols_rejected,
+        "symbol_yfinance_failures": yfinance_failures,
+    }
 
 
 def main() -> None:
@@ -205,8 +363,10 @@ def main() -> None:
     parser.add_argument("--horizon-days", type=int, default=5)
     args = parser.parse_args()
 
+    bad_symbol_cache = _load_bad_symbol_cache()
     events = read_decision_events(args.input, limit=max(1, args.limit))
-    rows, summary = build_rows(events, horizon_days=max(1, args.horizon_days))
+    rows, summary = build_rows(events, horizon_days=max(1, args.horizon_days), bad_symbol_cache=bad_symbol_cache)
+    _save_bad_symbol_cache(bad_symbol_cache)
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

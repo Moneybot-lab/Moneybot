@@ -10,6 +10,14 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # Massive exposes an S3-compatible endpoint that does not always return the
+  # optional checksum metadata expected by newer AWS CLI/botocore releases.
+  # Requiring checksums only when the API requires them avoids the opaque
+  # "argument of type 'NoneType' is not iterable" download failure.
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_EC2_METADATA_DISABLED: "true"
 
 jobs:
   run-track-b:
@@ -57,7 +65,8 @@ jobs:
           python3 scripts/run_track_b_offline.py \
             --input-log data/decision_events.jsonl \
             --output-dir data/track_b \
-            --min-rows 200
+            --min-rows 200 \
+            --dataset-limit 50000
 
       - name: Upload Track B artifacts
         if: always()

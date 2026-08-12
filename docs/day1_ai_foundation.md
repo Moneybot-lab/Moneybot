@@ -228,7 +228,7 @@ Optional env vars:
 
 ```bash
 DECISION_OUTCOMES_SNAPSHOT_PATH=data/decision_outcomes_snapshot.json
-DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS=900
+DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS=129600
 ```
 
 To bypass the snapshot and force live computation for debugging:
