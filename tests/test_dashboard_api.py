@@ -560,7 +560,7 @@ def test_run_weekly_model_refresh_executes_and_returns_output(monkeypatch, tmp_p
     assert payload["recalibration_plan_exists"] is False
 
 
-def test_run_daily_ops_reports_day13_paths_in_runtime_dir_when_files_exist(monkeypatch, tmp_path):
+def test_run_daily_ops_reports_day13_paths_in_runtime_dir_when_files_exist(monkeypatch, tmp_path, caplog):
     report_path = tmp_path / "day13_calibration_report.json"
     plan_path = tmp_path / "day13_recalibration_plan.json"
     report_path.write_text("{}", encoding="utf-8")
@@ -591,6 +591,8 @@ def test_run_daily_ops_reports_day13_paths_in_runtime_dir_when_files_exist(monke
     assert payload["recalibration_plan_path"] == str(plan_path)
     assert payload["recalibration_plan_exists"] is True
     assert "day13_calibration_report.py" in payload["day13_stderr"]
+    assert "run-daily-ops child failed returncode=1" in caplog.text
+    assert "Script stderr (day13_calibration_report.py): boom" in caplog.text
 
 
 def test_run_daily_ops_reports_child_timeout(monkeypatch, tmp_path):
