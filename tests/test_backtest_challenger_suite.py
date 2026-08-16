@@ -15,9 +15,10 @@ def test_date_block_bootstrap_is_deterministic_and_conservative():
     second = _bootstrap_confidence_bounds(returns, frame, resamples=300)
 
     assert first == second
-    assert first["independent_date_blocks"] == 3
+    assert first["independent_date_blocks"] == 1
+    assert first["method"] == "non_overlapping_horizon_date_block_bootstrap"
     assert first["avg_return_lower"] <= first["avg_return_median"] <= first["avg_return_upper"]
-    assert first["avg_return_lower"] < 0.0
+    assert first["avg_return_lower"] <= 0.0
 
 
 def test_pareto_frontier_retains_tradeoffs_and_drops_dominated_candidate():
@@ -72,19 +73,20 @@ def test_backtest_challenger_suite_scores_every_model_with_gates_and_benchmarks(
         min_rows=10,
     )
 
-    assert report["schema_version"] == "moneybot-challenger-backtest.v1"
+    assert report["schema_version"] == "moneybot-challenger-backtest.v2"
     assert report["routing_policy"].startswith("shadow-log first")
-    assert "Pareto frontiers control candidate retention" in report["ranking_policy"]
-    assert "buy_and_hold_return" in report["benchmark"]
+    assert "within each event date" in report["ranking_policy"]
+    assert report["benchmark"]["date_cohort_benchmark_avg_return"] is not None
+    assert report["benchmark"]["deprecated_fields"]["buy_and_hold_return"]["value"] is None
     assert len(report["challengers"]) == suite["challenger_count"]
     first = report["challengers"][0]
     assert "total_return_net" in first["backtest_metrics"]
     assert "max_drawdown" in first["backtest_metrics"]
     assert "calibration" in first["backtest_metrics"]
     assert "top_k_ranking" in first["backtest_metrics"]
-    assert "ranking_objective" in first["backtest_metrics"]["top_k_ranking"]
+    assert "date_local_top_k_avg_return" in first["backtest_metrics"]["top_k_ranking"]
     assert "drift" in first["backtest_metrics"]
-    assert first["backtest_metrics"]["bootstrap_confidence"]["method"] == "date_block_bootstrap"
+    assert first["backtest_metrics"]["bootstrap_confidence"]["method"] == "non_overlapping_horizon_date_block_bootstrap"
     assert first["backtest_metrics"]["bootstrap_confidence"]["avg_return_lower"] is not None
     assert first["promotion_gates"]["objective_gates"]["min_rows"] == 10
     assert first["promotion_gates"]["objective_gates"]["min_bootstrap_avg_return_lower"] == 0.0
@@ -153,3 +155,78 @@ def test_candidate_usage_scope_and_gate_fields_keep_ranking_out_of_promotion():
     assert fields["promotion_ready"] is False
     assert fields["routing_allowed"] is False
     assert "not_main_decision_candidate" in fields["promotion_blocking_issues"]
+
+
+def _write_constant_suite(tmp_path, rows):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    input_path = tmp_path / "panel.jsonl"
+    input_path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    models = tmp_path / "models"
+    models.mkdir()
+    artifact = models / "challenger-baseline-always-up-v1.json"
+    artifact.write_text(json.dumps({"version": "challenger-baseline-always-up-v1", "model_type": "baseline_classifier"}), encoding="utf-8")
+    suite_path = models / "challenger_suite_manifest.json"
+    suite_path.write_text(json.dumps({
+        "feature_columns": ["feature_close"],
+        "feature_fill_values": {"feature_close": 100.0},
+        "challengers": [{
+            "model_version": "challenger-baseline-always-up-v1",
+            "model_type": "baseline_classifier",
+            "model_path": str(artifact),
+        }],
+    }), encoding="utf-8")
+    report = backtest_challenger_suite(
+        suite_manifest_path=suite_path,
+        feature_store_path=input_path,
+        output_path=tmp_path / "backtest.json",
+        min_rows=1,
+    )
+    always_up = next(item for item in report["challengers"] if "always-up" in item["model_version"])
+    return report, always_up
+
+
+def _panel_rows():
+    return [
+        {"event_date": date, "ts": index, "symbol": symbol, "feature_close": 100.0, "return_5d": ret, "label_up_5d": int(ret > 0)}
+        for index, (date, symbol, ret) in enumerate([
+            ("2026-01-01", "AAA", 0.10), ("2026-01-01", "BBB", 0.10),
+            ("2026-01-02", "AAA", 0.10), ("2026-01-02", "BBB", 0.10),
+        ])
+    ]
+
+
+def test_cross_sectional_economics_do_not_pseudo_compound_and_fail_closed(tmp_path):
+    report, model = _write_constant_suite(tmp_path, _panel_rows())
+    metrics = model["backtest_metrics"]
+    assert report["benchmark"]["date_cohort_benchmark_avg_return"] == 0.10
+    assert metrics["avg_selected_return_gross"] == 0.10
+    assert metrics["avg_selected_return_net"] == 0.098
+    assert metrics["total_return_net"] is None
+    assert metrics["max_drawdown"] is None
+    assert metrics["max_drawdown_evaluable"] is False
+    assert "drawdown_evidence_unavailable" in model["promotion_gates"]["failed_gates"]
+    assert model["promotion_ready"] is False
+
+
+def test_economic_metrics_are_duplicate_and_order_invariant(tmp_path):
+    rows = _panel_rows()
+    base, base_model = _write_constant_suite(tmp_path / "base", rows)
+    changed_rows = list(reversed(rows)) + [dict(rows[0]) for _ in range(100)]
+    changed, changed_model = _write_constant_suite(tmp_path / "changed", changed_rows)
+    benchmark_fields = ["date_cohort_benchmark_avg_return", "equal_weight_universe_avg_5d_return"]
+    metric_fields = ["avg_selected_return_gross", "avg_selected_return_net", "date_cohort_avg_return_net", "excess_avg_return_vs_universe"]
+    assert {key: base["benchmark"][key] for key in benchmark_fields} == {key: changed["benchmark"][key] for key in benchmark_fields}
+    assert {key: base_model["backtest_metrics"][key] for key in metric_fields} == {key: changed_model["backtest_metrics"][key] for key in metric_fields}
+    assert changed["duplicate_weighting_report"]["duplicate_row_count"] == 100
+
+
+def test_date_local_ranking_is_primary_and_costs_are_position_based(tmp_path):
+    report, model = _write_constant_suite(tmp_path, _panel_rows())
+    metrics = model["backtest_metrics"]
+    assert metrics["top_k_ranking"]["date_local_top_k"] == 5
+    assert metrics["top_k_ranking"]["independent_ranking_dates"] == 2
+    assert metrics["estimated_entries"] == 4
+    assert metrics["estimated_exits"] == 4
+    assert metrics["turnover"] is None
+    assert "no adjacent-row inference" in metrics["turnover_method"]
+    assert report["economic_backtest_validity"]["overlapping_horizon_handled"] is True

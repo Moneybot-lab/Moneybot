@@ -193,19 +193,7 @@ def main() -> None:
         for command in commands:
             script_name = Path(command[1]).name if len(command) > 1 else "unknown"
             LOGGER.info("Running daily ops script=%s command=%s", script_name, " ".join(command))
-            try:
-                _run_daily_ops_command(command, script_name=script_name, log_dir=command_log_dir)
-            except subprocess.CalledProcessError as exc:
-                LOGGER.error("DAILY_OPS_FAILED script=%s returncode=%s", script_name, exc.returncode)
-                LOGGER.error(
-                    "failed_script=%s\nfailed_command=%s\nreturncode=%s\nstdout_tail=%s\nstderr_tail=%s",
-                    script_name,
-                    " ".join(str(part) for part in exc.cmd),
-                    exc.returncode,
-                    exc.stdout or "",
-                    exc.stderr or "",
-                )
-                raise SystemExit(exc.returncode) from None
+            _run_daily_ops_command(command, script_name=script_name, log_dir=command_log_dir)
 
             if script_name == "day13_calibration_report.py":
                 _log_file_state("After day13_calibration_report", calibration_report)

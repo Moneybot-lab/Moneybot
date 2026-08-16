@@ -204,7 +204,7 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     assert feature_manifest["reproducibility"]["output_file_hashes"] is True
     assert suite_manifest["challenger_count"] >= 20
     assert len(backtest["challengers"]) == suite_manifest["challenger_count"]
-    assert "buy_and_hold_return" in backtest["benchmark"]
+    assert "date_cohort_benchmark_avg_return" in backtest["benchmark"]
     assert "candidate_win" in promotion_report
     assert (promotion_dir / "candidate_model_track_b.json").exists()
     assert (promotion_dir / "production_servability_certification.json").exists()

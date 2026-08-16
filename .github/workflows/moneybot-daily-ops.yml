@@ -30,12 +30,8 @@ jobs:
           DAILY_OPS_TOKEN: ${{ secrets.DAILY_OPS_TOKEN }}
         run: |
           set -euo pipefail
-          response_file="$(mktemp)"
-          trap 'rm -f "$response_file"' EXIT
-
-          http_code="$(curl -sS --retry 3 --retry-delay 3 --retry-all-errors \
+          curl -fsS --retry 3 --retry-delay 3 --retry-all-errors \
             --connect-timeout 15 --max-time 720 --show-error \
-            --output "$response_file" --write-out "%{http_code}" \
             -X POST "$MONEYBOT_BASE_URL/api/run-daily-ops" \
             -H "X-Daily-Ops-Token: $DAILY_OPS_TOKEN" \
             -H "Content-Type: application/json")" || {

@@ -1,0 +1,23 @@
+{
+  "diagnostic_only": true,
+  "promotion_authorization": false,
+  "source": "deterministic synthetic panel: two dates, two symbols per date, each forward 5d return = 0.10",
+  "legacy_v1": {
+    "benchmark_buy_and_hold_return": 0.4641,
+    "calculation": "four cross-sectional rows incorrectly compounded as sequential periods",
+    "candidate_total_return_net": "pseudo-compounded and therefore invalid",
+    "max_drawdown": "derived from pseudo-equity and therefore invalid"
+  },
+  "repaired_v2": {
+    "date_cohort_benchmark_avg_return": 0.1,
+    "equal_weight_universe_avg_5d_return": 0.1,
+    "candidate_avg_selected_return_gross": 0.1,
+    "candidate_avg_selected_return_net_at_10bps_each_way": 0.098,
+    "total_return_net": null,
+    "total_return_net_evaluable": false,
+    "max_drawdown": null,
+    "max_drawdown_evaluable": false,
+    "promotion_blocker": "drawdown_evidence_unavailable"
+  },
+  "explanation": "The v2 values summarize canonical symbol/date outcomes and aligned date cohorts. Endpoint-only 5d returns cannot prove a daily portfolio equity path, so total return and drawdown are unavailable and promotion fails closed. Current production Track B artifacts were not present in the repository checkout and were not fabricated or promoted."
+}

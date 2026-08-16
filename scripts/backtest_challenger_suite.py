@@ -13,7 +13,7 @@ import pandas as pd
 from moneybot.services.decision_target import HORIZON_DAYS, TARGET_NAME
 from scripts.day10_train_candidate_model import _future_safe_feature_columns, _prepare_frame
 
-BACKTEST_SCHEMA_VERSION = "moneybot-challenger-backtest.v1"
+BACKTEST_SCHEMA_VERSION = "moneybot-challenger-backtest.v2"
 
 
 def _load_jsonl(path: Path) -> pd.DataFrame:
@@ -187,6 +187,131 @@ def _ranking_metrics(scores: np.ndarray, labels: np.ndarray, returns: np.ndarray
     }
 
 
+def _canonical_economic_frame(
+    frame: pd.DataFrame,
+    scores: np.ndarray,
+    preds: np.ndarray,
+    labels: np.ndarray,
+    returns: np.ndarray,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Collapse raw predictions to one auditable symbol/date economic outcome.
+
+    Classification remains row-level.  Economic calculations use the mean score and
+    outcome for each symbol/date, with the prediction recomputed from the mean score
+    relative to the mean of the raw binary decisions.  This makes duplicate copies
+    economically weight-neutral while reporting conflicting observations.
+    """
+    work = pd.DataFrame({
+        "event_date": _event_series(frame).to_numpy(),
+        "symbol": (frame["symbol"].fillna("unknown").astype(str).str.upper() if "symbol" in frame.columns else pd.Series("unknown", index=frame.index)).to_numpy(),
+        "score": np.asarray(scores, dtype=float),
+        "prediction": np.asarray(preds, dtype=int),
+        "label": np.asarray(labels, dtype=float),
+        "forward_return": np.asarray(returns, dtype=float),
+    })
+    multiplicity = work.groupby(["event_date", "symbol"], sort=True, dropna=False).size().rename("multiplicity")
+    # Exact duplicate decision rows carry no additional economic information.
+    # Conflicting distinct observations are retained and averaged explicitly.
+    economic_inputs = work.drop_duplicates(
+        subset=["event_date", "symbol", "score", "prediction", "label", "forward_return"]
+    )
+    grouped = economic_inputs.groupby(["event_date", "symbol"], sort=True, dropna=False)
+    canonical = grouped.agg(
+        score=("score", "mean"),
+        prediction_rate=("prediction", "mean"),
+        label=("label", "mean"),
+        forward_return=("forward_return", "mean"),
+        prediction_variants=("prediction", "nunique"),
+        score_variants=("score", "nunique"),
+        return_variants=("forward_return", "nunique"),
+    ).join(multiplicity).reset_index()
+    canonical["prediction"] = (canonical["prediction_rate"] >= 0.5).astype(int)
+    diagnostics = {
+        "raw_rows": int(len(work)),
+        "unique_symbol_dates": int(len(canonical)),
+        "duplicate_symbol_date_rows": int(len(work) - len(canonical)),
+        "effective_economic_observations": int(len(canonical)),
+        "aggregation_policy": "exact duplicates removed; one symbol/event_date; mean of distinct scores/outcomes; majority prediction with ties selected",
+        "mixed_prediction_groups": int((canonical["prediction_variants"] > 1).sum()),
+        "mixed_score_groups": int((canonical["score_variants"] > 1).sum()),
+        "mixed_outcome_groups": int((canonical["return_variants"] > 1).sum()),
+    }
+    return canonical, diagnostics
+
+
+def _cohort_economics(
+    canonical: pd.DataFrame,
+    *,
+    transaction_cost_bps: float,
+    slippage_bps: float,
+) -> tuple[dict[str, Any], pd.DataFrame]:
+    """Compute endpoint-only cohort statistics without manufacturing an equity path."""
+    round_trip_cost = 2.0 * (float(transaction_cost_bps) + float(slippage_bps)) / 10_000.0
+    rows: list[dict[str, Any]] = []
+    for event_date, cohort in canonical.groupby("event_date", sort=True):
+        selected = cohort[cohort["prediction"] == 1]
+        benchmark_return = float(cohort["forward_return"].mean())
+        gross = float(selected["forward_return"].mean()) if len(selected) else 0.0
+        net = gross - round_trip_cost if len(selected) else 0.0
+        rows.append({
+            "event_date": event_date,
+            "universe_return": benchmark_return,
+            "selected_return_gross": gross,
+            "selected_return_net": net,
+            "excess_return_net": net - benchmark_return,
+            "universe_symbols": int(len(cohort)),
+            "selected_symbols": int(len(selected)),
+        })
+    cohorts = pd.DataFrame(rows).sort_values("event_date").reset_index(drop=True)
+    selected_returns = canonical.loc[canonical["prediction"] == 1, "forward_return"].to_numpy(dtype=float)
+    metrics = {
+        "avg_selected_return_gross": round(float(selected_returns.mean()), 6) if selected_returns.size else 0.0,
+        "avg_selected_return_net": round(float(selected_returns.mean() - round_trip_cost), 6) if selected_returns.size else 0.0,
+        "median_selected_return_net": round(float(np.median(selected_returns) - round_trip_cost), 6) if selected_returns.size else 0.0,
+        "date_cohort_avg_return_net": round(float(cohorts["selected_return_net"].mean()), 6) if len(cohorts) else None,
+        "date_cohort_median_return_net": round(float(cohorts["selected_return_net"].median()), 6) if len(cohorts) else None,
+        "excess_avg_return_vs_universe": round(float(cohorts["excess_return_net"].mean()), 6) if len(cohorts) else None,
+        "gross_selected_return": round(float(selected_returns.mean()), 6) if selected_returns.size else 0.0,
+        "net_selected_return": round(float(selected_returns.mean() - round_trip_cost), 6) if selected_returns.size else 0.0,
+        "estimated_entries": int(selected_returns.size),
+        "estimated_exits": int(selected_returns.size),
+        "turnover": None,
+        "turnover_method": "one entry and one exit per selected symbol/date endpoint position; no adjacent-row inference",
+        "transaction_cost_bps": float(transaction_cost_bps),
+        "slippage_bps": float(slippage_bps),
+        "round_trip_cost_assumption": "2 * (transaction_cost_bps + slippage_bps), charged once per selected symbol/date",
+        "total_return_net": None,
+        "total_return_net_evaluable": False,
+        "max_drawdown": None,
+        "max_drawdown_evaluable": False,
+        "max_drawdown_reason": "daily mark-to-market path unavailable from endpoint-only 5d returns",
+    }
+    return metrics, cohorts
+
+
+def _date_local_ranking(canonical: pd.DataFrame, *, top_k: int) -> dict[str, Any]:
+    selected_parts: list[pd.DataFrame] = []
+    for _, cohort in canonical.groupby("event_date", sort=True):
+        selected_parts.append(cohort.sort_values(["score", "symbol"], ascending=[False, True]).head(top_k))
+    selected = pd.concat(selected_parts, ignore_index=True) if selected_parts else canonical.iloc[0:0]
+    gains = canonical["forward_return"] >= 0.03
+    losses = canonical["forward_return"] < -0.03
+    selected_keys = set(zip(selected["event_date"], selected["symbol"]))
+    selected_mask = np.asarray([(date, symbol) in selected_keys for date, symbol in zip(canonical["event_date"], canonical["symbol"])])
+    counts = selected["symbol"].value_counts(normalize=True)
+    return {
+        "date_local_top_k": int(top_k),
+        "date_local_top_k_avg_return": round(float(selected["forward_return"].mean()), 6) if len(selected) else 0.0,
+        "date_local_top_k_median_return": round(float(selected["forward_return"].median()), 6) if len(selected) else 0.0,
+        "date_local_top_k_precision": round(float((selected["label"] >= 0.5).mean()), 6) if len(selected) else 0.0,
+        "date_local_big_gain_capture": round(float((selected_mask & gains.to_numpy()).sum() / gains.sum()), 6) if gains.any() else 0.0,
+        "date_local_big_loss_rate": round(float((selected_mask & losses.to_numpy()).sum() / selected_mask.sum()), 6) if selected_mask.any() else 0.0,
+        "independent_ranking_dates": int(canonical["event_date"].nunique()),
+        "unique_selected_symbols": int(selected["symbol"].nunique()),
+        "selection_concentration": round(float(counts.max()), 6) if len(counts) else 0.0,
+    }
+
+
 def _max_drawdown(equity: np.ndarray) -> float:
     if equity.size == 0:
         return 0.0
@@ -229,8 +354,8 @@ def _drift(frame: pd.DataFrame, feature_columns: list[str]) -> dict[str, Any]:
     return {"max_mean_shift": max(shifts.values()) if shifts else 0.0, "feature_shifts": shifts}
 
 
-def _bootstrap_confidence_bounds(strategy_returns: np.ndarray, frame: pd.DataFrame, *, resamples: int = 500, confidence: float = 0.95) -> dict[str, Any]:
-    """Deterministic date-block bootstrap for net average return."""
+def _bootstrap_confidence_bounds(strategy_returns: np.ndarray, frame: pd.DataFrame, *, resamples: int = 500, confidence: float = 0.95, horizon_days: int = 5) -> dict[str, Any]:
+    """Deterministic non-overlapping horizon-block bootstrap of date cohorts."""
     if "event_date" in frame.columns:
         dates = pd.to_datetime(frame["event_date"], utc=True, errors="coerce")
     elif "ts" in frame.columns:
@@ -240,14 +365,17 @@ def _bootstrap_confidence_bounds(strategy_returns: np.ndarray, frame: pd.DataFra
         dates = pd.Series(pd.NaT, index=frame.index)
     block_keys = dates.dt.strftime("%Y-%m-%d") if dates.notna().all() else pd.Series([f"row-{index}" for index in range(len(frame))], index=frame.index)
     work = pd.DataFrame({"block": block_keys.to_numpy(), "return": np.asarray(strategy_returns, dtype=float)})
-    block_means = work.groupby("block", sort=True)["return"].mean().to_numpy(dtype=float)
+    date_means = work.groupby("block", sort=True)["return"].mean().to_numpy(dtype=float)
+    block_means = np.asarray([date_means[index:index + max(1, horizon_days)].mean() for index in range(0, len(date_means), max(1, horizon_days))], dtype=float)
     if block_means.size == 0:
-        return {"method": "date_block_bootstrap", "confidence": confidence, "resamples": resamples, "independent_date_blocks": 0, "avg_return_lower": None, "avg_return_median": None, "avg_return_upper": None, "probability_positive": 0.0}
+        return {"method": "non_overlapping_horizon_date_block_bootstrap", "confidence": confidence, "resamples": resamples, "independent_date_blocks": 0, "avg_return_lower": None, "avg_return_median": None, "avg_return_upper": None, "probability_positive": 0.0}
     rng = np.random.default_rng(20260803)
     samples = block_means[rng.integers(0, len(block_means), size=(max(1, resamples), len(block_means)))].mean(axis=1)
     alpha = (1.0 - confidence) / 2.0
     return {
-        "method": "date_block_bootstrap",
+        "method": "non_overlapping_horizon_date_block_bootstrap",
+        "bootstrap_method": "non_overlapping_horizon_date_block_bootstrap",
+        "overlap_policy": f"chronological date cohorts grouped into non-overlapping {max(1, horizon_days)}-date blocks",
         "confidence": confidence,
         "resamples": int(max(1, resamples)),
         "independent_date_blocks": int(len(block_means)),
@@ -355,9 +483,14 @@ def _promotion_gates(metrics: dict[str, Any], benchmark: dict[str, Any], *, min_
     failures: list[str] = []
     if metrics["rows"] < min_rows:
         failures.append("insufficient_rows")
-    if metrics["total_return_net"] < benchmark["buy_and_hold_return"] + min_excess_return:
-        failures.append("underperforms_buy_and_hold_after_costs")
-    if metrics["max_drawdown"] < -abs(max_drawdown):
+    excess = metrics.get("excess_avg_return_vs_universe")
+    if benchmark.get("benchmark_comparison_valid") is not True or excess is None:
+        failures.append("benchmark_comparison_invalid")
+    elif float(excess) < min_excess_return:
+        failures.append("underperforms_aligned_universe_after_costs")
+    if metrics.get("max_drawdown_evaluable") is not True:
+        failures.append("drawdown_evidence_unavailable")
+    elif float(metrics["max_drawdown"]) < -abs(max_drawdown):
         failures.append("drawdown_gate_failed")
     if metrics["calibration"]["ece"] is not None and metrics["calibration"]["ece"] > max_ece:
         failures.append("calibration_gate_failed")
@@ -381,19 +514,19 @@ def _pareto_objectives(challenger: dict[str, Any], lane: str) -> dict[str, float
     brier = metrics.get("calibration", {}).get("brier_score")
     common = {
         "bootstrap_lower": float(bootstrap_lower) if bootstrap_lower is not None else -999.0,
-        "max_drawdown": float(metrics.get("max_drawdown") or 0.0),
+        "economic_validity": 1.0 if metrics.get("economic_backtest_validity", {}).get("valid") else 0.0,
         "negative_big_loss_rate": -float(metrics.get("big_loss_prediction_rate") or 0.0),
     }
     if lane == "ranking":
         ranking = metrics.get("top_k_ranking") or {}
         return {
             **common,
-            "ranking_objective": float(ranking.get("ranking_objective") or 0.0),
-            "top_k_avg_return": float(ranking.get("top_k_avg_return") or 0.0),
+            "ranking_objective": float(ranking.get("date_local_top_k_avg_return") or 0.0),
+            "top_k_avg_return": float(ranking.get("date_local_top_k_avg_return") or 0.0),
         }
     return {
         **common,
-        "avg_return_net": float(metrics.get("avg_return_net") or 0.0),
+        "avg_return_net": float(metrics.get("date_cohort_avg_return_net", metrics.get("avg_return_net", 0.0)) or 0.0),
         "negative_brier": -float(brier) if brier is not None else -1.0,
     }
 
@@ -449,19 +582,32 @@ def backtest_challenger_suite(
     frame = _prepare_features(raw.dropna(subset=[return_col, label_col]).copy(), features, suite.get("feature_fill_values") or {})
     labels = pd.to_numeric(frame[label_col], errors="coerce").fillna(0).to_numpy(dtype=float)
     returns = pd.to_numeric(frame[return_col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    base_canonical, base_duplicate_diagnostics = _canonical_economic_frame(
+        frame, np.zeros(len(frame)), np.zeros(len(frame), dtype=int), labels, returns
+    )
+    benchmark_cohorts = base_canonical.groupby("event_date", sort=True)["forward_return"].mean()
     benchmark = {
-        "buy_and_hold_return": round(float(np.prod(1.0 + returns) - 1.0), 6),
+        "equal_weight_universe_avg_5d_return": round(float(base_canonical["forward_return"].mean()), 6),
+        "equal_weight_universe_median_5d_return": round(float(base_canonical["forward_return"].median()), 6),
+        "date_cohort_benchmark_avg_return": round(float(benchmark_cohorts.mean()), 6),
+        "date_cohort_benchmark_median_return": round(float(benchmark_cohorts.median()), 6),
+        "benchmark_independent_dates": int(len(benchmark_cohorts)),
+        "benchmark_unique_symbol_dates": int(len(base_canonical)),
+        "benchmark_comparison_valid": bool(len(benchmark_cohorts)),
         "cash_return": 0.0,
-        "equal_weight_long_cash_return": round(float(np.prod(1.0 + (returns * 0.5)) - 1.0), 6),
+        "deprecated_fields": {
+            "buy_and_hold_return": {"value": None, "replacement_field": "date_cohort_benchmark_avg_return", "calculation_method": "deprecated: prior row-wise compounding was invalid"},
+            "equal_weight_long_cash_return": {"value": None, "replacement_field": "date_cohort_benchmark_avg_return", "calculation_method": "deprecated: no portfolio path is available"},
+        },
     }
-    cost_rate = (float(transaction_cost_bps) + float(slippage_bps)) / 10_000.0
     challengers: list[dict[str, Any]] = []
     for challenger in suite.get("challengers") or []:
         artifact = _load_json(Path(challenger["model_path"]))
         probs, preds = _predict(artifact, frame, features)
-        position_changes = np.abs(np.diff(np.concatenate([[0], preds.astype(float)])))
-        strategy_returns = (preds * returns) - (position_changes * cost_rate)
-        equity = np.cumprod(1.0 + strategy_returns)
+        canonical, economic_diagnostics = _canonical_economic_frame(frame, probs, preds, labels, returns)
+        economic_metrics, cohort_returns = _cohort_economics(
+            canonical, transaction_cost_bps=transaction_cost_bps, slippage_bps=slippage_bps
+        )
         big_loss_rows = returns < -0.03
         big_loss_predictions = int(((preds == 1) & big_loss_rows).sum())
         selected_returns = returns[preds == 1]
@@ -470,20 +616,31 @@ def backtest_challenger_suite(
             "rows": int(len(frame)),
             "accuracy": round(float((preds == labels).mean()), 6) if len(frame) else 0.0,
             "positive_rate": round(float(preds.mean()), 6) if len(frame) else 0.0,
-            "total_return_net": round(float(equity[-1] - 1.0), 6) if len(equity) else 0.0,
-            "avg_return_net": round(float(strategy_returns.mean()), 6) if len(strategy_returns) else 0.0,
+            **economic_metrics,
+            "avg_return_net": economic_metrics["date_cohort_avg_return_net"],
             "downside_risk": round(float(abs(negative_selected_returns.mean())), 6) if len(negative_selected_returns) else 0.0,
             "big_loss_rows": int(big_loss_rows.sum()),
             "big_loss_predictions": big_loss_predictions,
             "big_loss_prediction_rate": round(big_loss_predictions / int(big_loss_rows.sum()), 6) if big_loss_rows.any() else 0.0,
-            "turnover": round(float(position_changes.sum()), 6),
-            "transaction_cost_bps": transaction_cost_bps,
-            "slippage_bps": slippage_bps,
-            "max_drawdown": _max_drawdown(equity),
-            "top_k_ranking": _ranking_metrics(probs, labels, returns),
+            "top_k_ranking": _date_local_ranking(canonical, top_k=5),
+            "date_local_ranking": {str(k): _date_local_ranking(canonical, top_k=k) for k in (1, 3, 5)},
             "calibration": _calibration(probs, labels),
             "drift": _drift(frame, features),
-            "bootstrap_confidence": _bootstrap_confidence_bounds(strategy_returns, frame),
+            "bootstrap_confidence": _bootstrap_confidence_bounds(
+                cohort_returns["excess_return_net"].to_numpy(dtype=float), cohort_returns, horizon_days=horizon_days
+            ),
+            "economic_unit_diagnostics": economic_diagnostics,
+            "economic_backtest_validity": {
+                "valid": False,
+                "cross_sectional_rows_handled": True,
+                "duplicate_weighting_applied": True,
+                "overlapping_horizon_handled": True,
+                "transaction_cost_semantics_valid": True,
+                "portfolio_path_available": False,
+                "path_dependent_metrics_evaluable": False,
+                "benchmark_comparison_valid": benchmark["benchmark_comparison_valid"],
+                "invalid_reasons": ["daily mark-to-market portfolio path unavailable; drawdown gate cannot be proven"],
+            },
         }
         slope = float(artifact.get("calibration_slope", 1.0) if "calibration_slope" in artifact else artifact.get("decision_model", {}).get("calibration_slope", 1.0))
         intercept = float(artifact.get("calibration_intercept", 0.0) if "calibration_intercept" in artifact else artifact.get("decision_model", {}).get("calibration_intercept", 0.0))
@@ -505,9 +662,9 @@ def backtest_challenger_suite(
         challengers,
         key=lambda item: (
             item["promotion_gates"]["promotion_ready"],
-            item["backtest_metrics"].get("top_k_ranking", {}).get("ranking_objective", 0),
-            item["backtest_metrics"].get("top_k_ranking", {}).get("top_k_avg_return", 0),
-            item["backtest_metrics"]["total_return_net"],
+            item["backtest_metrics"].get("top_k_ranking", {}).get("date_local_top_k_avg_return", 0),
+            item["backtest_metrics"].get("excess_avg_return_vs_universe") or -999.0,
+            item["backtest_metrics"].get("date_cohort_avg_return_net") or -999.0,
             -item["backtest_metrics"]["calibration"].get("ece", 1.0),
         ),
         reverse=True,
@@ -644,12 +801,22 @@ def backtest_challenger_suite(
     groups = pd.Series(symbols.to_numpy() + "|" + dates.to_numpy() + "|" + endpoints.to_numpy() + "|" + sources.to_numpy())
     duplicate_symbol_date_count = int(pd.Series(symbols.to_numpy() + "|" + dates.to_numpy()).duplicated(keep=False).sum())
     duplicate_weighting_report = {
+        "raw_row_count": int(len(frame)),
+        "unique_symbol_date_count": int(base_duplicate_diagnostics["unique_symbol_dates"]),
+        "duplicate_row_count": int(base_duplicate_diagnostics["duplicate_symbol_date_rows"]),
+        "effective_weight_sum": float(base_duplicate_diagnostics["unique_symbol_dates"]),
+        "maximum_symbol_date_multiplicity": int(pd.Series(symbols.to_numpy() + "|" + dates.to_numpy()).value_counts().max()) if len(frame) else 0,
         "symbol_date_group_count": int(pd.Series(symbols.to_numpy() + "|" + dates.to_numpy()).nunique()),
         "endpoint_symbol_date_group_count": int(pd.Series(endpoints.to_numpy() + "|" + symbols.to_numpy() + "|" + dates.to_numpy()).nunique()),
         "duplicate_symbol_date_count": duplicate_symbol_date_count,
         "effective_unique_symbol_dates": int(pd.Series(symbols.to_numpy() + "|" + dates.to_numpy()).nunique()),
         "top_symbol_date_concentration": round(float(pd.Series(symbols.to_numpy() + "|" + dates.to_numpy()).value_counts(normalize=True).max()), 6) if len(frame) else 0.0,
-        "group_weighting_policy": "effective_weight = 1 / count(symbol, event_date, endpoint, decision_source)",
+        "group_weighting_policy": "one equal-weight economic observation per symbol/event_date",
+        "economic_weighting_policy": "collapse to symbol/event_date; each canonical outcome has equal weight",
+        "classification_weighting_policy": "raw rows retained for ML accuracy, Brier, and ECE diagnostics",
+        "ranking_weighting_policy": "mean duplicate score then date-local ranking",
+        "benchmark_weighting_policy": "equal weight unique symbols within each date, then equal weight date cohorts",
+        "bootstrap_weighting_policy": "date-cohort excess returns grouped into non-overlapping 5-date horizon blocks",
     }
     production_feature_compatibility_report = {"comparison_valid": False, "comparison_invalid_reason": "real production comparator is evaluated in Day11 only; use massive baseline or valid adapter before promotion"}
     massive_baseline_model_report = {"available": False, "model_version": "massive_baseline_model_v1", "reason": "not trained by backtest; next generation should build this comparator"}
@@ -689,16 +856,16 @@ def backtest_challenger_suite(
         "rows": int(len(frame)),
         "horizon_days": horizon_days,
         "benchmark": benchmark,
-        "bootstrap_policy": {"method": "date_block_bootstrap", "confidence": 0.95, "resamples": 500, "promotion_requires_nonnegative_lower_avg_return": True},
+        "bootstrap_policy": {"method": "non_overlapping_horizon_date_block_bootstrap", "confidence": 0.95, "resamples": 500, "promotion_requires_nonnegative_lower_avg_return": True},
         "challengers": challengers,
         "ranked_model_versions": [item["model_version"] for item in ranked],
         "pareto_frontiers": {
             "decision": {
-                "objectives": ["bootstrap_lower", "avg_return_net", "negative_brier", "max_drawdown", "negative_big_loss_rate"],
+                "objectives": ["bootstrap_lower", "date_cohort_avg_return_net", "negative_brier", "economic_validity", "negative_big_loss_rate"],
                 "model_versions": [item["model_version"] for item in decision_frontier],
             },
             "ranking": {
-                "objectives": ["bootstrap_lower", "ranking_objective", "top_k_avg_return", "max_drawdown", "negative_big_loss_rate"],
+                "objectives": ["bootstrap_lower", "date_local_top_k_avg_return", "economic_validity", "negative_big_loss_rate"],
                 "model_versions": [item["model_version"] for item in ranking_frontier],
                 "can_replace_main_decision_model": False,
             },
@@ -707,7 +874,7 @@ def backtest_challenger_suite(
         "promotion_eligible_frontier_model_versions": [item["model_version"] for item in promotion_eligible_frontier],
         "shadow_candidates": [item["model_version"] for item in shadow_candidates],
         "retention_policy": "retain every non-dominated candidate on the lane-specific Pareto frontier; do not collapse research retention to one overall winner",
-        "ranking_policy": "legacy deterministic ordering is retained only for display and promotion packaging; Pareto frontiers control candidate retention",
+        "ranking_policy": "frozen top-5 selection is performed within each event date; global holdout ranking is not a promotion-quality simulation",
         "routing_policy": "shadow-log first; user-facing routing remains disabled until gates pass and human promotion occurs",
         "candidate_family_report": candidate_family_report,
         "calibration_stability_report": calibration_stability_report,
@@ -724,6 +891,17 @@ def backtest_challenger_suite(
         "feature_leakage_name_value_audit": feature_leakage_name_value_audit,
         "candidate_feature_coverage_segmented_report": candidate_feature_coverage_segmented_report,
         "duplicate_weighting_report": duplicate_weighting_report,
+        "economic_backtest_validity": {
+            "valid": False,
+            "cross_sectional_rows_handled": True,
+            "duplicate_weighting_applied": True,
+            "overlapping_horizon_handled": True,
+            "transaction_cost_semantics_valid": True,
+            "portfolio_path_available": False,
+            "path_dependent_metrics_evaluable": False,
+            "benchmark_comparison_valid": benchmark["benchmark_comparison_valid"],
+            "invalid_reasons": ["daily mark-to-market portfolio path unavailable; promotion drawdown evidence fails closed"],
+        },
         "final_summary": track_b_suite_diagnosis,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
