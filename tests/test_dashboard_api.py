@@ -647,6 +647,32 @@ def test_run_daily_ops_reports_child_timeout(monkeypatch, tmp_path):
     assert "partial stderr" in payload["stderr"]
 
 
+def test_run_daily_ops_reports_child_timeout(monkeypatch, tmp_path):
+    def fake_run(command, cwd, capture_output, text, check, timeout):
+        assert timeout == 660
+        raise api_module.subprocess.TimeoutExpired(
+            command,
+            timeout,
+            output="partial stdout",
+            stderr="partial stderr",
+        )
+
+    monkeypatch.setattr(api_module.subprocess, "run", fake_run)
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
+
+    client = _client()
+    client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
+    res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token"})
+
+    assert res.status_code == 504
+    payload = res.get_json()["data"]
+    assert payload["success"] is False
+    assert payload["returncode"] == -1
+    assert payload["stdout"] == "partial stdout"
+    assert "daily ops exceeded server execution timeout" in payload["stderr"]
+    assert "partial stderr" in payload["stderr"]
+
+
 def test_run_weekly_model_refresh_reports_diagnostics_when_files_exist(monkeypatch, tmp_path):
     report_path = tmp_path / "day13_calibration_report.json"
     plan_path = tmp_path / "day13_recalibration_plan.json"
