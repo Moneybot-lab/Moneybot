@@ -34,4 +34,23 @@ jobs:
             --connect-timeout 15 --max-time 720 --show-error \
             -X POST "$MONEYBOT_BASE_URL/api/run-daily-ops" \
             -H "X-Daily-Ops-Token: $DAILY_OPS_TOKEN" \
-            -H "Content-Type: application/json"
+            -H "Content-Type: application/json")" || {
+              curl_status=$?
+              echo "Daily Ops request failed at transport layer; curl exit=$curl_status"
+              if [ -s "$response_file" ]; then
+                echo "Daily Ops API response:"
+                cat "$response_file"
+              fi
+              exit "$curl_status"
+            }
+
+          echo "Daily Ops HTTP status: $http_code"
+          if [ -s "$response_file" ]; then
+            echo "Daily Ops API response:"
+            cat "$response_file"
+          fi
+
+          if [[ ! "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+            echo "Daily Ops returned non-success HTTP status: $http_code"
+            exit 1
+          fi

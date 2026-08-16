@@ -2418,6 +2418,12 @@ def run_daily_ops():
         )
         report_diag = _file_diagnostics(calibration_report)
         plan_diag = _file_diagnostics(recalibration_plan)
+        if completed.returncode != 0:
+            logging.error(
+                "run-daily-ops child failed returncode=%s stderr=%s",
+                completed.returncode,
+                completed.stderr,
+            )
         day13_stderr = completed.stderr if (completed.returncode != 0 and "day13_" in completed.stderr) else ""
         response = jsonify(
             {
