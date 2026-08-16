@@ -14,7 +14,12 @@ if str(PROJECT_ROOT) not in sys.path:
 import yfinance as yf
 
 from moneybot.services.decision_log import read_decision_events
-from moneybot.services.outcome_tracking import close_values, evaluate_decision_events, summarize_outcome_rows
+from moneybot.services.outcome_tracking import (
+    close_values,
+    evaluate_decision_events,
+    summarize_outcome_rows,
+    summarize_paper_pnl_by_action,
+)
 from moneybot.services.runtime_paths import resolve_runtime_dir
 
 
@@ -39,6 +44,24 @@ def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
     return round((end_price - start_price) / start_price, 4)
 
 
+def _price_path(symbol: str, start_ts: int, days: int) -> list[float]:
+    start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
+    end_dt = start_dt + timedelta(days=max(days + 3, 7))
+    history = yf.download(
+        symbol,
+        start=start_dt.strftime("%Y-%m-%d"),
+        end=end_dt.strftime("%Y-%m-%d"),
+        interval="1d",
+        progress=False,
+        auto_adjust=False,
+    )
+    return close_values(history)
+
+
+def _benchmark_return(start_ts: int, days: int) -> float | None:
+    return _future_return("SPY", start_ts, days)
+
+
 def main() -> None:
     base_dir = resolve_runtime_dir()
     parser = argparse.ArgumentParser(description="Evaluate logged recommendations against later price moves.")
@@ -48,7 +71,12 @@ def main() -> None:
     args = parser.parse_args()
 
     events = read_decision_events(args.input, limit=max(1, args.limit))
-    rows = evaluate_decision_events(events, future_return_lookup=_future_return)
+    rows = evaluate_decision_events(
+        events,
+        future_return_lookup=_future_return,
+        price_path_lookup=_price_path,
+        benchmark_return_lookup=_benchmark_return,
+    )
 
     output = {
         "summary_1d": summarize_outcome_rows(
@@ -57,6 +85,7 @@ def main() -> None:
         "summary_5d": summarize_outcome_rows(
             [{**row, "return_1d": row["return_5d"]} for row in rows]
         ),
+        "paper_pnl_by_recommendation": summarize_paper_pnl_by_action(rows),
         "rows": rows,
     }
 
