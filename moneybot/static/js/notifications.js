@@ -270,6 +270,7 @@ async function initializeTriggerToggles() {
     { id: 'triggerPortfolioSell', field: 'portfolio_sell_advice_change', label: 'Portfolio SELL advice changes' },
     { id: 'triggerPortfolioBuy', field: 'portfolio_buy_advice_change', label: 'Portfolio BUY advice changes' },
     { id: 'triggerMomentum8', field: 'hot_momentum_score_crosses_8', label: 'Hot momentum score > 8' },
+    { id: 'triggerFreshBreakouts', field: 'fresh_breakouts', label: 'Fresh Breakout Radar names' },
     { id: 'triggerWhaleAdded', field: 'whale_top_investor_added', label: 'Whale/top investor adds/removes a stock' },
     { id: 'triggerClearviewBuy', field: 'clearview_hold_off_to_buy', label: 'ClearView Hold Off to BUY' },
   ];

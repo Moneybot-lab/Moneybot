@@ -16,6 +16,7 @@ def test_build_weekly_refresh_commands_runs_refresh_then_daily_bundle():
     assert commands[0][:2] == ["python3", "/tmp/Moneybot/scripts/day1_refresh_artifact.py"]
     assert commands[1][:2] == ["python3", "/tmp/Moneybot/scripts/run_daily_ops.py"]
     assert commands[1][-3:] == ["--input-log", "data/decision_events.jsonl", "--skip-day1-refresh"]
+    assert commands[2] == ["python3", "/tmp/Moneybot/scripts/page6_historical_validation_report.py"]
 
 
 def test_run_weekly_model_refresh_bootstraps_project_root_for_imports(tmp_path):
