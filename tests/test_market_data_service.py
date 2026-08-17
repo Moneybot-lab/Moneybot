@@ -123,7 +123,8 @@ def test_get_market_indices_prefers_finnhub_quote_data(monkeypatch):
 
     data = svc.get_market_indices()
 
-    assert len(data) == 5
+    assert len(data) == 6
+    assert {item["symbol"] for item in data} == {"^DJI", "^GSPC", "^IXIC", "GC=F", "CL=F", "BTC-USD"}
     assert all(item["price"] == 321.0 for item in data)
     assert all(item["quote_source"] == "finnhub" for item in data)
 
@@ -253,7 +254,8 @@ def test_get_market_indices_uses_quote_when_history_rate_limited(monkeypatch):
 
     data = svc.get_market_indices()
 
-    assert len(data) == 5
+    assert len(data) == 6
+    assert {item["symbol"] for item in data} == {"^DJI", "^GSPC", "^IXIC", "GC=F", "CL=F", "BTC-USD"}
     assert all(item["price"] == 410.5 for item in data)
     assert all(item["change_percent"] == 0.8 for item in data)
     assert all(item["quote_source"] == "finnhub" for item in data)
