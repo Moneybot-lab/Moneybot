@@ -260,6 +260,7 @@ class MarketDataService:
             {"name": "S&P 500", "symbol": "^GSPC", "price": 5245.1, "change_percent": 0.44, "series": [5188, 5204, 5218, 5231, 5245]},
             {"name": "Nasdaq", "symbol": "^IXIC", "price": 16592.3, "change_percent": 0.71, "series": [16280, 16355, 16430, 16501, 16592]},
             {"name": "Gold", "symbol": "GC=F", "price": 2340.8, "change_percent": -0.18, "series": [2356, 2351, 2348, 2344, 2340]},
+            {"name": "Crude Oil", "symbol": "CL=F", "price": 78.42, "change_percent": 0.36, "series": [77.65, 77.88, 78.04, 78.14, 78.42]},
             {"name": "Bitcoin", "symbol": "BTC-USD", "price": 61110.2, "change_percent": -0.93, "series": [62400, 62020, 61680, 61390, 61110]},
         ]
 
@@ -269,6 +270,7 @@ class MarketDataService:
             {"name": "S&P 500", "symbol": "^GSPC", "quote_symbol": "SPY"},
             {"name": "Nasdaq", "symbol": "^IXIC", "quote_symbol": "QQQ"},
             {"name": "Gold", "symbol": "GC=F", "quote_symbol": "GLD"},
+            {"name": "Crude Oil", "symbol": "CL=F", "quote_symbol": "USO"},
             {"name": "Bitcoin", "symbol": "BTC-USD", "quote_symbol": "IBIT"},
         ]
         out: list[Dict[str, Any]] = []
@@ -678,6 +680,7 @@ class MarketDataService:
             {"name": "S&P 500", "symbol": "^GSPC", "price": 5245.1, "change_percent": 0.44, "series": [5188, 5204, 5218, 5231, 5245]},
             {"name": "Nasdaq", "symbol": "^IXIC", "price": 16592.3, "change_percent": 0.71, "series": [16280, 16355, 16430, 16501, 16592]},
             {"name": "Gold", "symbol": "GC=F", "price": 2340.8, "change_percent": -0.18, "series": [2356, 2351, 2348, 2344, 2340]},
+            {"name": "Crude Oil", "symbol": "CL=F", "price": 78.42, "change_percent": 0.36, "series": [77.65, 77.88, 78.04, 78.14, 78.42]},
             {"name": "Bitcoin", "symbol": "BTC-USD", "price": 61110.2, "change_percent": -0.93, "series": [62400, 62020, 61680, 61390, 61110]},
         ]
 
@@ -687,6 +690,7 @@ class MarketDataService:
             {"name": "S&P 500", "symbol": "^GSPC"},
             {"name": "Nasdaq", "symbol": "^IXIC"},
             {"name": "Gold", "symbol": "GC=F"},
+            {"name": "Crude Oil", "symbol": "CL=F"},
             {"name": "Bitcoin", "symbol": "BTC-USD"},
         ]
         out: list[Dict[str, Any]] = []
@@ -762,6 +766,7 @@ class MarketDataService:
             {"name": "S&P 500", "symbol": "^GSPC", "price": 5245.1, "change_percent": 0.44, "series": [5188, 5204, 5218, 5231, 5245]},
             {"name": "Nasdaq", "symbol": "^IXIC", "price": 16592.3, "change_percent": 0.71, "series": [16280, 16355, 16430, 16501, 16592]},
             {"name": "Gold", "symbol": "GC=F", "price": 2340.8, "change_percent": -0.18, "series": [2356, 2351, 2348, 2344, 2340]},
+            {"name": "Crude Oil", "symbol": "CL=F", "price": 78.42, "change_percent": 0.36, "series": [77.65, 77.88, 78.04, 78.14, 78.42]},
             {"name": "Bitcoin", "symbol": "BTC-USD", "price": 61110.2, "change_percent": -0.93, "series": [62400, 62020, 61680, 61390, 61110]},
         ]
 
@@ -771,6 +776,7 @@ class MarketDataService:
             {"name": "S&P 500", "symbol": "^GSPC", "quote_symbol": "SPY"},
             {"name": "Nasdaq", "symbol": "^IXIC", "quote_symbol": "QQQ"},
             {"name": "Gold", "symbol": "GC=F", "quote_symbol": "GLD"},
+            {"name": "Crude Oil", "symbol": "CL=F", "quote_symbol": "USO"},
             {"name": "Bitcoin", "symbol": "BTC-USD", "quote_symbol": "IBIT"},
         ]
         out: list[Dict[str, Any]] = []
