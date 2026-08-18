@@ -823,17 +823,16 @@ class MarketDataService:
 
     def get_market_indices(self) -> list[Dict[str, Any]]:
         symbols = [
-            {"name": "Dow", "symbol": "^DJI", "quote_symbol": "DIA", "instrument_type": "index", "currency": None},
-            {"name": "S&P 500", "symbol": "^GSPC", "quote_symbol": "SPY", "instrument_type": "index", "currency": None},
-            {"name": "Nasdaq", "symbol": "^IXIC", "quote_symbol": "QQQ", "instrument_type": "index", "currency": None},
-            {"name": "Gold", "symbol": "GC=F", "quote_symbol": "GLD", "instrument_type": "commodity_future", "currency": "USD"},
+            {"name": "Dow", "symbol": "^DJI", "quote_symbol": "^DJI", "instrument_type": "index", "currency": None},
+            {"name": "S&P 500", "symbol": "^GSPC", "quote_symbol": "^GSPC", "instrument_type": "index", "currency": None},
+            {"name": "Nasdaq", "symbol": "^IXIC", "quote_symbol": "^IXIC", "instrument_type": "index", "currency": None},
+            {"name": "Gold", "symbol": "GC=F", "quote_symbol": "GC=F", "instrument_type": "commodity_future", "currency": "USD"},
             {"name": "Crude Oil", "symbol": "CL=F", "quote_symbol": "CL=F", "instrument_type": "commodity_future", "currency": "USD"},
-            {"name": "Bitcoin", "symbol": "BTC-USD", "quote_symbol": "IBIT", "instrument_type": "crypto", "currency": "USD"},
+            {"name": "Bitcoin", "symbol": "BTC-USD", "quote_symbol": "BTC-USD", "instrument_type": "crypto", "currency": "USD"},
         ]
         out: list[Dict[str, Any]] = []
         for item in symbols:
-            # Preserve the quote symbols used by the working Market Indices feed.
-            # Crude Oil is the sole exception and uses the WTI/front-month symbol.
+            # Market cards show the underlying Yahoo instrument, not an ETF proxy.
             try:
                 quote = self.get_quote(item["quote_symbol"])
             except Exception as exc:  # noqa: BLE001
@@ -1555,6 +1554,16 @@ class MarketDataService:
                     time.sleep(0.15)
 
             return self._fallback_quote(cache_key, last_error)
+
+        # Massive's configured snapshot endpoint is stock-only. Yahoo index,
+        # commodity-future, and crypto symbols must bypass it: proxying these
+        # instruments through DIA/SPY/QQQ/GLD/IBIT displays ETF share prices,
+        # while characters such as ^ and = are rejected by the stock adapter.
+        yahoo_market_symbols = {"^DJI", "^GSPC", "^IXIC", "GC=F", "CL=F", "BTC-USD"}
+        if cache_key in yahoo_market_symbols:
+            payload = _yfinance_quote()
+            self.quote_cache.set(cache_key, payload)
+            return payload
 
         massive_key, massive_key_source = self._get_massive_key()
         massive_error: str | None = None

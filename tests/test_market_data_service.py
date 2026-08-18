@@ -126,7 +126,7 @@ def test_get_market_indices_prefers_finnhub_quote_data(monkeypatch):
 
     assert len(data) == 6
     assert {item["symbol"] for item in data} == {"^DJI", "^GSPC", "^IXIC", "GC=F", "CL=F", "BTC-USD"}
-    assert quote_symbols == ["DIA", "SPY", "QQQ", "GLD", "CL=F", "IBIT"]
+    assert quote_symbols == ["^DJI", "^GSPC", "^IXIC", "GC=F", "CL=F", "BTC-USD"]
     assert "USO" not in quote_symbols
     assert all(item["price"] == 321.0 for item in data)
     assert all(item["current_value"] == 321.0 for item in data)
@@ -136,6 +136,58 @@ def test_get_market_indices_prefers_finnhub_quote_data(monkeypatch):
     assert next(item for item in data if item["symbol"] == "^DJI")["instrument_type"] == "index"
     assert next(item for item in data if item["symbol"] == "CL=F")["currency"] == "USD"
     assert next(item for item in data if item["symbol"] == "CL=F")["provider_symbol"] == "CL=F"
+
+
+def test_market_symbols_bypass_massive_stock_snapshots(monkeypatch):
+    svc = MarketDataService()
+    monkeypatch.setenv("MASSIVE_API_KEY", "massive-key")
+
+    class DummyHistory:
+        empty = False
+        index = [0, 1]
+
+        def __getitem__(self, _key):
+            class Values:
+                iloc = [99.0, 101.0]
+
+                def tail(self, _days):
+                    return [97.0, 99.0, 101.0]
+
+            return Values()
+
+    class DummyTicker:
+        info = {
+            "regularMarketPrice": 101.0,
+            "regularMarketPreviousClose": 99.0,
+            "regularMarketChangePercent": 2.0202,
+            "regularMarketTime": datetime.now(timezone.utc).timestamp(),
+        }
+
+        def history(self, period, interval):
+            return DummyHistory()
+
+    class ForbiddenMassiveClient:
+        def get_quote(self, symbol):
+            raise AssertionError(f"Massive stock snapshot must not receive {symbol}")
+
+    monkeypatch.setattr("moneybot.services.market_data.yf.Ticker", lambda _symbol: DummyTicker())
+    monkeypatch.setattr(svc, "_massive_client", lambda: ForbiddenMassiveClient())
+
+    for symbol in ("^DJI", "^GSPC", "^IXIC", "GC=F", "CL=F", "BTC-USD"):
+        quote = svc.get_quote(symbol)
+        assert quote["price"] == 101.0
+        assert quote["previous_close"] == 99.0
+        assert quote["quote_source"] == "yfinance"
+
+    data = svc.get_market_indices()
+    assert len(data) == 6
+    assert all(item["current_value"] == 101.0 for item in data)
+    assert all(item["previous_close"] == 99.0 for item in data)
+    assert all(item["change"] == 2.0 for item in data)
+    assert all(item["change_percent"] == 2.02 for item in data)
+    assert all(item["quote_source"] == "yfinance" for item in data)
+    assert all(item["provider_symbol"] == item["symbol"] for item in data)
+    assert all(item["series"] == [97.0, 99.0, 101.0] for item in data)
 
 
 def test_get_quote_stops_yfinance_retries_on_rate_limit(monkeypatch):
