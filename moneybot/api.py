@@ -9,7 +9,6 @@ import sys
 import time
 import uuid
 import hmac
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -21,7 +20,7 @@ from functools import wraps
 from typing import Any, Dict, Tuple
 
 import yfinance as yf
-from flask import Blueprint, Response, current_app, g, jsonify, request, session, url_for
+from flask import Blueprint, Response, current_app, g, jsonify, request, session, stream_with_context, url_for
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -30,24 +29,51 @@ from advice_engine import compute_user_advice
 from .extensions import db
 from sqlalchemy import or_, text
 from sqlalchemy import inspect
-from sqlalchemy.exc import OperationalError, ProgrammingError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
+from sqlalchemy.orm.exc import StaleDataError
 
-from .models import FcmDeviceToken, NotificationTriggerPreference, SoldTrade, User, WatchlistItem
+from .models import (
+    FcmDeviceToken,
+    InvestorProfile,
+    InvestorProfileRevision,
+    NotificationTriggerPreference,
+    SoldTrade,
+    User,
+    WatchlistItem,
+)
 from .services.decision_log import read_decision_events, summarize_decision_events
+from .services.investor_profile import (
+    InvestorProfileValidationError,
+    profile_payload,
+    revision_payload,
+    serialized_profile_values,
+    stored_profile_values,
+    update_completion_timestamp,
+    validate_profile_updates,
+)
 from .services.model_metadata import load_artifact_history, load_artifact_metadata
+from .services.production_servability import validate_certification
 from .services.decision_snapshot import build_decision_snapshot
+from .services.suitability_policy import UserDecisionContext
+from .services.market_stream import register_demand_safely
+from .services.live_market import LiveQuoteResolver, sse_encode
 from .services.outcome_tracking import (
+    OutcomeHistoryCache,
     close_values,
     evaluate_decision_events,
     merge_recent_rows,
     rows_with_any_horizon_return,
+    rows_with_horizon_accuracy_outcome,
     rows_with_horizon_return,
+    select_recent_unique_rows,
     summarize_outcome_rows,
+    summarize_paper_pnl_by_action,
 )
 from .services.runtime_paths import (
     day13_calibration_report_path,
     day13_recalibration_plan_path,
     decision_events_log_path,
+    historical_validation_report_path,
     resolve_runtime_dir,
 )
 
@@ -89,7 +115,12 @@ def _file_diagnostics(path: str | Path) -> dict[str, Any]:
     return diagnostics
 
 
-def _load_materialized_outcomes_snapshot(path: str, *, max_age_seconds: int) -> dict[str, Any] | None:
+def _load_materialized_outcomes_snapshot(
+    path: str,
+    *,
+    max_age_seconds: int,
+    allow_stale: bool = False,
+) -> dict[str, Any] | None:
     file_path = Path(path)
     if not file_path.exists():
         return None
@@ -108,12 +139,17 @@ def _load_materialized_outcomes_snapshot(path: str, *, max_age_seconds: int) -> 
     except ValueError:
         return None
     age_seconds = (datetime.now(timezone.utc) - computed_dt.astimezone(timezone.utc)).total_seconds()
-    if age_seconds < 0 or age_seconds > max(1, int(max_age_seconds)):
+    max_age = max(1, int(max_age_seconds))
+    if age_seconds < 0:
+        return None
+    stale = age_seconds > max_age
+    if stale and not allow_stale:
         return None
     return {
         "data": data,
         "computed_at_utc": computed_dt.astimezone(timezone.utc).isoformat(),
         "age_seconds": int(age_seconds),
+        "stale": stale,
     }
 
 
@@ -332,20 +368,26 @@ def _request_context_setup():
 
 
 _RATE: dict[Tuple[str, str], deque] = defaultdict(deque)
-WINDOW_SECONDS = 60
-MAX_REQUESTS_PER_WINDOW = 120
+DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60
+DEFAULT_RATE_LIMIT_MAX_REQUESTS = 120
 
 
 @api_bp.before_request
 def _basic_rate_limit():
+    load_test_token = str(current_app.config.get("LOAD_TEST_RATE_LIMIT_TOKEN") or "").strip()
+    if load_test_token and request.headers.get("X-Load-Test-Token") == load_test_token:
+        return None
+
     ip = request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(","
     )[0].strip()
     key = (ip, request.endpoint or "")
     now = time.time()
     dq = _RATE[key]
-    while dq and now - dq[0] > WINDOW_SECONDS:
+    window_seconds = max(1, int(current_app.config.get("API_RATE_LIMIT_WINDOW_SECONDS") or DEFAULT_RATE_LIMIT_WINDOW_SECONDS))
+    max_requests = max(1, int(current_app.config.get("API_RATE_LIMIT_MAX_REQUESTS") or DEFAULT_RATE_LIMIT_MAX_REQUESTS))
+    while dq and now - dq[0] > window_seconds:
         dq.popleft()
-    if len(dq) >= MAX_REQUESTS_PER_WINDOW:
+    if len(dq) >= max_requests:
         return jsonify({"error": "rate limit exceeded", "request_id": g.request_id}), 429
     dq.append(now)
 
@@ -370,6 +412,126 @@ def _user_payload(user: User) -> Dict[str, Any]:
         "created_at": user.created_at.isoformat(),
         "updated_at": user.updated_at.isoformat(),
     }
+
+
+def _ensure_investor_profile(user_id: int) -> InvestorProfile:
+    profile = InvestorProfile.query.filter_by(user_id=user_id).first()
+    if profile is None:
+        profile = InvestorProfile(user_id=user_id)
+        db.session.add(profile)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            profile = InvestorProfile.query.filter_by(user_id=user_id).one()
+    return profile
+
+
+def _decision_context_for_user(user_id: int) -> UserDecisionContext:
+    return UserDecisionContext.from_profile(_ensure_investor_profile(user_id))
+
+
+def _personalize_action(
+    *,
+    user_id: int | None,
+    context: UserDecisionContext,
+    endpoint: str,
+    symbol: str,
+    base_action: str,
+    forecast_horizon: str,
+    **policy_inputs: Any,
+):
+    runtime = current_app.extensions.get("personalization_runtime")
+    if runtime is None:
+        from .services.suitability_policy import PersonalizationRuntime
+        runtime = PersonalizationRuntime(profile_enabled=False, policy_enabled=False, mode="off")
+    return runtime.evaluate(
+        user_id=user_id, context=context, endpoint=endpoint, symbol=symbol,
+        base_action=base_action, forecast_horizon=forecast_horizon, **policy_inputs,
+    )
+
+
+def _live_quote_resolver() -> LiveQuoteResolver | None:
+    state = current_app.extensions.get("market_stream_state")
+    svc = current_app.extensions.get("market_data_service")
+    if state is None or svc is None:
+        return None
+    return LiveQuoteResolver(state=state, rest_quote=lambda symbol: svc.get_quote(symbol))
+
+
+def _live_quote_payload(symbol: str) -> dict[str, Any] | None:
+    resolver = _live_quote_resolver()
+    if resolver is None:
+        return None
+    return resolver.resolve(symbol).payload()
+
+
+def _clear_stream_demand(source: str) -> None:
+    state = current_app.extensions.get("market_stream_state")
+    if state is not None and hasattr(state, "clear_demand"):
+        try:
+            state.clear_demand(source)
+        except Exception:  # noqa: BLE001
+            logging.exception("Unable to clear market-stream demand source=%s", source)
+
+
+def _symbols_for_live_user(user_id: int) -> set[str]:
+    portfolio = {
+        str(symbol).upper()
+        for (symbol,) in WatchlistItem.query.filter_by(user_id=user_id).with_entities(WatchlistItem.symbol).all()
+        if symbol
+    }
+    prefs = NotificationTriggerPreference.query.filter_by(user_id=user_id).first()
+    clearview = set(_parse_clearview_symbols(prefs.clearview_symbols_csv)) if prefs else set()
+    return portfolio | clearview
+
+
+def _register_stream_demand(source: str, symbols) -> bool:
+    config = current_app.config.get("MASSIVE_STREAM_CONFIG")
+    ttl_seconds = int(getattr(config, "demand_ttl_seconds", 90))
+    return register_demand_safely(current_app.extensions.get("market_stream_state"), source, symbols, ttl_seconds=ttl_seconds)
+
+
+def _market_stream_health_payload() -> dict[str, Any]:
+    state = current_app.extensions.get("market_stream_state")
+    if state is None:
+        return {}
+    try:
+        return state.get_health()
+    except Exception:  # noqa: BLE001
+        logging.exception("Unable to read market-stream health state")
+        return {"connection_state": "redis_unavailable"}
+
+
+@api_bp.get("/market-stream-health")
+@login_required
+def market_stream_health():
+    worker = _market_stream_health_payload()
+    worker_state = str(worker.get("connection_state") or "unknown")
+    last_event = worker.get("last_event_at_utc") or worker.get("last_market_event_at_utc")
+    diagnosis = (
+        "no market event has arrived yet"
+        if worker_state == "connected" and not last_event
+        else "market stream health reported by the shadow worker"
+    )
+    config = current_app.config.get("MASSIVE_STREAM_CONFIG")
+    return jsonify(
+        {
+            "data": {
+                "shadow_mode": bool(getattr(config, "shadow_mode", True)),
+                "worker_state": worker_state,
+                "diagnosis": diagnosis,
+                "worker": worker,
+            },
+            "request_id": g.request_id,
+        }
+    )
+
+
+def _is_regular_market_hours(now_utc: datetime | None = None) -> bool:
+    from zoneinfo import ZoneInfo
+    now = (now_utc or datetime.now(timezone.utc)).astimezone(ZoneInfo("America/New_York"))
+    return now.weekday() < 5 and (now.hour, now.minute) >= (9, 30) and (now.hour, now.minute) < (16, 0)
 
 
 def _watchlist_item_payload(item: WatchlistItem) -> Dict[str, Any]:
@@ -411,6 +573,7 @@ def _notification_trigger_payload(item: NotificationTriggerPreference) -> Dict[s
         "portfolio_sell_advice_change": bool(item.portfolio_sell_advice_change),
         "portfolio_buy_advice_change": bool(item.portfolio_buy_advice_change),
         "hot_momentum_score_crosses_8": bool(item.hot_momentum_score_crosses_8),
+        "fresh_breakouts": bool(getattr(item, "fresh_breakouts", True)),
         "whale_top_investor_added": bool(item.whale_top_investor_added),
         "clearview_hold_off_to_buy": bool(item.clearview_hold_off_to_buy),
         "push_notifications_enabled": bool(item.push_notifications_enabled),
@@ -445,6 +608,10 @@ def _ensure_clearview_trigger_column() -> None:
         statements.append(
             "ALTER TABLE notification_trigger_preferences ADD COLUMN clearview_hold_off_to_buy BOOLEAN NOT NULL DEFAULT TRUE"
         )
+    if "fresh_breakouts" not in columns:
+        statements.append(
+            "ALTER TABLE notification_trigger_preferences ADD COLUMN fresh_breakouts BOOLEAN NOT NULL DEFAULT TRUE"
+        )
     if "push_notifications_enabled" not in columns:
         statements.append(
             "ALTER TABLE notification_trigger_preferences ADD COLUMN push_notifications_enabled BOOLEAN NOT NULL DEFAULT FALSE"
@@ -469,19 +636,75 @@ def _notification_trigger_state_path() -> str:
 def _load_notification_trigger_state() -> dict[str, Any]:
     path = Path(_notification_trigger_state_path())
     if not path.exists():
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "breakout_symbols": [], "wells_snapshot": {}, "clearview_advice": {}}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "breakout_symbols": [], "wells_snapshot": {}, "clearview_advice": {}}
     if not isinstance(payload, dict):
-        return {"portfolio_advice": {}, "momentum_scores": {}, "wells_snapshot": {}, "clearview_advice": {}}
+        return {"portfolio_advice": {}, "momentum_scores": {}, "breakout_symbols": [], "wells_snapshot": {}, "clearview_advice": {}}
     return {
         "portfolio_advice": payload.get("portfolio_advice") if isinstance(payload.get("portfolio_advice"), dict) else {},
         "momentum_scores": payload.get("momentum_scores") if isinstance(payload.get("momentum_scores"), dict) else {},
+        "breakout_symbols": payload.get("breakout_symbols") if isinstance(payload.get("breakout_symbols"), list) else [],
+        "breakout_scores": payload.get("breakout_scores") if isinstance(payload.get("breakout_scores"), dict) else {},
         "wells_snapshot": payload.get("wells_snapshot") if isinstance(payload.get("wells_snapshot"), dict) else {},
         "clearview_advice": payload.get("clearview_advice") if isinstance(payload.get("clearview_advice"), dict) else {},
     }
+
+
+def _recent_breakout_seed_scores(default_score: float = 8.0) -> dict[str, float]:
+    state = _load_notification_trigger_state()
+    saved_scores = state.get("breakout_scores") if isinstance(state.get("breakout_scores"), dict) else {}
+    seeds: dict[str, float] = {}
+    for symbol in state.get("breakout_symbols") or []:
+        normalized_symbol = str(symbol or "").strip().upper()
+        if not normalized_symbol:
+            continue
+        try:
+            score = float(saved_scores.get(normalized_symbol, default_score))
+        except (TypeError, ValueError):
+            score = default_score
+        seeds[normalized_symbol] = score
+    return seeds
+
+
+def _get_breakout_radar_items(svc: Any, seed_symbols: dict[str, float] | None = None) -> list[dict[str, Any]]:
+    try:
+        items = svc.get_breakout_radar(seed_symbols=seed_symbols or {})
+    except TypeError:
+        items = svc.get_breakout_radar()
+    return [item for item in (items or []) if isinstance(item, dict)]
+
+
+def _is_actionable_scanner_row(row: Any, *, require_breakout: bool = False) -> bool:
+    """Defense in depth for dashboard and notification scanner consumers."""
+    if not isinstance(row, dict):
+        return False
+    recommendation = str(row.get("recommendation") or "").strip().upper()
+    try:
+        price = float(row.get("price"))
+    except (TypeError, ValueError):
+        return False
+    if recommendation not in {"BUY", "STRONG BUY"} or not 0.0 < price <= 100.0:
+        return False
+    if require_breakout:
+        snapshot = row.get("intraday_breakout")
+        return isinstance(snapshot, dict) and snapshot.get("status") == "ok" and snapshot.get("qualifies") is True
+    return True
+
+
+def _breakout_scores_from_rows(rows: list[dict[str, Any]]) -> dict[str, float]:
+    scores: dict[str, float] = {}
+    for row in rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        try:
+            scores[symbol] = float(row.get("score") or 8.0)
+        except (TypeError, ValueError):
+            scores[symbol] = 8.0
+    return scores
 
 
 def _save_notification_trigger_state(state: dict[str, Any]) -> None:
@@ -604,6 +827,15 @@ def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> 
         "quote_diagnostics": quote_data.get("diagnostics"),
         "decision_source": "rule_based",
     }
+
+
+def _safe_market_payload(label: str, symbol: str, fn, fallback):
+    try:
+        value = fn()
+    except Exception:  # noqa: BLE001
+        logging.exception("Quick Ask %s fetch failed for symbol=%s", label, symbol)
+        return fallback
+    return value if value is not None else fallback
 
 
 def _quick_score_payload(signal_data: Dict[str, Any], decision: Dict[str, Any]) -> tuple[Any, Any, Any, str | None]:
@@ -864,6 +1096,146 @@ def update_profile():
     return jsonify({"user": _user_payload(user), "request_id": g.request_id})
 
 
+@api_bp.get("/me/investor-profile")
+@login_required
+def get_investor_profile():
+    user = db.session.get(User, session["user_id"])
+    if not user:
+        session.clear()
+        return jsonify({"error": "user not found", "request_id": g.request_id}), 404
+
+    profile = _ensure_investor_profile(user.id)
+    return jsonify({"profile": profile_payload(profile), "request_id": g.request_id})
+
+
+@api_bp.put("/me/investor-profile")
+@login_required
+def update_investor_profile():
+    user = db.session.get(User, session["user_id"])
+    if not user:
+        session.clear()
+        return jsonify({"error": "user not found", "request_id": g.request_id}), 404
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "JSON object required", "request_id": g.request_id}), 400
+
+    submitted_version = data.get("profile_version")
+    if isinstance(submitted_version, bool) or not isinstance(submitted_version, int):
+        return jsonify({
+            "error": "profile_version must be an integer",
+            "request_id": g.request_id,
+        }), 400
+
+    change_reason_raw = data.get("change_reason")
+    if change_reason_raw is not None and not isinstance(change_reason_raw, str):
+        return jsonify({
+            "error": "change_reason must be a string or null",
+            "request_id": g.request_id,
+        }), 400
+    change_reason = str(change_reason_raw or "").strip() or None
+    if change_reason and len(change_reason) > 255:
+        return jsonify({
+            "error": "change_reason must be 255 characters or fewer",
+            "request_id": g.request_id,
+        }), 400
+
+    try:
+        updates = validate_profile_updates(data)
+    except InvestorProfileValidationError as exc:
+        return jsonify({
+            "error": "invalid investor profile",
+            "fields": exc.errors,
+            "request_id": g.request_id,
+        }), 400
+    if not updates:
+        return jsonify({
+            "error": "at least one investor profile field is required",
+            "request_id": g.request_id,
+        }), 400
+
+    profile = _ensure_investor_profile(user.id)
+    if submitted_version != profile.profile_version:
+        return jsonify({
+            "error": "investor profile version conflict",
+            "current_profile": profile_payload(profile),
+            "request_id": g.request_id,
+        }), 409
+
+    previous_values = stored_profile_values(profile)
+    for field, value in updates.items():
+        setattr(profile, field, value)
+    update_completion_timestamp(profile)
+    new_values = stored_profile_values(profile)
+
+    if new_values == previous_values:
+        db.session.rollback()
+        profile = InvestorProfile.query.filter_by(user_id=user.id).one()
+        return jsonify({"profile": profile_payload(profile), "request_id": g.request_id})
+
+    next_version = profile.profile_version + 1
+    revision = InvestorProfileRevision(
+        user_id=user.id,
+        profile_version=next_version,
+        previous_profile_json=serialized_profile_values(previous_values),
+        new_profile_json=serialized_profile_values(new_values),
+        change_reason=change_reason,
+        source="settings",
+    )
+    db.session.add(revision)
+    try:
+        db.session.commit()
+    except StaleDataError:
+        db.session.rollback()
+        current_profile = InvestorProfile.query.filter_by(user_id=user.id).one()
+        return jsonify({
+            "error": "investor profile version conflict",
+            "current_profile": profile_payload(current_profile),
+            "request_id": g.request_id,
+        }), 409
+    return jsonify({"profile": profile_payload(profile), "request_id": g.request_id})
+
+
+def _prune_investor_profile_revisions(*, user_id: int) -> int:
+    retention_days = max(1, int(current_app.config.get("INVESTOR_PROFILE_REVISION_RETENTION_DAYS") or 2555))
+    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+    deleted = (
+        InvestorProfileRevision.query
+        .filter(
+            InvestorProfileRevision.user_id == user_id,
+            InvestorProfileRevision.created_at < cutoff,
+        )
+        .delete(synchronize_session=False)
+    )
+    if deleted:
+        db.session.commit()
+    return int(deleted or 0)
+
+
+@api_bp.get("/me/investor-profile/revisions")
+@login_required
+def get_investor_profile_revisions():
+    user = db.session.get(User, session["user_id"])
+    if not user:
+        session.clear()
+        return jsonify({"error": "user not found", "request_id": g.request_id}), 404
+
+    pruned_count = _prune_investor_profile_revisions(user_id=user.id)
+    revisions = (
+        InvestorProfileRevision.query
+        .filter_by(user_id=user.id)
+        .order_by(InvestorProfileRevision.profile_version.desc())
+        .limit(100)
+        .all()
+    )
+    return jsonify({
+        "items": [revision_payload(item) for item in revisions],
+        "retention_days": max(1, int(current_app.config.get("INVESTOR_PROFILE_REVISION_RETENTION_DAYS") or 2555)),
+        "pruned_count": pruned_count,
+        "request_id": g.request_id,
+    })
+
+
 @api_bp.put("/me/security")
 @login_required
 def update_security():
@@ -932,6 +1304,7 @@ def update_notification_triggers():
         "portfolio_sell_advice_change",
         "portfolio_buy_advice_change",
         "hot_momentum_score_crosses_8",
+        "fresh_breakouts",
         "whale_top_investor_added",
         "clearview_hold_off_to_buy",
         "push_notifications_enabled",
@@ -956,7 +1329,9 @@ def update_notification_triggers():
 @login_required
 def get_clearview_symbols():
     item = _ensure_notification_trigger_preferences(session["user_id"])
-    return jsonify({"symbols": _parse_clearview_symbols(item.clearview_symbols_csv), "request_id": g.request_id})
+    symbols = _parse_clearview_symbols(item.clearview_symbols_csv)
+    _register_stream_demand(f"clearview:{session['user_id']}", symbols)
+    return jsonify({"symbols": symbols, "request_id": g.request_id})
 
 
 @api_bp.put("/clearview-symbols")
@@ -975,6 +1350,7 @@ def update_clearview_symbols():
     item = _ensure_notification_trigger_preferences(session["user_id"])
     item.clearview_symbols_csv = ",".join(parsed)
     db.session.commit()
+    _register_stream_demand(f"clearview:{session['user_id']}", parsed)
     return jsonify({"symbols": parsed, "request_id": g.request_id})
 
 
@@ -1072,32 +1448,105 @@ def user_watchlist():
         .all()
     )
     base_items = [_watchlist_item_payload(i) for i in items]
+    skip_market_data = str(request.args.get("skip_market_data") or "").strip().lower() in {"1", "true", "yes", "on"}
+    if skip_market_data:
+        return jsonify({"items": base_items, "enriched_items": [], "request_id": g.request_id})
+
+    _register_stream_demand(f"portfolio:{session['user_id']}", {str(item.get("symbol") or "") for item in base_items})
 
     svc = current_app.extensions.get("market_data_service")
     ai_svc = current_app.extensions.get("ai_advisor_service")
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
     decision_logger = current_app.extensions.get("decision_logger")
+    investor_profile = _ensure_investor_profile(session["user_id"])
+    decision_context = _decision_context_for_user(session["user_id"])
     enriched_items: list[Dict[str, Any]] = []
 
-    def _load_market_inputs(symbol: str) -> tuple[dict[str, Any], dict[str, Any], list[float]]:
+    def _safe_market_call(fn, fallback):
+        try:
+            result = fn()
+            return result if result is not None else fallback
+        except Exception:  # noqa: BLE001
+            return fallback
+
+    def _portfolio_signal_from_quote(symbol: str, quote: dict[str, Any]) -> dict[str, Any]:
+        change_percent = quote.get("change_percent")
+        action = "HOLD"
+        score = None
+        reason = "Portfolio row generated from live quote data; deeper signal enrichment is deferred to Quick Ask."
+        if isinstance(change_percent, (int, float)):
+            score = round(max(0.0, min(10.0, 5.0 + (float(change_percent) / 2.0))), 2)
+            if change_percent >= 5.0:
+                action = "BUY"
+                reason = "Live quote shows strong positive momentum today."
+            elif change_percent <= -5.0:
+                action = "SELL"
+                reason = "Live quote shows elevated downside pressure today."
+            else:
+                reason = "Live quote shows mixed or moderate momentum today."
+        return {
+            "symbol": symbol,
+            "action": action,
+            "verdict": action,
+            "hybrid_score": score,
+            "score": score,
+            "technical": {"rsi": None, "macd_histogram": None, "trend": "quote_only"},
+            "rsi": None,
+            "macd_hist": None,
+            "volume_today": None,
+            "volume_ratio": None,
+            "sentiment": {"score": None, "label": "neutral", "headlines": []},
+            "rationale": [reason],
+            "reasons": [reason],
+            "quote": quote,
+            "quote_data_available": bool(quote.get("live_data_available")),
+            "diagnostics": {"provider": "portfolio_quote_only", "error": None},
+        }
+
+    def _load_market_inputs(symbol: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
         if svc is None:
-            return {}, {}, []
+            quote: dict[str, Any] = {}
+            history_payload: dict[str, Any] = {}
+        else:
+            quote = _safe_market_call(lambda: svc.get_quote(symbol), {})
+            if hasattr(svc, "get_price_history_data"):
+                history_payload = _safe_market_call(lambda: svc.get_price_history_data(symbol, days=30), {})
+            else:
+                history_values = _safe_market_call(lambda: svc.get_price_history(symbol, days=30), [])
+                history_payload = {"closes": history_values if isinstance(history_values, list) else [], "bars": []}
+        if not isinstance(history_payload, dict):
+            history_payload = {}
+        return _portfolio_signal_from_quote(symbol, quote), quote, history_payload
 
-        def _safe_call(fn, fallback):
-            try:
-                result = fn()
-                return result if result is not None else fallback
-            except Exception:  # noqa: BLE001
-                return fallback
-
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            signal_future = pool.submit(lambda: _safe_call(lambda: svc.get_signal(symbol), {}))
-            quote_future = pool.submit(lambda: _safe_call(lambda: svc.get_quote(symbol), {}))
-            history_future = pool.submit(lambda: _safe_call(lambda: svc.get_price_history(symbol, days=30), []))
-            return signal_future.result(), quote_future.result(), history_future.result()
+    market_inputs_by_id: dict[int, tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = {}
+    position_values_by_id: dict[int, float] = {}
+    sector_by_id: dict[int, str | None] = {}
+    sector_market_values: dict[str, float] = defaultdict(float)
+    portfolio_market_value = 0.0
+    for item in base_items:
+        market_inputs = _load_market_inputs(item["symbol"])
+        market_inputs_by_id[item["id"]] = market_inputs
+        quote = market_inputs[1]
+        price = quote.get("price")
+        if not isinstance(price, (int, float)):
+            price = item.get("entry_price")
+        shares = item.get("shares")
+        shares_value = float(shares) if isinstance(shares, (int, float)) and shares > 0 else 1.0
+        position_value = max(0.0, float(price) * shares_value) if isinstance(price, (int, float)) else 0.0
+        position_values_by_id[item["id"]] = position_value
+        portfolio_market_value += position_value
+        sector = None
+        if svc is not None and hasattr(svc, "get_sector"):
+            sector_value = _safe_market_call(lambda: svc.get_sector(item["symbol"]), None)
+            if isinstance(sector_value, str) and sector_value.strip() and sector_value.lower() != "unknown":
+                sector = sector_value.strip()
+                sector_market_values[sector.lower()] += position_value
+        sector_by_id[item["id"]] = sector
 
     for item in base_items:
-        signal, quote, history30 = _load_market_inputs(item["symbol"])
+        signal, quote, history_payload = market_inputs_by_id[item["id"]]
+        history30 = list(history_payload.get("closes") or [])
+        history30_bars = list(history_payload.get("bars") or [])
 
         sentiment_label = str((signal.get("sentiment") or {}).get("label") or "neutral").lower()
         if sentiment_label in {"positive", "bullish"}:
@@ -1214,6 +1663,32 @@ def user_watchlist():
                 "so BUY was softened to HOLD."
             )
 
+        base_advice = advice
+        position_value = position_values_by_id.get(item["id"], 0.0)
+        position_weight_percent = (position_value / portfolio_market_value * 100.0) if portfolio_market_value > 0 else None
+        sector = sector_by_id.get(item["id"])
+        sector_value = sector_market_values.get(str(sector or "").lower(), 0.0)
+        sector_weight_percent = (sector_value / portfolio_market_value * 100.0) if sector and portfolio_market_value > 0 else None
+        personalized_decision = _personalize_action(
+            user_id=session["user_id"],
+            context=decision_context,
+            endpoint="user_watchlist",
+            symbol=item["symbol"],
+            base_action=base_advice,
+            forecast_horizon="portfolio_position",
+            current_price=current_price if isinstance(current_price, (int, float)) else None,
+            probability_up=(deterministic_portfolio or {}).get("probability_up"),
+            confidence=(deterministic_portfolio or {}).get("confidence"),
+            position_weight_percent=position_weight_percent,
+            sector=sector,
+            sector_weight_percent=sector_weight_percent,
+        )
+        suitability = personalized_decision.payload()
+        advice = personalized_decision.action
+        if suitability["changed"]:
+            policy_messages = " ".join(rule["message"] for rule in suitability["applied_rules"])
+            advice_reason = f"{advice_reason} Profile adjustment: {policy_messages}"
+
         enriched_items.append(
             {
                 **item,
@@ -1224,11 +1699,21 @@ def user_watchlist():
                 "today_change_amount": round(today_change_amount, 2) if today_change_amount is not None else None,
                 "performance_percent": round(performance_percent, 2) if performance_percent is not None else None,
                 "performance_amount": round(performance_amount, 2) if performance_amount is not None else None,
+                "base_advice": base_advice,
                 "advice": advice,
                 "advice_reason": advice_reason,
+                "suitability": suitability,
+                "profile_version": decision_context.profile_version,
+                "profile_complete": decision_context.profile_complete,
+                "position_weight_percent": round(position_weight_percent, 2) if position_weight_percent is not None else None,
+                "sector": sector,
+                "sector_weight_percent": round(sector_weight_percent, 2) if sector_weight_percent is not None else None,
+                "weight_basis": "invested_positions_only_cash_excluded",
                 "deterministic_portfolio": deterministic_portfolio,
                 "ai_portfolio": ai_portfolio,
                 "history30": history30,
+                "history30_bars": history30_bars,
+                "history30_source": history_payload.get("source"),
                 "quote_source": quote.get("quote_source"),
                 "quote_diagnostics": quote.get("diagnostics"),
                 "quick_alignment_recommendation": quick_alignment_recommendation,
@@ -1242,9 +1727,16 @@ def user_watchlist():
                 symbol=item.get("symbol"),
                 decision_source=watchlist_source,
                 payload={
+                    "base_advice": base_advice,
                     "advice": advice,
                     "model_version": (deterministic_portfolio or {}).get("model_version"),
+                    "probability_up": (deterministic_portfolio or {}).get("probability_up"),
+                    "forecast_horizon": (deterministic_portfolio or {}).get("forecast_horizon"),
                     "confidence": (deterministic_portfolio or {}).get("confidence"),
+                    "profile_version": decision_context.profile_version,
+                    "profile_complete": decision_context.profile_complete,
+                    "suitability_changed": suitability["changed"],
+                    "suitability_rules": [rule["code"] for rule in suitability["applied_rules"]],
                 },
                 snapshot=build_decision_snapshot(
                     symbol=str(item.get("symbol") or ""),
@@ -1253,10 +1745,22 @@ def user_watchlist():
                     recommendation=str(advice),
                     probability_up=(deterministic_portfolio or {}).get("probability_up"),
                     model_version=(deterministic_portfolio or {}).get("model_version"),
+                    forecast_horizon=(deterministic_portfolio or {}).get("forecast_horizon"),
                     quote=quote,
+                    market_data={
+                        "quote_source": quote.get("source") or quote.get("quote_source"),
+                        "quote_source_mode": quote.get("source_mode") or (quote.get("diagnostics") or {}).get("source_mode"),
+                        "quote_schema_version": quote.get("schema_version") or (quote.get("diagnostics") or {}).get("schema_version"),
+                        "quote_is_stale": quote.get("is_stale"),
+                    },
                     features=signal.get("features") if isinstance(signal.get("features"), dict) else {},
                     signals=signal,
                     explanation={"rationale": advice_reason},
+                    personalization={
+                        "profile_version": decision_context.profile_version,
+                        "profile_complete": decision_context.profile_complete,
+                        "decision": suitability,
+                    },
                 ),
                 experiment=_experiment_metadata(cohort_id="treatment" if str(watchlist_source) == "deterministic_model" else "control"),
             )
@@ -1452,6 +1956,73 @@ def sold_trades():
     return jsonify({"items": payload, "total_realized": total_realized, "request_id": g.request_id})
 
 
+@api_bp.patch("/sold-trades/<int:trade_id>")
+@login_required
+def update_sold_trade(trade_id: int):
+    data = request.get_json(silent=True) or {}
+    sold_trade = SoldTrade.query.filter_by(id=trade_id, user_id=session["user_id"]).first()
+    if not sold_trade:
+        return jsonify({"error": "sold trade not found", "request_id": g.request_id}), 404
+
+    sold_price = _to_decimal(data.get("sold_price"))
+    shares_sold = _to_decimal(data.get("shares_sold"))
+
+    if sold_price is None or sold_price <= 0:
+        return jsonify({"error": "sold_price must be > 0", "request_id": g.request_id}), 400
+    if shares_sold is None or shares_sold <= 0:
+        return jsonify({"error": "shares_sold must be > 0", "request_id": g.request_id}), 400
+
+    shares_delta = sold_trade.shares_sold - shares_sold
+    portfolio_item = WatchlistItem.query.filter_by(
+        user_id=session["user_id"],
+        symbol=sold_trade.symbol,
+    ).first()
+    portfolio_adjustment_skipped = False
+    portfolio_adjustment_note = None
+
+    if shares_delta != 0:
+        if portfolio_item:
+            current_shares = portfolio_item.shares or Decimal("0")
+            corrected_shares = current_shares + shares_delta
+            if corrected_shares < 0:
+                portfolio_adjustment_skipped = True
+                portfolio_adjustment_note = "Portfolio shares were left unchanged because they appear to have already been corrected."
+            elif corrected_shares == 0:
+                db.session.delete(portfolio_item)
+                portfolio_item = None
+            else:
+                portfolio_item.shares = corrected_shares
+        elif shares_delta > 0:
+            portfolio_item = WatchlistItem(
+                user_id=session["user_id"],
+                symbol=sold_trade.symbol,
+                buy_price=sold_trade.entry_price,
+                shares=shares_delta,
+            )
+            db.session.add(portfolio_item)
+        else:
+            portfolio_adjustment_skipped = True
+            portfolio_adjustment_note = "Sold trade was updated without changing portfolio shares because there is no open position to reduce."
+
+    sold_trade.sold_price = sold_price
+    sold_trade.shares_sold = shares_sold
+    sold_trade.realized_amount = (sold_price - sold_trade.entry_price) * shares_sold
+    db.session.commit()
+
+    payload = [_sold_trade_payload(i) for i in SoldTrade.query.filter_by(user_id=session["user_id"]).all()]
+    total_realized = round(sum(i["realized_amount"] for i in payload), 2)
+    return jsonify(
+        {
+            "sold_trade": _sold_trade_payload(sold_trade),
+            "remaining_item": _watchlist_item_payload(portfolio_item) if portfolio_item else None,
+            "portfolio_adjustment_skipped": portfolio_adjustment_skipped,
+            "portfolio_adjustment_note": portfolio_adjustment_note,
+            "total_realized": total_realized,
+            "request_id": g.request_id,
+        }
+    )
+
+
 @api_bp.get("/portfolio-summary")
 @login_required
 def portfolio_summary():
@@ -1461,7 +2032,8 @@ def portfolio_summary():
         .all()
     )
 
-    svc = current_app.extensions.get("market_data_service")
+    skip_market_data = str(request.args.get("skip_market_data") or "").strip().lower() in {"1", "true", "yes", "on"}
+    svc = None if skip_market_data else current_app.extensions.get("market_data_service")
     total_value = 0.0
     score_values: list[float] = []
     sector_totals: Dict[str, float] = defaultdict(float)
@@ -1537,12 +2109,96 @@ def company_details():
     return jsonify({"data": svc.get_company_snapshot(symbol), "request_id": g.request_id})
 
 
+@api_bp.get("/live-market-stream")
+@login_required
+def live_market_stream():
+    requested = [
+        _normalize_symbol(part)
+        for part in str(request.args.get("symbols") or "").replace(";", ",").split(",")
+        if _normalize_symbol(part)
+    ]
+    scope = str(request.args.get("scope") or "portfolio").strip().lower()
+    cap = max(1, int(current_app.config.get("LIVE_SSE_SYMBOL_CAP") or 25))
+    permitted = _symbols_for_live_user(int(session["user_id"]))
+    if scope == "quick" and requested:
+        permitted.add(requested[0])
+    symbols = requested or sorted(permitted)
+    symbols = [symbol for symbol in symbols if symbol in permitted][:cap]
+    if not symbols:
+        return jsonify({"error": "no permitted symbols", "request_id": g.request_id}), 400
+
+    demand_source = f"sse:{session['user_id']}:{g.request_id}"
+    interval = max(0.25, float(current_app.config.get("LIVE_SSE_INTERVAL_SECONDS") or 1.0))
+    heartbeat_seconds = max(2.0, float(current_app.config.get("LIVE_SSE_HEARTBEAT_SECONDS") or 15.0))
+    max_iterations = 1 if request.args.get("once") == "1" and current_app.testing else None
+    resolver = _live_quote_resolver()
+    trigger_engine = current_app.extensions.get("live_trigger_engine")
+    user_id = int(session["user_id"])
+    live_context = _decision_context_for_user(user_id)
+
+    _register_stream_demand(demand_source, symbols)
+
+    @stream_with_context
+    def generate():
+        last_ids: dict[str, str] = {}
+        last_minute_bar_ids: dict[str, str] = {}
+        last_heartbeat = 0.0
+        iterations = 0
+        try:
+            yield sse_encode(event="ready", event_id=f"ready:{g.request_id}", retry_ms=3000, data={"schema_version": "live-market.v1", "symbols": symbols, "resume_from": request.headers.get("Last-Event-ID")})
+            while True:
+                updates = []
+                if resolver is not None:
+                    for symbol in symbols:
+                        quote = resolver.resolve(symbol).payload()
+                        if quote["event_id"] != last_ids.get(symbol):
+                            last_ids[symbol] = quote["event_id"]
+                            updates.append(quote)
+                            if trigger_engine is not None:
+                                minute_bar = current_app.extensions["market_stream_state"].get_latest(symbol, "AM")
+                                minute_bar_id = None
+                                if minute_bar:
+                                    minute_bar_id = str(minute_bar.get("sequence_number") or minute_bar.get("provider_event_id") or minute_bar.get("event_timestamp"))
+                                trigger_event_type = quote.get("event_type")
+                                if minute_bar_id and minute_bar_id != last_minute_bar_ids.get(symbol):
+                                    last_minute_bar_ids[symbol] = minute_bar_id
+                                    trigger_event_type = "AM"
+                                trigger = trigger_engine.evaluate(
+                                    user_id=user_id, symbol=symbol, event_type=trigger_event_type, price=quote.get("price"),
+                                    market_session=quote.get("market_session"), after_hours_allowed=live_context.after_hours_alerts,
+                                    recommendation_state=None, price_threshold=None,
+                                    spread_bps=(abs((quote.get("ask") or 0) - (quote.get("bid") or 0)) / quote["price"] * 10000 if quote.get("price") and quote.get("bid") and quote.get("ask") else None),
+                                    profile_version=live_context.profile_version,
+                                    market_data_version=quote.get("schema_version") or "live-market.v1",
+                                )
+                                if trigger.get("fire"):
+                                    yield sse_encode(event="recommendation_refresh", event_id=f"trigger:{symbol}:{trigger['reason']}:{int(time.time()*1000)}", data=trigger)
+                if updates:
+                    yield sse_encode(event="quotes", event_id=updates[-1]["event_id"], data={"schema_version": "live-market.v1", "quotes": updates})
+                now = time.time()
+                if now - last_heartbeat >= heartbeat_seconds:
+                    _register_stream_demand(demand_source, symbols)
+                    last_heartbeat = now
+                    yield sse_encode(event="heartbeat", event_id=f"heartbeat:{int(now * 1000)}", data={"symbols": symbols, "ts": datetime.now(timezone.utc).isoformat()})
+                iterations += 1
+                if max_iterations is not None and iterations >= max_iterations:
+                    break
+                time.sleep(interval)
+        finally:
+            _clear_stream_demand(demand_source)
+
+    return Response(generate(), mimetype="text/event-stream", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
 @api_bp.get("/quote")
 def api_quote():
     symbol = _normalize_symbol(request.args.get("symbol") or "")
     if not symbol:
         return jsonify({"error": "symbol required", "request_id": g.request_id}), 400
 
+    live_quote = _live_quote_payload(symbol)
+    if live_quote is not None:
+        return jsonify({"data": live_quote, "request_id": g.request_id})
     svc = current_app.extensions["market_data_service"]
     return jsonify({"data": svc.get_quote(symbol), "request_id": g.request_id})
 
@@ -1568,60 +2224,105 @@ def quick_ask():
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
     decision_logger = current_app.extensions.get("decision_logger")
 
-    signal_data = svc.get_signal(symbol)
-    quote_data = signal_data.get("quote") or svc.get_quote(symbol)
-    history30 = svc.get_price_history(symbol, days=30)
+    signal_data = _safe_market_payload("signal", symbol, lambda: svc.get_signal(symbol), {})
+    if not isinstance(signal_data, dict):
+        signal_data = {}
+    signal_data.setdefault("symbol", symbol)
+
+    quote_data = signal_data.get("quote") if isinstance(signal_data.get("quote"), dict) else None
+    if quote_data is None:
+        quote_data = _safe_market_payload("quote", symbol, lambda: svc.get_quote(symbol), {})
+    if not isinstance(quote_data, dict):
+        quote_data = {}
+
+    history_payload = _safe_market_payload("history", symbol, lambda: svc.get_price_history_data(symbol, days=30), {})
+    if not isinstance(history_payload, dict):
+        history_payload = {}
+    history30 = list(history_payload.get("closes") or [])
+    market_data_provenance = {
+        "quote_source": quote_data.get("source") or quote_data.get("quote_source"),
+        "quote_source_mode": quote_data.get("source_mode") or (quote_data.get("diagnostics") or {}).get("source_mode"),
+        "quote_schema_version": quote_data.get("schema_version") or (quote_data.get("diagnostics") or {}).get("schema_version"),
+        "quote_is_stale": quote_data.get("is_stale"),
+        "history_source": history_payload.get("source"),
+        "history_source_mode": history_payload.get("source_mode"),
+        "history_schema_version": history_payload.get("schema_version"),
+        "mixed_sources": bool(history_payload.get("mixed_sources") or ((quote_data.get("source") or quote_data.get("quote_source")) != history_payload.get("source"))),
+    }
     decision = None
     if deterministic_svc is not None:
-        decision = deterministic_svc.predict_quick_decision(
-            signal_data=signal_data,
-            quote_data=quote_data,
-            symbol=symbol,
-        )
-        if decision is None and getattr(deterministic_svc, "rollout_dry_run", False):
-            shadow = deterministic_svc.predict_shadow_decision(
+        try:
+            decision = deterministic_svc.predict_quick_decision(
                 signal_data=signal_data,
                 quote_data=quote_data,
+                symbol=symbol,
             )
-            if shadow is not None and decision_logger is not None:
-                decision_logger.log(
-                    endpoint="quick_ask_shadow",
-                    symbol=symbol,
-                    decision_source=shadow.get("decision_source"),
-                    payload={
-                        "shadow_only": True,
-                        "recommendation": shadow.get("recommendation"),
-                        "model_version": shadow.get("model_version"),
-                        "probability_up": shadow.get("probability_up"),
-                        "confidence": shadow.get("confidence"),
-                    },
-                    snapshot=build_decision_snapshot(
-                        symbol=symbol,
-                        endpoint="quick_ask_shadow",
-                        decision_source=str(shadow.get("decision_source") or "unknown"),
-                        recommendation=str(shadow.get("recommendation") or "HOLD"),
-                        probability_up=shadow.get("probability_up"),
-                        model_version=shadow.get("model_version"),
-                        quote=quote_data,
-                        features=signal_data.get("features") if isinstance(signal_data.get("features"), dict) else {},
-                        signals=signal_data,
-                        explanation={"rationale": (shadow.get("advice_reason") or shadow.get("rationale"))},
-                    ),
-                    experiment=_experiment_metadata(cohort_id="shadow"),
+            if decision is None and getattr(deterministic_svc, "rollout_dry_run", False):
+                shadow = deterministic_svc.predict_shadow_decision(
+                    signal_data=signal_data,
+                    quote_data=quote_data,
                 )
+                if shadow is not None and decision_logger is not None:
+                    decision_logger.log(
+                        endpoint="quick_ask_shadow",
+                        symbol=symbol,
+                        decision_source=shadow.get("decision_source"),
+                        payload={
+                            "shadow_only": True,
+                            "recommendation": shadow.get("recommendation"),
+                            "model_version": shadow.get("model_version"),
+                            "forecast_horizon": shadow.get("forecast_horizon"),
+                            "probability_up": shadow.get("probability_up"),
+                            "confidence": shadow.get("confidence"),
+                        },
+                        snapshot=build_decision_snapshot(
+                            symbol=symbol,
+                            endpoint="quick_ask_shadow",
+                            decision_source=str(shadow.get("decision_source") or "unknown"),
+                            recommendation=str(shadow.get("recommendation") or "HOLD"),
+                            probability_up=shadow.get("probability_up"),
+                            model_version=shadow.get("model_version"),
+                            forecast_horizon=shadow.get("forecast_horizon"),
+                            quote=quote_data,
+                            market_data=market_data_provenance,
+                            features=signal_data.get("features") if isinstance(signal_data.get("features"), dict) else {},
+                            signals=signal_data,
+                            explanation={"rationale": (shadow.get("advice_reason") or shadow.get("rationale"))},
+                        ),
+                        experiment=_experiment_metadata(cohort_id="shadow"),
+                    )
+        except Exception:  # noqa: BLE001
+            logging.exception("Deterministic Quick Ask prediction failed for symbol=%s", symbol)
+            decision = None
     if decision is None:
         decision = _quick_decision(signal_data, quote_data)
 
     ai_payload = None
     if ai_svc is not None:
-        ai_payload = ai_svc.enhance_quick_decision(
-            symbol=symbol,
-            quick_decision=decision,
-            signal_data=signal_data,
-            quote_data=quote_data,
-        )
+        try:
+            ai_payload = ai_svc.enhance_quick_decision(
+                symbol=symbol,
+                quick_decision=decision,
+                signal_data=signal_data,
+                quote_data=quote_data,
+            )
+        except Exception:  # noqa: BLE001
+            logging.exception("AI Quick Ask enhancement failed for symbol=%s", symbol)
+            ai_payload = None
 
     ai_mode = (ai_payload or {}).get("mode")
+
+    personalization = None
+    user_id = session.get("user_id")
+    if user_id:
+        context = _decision_context_for_user(int(user_id))
+        quick_base = "BUY" if str(decision.get("recommendation") or "").upper() in {"BUY", "STRONG BUY"} else ("SELL" if str(decision.get("recommendation") or "").upper() == "SELL" else "HOLD")
+        personalized = _personalize_action(
+            user_id=int(user_id), context=context, endpoint="quick_ask", symbol=symbol,
+            base_action=quick_base, forecast_horizon="short_term",
+            current_price=quote_data.get("price"), probability_up=decision.get("probability_up"), confidence=decision.get("confidence"),
+        )
+        personalization = personalized.payload()
 
     if decision_logger is not None:
         decision_logger.log(
@@ -1631,9 +2332,13 @@ def quick_ask():
             payload={
                 "recommendation": decision.get("recommendation"),
                 "model_version": decision.get("model_version"),
+                "forecast_horizon": decision.get("forecast_horizon"),
                 "probability_up": decision.get("probability_up"),
                 "confidence": decision.get("confidence"),
                 "ai_mode": ai_mode,
+                "personalized_action": (personalization or {}).get("action"),
+                "policy_schema_version": (personalization or {}).get("policy_schema_version"),
+                "market_data_provenance": market_data_provenance,
             },
             snapshot=build_decision_snapshot(
                 symbol=symbol,
@@ -1642,10 +2347,13 @@ def quick_ask():
                 recommendation=str(decision.get("recommendation") or "HOLD"),
                 probability_up=decision.get("probability_up"),
                 model_version=decision.get("model_version"),
+                forecast_horizon=decision.get("forecast_horizon"),
                 quote=quote_data,
+                market_data=market_data_provenance,
                 features=signal_data.get("features") if isinstance(signal_data.get("features"), dict) else {},
                 signals=signal_data,
                 explanation={"rationale": (decision.get("advice_reason") or decision.get("rationale"))},
+                personalization=personalization,
             ),
             experiment=_experiment_metadata(cohort_id="treatment" if str(decision.get("decision_source") or "") == "deterministic_model" else "control"),
         )
@@ -1665,6 +2373,9 @@ def quick_ask():
                 "ai": ai_payload,
                 "ai_status": "working" if ai_mode == "ai_enhanced" else "fallback",
                 "ai_mode": ai_mode,
+                "personalization": personalization,
+                "personalized_recommendation": (personalization or {}).get("action"),
+                "market_data_provenance": market_data_provenance,
             },
             "request_id": g.request_id,
         }
@@ -1703,11 +2414,12 @@ def run_daily_ops():
             capture_output=True,
             text=True,
             check=False,
+            timeout=660,
         )
         report_diag = _file_diagnostics(calibration_report)
         plan_diag = _file_diagnostics(recalibration_plan)
         day13_stderr = completed.stderr if (completed.returncode != 0 and "day13_" in completed.stderr) else ""
-        return jsonify(
+        response = jsonify(
             {
                 "data": {
                     "success": completed.returncode == 0,
@@ -1723,6 +2435,28 @@ def run_daily_ops():
                 "request_id": g.request_id,
             }
         )
+        return response, (200 if completed.returncode == 0 else 500)
+    except subprocess.TimeoutExpired as exc:
+        logging.exception("run-daily-ops exceeded the server execution timeout.")
+
+        def _timeout_text(value):
+            if isinstance(value, bytes):
+                return value.decode("utf-8", errors="replace")
+            return str(value or "")
+
+        captured_stderr = _timeout_text(exc.stderr)
+        diagnostic = "daily ops exceeded server execution timeout"
+        return jsonify(
+            {
+                "data": {
+                    "success": False,
+                    "returncode": -1,
+                    "stdout": _timeout_text(exc.stdout),
+                    "stderr": f"{diagnostic}: {captured_stderr}" if captured_stderr else diagnostic,
+                },
+                "request_id": g.request_id,
+            }
+        ), 504
     except Exception as exc:  # noqa: BLE001
         logging.exception("run-daily-ops failed to execute.")
         return jsonify(
@@ -1762,6 +2496,7 @@ def run_notification_triggers():
         except (TypeError, ValueError):
             continue
     clearview_state: dict[str, str] = {str(k): str(v).upper() for k, v in (state.get("clearview_advice") or {}).items() if str(k)}
+    previous_breakouts: set[str] = {str(symbol).strip().upper() for symbol in (state.get("breakout_symbols") or []) if str(symbol).strip()}
 
     wells_prev = {
         str(k): [str(t).upper() for t in v if str(t).strip()]
@@ -1774,6 +2509,7 @@ def run_notification_triggers():
     events_queued = 0
     sent_count = 0
     failed_count = 0
+    suppressed_after_hours = 0
     per_user_events: dict[int, list[dict[str, str]]] = {}
 
     def queue_user_event(user_id: int, *, title: str, body: str, kind: str, symbol: str = "") -> None:
@@ -1789,6 +2525,7 @@ def run_notification_triggers():
     for user in users:
         prefs = _ensure_notification_trigger_preferences(user.id)
         pref_cache[user.id] = prefs
+        decision_context = _decision_context_for_user(user.id)
         if not prefs.push_notifications_enabled:
             continue
         watchlist_items = (
@@ -1801,15 +2538,64 @@ def run_notification_triggers():
             if not symbol:
                 continue
             advice = "HOLD"
+            deterministic_portfolio: dict[str, Any] | None = None
+            quote: dict[str, Any] = {}
             try:
                 signal = svc.get_signal(symbol) or {}
             except Exception:  # noqa: BLE001
                 signal = {}
+            if isinstance(signal.get("quote"), dict):
+                quote = signal.get("quote") or {}
+            elif hasattr(svc, "get_quote"):
+                try:
+                    quote = svc.get_quote(symbol) or {}
+                except Exception:  # noqa: BLE001
+                    quote = {}
+
             action = str(signal.get("action") or "").upper()
             if action in {"STRONG BUY", "BUY"}:
                 advice = "BUY"
             elif action == "SELL":
                 advice = "SELL"
+
+            current_price = quote.get("price")
+            if not isinstance(current_price, (int, float)):
+                current_price = item.buy_price
+            shares_value = float(item.shares) if isinstance(item.shares, (int, float, Decimal)) and float(item.shares) > 0 else 1.0
+            has_portfolio_market_context = isinstance(quote.get("price"), (int, float, Decimal))
+            if deterministic_svc is not None and has_portfolio_market_context:
+                try:
+                    deterministic_portfolio = deterministic_svc.predict_portfolio_position(
+                        symbol=symbol,
+                        entry_price=float(item.buy_price) if isinstance(item.buy_price, (int, float, Decimal)) else None,
+                        current_price=float(current_price) if isinstance(current_price, (int, float, Decimal)) else None,
+                        shares=shares_value,
+                        signal_data=signal,
+                        quote_data=quote,
+                    )
+                    deterministic_advice = str((deterministic_portfolio or {}).get("advice") or "").upper()
+                    if deterministic_advice in {"BUY", "HOLD", "SELL"}:
+                        advice = deterministic_advice
+                except Exception:  # noqa: BLE001
+                    deterministic_portfolio = None
+
+            try:
+                quick_alignment = str((_quick_decision(signal, quote) or {}).get("recommendation") or "").upper()
+            except Exception:  # noqa: BLE001
+                quick_alignment = ""
+            if quick_alignment in {"BUY", "STRONG BUY"} and advice == "SELL":
+                advice = "HOLD"
+            elif quick_alignment == "HOLD OFF FOR NOW" and advice == "BUY":
+                advice = "HOLD"
+
+            personalized = _personalize_action(
+                user_id=user.id, context=decision_context, endpoint="notification_portfolio",
+                symbol=symbol, base_action=advice, forecast_horizon="portfolio_position",
+                current_price=float(current_price) if isinstance(current_price, (int, float, Decimal)) else None,
+                probability_up=(deterministic_portfolio or {}).get("probability_up"),
+                confidence=(deterministic_portfolio or {}).get("confidence"),
+            )
+            advice = personalized.action
 
             state_key = f"{user.id}:{symbol}"
             previous = portfolio_state.get(state_key, "")
@@ -1844,6 +2630,13 @@ def run_notification_triggers():
                     symbol=symbol,
                 )
                 advice = str(clearview_decision.get("advice") or "HOLD").upper()
+                personalized = _personalize_action(
+                    user_id=user.id, context=decision_context, endpoint="clearview", symbol=symbol,
+                    base_action=advice, forecast_horizon="short_term",
+                    current_price=clearview_decision.get("current_price"),
+                )
+                advice = personalized.action
+                clearview_decision["personalization"] = personalized.payload()
                 previous_clearview = clearview_state.get(state_key, "")
                 clearview_state[state_key] = advice
                 if advice == "BUY" and previous_clearview != "BUY":
@@ -1864,7 +2657,7 @@ def run_notification_triggers():
     except Exception:  # noqa: BLE001
         momentum_items = []
     for row in momentum_items:
-        if not isinstance(row, dict):
+        if not _is_actionable_scanner_row(row):
             continue
         symbol = str(row.get("symbol") or "").strip().upper()
         if not symbol:
@@ -1889,6 +2682,41 @@ def run_notification_triggers():
                     kind="hot_momentum_score_crosses_8",
                     symbol=symbol,
                 )
+
+    breakout_items = []
+    if hasattr(svc, "get_breakout_radar"):
+        try:
+            breakout_items = _get_breakout_radar_items(svc, seed_symbols=_recent_breakout_seed_scores())
+        except Exception:  # noqa: BLE001
+            breakout_items = []
+    current_breakouts: set[str] = set()
+    fresh_breakout_rows: list[dict[str, Any]] = []
+    for row in breakout_items:
+        if not _is_actionable_scanner_row(row, require_breakout=True):
+            continue
+        symbol = str(row.get("symbol") or "").strip().upper()
+        if not symbol:
+            continue
+        current_breakouts.add(symbol)
+        if symbol not in previous_breakouts:
+            fresh_breakout_rows.append(row)
+    for row in fresh_breakout_rows:
+        symbol = str(row.get("symbol") or "").strip().upper()
+        score = row.get("score")
+        score_text = f" Score: {float(score):.2f}." if isinstance(score, (int, float)) else ""
+        for user in users:
+            prefs = pref_cache.get(user.id) or _ensure_notification_trigger_preferences(user.id)
+            if not prefs.push_notifications_enabled:
+                continue
+            if not getattr(prefs, "fresh_breakouts", True):
+                continue
+            queue_user_event(
+                user.id,
+                title=f"{symbol}: Fresh breakout",
+                body=f"{symbol} just appeared on Breakout Radar.{score_text}",
+                kind="fresh_breakout",
+                symbol=symbol,
+            )
 
     wells_items = []
     try:
@@ -1928,6 +2756,10 @@ def run_notification_triggers():
     for user in users:
         user_events = per_user_events.get(user.id) or []
         if not user_events:
+            continue
+        context = _decision_context_for_user(user.id)
+        if not _is_regular_market_hours() and not context.after_hours_alerts:
+            suppressed_after_hours += len(user_events)
             continue
         tokens = (
             FcmDeviceToken.query.filter_by(user_id=user.id)
@@ -1974,6 +2806,8 @@ def run_notification_triggers():
         {
             "portfolio_advice": portfolio_state,
             "momentum_scores": momentum_scores,
+            "breakout_symbols": sorted(current_breakouts),
+            "breakout_scores": _breakout_scores_from_rows(breakout_items),
             "wells_snapshot": wells_now,
             "clearview_advice": clearview_state,
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -1988,6 +2822,7 @@ def run_notification_triggers():
                 "sent_count": sent_count,
                 "failed_count": failed_count,
                 "events_queued": events_queued,
+                "suppressed_after_hours": suppressed_after_hours,
                 "users_checked": len(users),
                 "message": "Notification trigger cron check completed.",
             },
@@ -2019,7 +2854,7 @@ def run_weekly_model_refresh():
         )
         report_diag = _file_diagnostics(calibration_report)
         plan_diag = _file_diagnostics(recalibration_plan)
-        return jsonify(
+        response = jsonify(
             {
                 "data": {
                     "success": completed.returncode == 0,
@@ -2037,6 +2872,7 @@ def run_weekly_model_refresh():
                 "request_id": g.request_id,
             }
         )
+        return response, (200 if completed.returncode == 0 else 500)
     except Exception as exc:  # noqa: BLE001
         logging.exception("run-weekly-model-refresh failed to execute.")
         return jsonify(
@@ -2071,7 +2907,7 @@ def stable_watchlist():
 def hot_momentum_buys():
     svc = current_app.extensions["market_data_service"]
     decision_logger = current_app.extensions.get("decision_logger")
-    items = svc.get_hot_momentum_buys()
+    items = [item for item in svc.get_hot_momentum_buys() if _is_actionable_scanner_row(item)]
     if decision_logger is not None:
         for item in items:
             decision_logger.log(
@@ -2081,6 +2917,7 @@ def hot_momentum_buys():
                 payload={
                     "score": item.get("score"),
                     "model_version": item.get("model_version"),
+                    "forecast_horizon": item.get("forecast_horizon"),
                     "probability_up": item.get("probability_up"),
                     "confidence": item.get("confidence"),
                 },
@@ -2088,10 +2925,298 @@ def hot_momentum_buys():
     return jsonify({"items": items, "request_id": g.request_id})
 
 
+
+@api_bp.get("/breakout-radar")
+def breakout_radar():
+    svc = current_app.extensions["market_data_service"]
+    seed_scores = _recent_breakout_seed_scores()
+    items = [item for item in _get_breakout_radar_items(svc, seed_symbols=seed_scores) if _is_actionable_scanner_row(item, require_breakout=True)]
+    decision_logger = current_app.extensions.get("decision_logger")
+    if decision_logger is not None:
+        for item in items:
+            decision_logger.log(
+                endpoint="breakout_radar",
+                symbol=item.get("symbol"),
+                decision_source=item.get("decision_source") or item.get("candidate_source") or "scanner",
+                payload={
+                    "score": item.get("score"),
+                    "score_basis": item.get("score_basis"),
+                    "model_version": item.get("model_version"),
+                    "probability_up": item.get("probability_up"),
+                    "forecast_horizon": item.get("forecast_horizon"),
+                },
+            )
+    return jsonify({"items": items, "request_id": g.request_id})
+
+
+@api_bp.post("/promote-track-b-candidate")
+def promote_track_b_candidate():
+    expected_token = str(
+        current_app.config.get("TRACK_B_PROMOTION_TOKEN") or current_app.config.get("DAILY_OPS_TOKEN") or ""
+    ).strip()
+    provided_token = str(
+        request.headers.get("X-Track-B-Promotion-Token") or request.headers.get("X-Daily-Ops-Token") or ""
+    ).strip()
+    if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
+
+    comparison_file = request.files.get("comparison_report")
+    candidate_file = request.files.get("candidate_model")
+    certification_file = request.files.get("servability_certification")
+    if comparison_file is None or candidate_file is None or certification_file is None:
+        return jsonify({"error": "comparison_report, candidate_model, and servability_certification files are required", "request_id": g.request_id}), 400
+
+    try:
+        comparison_bytes = comparison_file.read()
+        candidate_bytes = candidate_file.read()
+        certification_bytes = certification_file.read()
+        comparison_report = json.loads(comparison_bytes.decode("utf-8"))
+        candidate_model = json.loads(candidate_bytes.decode("utf-8"))
+        certification = json.loads(certification_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return jsonify({"error": "uploaded files must be valid JSON", "request_id": g.request_id}), 400
+
+    if not isinstance(comparison_report, dict):
+        return jsonify({"error": "comparison_report must be a JSON object", "request_id": g.request_id}), 400
+    if not isinstance(candidate_model, dict):
+        return jsonify({"error": "candidate_model must be a JSON object", "request_id": g.request_id}), 400
+    if not isinstance(certification, dict):
+        return jsonify({"error": "servability_certification must be a JSON object", "request_id": g.request_id}), 400
+
+    force_raw = str(request.form.get("force") or request.args.get("force") or "").strip().lower()
+    force = force_raw in {"1", "true", "yes", "y"}
+    candidate_win = bool(comparison_report.get("candidate_win"))
+    candidate_version = str(candidate_model.get("version") or candidate_model.get("model_version") or "").strip()
+    if candidate_model.get("promotion_ready") is False or candidate_version == "no-promotable-challenger":
+        return jsonify(
+            {
+                "data": {
+                    "success": False,
+                    "promoted": False,
+                    "candidate_win": candidate_win,
+                    "candidate_model_version": candidate_version,
+                    "reasons": comparison_report.get("reasons") or [],
+                    "message": "candidate_model is an explicit no-promotion placeholder and cannot be promoted, even with force",
+                },
+                "request_id": g.request_id,
+            }
+        ), 409
+    if not candidate_win and not force:
+        return jsonify(
+            {
+                "data": {
+                    "success": False,
+                    "promoted": False,
+                    "candidate_win": False,
+                    "reasons": comparison_report.get("reasons") or [],
+                    "message": "comparison report does not approve promotion",
+                },
+                "request_id": g.request_id,
+            }
+        ), 409
+
+    project_root = Path(__file__).resolve().parents[1]
+    track_b_dir = resolve_runtime_dir() / "track_b"
+    track_b_dir.mkdir(parents=True, exist_ok=True)
+    validation_candidate_path = track_b_dir / f".candidate-upload-{uuid.uuid4().hex}.json"
+    try:
+        validation_candidate_path.write_bytes(candidate_bytes)
+        certification_failures = validate_certification(
+            validation_candidate_path, certification
+        )
+    finally:
+        validation_candidate_path.unlink(missing_ok=True)
+    if certification_failures:
+        return jsonify(
+            {
+                "data": {
+                    "success": False,
+                    "promoted": False,
+                    "candidate_win": candidate_win,
+                    "candidate_model_version": candidate_version,
+                    "certification_failures": certification_failures,
+                    "message": "servability certification validation failed and cannot be overridden",
+                },
+                "request_id": g.request_id,
+            }
+        ), 409
+    comparison_path = track_b_dir / "model_comparison_track_b.json"
+    candidate_path = track_b_dir / "candidate_model_track_b.json"
+    certification_path = track_b_dir / "production_servability_certification.json"
+    comparison_path.write_bytes(comparison_bytes)
+    candidate_path.write_bytes(candidate_bytes)
+    certification_path.write_bytes(certification_bytes)
+
+    production_model_path = Path(
+        str(current_app.config.get("DETERMINISTIC_MODEL_PATH") or (resolve_runtime_dir() / "day1_baseline_model.json"))
+    )
+    command = [
+        "python3",
+        "scripts/day14_promote_candidate.py",
+        "--comparison-report",
+        str(comparison_path),
+        "--candidate-model",
+        str(candidate_path),
+        "--production-model",
+        str(production_model_path),
+        "--servability-certification",
+        str(certification_path),
+    ]
+    if force:
+        command.append("--force")
+
+    logging.info("Running Track B candidate promotion via protected API endpoint.")
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.exception("promote-track-b-candidate failed to execute.")
+        return jsonify(
+            {
+                "data": {
+                    "success": False,
+                    "promoted": False,
+                    "returncode": -1,
+                    "stdout": "",
+                    "stderr": str(exc),
+                    "comparison_report_path": str(comparison_path),
+                    "candidate_model_path": str(candidate_path),
+                    "production_model_path": str(production_model_path),
+                },
+                "request_id": g.request_id,
+            }
+        ), 500
+
+    promoted = completed.returncode == 0 and "promoted candidate" in (completed.stdout or "")
+    status = 200 if completed.returncode == 0 else 500
+    return jsonify(
+        {
+            "data": {
+                "success": completed.returncode == 0,
+                "promoted": promoted,
+                "candidate_win": candidate_win,
+                "reasons": comparison_report.get("reasons") or [],
+                "command": command,
+                "returncode": completed.returncode,
+                "exit_code": completed.returncode,
+                "stdout": completed.stdout,
+                "stderr": completed.stderr,
+                "comparison_report_path": str(comparison_path),
+                "candidate_model_path": str(candidate_path),
+                "servability_certification_path": str(certification_path),
+                "production_model_path": str(production_model_path),
+            },
+            "request_id": g.request_id,
+        }
+    ), status
+
+
+
+def _historical_validation_status() -> dict[str, Any]:
+    """Return optional historical-validation diagnostics without breaking model health."""
+    raw_path = str(
+        current_app.config.get("HISTORICAL_VALIDATION_REPORT_PATH")
+        or current_app.config.get("DETERMINISTIC_HISTORICAL_VALIDATION_REPORT_PATH")
+        or historical_validation_report_path()
+    ).strip()
+    if not raw_path:
+        return {
+            "available": False,
+            "configured": False,
+            "path": None,
+            "exists": False,
+            "mtime_utc": None,
+            "summary": None,
+            "error": None,
+        }
+
+    diag = _file_diagnostics(raw_path)
+    status: dict[str, Any] = {
+        "available": False,
+        "configured": True,
+        "path": diag["path"],
+        "exists": diag["exists"],
+        "mtime_utc": diag["mtime_utc"],
+        "summary": None,
+        "error": None,
+        "fresh": False,
+        "promotion_ready": False,
+        "evaluated_rows": 0,
+        "rollout_recommendation": "hold_shadow",
+    }
+    if not diag["exists"]:
+        return status
+
+    try:
+        payload = json.loads(Path(raw_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        status["error"] = str(exc)
+        return status
+
+    if isinstance(payload, dict):
+        metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+        gates = payload.get("promotion_gates") if isinstance(payload.get("promotion_gates"), dict) else {}
+        timestamp_raw = payload.get("computed_at_utc") or payload.get("generated_at_utc")
+        fresh = False
+        if isinstance(timestamp_raw, str):
+            try:
+                timestamp = datetime.fromisoformat(timestamp_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+                age_seconds = (datetime.now(timezone.utc) - timestamp).total_seconds()
+                fresh = 0 <= age_seconds <= int(
+                    current_app.config.get("HISTORICAL_VALIDATION_REPORT_MAX_AGE_SECONDS")
+                    or 604800
+                )
+            except ValueError:
+                fresh = False
+        status["available"] = True
+        status["fresh"] = fresh
+        status["promotion_ready"] = gates.get("promotion_ready") is True
+        status["evaluated_rows"] = int(metrics.get("evaluated_rows") or 0)
+        status["rollout_recommendation"] = str(
+            payload.get("rollout_recommendation") or "hold_shadow"
+        )
+        status["summary"] = {
+            key: payload.get(key)
+            for key in (
+                "generated_at_utc",
+                "rows",
+                "accuracy",
+                "brier_score",
+                "avg_return",
+                "candidate_win",
+                "status",
+            )
+            if key in payload
+        }
+    return status
+
+
+@api_bp.get("/historical-validation")
+def historical_validation_report():
+    expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
+    provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
+    if not expected_token or not provided_token or not hmac.compare_digest(
+        provided_token, expected_token
+    ):
+        return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
+
+    status = _historical_validation_status()
+    if not status.get("available"):
+        return jsonify({"status": status, "request_id": g.request_id}), 404
+    payload = json.loads(Path(str(status["path"])).read_text(encoding="utf-8"))
+    return jsonify({"data": payload, "status": status, "request_id": g.request_id})
+
+
 @api_bp.get("/model-health")
 def model_health():
     deterministic_svc = current_app.extensions.get("deterministic_quick_advisor")
     decision_logger = current_app.extensions.get("decision_logger")
+    personalization_runtime = current_app.extensions.get("personalization_runtime")
     model_path = current_app.config.get("DETERMINISTIC_MODEL_PATH")
 
     calibration_report_path = str(day13_calibration_report_path())
@@ -2144,6 +3269,25 @@ def model_health():
             "data": {
                 "schema_version": "model_health.v1",
                 "deterministic_quick_enabled": bool(current_app.config.get("DETERMINISTIC_QUICK_ENABLED")),
+                "investor_profile_enabled": bool(current_app.config.get("INVESTOR_PROFILE_ENABLED")),
+                "suitability_policy_enabled": bool(current_app.config.get("SUITABILITY_POLICY_ENABLED")),
+                "suitability_policy_mode": current_app.config.get("SUITABILITY_POLICY_MODE"),
+                "suitability_rollout_percentage": current_app.config.get("SUITABILITY_ROLLOUT_PERCENTAGE"),
+                "personalization_metrics": personalization_runtime.metrics.snapshot() if personalization_runtime else {},
+                "market_stream_health": _market_stream_health_payload(),
+                "live_trigger_metrics": (current_app.extensions.get("live_trigger_engine").snapshot() if current_app.extensions.get("live_trigger_engine") else {}),
+                "historical_validation": _historical_validation_status(),
+                "market_data_provider_health": (
+                    current_app.extensions["market_data_service"].get_provider_health()
+                    if current_app.extensions.get("market_data_service") is not None
+                    and hasattr(current_app.extensions["market_data_service"], "get_provider_health")
+                    else {}
+                ),
+                "profile_counts": {
+                    "total": User.query.count(),
+                    "complete": InvestorProfile.query.filter(InvestorProfile.questionnaire_completed_at.isnot(None)).count(),
+                    "incomplete": User.query.count() - InvestorProfile.query.filter(InvestorProfile.questionnaire_completed_at.isnot(None)).count(),
+                },
                 "deterministic_momentum_enabled": bool(current_app.config.get("DETERMINISTIC_MOMENTUM_ENABLED")),
                 "deterministic_model_path": model_path,
                 "model_loaded": bool(getattr(deterministic_svc, "artifact", None) is not None),
@@ -2171,6 +3315,7 @@ def model_health():
                 "training_max_age_hours": training_max_age_hours,
                 "training_fresh": training_fresh,
                 "decision_logging": _normalized_decision_logging_health(decision_logger),
+                "historical_validation": _historical_validation_status(),
             },
             "request_id": g.request_id,
         }
@@ -2204,6 +3349,38 @@ def export_decision_log():
         "X-Decision-Log-Lines": str(len(events)),
     }
     return Response(body, status=200, headers=headers)
+
+@api_bp.get("/export-production-model")
+def export_production_model():
+    expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
+    provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
+    if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
+
+    model_path = Path(
+        str(current_app.config.get("DETERMINISTIC_MODEL_PATH") or (resolve_runtime_dir() / "day1_baseline_model.json"))
+    )
+    if not model_path.exists() or not model_path.is_file():
+        return jsonify({"error": "production model not found", "path": str(model_path), "request_id": g.request_id}), 404
+
+    try:
+        body = model_path.read_text(encoding="utf-8")
+        parsed = json.loads(body)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        logging.exception("Failed to export production model artifact from %s", model_path)
+        return jsonify({"error": "production model is not readable JSON", "path": str(model_path), "request_id": g.request_id}), 500
+
+    if not isinstance(parsed, dict):
+        return jsonify({"error": "production model must be a JSON object", "path": str(model_path), "request_id": g.request_id}), 500
+
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        "Cache-Control": "no-store",
+        "X-Production-Model-Path": str(model_path),
+        "X-Production-Model-Version": str(parsed.get("version") or parsed.get("model_version") or ""),
+    }
+    return Response(body if body.endswith("\n") else body + "\n", status=200, headers=headers)
+
 @api_bp.get("/decision-log-summary")
 def decision_log_summary():
     decision_logger = current_app.extensions.get("decision_logger")
@@ -2234,6 +3411,7 @@ def decision_outcomes():
     include_skipped = (request.args.get("include_skipped") or "").strip().lower() == "true"
     decision_source_filter = (request.args.get("decision_source") or "").strip()
     force_live = (request.args.get("force_live") or "").strip().lower() == "true"
+    allow_stale_snapshot = (request.args.get("allow_stale_snapshot") or "").strip().lower() == "true"
     if decision_source_filter:
         # Snapshot payload is pre-aggregated and may not match source filtering.
         force_live = True
@@ -2243,19 +3421,30 @@ def decision_outcomes():
         return jsonify({"error": "limit must be an integer", "request_id": g.request_id}), 400
 
     snapshot_path = current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_PATH") or _runtime_data_path("decision_outcomes_snapshot.json")
-    snapshot_max_age_seconds = int(current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS") or 900)
+    snapshot_max_age_seconds = int(current_app.config.get("DECISION_OUTCOMES_SNAPSHOT_MAX_AGE_SECONDS") or 129600)
     if not force_live:
         snapshot = _load_materialized_outcomes_snapshot(
             str(snapshot_path),
             max_age_seconds=snapshot_max_age_seconds,
+            allow_stale=allow_stale_snapshot,
         )
         if snapshot is not None:
+            snapshot_data = dict(snapshot["data"] or {})
+            if "paper_pnl_by_recommendation" not in snapshot_data:
+                snapshot_data["paper_pnl_by_recommendation"] = summarize_paper_pnl_by_action(
+                    snapshot_data.get("rows") or []
+                )
+            if "visible_paper_pnl_by_recommendation" not in snapshot_data:
+                snapshot_data["visible_paper_pnl_by_recommendation"] = summarize_paper_pnl_by_action(
+                    snapshot_data.get("rows") or []
+                )
             return jsonify(
                 {
                     "data": {
                         "schema_version": "decision_outcomes.v1",
-                        **snapshot["data"],
-                        "snapshot_source": "materialized",
+                        **snapshot_data,
+                        "snapshot_source": "materialized_stale" if snapshot["stale"] else "materialized",
+                        "snapshot_stale": bool(snapshot["stale"]),
                         "snapshot_computed_at_utc": snapshot["computed_at_utc"],
                         "snapshot_age_seconds": snapshot["age_seconds"],
                     },
@@ -2268,38 +3457,84 @@ def decision_outcomes():
         or current_app.config.get("DECISION_LOG_PATH")
         or _runtime_data_path("decision_events.jsonl")
     )
-    lookup_cache: dict[tuple[str, int, int], float | None] = {}
-    cache_hits = 0
-    cache_misses = 0
-    lookup_errors = 0
-
-    def cached_future_return_lookup(symbol: str, ts: int, days: int) -> float | None:
-        nonlocal cache_hits, cache_misses, lookup_errors
-        key = (str(symbol).upper(), int(ts), int(days))
-        if key in lookup_cache:
-            cache_hits += 1
-            return lookup_cache[key]
-
-        cache_misses += 1
-        try:
-            value = _future_return_for_outcomes(symbol, ts, days)
-        except Exception:  # noqa: BLE001
-            lookup_errors += 1
-            value = None
-        lookup_cache[key] = value
-        return value
+    raw_read_cap = (
+        current_app.config.get("DECISION_OUTCOMES_READ_CAP")
+        or os.environ.get("DECISION_OUTCOMES_READ_CAP")
+        or 50000
+    )
+    try:
+        read_cap = max(1, int(raw_read_cap))
+    except (TypeError, ValueError):
+        read_cap = 50000
+    history_cache = OutcomeHistoryCache(download=yf.download)
+    legacy_lookup_cache: dict[tuple[str, int, int], float | None] = {}
+    legacy_lookup_hits = 0
+    legacy_lookup_misses = 0
 
     # Read progressively wider windows so the endpoint can still find older evaluated rows
     # when very recent logs are mostly too fresh for 1D / 5D outcomes.
-    read_cap = 5000
     read_limit = min(max(limit * 10, 200), read_cap)
+    events_read = 0
+    all_available_events_read = False
+    scan_cap_reached = False
+    aggregate_events_available = None
+    try:
+        with open(output_path, "rb") as event_file:
+            aggregate_events_available = sum(1 for _ in event_file)
+    except OSError:
+        aggregate_events_available = None
+    oldest_event_ts_scanned = None
+    newest_event_ts_scanned = None
     rows: list[dict[str, Any]] = []
     evaluated_rows: list[dict[str, Any]] = []
     evaluated_rows_1d: list[dict[str, Any]] = []
     evaluated_rows_5d: list[dict[str, Any]] = []
     while True:
         events = read_decision_events(str(output_path), limit=read_limit)
-        rows = evaluate_decision_events(events, future_return_lookup=cached_future_return_lookup)
+        events_read = len(events)
+        all_available_events_read = events_read < read_limit
+        event_ts_values = [
+            int(event["ts"])
+            for event in events
+            if isinstance(event, dict) and isinstance(event.get("ts"), int)
+        ]
+        oldest_event_ts_scanned = min(event_ts_values) if event_ts_values else None
+        newest_event_ts_scanned = max(event_ts_values) if event_ts_values else None
+        def future_return_lookup(symbol: str, ts: int, days: int) -> float | None:
+            nonlocal legacy_lookup_hits, legacy_lookup_misses
+            key = (str(symbol).upper(), int(ts), int(days))
+            if key in legacy_lookup_cache:
+                legacy_lookup_hits += 1
+                return legacy_lookup_cache[key]
+            legacy_lookup_misses += 1
+            try:
+                value = _future_return_for_outcomes(symbol, ts, days, history_cache)
+            except TypeError:
+                value = _future_return_for_outcomes(symbol, ts, days)
+            legacy_lookup_cache[key] = value
+            return value
+
+        def price_path_lookup(symbol: str, ts: int, days: int) -> list[float]:
+            try:
+                return _price_path_for_outcomes(symbol, ts, days, history_cache)
+            except TypeError:
+                return _price_path_for_outcomes(symbol, ts, days)
+
+        def benchmark_return_lookup(ts: int, days: int) -> float | None:
+            return future_return_lookup("SPY", ts, days)
+
+        use_history_preload = (
+            getattr(_future_return_for_outcomes, "__name__", "") == "_future_return_for_outcomes"
+            and getattr(_price_path_for_outcomes, "__name__", "") == "_price_path_for_outcomes"
+        )
+        if use_history_preload:
+            history_cache.preload_events(events)
+        rows = evaluate_decision_events(
+            events,
+            future_return_lookup=future_return_lookup,
+            price_path_lookup=price_path_lookup,
+            benchmark_return_lookup=benchmark_return_lookup,
+        )
         evaluated_rows_1d = rows_with_horizon_return(rows, "1d")
         evaluated_rows_5d = rows_with_horizon_return(rows, "5d")
         evaluated_rows = rows_with_any_horizon_return(rows)
@@ -2310,24 +3545,39 @@ def decision_outcomes():
             evaluated_rows = rows_with_any_horizon_return(rows)
         # Keep widening until we either have enough 5D-evaluable rows or hit the cap.
         # Do not stop early just because 1D rows are available; that can hide older 5D rows.
-        if include_skipped or len(evaluated_rows_5d) >= limit or read_limit >= read_cap:
+        scan_cap_reached = read_limit >= read_cap
+        if include_skipped or scan_cap_reached or all_available_events_read:
             break
         read_limit = min(read_limit * 2, read_cap)
     used_unevaluated_fallback = False
+    actionable_rows_1d = rows_with_horizon_accuracy_outcome(rows, "1d")
+    actionable_rows_5d = rows_with_horizon_accuracy_outcome(rows, "5d")
     if include_skipped:
-        visible_rows = rows[-limit:]
-        visible_rows_1d = rows_with_horizon_return(rows, "1d")[-limit:]
-        visible_rows_5d = rows_with_horizon_return(rows, "5d")[-limit:]
+        visible_rows = select_recent_unique_rows(rows, limit=limit)
+        visible_rows_1d = select_recent_unique_rows(actionable_rows_1d or rows_with_horizon_return(rows, "1d"), limit=limit, horizon="1d")
+        visible_rows_5d = select_recent_unique_rows(actionable_rows_5d or rows_with_horizon_return(rows, "5d"), limit=limit, horizon="5d")
     else:
-        visible_rows_1d = evaluated_rows_1d[-limit:]
-        visible_rows_5d = evaluated_rows_5d[-limit:]
+        visible_rows_1d = select_recent_unique_rows(actionable_rows_1d or evaluated_rows_1d, limit=limit, horizon="1d")
+        visible_rows_5d = select_recent_unique_rows(actionable_rows_5d or evaluated_rows_5d, limit=limit, horizon="5d")
         visible_rows = merge_recent_rows(visible_rows_1d, visible_rows_5d, limit=limit)
     if not include_skipped and not visible_rows and rows:
         # If nothing is evaluable yet, return the most recent rows so the UI still shows
         # live decision activity instead of an empty panel.
-        visible_rows = rows[-limit:]
+        visible_rows = select_recent_unique_rows(rows, limit=limit)
         used_unevaluated_fallback = True
 
+    visible_pnl_rows = merge_recent_rows(
+        visible_rows_1d,
+        visible_rows_5d,
+        limit=max(1, len(visible_rows_1d) + len(visible_rows_5d)),
+    )
+    if not visible_pnl_rows:
+        visible_pnl_rows = visible_rows
+    aggregate_complete = (
+        events_read >= aggregate_events_available
+        if aggregate_events_available is not None
+        else all_available_events_read
+    )
     summary_1d = summarize_outcome_rows(visible_rows_1d)
     summary_5d = summarize_outcome_rows([{**row, "return_1d": row.get("return_5d")} for row in visible_rows_5d])
 
@@ -2340,17 +3590,33 @@ def decision_outcomes():
                 "rows_5d": visible_rows_5d,
                 "summary_1d": summary_1d,
                 "summary_5d": summary_5d,
+                "paper_pnl_by_recommendation": summarize_paper_pnl_by_action(rows),
+                "visible_paper_pnl_by_recommendation": summarize_paper_pnl_by_action(
+                    visible_pnl_rows
+                ),
                 "include_skipped": include_skipped,
                 "decision_source_filter": decision_source_filter or None,
+                "events_read": events_read,
                 "rows_scanned": len(rows),
+                "aggregate_complete": aggregate_complete,
+                "aggregate_events_available": aggregate_events_available,
+                "aggregate_events_scanned": events_read,
+                "aggregate_scan_cap_reached": scan_cap_reached,
+                "aggregate_oldest_event_ts": oldest_event_ts_scanned,
                 "evaluated_rows_available": len(evaluated_rows),
                 "evaluated_rows_1d_available": len(evaluated_rows_1d),
                 "evaluated_rows_5d_available": len(evaluated_rows_5d),
                 "used_unevaluated_fallback": used_unevaluated_fallback,
-                "lookup_cache_hits": cache_hits,
-                "lookup_cache_misses": cache_misses,
-                "lookup_cache_size": len(lookup_cache),
-                "lookup_errors": lookup_errors,
+                "oldest_event_ts_scanned": oldest_event_ts_scanned,
+                "newest_event_ts_scanned": newest_event_ts_scanned,
+                "read_cap": read_cap,
+                "scan_cap_reached": scan_cap_reached,
+                "all_available_events_read": all_available_events_read,
+                **history_cache.diagnostics_payload(),
+                "lookup_cache_hits": history_cache.diagnostics.history_cache_hits + legacy_lookup_hits,
+                "lookup_cache_misses": history_cache.diagnostics.history_cache_misses + legacy_lookup_misses,
+                "lookup_cache_size": history_cache.cache_size + len(legacy_lookup_cache),
+                "lookup_errors": history_cache.diagnostics.history_download_errors,
                 "snapshot_source": "live",
                 "snapshot_computed_at_utc": None,
                 "snapshot_age_seconds": None,
@@ -2364,7 +3630,47 @@ def decision_outcomes():
 def wells_picks():
     svc = current_app.extensions["market_data_service"]
     return jsonify({"items": svc.get_wells_picks(), "request_id": g.request_id})
-def _future_return_for_outcomes(symbol: str, start_ts: int, days: int) -> float | None:
+
+
+def _price_path_for_outcomes(
+    symbol: str,
+    start_ts: int,
+    days: int,
+    history_cache: OutcomeHistoryCache | None = None,
+) -> list[float]:
+    if history_cache is not None:
+        return history_cache.price_path(symbol, start_ts, days)
+    start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
+    now_utc = datetime.now(timezone.utc)
+    if start_dt >= now_utc:
+        return []
+    if start_dt + timedelta(days=days) > now_utc:
+        return []
+
+    end_dt = start_dt + timedelta(days=max(days + 3, 7))
+    safe_end_dt = min(end_dt, now_utc + timedelta(days=1))
+    try:
+        history = yf.download(
+            symbol,
+            start=start_dt.strftime("%Y-%m-%d"),
+            end=safe_end_dt.strftime("%Y-%m-%d"),
+            interval="1d",
+            progress=False,
+            auto_adjust=False,
+        )
+    except Exception:  # noqa: BLE001
+        return []
+    return close_values(history)
+
+
+def _future_return_for_outcomes(
+    symbol: str,
+    start_ts: int,
+    days: int,
+    history_cache: OutcomeHistoryCache | None = None,
+) -> float | None:
+    if history_cache is not None:
+        return history_cache.future_return(symbol, start_ts, days)
     start_dt = datetime.fromtimestamp(int(start_ts), tz=timezone.utc)
     now_utc = datetime.now(timezone.utc)
     # Skip network calls when event time is too recent (or future) to have realized horizon returns.

@@ -1,0 +1,10 @@
+{
+  "request_id": "snapshot-partial",
+  "status": "OK",
+  "ticker": {
+    "ticker": "AAPL",
+    "lastQuote": {"p": 200.08, "s": 7, "t": 1780929000000000000},
+    "min": {"c": 200.05, "t": 1780929000000},
+    "prevDay": {"c": 198.00}
+  }
+}

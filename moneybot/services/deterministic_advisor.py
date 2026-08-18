@@ -3,12 +3,33 @@ from __future__ import annotations
 import logging
 import math
 import hashlib
-from pathlib import Path
 from typing import Any, Dict
 
 import numpy as np
 
 from .deterministic_model import BaselineModelArtifact, default_baseline_artifact, load_artifact, predict_proba
+from .forecast_horizon import resolve_forecast_horizon
+from .model_metadata import load_artifact_metadata
+from .alpha_atlas_feature_contract import (
+    ALPHA_ATLAS_V2_FEATURES,
+    NON_SERVABLE_V2_FEATURES,
+    build_alpha_atlas_event_features,
+)
+from .alpha_atlas_v3_features import (
+    ALPHA_ATLAS_V3_FEATURES,
+    FEATURE_ENGINE_VERSION,
+    build_alpha_atlas_v3_features,
+)
+
+
+def display_model_name(version: str | None) -> str:
+    raw = str(version or "").strip()
+    prefix = "alpha-atlas-v"
+    if raw.lower().startswith(prefix):
+        return f"Alpha Atlas v{raw[len(prefix):]}"
+    if raw:
+        return raw
+    return "Alpha Atlas"
 
 
 class DeterministicQuickAdvisor:
@@ -28,6 +49,7 @@ class DeterministicQuickAdvisor:
         calibration_enabled: bool = False,
         calibration_slope: float = 1.0,
         calibration_intercept: float = 0.0,
+        calibration_rollout_percentage: float = 100.0,
         rollout_percentage: float = 100.0,
         rollout_seed: str = "moneybot",
         rollout_allowlist: set[str] | None = None,
@@ -38,7 +60,10 @@ class DeterministicQuickAdvisor:
         self.enabled = bool(enabled)
         self.artifact_path = artifact_path
         self.artifact: BaselineModelArtifact | None = None
+        self.artifact_metadata: Dict[str, Any] | None = None
         self.load_error: str | None = None
+        self.last_feature_contract_diagnostics: Dict[str, Any] | None = None
+        self.market_history_service: Any | None = None
 
         self.quick_buy_threshold = quick_buy_threshold
         self.quick_strong_buy_threshold = float(quick_strong_buy_threshold)
@@ -49,6 +74,9 @@ class DeterministicQuickAdvisor:
         self.calibration_enabled = bool(calibration_enabled)
         self.calibration_slope = float(calibration_slope)
         self.calibration_intercept = float(calibration_intercept)
+        self.calibration_rollout_percentage = max(
+            0.0, min(100.0, float(calibration_rollout_percentage))
+        )
         self.rollout_percentage = max(0.0, min(100.0, float(rollout_percentage)))
         self.rollout_seed = str(rollout_seed or "moneybot")
         self.rollout_allowlist = {s.strip().upper() for s in (rollout_allowlist or set()) if str(s).strip()}
@@ -67,12 +95,23 @@ class DeterministicQuickAdvisor:
         if self.enabled:
             self._load_artifact()
 
+    def reload_artifact(self) -> bool:
+        """Reload the model artifact from disk and report whether it is usable."""
+        self._load_artifact()
+        return self.artifact is not None
+
+    def set_market_history_service(self, service: Any) -> None:
+        """Attach the existing MarketDataService after app construction."""
+        self.market_history_service = service
+
     def _load_artifact(self) -> None:
         try:
             self.artifact = load_artifact(self.artifact_path)
+            self.artifact_metadata = load_artifact_metadata(self.artifact_path)
             self.load_error = None
         except FileNotFoundError:
             self.artifact = default_baseline_artifact()
+            self.artifact_metadata = None
             self.load_error = (
                 f"Artifact file not found at {self.artifact_path}. "
                 "Using built-in deterministic fallback artifact."
@@ -80,6 +119,7 @@ class DeterministicQuickAdvisor:
             logging.warning("%s", self.load_error)
         except Exception as exc:  # noqa: BLE001
             self.artifact = None
+            self.artifact_metadata = None
             self.load_error = str(exc)
             logging.warning(
                 "Deterministic quick advisor disabled: unable to load artifact %s (%s)",
@@ -94,6 +134,19 @@ class DeterministicQuickAdvisor:
         return None
 
     def _build_feature_row(self, signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> tuple[np.ndarray, list[str]]:
+        row, imputed, _ = self._build_feature_row_with_diagnostics(
+            signal_data, quote_data
+        )
+        return row, imputed
+
+    def _build_feature_row_with_diagnostics(
+        self,
+        signal_data: Dict[str, Any],
+        quote_data: Dict[str, Any],
+        *,
+        endpoint: str = "quick_ask",
+        symbol: str | None = None,
+    ) -> tuple[np.ndarray, list[str], Dict[str, Any]]:
         assert self.artifact is not None
 
         technical = signal_data.get("technical") or {}
@@ -105,13 +158,60 @@ class DeterministicQuickAdvisor:
         if return_5d is None and return_1d is not None:
             return_5d = return_1d * 5.0
 
-        raw_values = {
+        raw_values: Dict[str, float | None] = {
             "return_1d": return_1d,
             "return_5d": return_5d,
             "rsi_14": self._num(technical.get("rsi")),
             "macd_hist": self._num(technical.get("macd_histogram") or signal_data.get("macd_hist")),
             "vol_ratio_20d": self._num(signal_data.get("volume_ratio")),
         }
+        is_v2_contract = set(self.artifact.feature_columns) == set(
+            ALPHA_ATLAS_V2_FEATURES
+        )
+        if is_v2_contract:
+            raw_values.update(
+                build_alpha_atlas_event_features(
+                    endpoint=endpoint,
+                    decision_source=str(
+                        signal_data.get("decision_source") or "rule_based"
+                    ),
+                    recommendation=str(
+                        signal_data.get("action") or signal_data.get("verdict") or ""
+                    ),
+                    quote=quote_data,
+                    signals=signal_data,
+                    # The v2 output must never be fed back into its own input.
+                    prior_probability=self._num(signal_data.get("prior_probability_up")),
+                )
+            )
+
+        is_v3_contract = set(self.artifact.feature_columns) == set(
+            ALPHA_ATLAS_V3_FEATURES
+        )
+        history_diagnostics: Dict[str, Any] = {}
+        if is_v3_contract:
+            symbol_history: Dict[str, Any] = {}
+            spy_history: Dict[str, Any] = {}
+            if self.market_history_service is not None and symbol:
+                symbol_history = self.market_history_service.get_price_history_data(
+                    symbol, days=90
+                )
+                spy_history = self.market_history_service.get_price_history_data(
+                    "SPY", days=90
+                )
+            raw_values.update(
+                build_alpha_atlas_v3_features(
+                    symbol_bars=symbol_history.get("bars") or [],
+                    spy_bars=spy_history.get("bars") or [],
+                )
+            )
+            history_diagnostics = {
+                "symbol_history_source": symbol_history.get("source"),
+                "spy_history_source": spy_history.get("source"),
+                "history_adjusted_for_splits": symbol_history.get(
+                    "adjusted_for_splits"
+                ),
+            }
 
         means = np.asarray(self.artifact.means, dtype=float)
         row = np.zeros(len(self.artifact.feature_columns), dtype=float)
@@ -124,7 +224,43 @@ class DeterministicQuickAdvisor:
             else:
                 row[idx] = float(val)
 
-        return row, imputed
+        diagnostics = {
+            "feature_contract_expected_count": len(self.artifact.feature_columns),
+            "feature_contract_available_count": len(self.artifact.feature_columns) - len(imputed),
+            "feature_contract_imputed_count": len(imputed),
+            "feature_contract_missing_features": list(imputed),
+            "feature_contract_source": (
+                FEATURE_ENGINE_VERSION
+                if is_v3_contract
+                else "day8_decision_event_contract"
+                if is_v2_contract
+                else "legacy_day1_contract"
+            ),
+            "feature_contract_version": (
+                FEATURE_ENGINE_VERSION
+                if is_v3_contract
+                else "alpha-atlas-v2-event-v1"
+                if is_v2_contract
+                else "day1-v1"
+            ),
+            "feature_contract_servable": (
+                len(imputed) <= 2 and len(imputed) < len(self.artifact.feature_columns)
+                if is_v3_contract
+                else not is_v2_contract
+            ),
+            "feature_contract_blocking_features": sorted(
+                set(self.artifact.feature_columns).intersection(NON_SERVABLE_V2_FEATURES)
+            ) if is_v2_contract else [],
+            "feature_contract_reason": (
+                "v2 was trained with same-event probability/recommendation/source and post-event return features; serving would be circular or leak future outcomes"
+                if is_v2_contract
+                else "V3 requires adjusted normalized daily symbol and SPY bars; too many required features were unavailable"
+                if is_v3_contract and len(imputed) > 2
+                else None
+            ),
+            **history_diagnostics,
+        }
+        return row, imputed, diagnostics
 
     def _is_in_rollout(self, symbol: str | None) -> bool:
         return self._is_in_rollout_with_percentage(symbol, self.rollout_percentage)
@@ -146,13 +282,24 @@ class DeterministicQuickAdvisor:
     def _is_in_portfolio_rollout(self, symbol: str | None) -> bool:
         return self._is_in_rollout_with_percentage(symbol, self.portfolio_rollout_percentage)
 
+    def _is_in_calibration_rollout(self, symbol: str | None) -> bool:
+        percentage = self.calibration_rollout_percentage
+        if percentage >= 100.0:
+            return True
+        if percentage <= 0.0:
+            return False
+        normalized = str(symbol or "").strip().upper()
+        key = f"{self.rollout_seed}:calibration:{normalized or '*'}".encode("utf-8")
+        bucket = int(hashlib.sha256(key).hexdigest()[:8], 16) / 0xFFFFFFFF
+        return bucket < (percentage / 100.0)
+
     @staticmethod
     def _sigmoid(value: float) -> float:
         clipped = max(min(value, 35.0), -35.0)
         return 1.0 / (1.0 + math.exp(-clipped))
 
-    def _calibrate_probability(self, prob_up: float) -> float:
-        if not self.calibration_enabled:
+    def _calibrate_probability(self, prob_up: float, *, symbol: str | None = None) -> float:
+        if not self.calibration_enabled or not self._is_in_calibration_rollout(symbol):
             return prob_up
         p = min(max(float(prob_up), 1e-6), 1.0 - 1e-6)
         logit = math.log(p / (1.0 - p))
@@ -164,15 +311,30 @@ class DeterministicQuickAdvisor:
         *,
         signal_data: Dict[str, Any],
         quote_data: Dict[str, Any],
+        symbol: str | None = None,
     ) -> Dict[str, Any] | None:
         if not self.enabled:
             return None
         if self.artifact is None:
             return None
 
-        row, imputed = self._build_feature_row(signal_data, quote_data)
+        row, imputed, contract = self._build_feature_row_with_diagnostics(
+            signal_data, quote_data, symbol=symbol
+        )
+        self.last_feature_contract_diagnostics = contract
+        if not contract["feature_contract_servable"]:
+            logging.error(
+                "Deterministic prediction blocked for %s: %s",
+                self.artifact.version,
+                contract["feature_contract_reason"],
+            )
+            return None
         raw_prob_up = float(predict_proba(self.artifact, row)[0])
-        prob_up = self._calibrate_probability(raw_prob_up)
+        calibration_applied = bool(
+            self.calibration_enabled
+            and self._is_in_calibration_rollout(symbol)
+        )
+        prob_up = self._calibrate_probability(raw_prob_up, symbol=symbol)
         threshold = float(self.quick_buy_threshold if self.quick_buy_threshold is not None else self.artifact.decision_threshold)
         strong_threshold = max(threshold + 0.15, self.quick_strong_buy_threshold)
 
@@ -184,16 +346,17 @@ class DeterministicQuickAdvisor:
             recommendation = "HOLD OFF FOR NOW"
 
         confidence = round(max(prob_up, 1.0 - prob_up) * 100.0, 1)
+        model_name = display_model_name(self.artifact.version if self.artifact else None)
         rationale = (
-            f"Alpha Atlas v1 probability-up={prob_up:.2f} vs threshold={threshold:.2f}."
+            f"{model_name} probability-up={prob_up:.2f} vs threshold={threshold:.2f}."
         )
-        if self.calibration_enabled:
+        if calibration_applied:
             rationale += (
                 f" Calibrated from raw={raw_prob_up:.2f} with slope={self.calibration_slope:.2f}"
                 f" intercept={self.calibration_intercept:.2f}."
             )
         if imputed:
-            rationale += f" Missing live features were imputed: {', '.join(imputed)}."
+            rationale += " Some live inputs were unavailable, so the model used safe defaults."
 
         return {
             "recommendation": recommendation,
@@ -204,6 +367,11 @@ class DeterministicQuickAdvisor:
             "quote_diagnostics": quote_data.get("diagnostics"),
             "decision_source": "deterministic_model",
             "model_version": self.artifact.version,
+            "forecast_horizon": resolve_forecast_horizon(
+                artifact=self.artifact,
+                model_version=self.artifact.version,
+                explicit_horizon=(self.artifact_metadata or {}).get("horizon_days"),
+            ),
             "raw_probability_up": round(raw_prob_up, 4),
             "probability_up": round(prob_up, 4),
             "decision_threshold": threshold,
@@ -211,6 +379,18 @@ class DeterministicQuickAdvisor:
             "imputed_features": imputed,
             "rollout_percentage": self.rollout_percentage,
             "calibration_enabled": self.calibration_enabled,
+            "calibration_applied": calibration_applied,
+            "calibration_rollout_percentage": self.calibration_rollout_percentage,
+            "feature_contract_servable": contract["feature_contract_servable"],
+            "feature_contract_available_count": contract[
+                "feature_contract_available_count"
+            ],
+            "feature_contract_imputed_count": contract[
+                "feature_contract_imputed_count"
+            ],
+            "feature_contract_missing_features": contract[
+                "feature_contract_missing_features"
+            ],
         }
 
     def predict_quick_decision(
@@ -222,15 +402,20 @@ class DeterministicQuickAdvisor:
     ) -> Dict[str, Any] | None:
         if not self._is_in_rollout(symbol):
             return None
-        return self._predict_quick_decision_internal(signal_data=signal_data, quote_data=quote_data)
+        return self._predict_quick_decision_internal(
+            signal_data=signal_data, quote_data=quote_data, symbol=symbol
+        )
 
     def predict_shadow_decision(
         self,
         *,
         signal_data: Dict[str, Any],
         quote_data: Dict[str, Any],
+        symbol: str | None = None,
     ) -> Dict[str, Any] | None:
-        return self._predict_quick_decision_internal(signal_data=signal_data, quote_data=quote_data)
+        return self._predict_quick_decision_internal(
+            signal_data=signal_data, quote_data=quote_data, symbol=symbol
+        )
 
     def predict_portfolio_position(
         self,
@@ -246,7 +431,9 @@ class DeterministicQuickAdvisor:
         if self._is_in_portfolio_rollout(symbol):
             quick = self.predict_quick_decision(signal_data=signal_data, quote_data=quote_data, symbol=symbol)
         if quick is None and self.rollout_dry_run:
-            quick = self.predict_shadow_decision(signal_data=signal_data, quote_data=quote_data)
+            quick = self.predict_shadow_decision(
+                signal_data=signal_data, quote_data=quote_data, symbol=symbol
+            )
         if quick is None:
             return None
 
@@ -265,10 +452,10 @@ class DeterministicQuickAdvisor:
                 advice = "SELL"
 
         reason = (
-            f"Alpha Atlas v1 portfolio rule using probability_up={prob_up:.2f}"
+            f"{display_model_name(quick.get('model_version'))} portfolio rule using probability_up={prob_up:.2f}"
             f" and pnl_percent={pnl_percent:.2f}."
             if pnl_percent is not None
-            else "Alpha Atlas v1 portfolio rule holding due to missing entry/current price context."
+            else f"{display_model_name(quick.get('model_version'))} portfolio rule holding due to missing entry/current price context."
         )
 
         return {
@@ -278,6 +465,7 @@ class DeterministicQuickAdvisor:
             "advice_reason": reason,
             "decision_source": "deterministic_model",
             "model_version": quick.get("model_version"),
+            "forecast_horizon": quick.get("forecast_horizon"),
             "probability_up": round(prob_up, 4),
             "confidence": confidence,
             "position_shares": float(shares),

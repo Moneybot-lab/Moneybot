@@ -9,7 +9,7 @@ on:
 jobs:
   trigger-daily-ops:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     concurrency:
       group: moneybot-daily-ops
       cancel-in-progress: false
@@ -30,7 +30,31 @@ jobs:
           DAILY_OPS_TOKEN: ${{ secrets.DAILY_OPS_TOKEN }}
         run: |
           set -euo pipefail
-          curl -fsS --retry 3 --retry-delay 3 --retry-all-errors \
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
+
+          http_code="$(curl -sS --retry 3 --retry-delay 3 --retry-all-errors \
+            --connect-timeout 15 --max-time 720 --show-error \
+            --output "$response_file" --write-out "%{http_code}" \
             -X POST "$MONEYBOT_BASE_URL/api/run-daily-ops" \
             -H "X-Daily-Ops-Token: $DAILY_OPS_TOKEN" \
-            -H "Content-Type: application/json"
+            -H "Content-Type: application/json")" || {
+              curl_status=$?
+              echo "Daily Ops request failed at transport layer; curl exit=$curl_status"
+              if [ -s "$response_file" ]; then
+                echo "Daily Ops API response:"
+                cat "$response_file"
+              fi
+              exit "$curl_status"
+            }
+
+          echo "Daily Ops HTTP status: $http_code"
+          if [ -s "$response_file" ]; then
+            echo "Daily Ops API response:"
+            cat "$response_file"
+          fi
+
+          if [[ ! "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+            echo "Daily Ops returned non-success HTTP status: $http_code"
+            exit 1
+          fi
