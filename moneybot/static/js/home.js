@@ -1,10 +1,11 @@
 const fallbackData = {
                     market: [
-                      { name: 'Dow', symbol: '^DJI', price: 39210.4, change_percent: 0.52, series: [38800,38940,39020,39105,39210] },
-                      { name: 'S&P 500', symbol: '^GSPC', price: 5245.1, change_percent: 0.44, series: [5188,5204,5218,5231,5245] },
-                      { name: 'Nasdaq', symbol: '^IXIC', price: 16592.3, change_percent: 0.71, series: [16280,16355,16430,16501,16592] },
-                      { name: 'Gold', symbol: 'GC=F', price: 2340.8, change_percent: -0.18, series: [2356,2351,2348,2344,2340] },
-                      { name: 'Bitcoin', symbol: 'BTC-USD', price: 61110.2, change_percent: -0.93, series: [62400,62020,61680,61390,61110] },
+                      { name: 'Dow', symbol: '^DJI', current_value: null, change: null, change_percent: null, instrument_type: 'index', currency: null, series: [], unavailable: true },
+                      { name: 'S&P 500', symbol: '^GSPC', current_value: null, change: null, change_percent: null, instrument_type: 'index', currency: null, series: [], unavailable: true },
+                      { name: 'Nasdaq', symbol: '^IXIC', current_value: null, change: null, change_percent: null, instrument_type: 'index', currency: null, series: [], unavailable: true },
+                      { name: 'Gold', symbol: 'GC=F', current_value: null, change: null, change_percent: null, instrument_type: 'commodity_future', currency: 'USD', series: [], unavailable: true },
+                      { name: 'Crude Oil', symbol: 'CL=F', current_value: null, change: null, change_percent: null, instrument_type: 'commodity_future', currency: 'USD', series: [], unavailable: true },
+                      { name: 'Bitcoin', symbol: 'BTC-USD', current_value: null, change: null, change_percent: null, instrument_type: 'crypto', currency: 'USD', series: [], unavailable: true },
                     ],
                     stable: [{ symbol: 'MSFT', company: 'Microsoft', price: 418.2, signal_score: 7.9, transparency: 'Strong balance sheet and recurring revenue.' }],
                     momentum: [{ symbol: 'SOFI', price: 9.84, score: 9.4, decision_source: 'rule_based', rationale: 'Member growth trend and improving margins.' }],
@@ -37,6 +38,22 @@ const fallbackData = {
                   };
 
                   function formatMoney(v){ return typeof v === 'number' ? '$' + v.toLocaleString(undefined,{maximumFractionDigits:2}) : 'n/a'; }
+                  function marketValue(item, value){
+                    if(value === null || value === undefined || value === '') return 'Unavailable';
+                    const number = Number(value);
+                    if(!Number.isFinite(number)) return 'Unavailable';
+                    const formatted = number.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+                    return item?.currency === 'USD' && item?.instrument_type !== 'index' ? '$' + formatted : formatted;
+                  }
+                  function marketChange(item){
+                    if(item?.change === null || item?.change === undefined || item?.change_percent === null || item?.change_percent === undefined) return 'Unavailable';
+                    const change = Number(item?.change);
+                    const percent = Number(item?.change_percent);
+                    if(!Number.isFinite(change) || !Number.isFinite(percent)) return 'Unavailable';
+                    const sign = change >= 0 ? '+' : '-';
+                    const currency = item?.currency === 'USD' && item?.instrument_type !== 'index' ? '$' : '';
+                    return `${sign}${currency}${Math.abs(change).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} (${percent >= 0 ? '+' : ''}${percent.toFixed(2)}%)`;
+                  }
                   function escapeHtml(value){
                     return String(value || '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] || ch));
                   }
@@ -398,11 +415,14 @@ const fallbackData = {
                     const grid = document.getElementById('market-charts');
                     destroyMarketCharts();
                     grid.innerHTML = items.map((item, idx) => {
-                      const up = (item.change_percent || 0) >= 0;
+                      const hasChange = item.change_percent !== null && item.change_percent !== undefined && Number.isFinite(Number(item.change_percent));
+                      const up = hasChange && Number(item.change_percent) >= 0;
+                      const currentValue = item.current_value ?? item.price;
+                      const movementColor = hasChange ? (up ? '#22c55e' : '#dc2626') : '#d1fae5';
                       return `<article style="background:#000;border:1px solid #166534;border-radius:12px;padding:12px">
                         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
                           <div><div style="font-weight:700;color:#f0fdf4">${item.name}</div><div style="font-size:12px;color:#d1fae5">${item.symbol}</div></div>
-                          <div style="text-align:right"><div style="font-size:18px;color:#f0fdf4">${formatMoney(item.price)}</div><div style="font-size:13px;color:${up ? '#22c55e' : '#dc2626'}">${up ? '+' : ''}${Number(item.change_percent || 0).toFixed(2)}%</div></div>
+                          <div style="text-align:right"><div style="font-size:18px;color:#f0fdf4">${marketValue(item, currentValue)}</div><div style="font-size:13px;color:${movementColor}">${marketChange(item)}</div></div>
                         </div>
                         <div style="margin-top:8px;height:120px"><canvas id="market-chart-${idx}"></canvas></div>
                       </article>`;
@@ -415,7 +435,7 @@ const fallbackData = {
                       marketChartInstances[idx] = new Chart(ctx, {
                         type:'line',
                         data:{labels:(item.series||[]).map((_,i)=>`${i+1}`),datasets:[{data:item.series||[],borderColor:up?'#16a34a':'#dc2626',borderWidth:2,pointRadius:0,tension:.32,fill:true,backgroundColor:up?'rgba(22,163,74,.18)':'rgba(220,38,38,.16)'}]},
-                        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{enabled:true}},scales:{x:{display:false},y:{display:false}}}
+                        options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{enabled:true,callbacks:{label:(context)=>marketValue(item, context.parsed.y)}}},scales:{x:{display:false},y:{display:false}}}
                       });
                     });
                   }
