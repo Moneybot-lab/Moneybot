@@ -254,31 +254,23 @@ class MarketDataService:
         }
 
 
-    def _mock_market_indices(self) -> list[Dict[str, Any]]:
-        rows = [
-            ("Dow", "^DJI", "index", None, 39210.4, 39007.56, [38800, 38940, 39020, 39105, 39210.4]),
-            ("S&P 500", "^GSPC", "index", None, 5245.1, 5222.12, [5188, 5204, 5218, 5231, 5245.1]),
-            ("Nasdaq", "^IXIC", "index", None, 16592.3, 16475.32, [16280, 16355, 16430, 16501, 16592.3]),
-            ("Gold", "GC=F", "commodity_future", "USD", 2340.8, 2345.02, [2356, 2351, 2348, 2344, 2340.8]),
-            ("Crude Oil", "CL=F", "commodity_future", "USD", 78.42, 78.14, [77.65, 77.88, 78.04, 78.14, 78.42]),
-            ("Bitcoin", "BTC-USD", "crypto", "USD", 61110.2, 61683.89, [62400, 62020, 61680, 61390, 61110.2]),
-        ]
+    def _unavailable_market_indices(self) -> list[Dict[str, Any]]:
         return [
             {
-                "name": name,
-                "symbol": symbol,
-                "price": price,
-                "current_value": price,
-                "previous_close": previous_close,
-                "change": round(price - previous_close, 2),
-                "change_percent": round(((price - previous_close) / previous_close) * 100, 2),
-                "currency": currency,
-                "instrument_type": instrument_type,
-                "updated_at": None,
-                "series": series,
-                "quote_source": "fallback",
+                "name": name, "symbol": symbol, "price": None, "current_value": None,
+                "previous_close": None, "change": None, "change_percent": None,
+                "currency": currency, "instrument_type": instrument_type,
+                "updated_at": None, "series": [], "quote_source": None,
+                "is_stale": True, "unavailable": True,
             }
-            for name, symbol, instrument_type, currency, price, previous_close, series in rows
+            for name, symbol, instrument_type, currency in (
+                ("Dow", "^DJI", "index", None),
+                ("S&P 500", "^GSPC", "index", None),
+                ("Nasdaq", "^IXIC", "index", None),
+                ("Gold", "GC=F", "commodity_future", "USD"),
+                ("Crude Oil", "CL=F", "commodity_future", "USD"),
+                ("Bitcoin", "BTC-USD", "crypto", "USD"),
+            )
         ]
 
     def get_market_indices(self) -> list[Dict[str, Any]]:
@@ -317,7 +309,7 @@ class MarketDataService:
             except Exception as exc:  # noqa: BLE001
                 logging.warning("Index fetch failed for %s: %s", item["symbol"], exc)
 
-        return out if len(out) == len(symbols) else self._mock_market_indices()
+        return out if len(out) == len(symbols) else self._unavailable_market_indices()
 
     def get_stable_watchlist(self) -> list[Dict[str, Any]]:
         self._maybe_refresh_daily_lists()
@@ -691,14 +683,23 @@ class MarketDataService:
 
 
 
-    def _mock_market_indices(self) -> list[Dict[str, Any]]:
+    def _unavailable_market_indices(self) -> list[Dict[str, Any]]:
         return [
-            {"name": "Dow", "symbol": "^DJI", "price": 39210.4, "change_percent": 0.52, "series": [38800, 38940, 39020, 39105, 39210]},
-            {"name": "S&P 500", "symbol": "^GSPC", "price": 5245.1, "change_percent": 0.44, "series": [5188, 5204, 5218, 5231, 5245]},
-            {"name": "Nasdaq", "symbol": "^IXIC", "price": 16592.3, "change_percent": 0.71, "series": [16280, 16355, 16430, 16501, 16592]},
-            {"name": "Gold", "symbol": "GC=F", "price": 2340.8, "change_percent": -0.18, "series": [2356, 2351, 2348, 2344, 2340]},
-            {"name": "Crude Oil", "symbol": "CL=F", "price": 78.42, "change_percent": 0.36, "series": [77.65, 77.88, 78.04, 78.14, 78.42]},
-            {"name": "Bitcoin", "symbol": "BTC-USD", "price": 61110.2, "change_percent": -0.93, "series": [62400, 62020, 61680, 61390, 61110]},
+            {
+                "name": name, "symbol": symbol, "price": None, "current_value": None,
+                "previous_close": None, "change": None, "change_percent": None,
+                "currency": currency, "instrument_type": instrument_type,
+                "updated_at": None, "series": [], "quote_source": None,
+                "is_stale": True, "unavailable": True,
+            }
+            for name, symbol, instrument_type, currency in (
+                ("Dow", "^DJI", "index", None),
+                ("S&P 500", "^GSPC", "index", None),
+                ("Nasdaq", "^IXIC", "index", None),
+                ("Gold", "GC=F", "commodity_future", "USD"),
+                ("Crude Oil", "CL=F", "commodity_future", "USD"),
+                ("Bitcoin", "BTC-USD", "crypto", "USD"),
+            )
         ]
 
     def get_market_indices(self) -> list[Dict[str, Any]]:
@@ -731,7 +732,7 @@ class MarketDataService:
             except Exception as exc:  # noqa: BLE001
                 logging.warning("Index fetch failed for %s: %s", item["symbol"], exc)
 
-        return out if len(out) == len(symbols) else self._mock_market_indices()
+        return out if len(out) == len(symbols) else self._unavailable_market_indices()
 
     def get_stable_watchlist(self) -> list[Dict[str, Any]]:
         self._maybe_refresh_daily_lists()
@@ -777,50 +778,45 @@ class MarketDataService:
 
 
 
-    def _mock_market_indices(self) -> list[Dict[str, Any]]:
-        rows = [
-            ("Dow", "^DJI", "index", None, 39210.4, 39007.56, [38800, 38940, 39020, 39105, 39210.4]),
-            ("S&P 500", "^GSPC", "index", None, 5245.1, 5222.12, [5188, 5204, 5218, 5231, 5245.1]),
-            ("Nasdaq", "^IXIC", "index", None, 16592.3, 16475.32, [16280, 16355, 16430, 16501, 16592.3]),
-            ("Gold", "GC=F", "commodity_future", "USD", 2340.8, 2345.02, [2356, 2351, 2348, 2344, 2340.8]),
-            ("Crude Oil", "CL=F", "commodity_future", "USD", 78.42, 78.14, [77.65, 77.88, 78.04, 78.14, 78.42]),
-            ("Bitcoin", "BTC-USD", "crypto", "USD", 61110.2, 61683.89, [62400, 62020, 61680, 61390, 61110.2]),
-        ]
+    def _unavailable_market_indices(self) -> list[Dict[str, Any]]:
         return [
             {
-                "name": name,
-                "symbol": symbol,
-                "price": price,
-                "current_value": price,
-                "previous_close": previous_close,
-                "change": round(price - previous_close, 2),
-                "change_percent": round(((price - previous_close) / previous_close) * 100, 2),
-                "currency": currency,
-                "instrument_type": instrument_type,
-                "updated_at": None,
-                "series": series,
-                "quote_source": "fallback",
+                "name": name, "symbol": symbol, "price": None, "current_value": None,
+                "previous_close": None, "change": None, "change_percent": None,
+                "currency": currency, "instrument_type": instrument_type,
+                "updated_at": None, "series": [], "quote_source": None,
+                "is_stale": True, "unavailable": True,
             }
-            for name, symbol, instrument_type, currency, price, previous_close, series in rows
+            for name, symbol, instrument_type, currency in (
+                ("Dow", "^DJI", "index", None),
+                ("S&P 500", "^GSPC", "index", None),
+                ("Nasdaq", "^IXIC", "index", None),
+                ("Gold", "GC=F", "commodity_future", "USD"),
+                ("Crude Oil", "CL=F", "commodity_future", "USD"),
+                ("Bitcoin", "BTC-USD", "crypto", "USD"),
+            )
         ]
 
     def get_market_indices(self) -> list[Dict[str, Any]]:
         symbols = [
-            {"name": "Dow", "symbol": "^DJI", "instrument_type": "index", "currency": None},
-            {"name": "S&P 500", "symbol": "^GSPC", "instrument_type": "index", "currency": None},
-            {"name": "Nasdaq", "symbol": "^IXIC", "instrument_type": "index", "currency": None},
-            {"name": "Gold", "symbol": "GC=F", "instrument_type": "commodity_future", "currency": "USD"},
-            {"name": "Crude Oil", "symbol": "CL=F", "instrument_type": "commodity_future", "currency": "USD"},
-            {"name": "Bitcoin", "symbol": "BTC-USD", "instrument_type": "crypto", "currency": "USD"},
+            {"name": "Dow", "symbol": "^DJI", "quote_symbol": "DIA", "instrument_type": "index", "currency": None},
+            {"name": "S&P 500", "symbol": "^GSPC", "quote_symbol": "SPY", "instrument_type": "index", "currency": None},
+            {"name": "Nasdaq", "symbol": "^IXIC", "quote_symbol": "QQQ", "instrument_type": "index", "currency": None},
+            {"name": "Gold", "symbol": "GC=F", "quote_symbol": "GLD", "instrument_type": "commodity_future", "currency": "USD"},
+            {"name": "Crude Oil", "symbol": "CL=F", "quote_symbol": "CL=F", "instrument_type": "commodity_future", "currency": "USD"},
+            {"name": "Bitcoin", "symbol": "BTC-USD", "quote_symbol": "IBIT", "instrument_type": "crypto", "currency": "USD"},
         ]
         out: list[Dict[str, Any]] = []
         for item in symbols:
-            # Quote the displayed instrument itself.  Using ETF proxies here (for
-            # example USO for CL=F) mixes different prices, sessions, and units.
-            quote = self.get_quote(item["symbol"])
+            # Preserve the quote symbols used by the working Market Indices feed.
+            # Crude Oil is the sole exception and uses the WTI/front-month symbol.
+            quote = self.get_quote(item["quote_symbol"])
             quote_price = quote.get("price")
             quote_change = quote.get("change_percent")
-            price: float | None = float(quote_price) if isinstance(quote_price, (int, float)) else None
+            quote_is_stale = quote.get("is_stale") is True
+            price: float | None = (
+                float(quote_price) if isinstance(quote_price, (int, float)) and not quote_is_stale else None
+            )
             change_percent: float | None = float(quote_change) if isinstance(quote_change, (int, float)) else None
             previous_raw = quote.get("previous_close")
             previous_close: float | None = float(previous_raw) if isinstance(previous_raw, (int, float)) else None
@@ -834,33 +830,26 @@ class MarketDataService:
             except Exception as exc:  # noqa: BLE001
                 logging.warning("Index history fetch failed for %s: %s", item["symbol"], exc)
 
-            if not closes:
-                if price is not None:
-                    closes = [round(price, 2)] * 15
-                else:
-                    mock_item = next((m for m in self._mock_market_indices() if m["symbol"] == item["symbol"]), None)
-                    closes = list(mock_item["series"]) if mock_item else []
-
-            if price is None and closes:
-                price = closes[-1]
-
             if previous_close is None and price is not None and change_percent is not None and change_percent != -100:
                 # The quote provider supplied price and percentage for one session;
                 # algebraically recover that same provider's previous close rather
                 # than mixing it with a historical bar from another provider.
                 previous_close = price / (1.0 + (change_percent / 100.0))
-            if previous_close is None and closes:
-                previous_close = closes[-2] if len(closes) > 1 else closes[-1]
-
             absolute_change = (price - previous_close) if price is not None and previous_close is not None else None
             if change_percent is None and absolute_change is not None and previous_close:
                 change_percent = (absolute_change / previous_close) * 100
 
             if price is None:
-                mock_item = next((m for m in self._mock_market_indices() if m["symbol"] == item["symbol"]), None)
-                if mock_item:
-                    out.append(dict(mock_item))
-                    continue
+                unavailable = next(m for m in self._unavailable_market_indices() if m["symbol"] == item["symbol"])
+                unavailable.update({
+                    "series": closes,
+                    "quote_source": quote.get("quote_source"),
+                    "provider_symbol": item["quote_symbol"],
+                    "updated_at": quote.get("event_timestamp"),
+                    "is_stale": quote_is_stale,
+                })
+                out.append(unavailable)
+                continue
 
             out.append({
                 "name": item["name"],
@@ -872,12 +861,15 @@ class MarketDataService:
                 "change_percent": round(float(change_percent or 0.0), 2),
                 "currency": item["currency"],
                 "instrument_type": item["instrument_type"],
-                "updated_at": quote.get("event_timestamp") or quote.get("received_timestamp"),
+                "updated_at": quote.get("event_timestamp"),
                 "series": closes,
                 "quote_source": quote.get("quote_source"),
+                "provider_symbol": item["quote_symbol"],
+                "is_stale": False,
+                "unavailable": False,
             })
 
-        return out if len(out) == len(symbols) else self._mock_market_indices()
+        return out if len(out) == len(symbols) else self._unavailable_market_indices()
 
     def _score_from_signal(self, signal: Dict[str, Any], default_score: float) -> float:
         raw_score = signal.get("score")

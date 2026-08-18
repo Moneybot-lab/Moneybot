@@ -1,11 +1,11 @@
 const fallbackData = {
                     market: [
-                      { name: 'Dow', symbol: '^DJI', current_value: 39210.4, previous_close: 39007.56, change: 202.84, change_percent: 0.52, instrument_type: 'index', currency: null, series: [38800,38940,39020,39105,39210.4] },
-                      { name: 'S&P 500', symbol: '^GSPC', current_value: 5245.1, previous_close: 5222.12, change: 22.98, change_percent: 0.44, instrument_type: 'index', currency: null, series: [5188,5204,5218,5231,5245.1] },
-                      { name: 'Nasdaq', symbol: '^IXIC', current_value: 16592.3, previous_close: 16475.32, change: 116.98, change_percent: 0.71, instrument_type: 'index', currency: null, series: [16280,16355,16430,16501,16592.3] },
-                      { name: 'Gold', symbol: 'GC=F', current_value: 2340.8, previous_close: 2345.02, change: -4.22, change_percent: -0.18, instrument_type: 'commodity_future', currency: 'USD', series: [2356,2351,2348,2344,2340.8] },
-                      { name: 'Crude Oil', symbol: 'CL=F', current_value: 78.42, previous_close: 78.14, change: 0.28, change_percent: 0.36, instrument_type: 'commodity_future', currency: 'USD', series: [77.65,77.88,78.04,78.14,78.42] },
-                      { name: 'Bitcoin', symbol: 'BTC-USD', current_value: 61110.2, previous_close: 61683.89, change: -573.69, change_percent: -0.93, instrument_type: 'crypto', currency: 'USD', series: [62400,62020,61680,61390,61110.2] },
+                      { name: 'Dow', symbol: '^DJI', current_value: null, change: null, change_percent: null, instrument_type: 'index', currency: null, series: [], unavailable: true },
+                      { name: 'S&P 500', symbol: '^GSPC', current_value: null, change: null, change_percent: null, instrument_type: 'index', currency: null, series: [], unavailable: true },
+                      { name: 'Nasdaq', symbol: '^IXIC', current_value: null, change: null, change_percent: null, instrument_type: 'index', currency: null, series: [], unavailable: true },
+                      { name: 'Gold', symbol: 'GC=F', current_value: null, change: null, change_percent: null, instrument_type: 'commodity_future', currency: 'USD', series: [], unavailable: true },
+                      { name: 'Crude Oil', symbol: 'CL=F', current_value: null, change: null, change_percent: null, instrument_type: 'commodity_future', currency: 'USD', series: [], unavailable: true },
+                      { name: 'Bitcoin', symbol: 'BTC-USD', current_value: null, change: null, change_percent: null, instrument_type: 'crypto', currency: 'USD', series: [], unavailable: true },
                     ],
                     stable: [{ symbol: 'MSFT', company: 'Microsoft', price: 418.2, signal_score: 7.9, transparency: 'Strong balance sheet and recurring revenue.' }],
                     momentum: [{ symbol: 'SOFI', price: 9.84, score: 9.4, decision_source: 'rule_based', rationale: 'Member growth trend and improving margins.' }],
@@ -39,15 +39,17 @@ const fallbackData = {
 
                   function formatMoney(v){ return typeof v === 'number' ? '$' + v.toLocaleString(undefined,{maximumFractionDigits:2}) : 'n/a'; }
                   function marketValue(item, value){
+                    if(value === null || value === undefined || value === '') return 'Unavailable';
                     const number = Number(value);
-                    if(!Number.isFinite(number)) return 'n/a';
+                    if(!Number.isFinite(number)) return 'Unavailable';
                     const formatted = number.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
                     return item?.currency === 'USD' && item?.instrument_type !== 'index' ? '$' + formatted : formatted;
                   }
                   function marketChange(item){
+                    if(item?.change === null || item?.change === undefined || item?.change_percent === null || item?.change_percent === undefined) return 'Unavailable';
                     const change = Number(item?.change);
                     const percent = Number(item?.change_percent);
-                    if(!Number.isFinite(change) || !Number.isFinite(percent)) return 'n/a';
+                    if(!Number.isFinite(change) || !Number.isFinite(percent)) return 'Unavailable';
                     const sign = change >= 0 ? '+' : '-';
                     const currency = item?.currency === 'USD' && item?.instrument_type !== 'index' ? '$' : '';
                     return `${sign}${currency}${Math.abs(change).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})} (${percent >= 0 ? '+' : ''}${percent.toFixed(2)}%)`;
@@ -413,12 +415,14 @@ const fallbackData = {
                     const grid = document.getElementById('market-charts');
                     destroyMarketCharts();
                     grid.innerHTML = items.map((item, idx) => {
-                      const up = (item.change_percent || 0) >= 0;
-                      const currentValue = Number.isFinite(Number(item.current_value)) ? Number(item.current_value) : Number(item.price);
+                      const hasChange = item.change_percent !== null && item.change_percent !== undefined && Number.isFinite(Number(item.change_percent));
+                      const up = hasChange && Number(item.change_percent) >= 0;
+                      const currentValue = item.current_value ?? item.price;
+                      const movementColor = hasChange ? (up ? '#22c55e' : '#dc2626') : '#d1fae5';
                       return `<article style="background:#000;border:1px solid #166534;border-radius:12px;padding:12px">
                         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px">
                           <div><div style="font-weight:700;color:#f0fdf4">${item.name}</div><div style="font-size:12px;color:#d1fae5">${item.symbol}</div></div>
-                          <div style="text-align:right"><div style="font-size:18px;color:#f0fdf4">${marketValue(item, currentValue)}</div><div style="font-size:13px;color:${up ? '#22c55e' : '#dc2626'}">${marketChange(item)}</div></div>
+                          <div style="text-align:right"><div style="font-size:18px;color:#f0fdf4">${marketValue(item, currentValue)}</div><div style="font-size:13px;color:${movementColor}">${marketChange(item)}</div></div>
                         </div>
                         <div style="margin-top:8px;height:120px"><canvas id="market-chart-${idx}"></canvas></div>
                       </article>`;

@@ -31,6 +31,9 @@ def test_market_cards_format_index_levels_and_usd_instruments_with_absolute_chan
     assert "item?.instrument_type !== 'index'" in js
     assert "${marketChange(item)}" in js
     assert "label:(context)=>marketValue(item, context.parsed.y)" in js
+    assert "if(value === null || value === undefined || value === '') return 'Unavailable'" in js
+    for stale_value in ("39210.4", "5245.1", "16592.3", "2340.8", "78.42", "61110.2"):
+        assert stale_value not in js
 
 
 def test_portfolio_has_live_price_pnl_reconnect_and_controlled_refresh_ui():
