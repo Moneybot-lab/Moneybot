@@ -424,10 +424,23 @@ def _date_block_bootstrap(
     }
     for metric, values in deltas.items():
         array = np.asarray(values, dtype=float)
+        array = array[np.isfinite(array)]
+        if array.size == 0:
+            result["metrics"][metric] = {
+                "available": False,
+                "sample_count": 0,
+                "reason": "no paired finite bootstrap observations",
+                "mean_delta": None,
+                "confidence_interval_95": None,
+                "probability_v31_improves": None,
+            }
+            continue
         lower, upper = np.quantile(array, [0.025, 0.975])
         lower_is_better = metric in {"brier_score", "big_loss_false_positive_rate"}
         improves = array < 0 if lower_is_better else array > 0
         result["metrics"][metric] = {
+            "available": True,
+            "sample_count": int(array.size),
             "mean_delta": float(array.mean()),
             "confidence_interval_95": [float(lower), float(upper)],
             "probability_v31_improves": float(improves.mean()),
