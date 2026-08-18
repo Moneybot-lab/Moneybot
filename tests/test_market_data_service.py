@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import requests
@@ -302,6 +302,87 @@ def test_get_market_indices_never_substitutes_demo_values_for_failed_quotes(monk
     assert all(item["change_percent"] is None for item in data)
     assert all(item["series"] == [] for item in data)
     assert all(item["unavailable"] is True for item in data)
+
+
+def test_get_market_indices_accepts_valid_quote_marked_stale_by_trading_threshold(monkeypatch):
+    svc = MarketDataService()
+    event_timestamp = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+
+    class DummyHistory:
+        empty = False
+
+        def __getitem__(self, _key):
+            class Tailable:
+                def tail(self, _days):
+                    return [100.0, 101.0, 102.0]
+
+            return Tailable()
+
+    class DummyTicker:
+        def history(self, period, interval):
+            return DummyHistory()
+
+    monkeypatch.setattr("moneybot.services.market_data.yf.Ticker", lambda _symbol: DummyTicker())
+    monkeypatch.setattr(
+        svc,
+        "get_quote",
+        lambda symbol: {
+            "symbol": symbol,
+            "price": 505.0,
+            "previous_close": 500.0,
+            "change_percent": 1.0,
+            "quote_source": "massive",
+            "is_stale": True,
+            "event_timestamp": event_timestamp,
+        },
+    )
+
+    data = svc.get_market_indices()
+
+    assert all(item["current_value"] == 505.0 for item in data)
+    assert all(item["change"] == 5.0 for item in data)
+    assert all(item["change_percent"] == 1.0 for item in data)
+    assert all(item["is_stale"] is True for item in data)
+    assert all(item["unavailable"] is False for item in data)
+    assert all(1_100 <= item["freshness_seconds"] <= 1_300 for item in data)
+
+
+def test_get_market_indices_rejects_quote_older_than_four_days_and_isolates_exceptions(monkeypatch):
+    svc = MarketDataService()
+    old_timestamp_ms = int((datetime.now(timezone.utc) - timedelta(days=5)).timestamp() * 1000)
+
+    class DummyTicker:
+        def history(self, period, interval):
+            raise RuntimeError("history unavailable")
+
+    monkeypatch.setattr("moneybot.services.market_data.yf.Ticker", lambda _symbol: DummyTicker())
+
+    def fake_quote(symbol):
+        if symbol == "CL=F":
+            raise RuntimeError("crude quote failed")
+        return {
+            "symbol": symbol,
+            "price": 505.0,
+            "previous_close": 500.0,
+            "change_percent": 1.0,
+            "quote_source": "massive",
+            "is_stale": True,
+            "event_timestamp": old_timestamp_ms,
+        }
+
+    monkeypatch.setattr(svc, "get_quote", fake_quote)
+
+    data = svc.get_market_indices()
+
+    assert len(data) == 6
+    assert next(item for item in data if item["symbol"] == "CL=F")["unavailable_reason"] == "quote_exception"
+    assert all(item["unavailable"] is True for item in data)
+    assert all(item["current_value"] is None for item in data)
+    assert all(
+        item.get("unavailable_reason") == "quote_older_than_96h"
+        for item in data
+        if item["symbol"] != "CL=F"
+    )
 
 
 

@@ -273,6 +273,30 @@ class MarketDataService:
             )
         ]
 
+    @staticmethod
+    def _market_quote_age_seconds(event_timestamp: Any) -> float | None:
+        if event_timestamp in (None, ""):
+            return None
+        timestamp: datetime | None = None
+        if isinstance(event_timestamp, datetime):
+            timestamp = event_timestamp
+        elif isinstance(event_timestamp, (int, float)):
+            raw = float(event_timestamp)
+            if abs(raw) >= 1e11:
+                raw /= 1000.0
+            try:
+                timestamp = datetime.fromtimestamp(raw, tz=timezone.utc)
+            except (OverflowError, OSError, ValueError):
+                return None
+        else:
+            try:
+                timestamp = datetime.fromisoformat(str(event_timestamp).replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - timestamp.astimezone(timezone.utc)).total_seconds())
+
     def get_market_indices(self) -> list[Dict[str, Any]]:
         symbols = [
             {"name": "Dow", "symbol": "^DJI", "quote_symbol": "^DJI"},
@@ -810,13 +834,28 @@ class MarketDataService:
         for item in symbols:
             # Preserve the quote symbols used by the working Market Indices feed.
             # Crude Oil is the sole exception and uses the WTI/front-month symbol.
-            quote = self.get_quote(item["quote_symbol"])
+            try:
+                quote = self.get_quote(item["quote_symbol"])
+            except Exception as exc:  # noqa: BLE001
+                logging.exception(
+                    "MARKET_INDEX_DEBUG symbol=%s provider_symbol=%s status=rejected reason=quote_exception error=%s",
+                    item["symbol"], item["quote_symbol"], type(exc).__name__,
+                )
+                unavailable = next(m for m in self._unavailable_market_indices() if m["symbol"] == item["symbol"])
+                unavailable["provider_symbol"] = item["quote_symbol"]
+                unavailable["unavailable_reason"] = "quote_exception"
+                out.append(unavailable)
+                continue
             quote_price = quote.get("price")
             quote_change = quote.get("change_percent")
             quote_is_stale = quote.get("is_stale") is True
-            price: float | None = (
-                float(quote_price) if isinstance(quote_price, (int, float)) and not quote_is_stale else None
-            )
+            event_timestamp = quote.get("event_timestamp")
+            freshness_seconds = self._market_quote_age_seconds(event_timestamp)
+            # Provider adapters use stock-stream freshness thresholds (15-60s),
+            # which are intentionally strict for trading decisions. Market cards
+            # may display the latest legitimate close through weekends/holidays.
+            too_old_for_market_card = freshness_seconds is not None and freshness_seconds > (96 * 60 * 60)
+            price: float | None = float(quote_price) if isinstance(quote_price, (int, float)) and not too_old_for_market_card else None
             change_percent: float | None = float(quote_change) if isinstance(quote_change, (int, float)) else None
             previous_raw = quote.get("previous_close")
             previous_close: float | None = float(previous_raw) if isinstance(previous_raw, (int, float)) else None
@@ -840,14 +879,23 @@ class MarketDataService:
                 change_percent = (absolute_change / previous_close) * 100
 
             if price is None:
+                unavailable_reason = "quote_older_than_96h" if too_old_for_market_card else "missing_current_value"
                 unavailable = next(m for m in self._unavailable_market_indices() if m["symbol"] == item["symbol"])
                 unavailable.update({
                     "series": closes,
                     "quote_source": quote.get("quote_source"),
                     "provider_symbol": item["quote_symbol"],
-                    "updated_at": quote.get("event_timestamp"),
+                    "updated_at": event_timestamp,
                     "is_stale": quote_is_stale,
+                    "freshness_seconds": round(freshness_seconds, 1) if freshness_seconds is not None else None,
+                    "unavailable_reason": unavailable_reason,
                 })
+                logging.warning(
+                    "MARKET_INDEX_DEBUG symbol=%s provider_symbol=%s provider=%s current=%r previous_close=%r "
+                    "timestamp=%r freshness_seconds=%r status=rejected reason=%s",
+                    item["symbol"], item["quote_symbol"], quote.get("quote_source"), quote_price, previous_raw,
+                    event_timestamp, freshness_seconds, unavailable_reason,
+                )
                 out.append(unavailable)
                 continue
 
@@ -858,16 +906,27 @@ class MarketDataService:
                 "current_value": round(float(price), 2),
                 "previous_close": round(float(previous_close), 2) if previous_close is not None else None,
                 "change": round(float(absolute_change), 2) if absolute_change is not None else None,
-                "change_percent": round(float(change_percent or 0.0), 2),
+                "change_percent": round(float(change_percent), 2) if change_percent is not None else None,
                 "currency": item["currency"],
                 "instrument_type": item["instrument_type"],
-                "updated_at": quote.get("event_timestamp"),
+                "updated_at": event_timestamp,
                 "series": closes,
                 "quote_source": quote.get("quote_source"),
                 "provider_symbol": item["quote_symbol"],
-                "is_stale": False,
+                "is_stale": quote_is_stale,
+                "freshness_seconds": round(freshness_seconds, 1) if freshness_seconds is not None else None,
                 "unavailable": False,
             })
+            logging.info(
+                "MARKET_INDEX_DEBUG symbol=%s provider_symbol=%s provider=%s current=%s previous_close=%s "
+                "timestamp=%r freshness_seconds=%r normalized_current=%s change=%s change_percent=%s "
+                "status=%s",
+                item["symbol"], item["quote_symbol"], quote.get("quote_source"), quote_price, previous_raw,
+                event_timestamp, freshness_seconds, round(float(price), 2),
+                round(float(absolute_change), 2) if absolute_change is not None else None,
+                round(float(change_percent), 2) if change_percent is not None else None,
+                "accepted_stale" if quote_is_stale else "accepted",
+            )
 
         return out if len(out) == len(symbols) else self._unavailable_market_indices()
 
@@ -1483,9 +1542,11 @@ class MarketDataService:
                     market_time = info.get("regularMarketTime")
                     if isinstance(market_time, (int, float)):
                         event_timestamp = datetime.fromtimestamp(float(market_time), tz=timezone.utc)
-                    return self._normalized_fallback_payload(
+                    payload = self._normalized_fallback_payload(
                         symbol=cache_key, price=price, change_percent=change, source="yfinance", event_timestamp=event_timestamp,
                     )
+                    payload["previous_close"] = float(prev) if isinstance(prev, (int, float)) else None
+                    return payload
                 except Exception as exc:  # noqa: BLE001
                     last_error = str(exc)
                     logging.warning("Quote fetch failed for %s: %s", cache_key, exc)
@@ -1552,6 +1613,7 @@ class MarketDataService:
                                 symbol=cache_key, price=price, change_percent=change_percent, source="finnhub",
                                 event_timestamp=event_timestamp, diagnostics={"finnhub_key_source": finnhub_key_source},
                             )
+                            payload["previous_close"] = float(prev_close) if isinstance(prev_close, (int, float)) else None
                             self.quote_cache.set(cache_key, payload)
                             return payload
 
@@ -1614,6 +1676,9 @@ class MarketDataService:
                         payload = self._normalized_fallback_payload(
                             symbol=cache_key, price=price, change_percent=change_percent, source="twelve_data",
                             event_timestamp=event_timestamp, diagnostics={"twelve_data_key_source": twelve_data_key_source},
+                        )
+                        payload["previous_close"] = (
+                            float(prev_close_raw) if prev_close_raw not in (None, "") else None
                         )
                         self.quote_cache.set(cache_key, payload)
                         return payload
