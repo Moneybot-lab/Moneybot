@@ -1483,11 +1483,9 @@ class MarketDataService:
                     market_time = info.get("regularMarketTime")
                     if isinstance(market_time, (int, float)):
                         event_timestamp = datetime.fromtimestamp(float(market_time), tz=timezone.utc)
-                    payload = self._normalized_fallback_payload(
+                    return self._normalized_fallback_payload(
                         symbol=cache_key, price=price, change_percent=change, source="yfinance", event_timestamp=event_timestamp,
                     )
-                    payload["previous_close"] = float(prev) if isinstance(prev, (int, float)) else None
-                    return payload
                 except Exception as exc:  # noqa: BLE001
                     last_error = str(exc)
                     logging.warning("Quote fetch failed for %s: %s", cache_key, exc)
@@ -1554,7 +1552,6 @@ class MarketDataService:
                                 symbol=cache_key, price=price, change_percent=change_percent, source="finnhub",
                                 event_timestamp=event_timestamp, diagnostics={"finnhub_key_source": finnhub_key_source},
                             )
-                            payload["previous_close"] = float(prev_close) if isinstance(prev_close, (int, float)) else None
                             self.quote_cache.set(cache_key, payload)
                             return payload
 
@@ -1617,9 +1614,6 @@ class MarketDataService:
                         payload = self._normalized_fallback_payload(
                             symbol=cache_key, price=price, change_percent=change_percent, source="twelve_data",
                             event_timestamp=event_timestamp, diagnostics={"twelve_data_key_source": twelve_data_key_source},
-                        )
-                        payload["previous_close"] = (
-                            float(prev_close_raw) if prev_close_raw not in (None, "") else None
                         )
                         self.quote_cache.set(cache_key, payload)
                         return payload

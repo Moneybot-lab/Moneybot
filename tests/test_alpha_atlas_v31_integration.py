@@ -2,6 +2,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -10,6 +11,7 @@ from moneybot.services.alpha_atlas_v31_quantitative import (
     V31_SCALER_RECIPES,
 )
 from moneybot.services.alpha_atlas_v3_features import ALPHA_ATLAS_V3_FEATURES
+from moneybot.services.deterministic_model import BaselineModelArtifact, save_artifact
 from scripts import train_alpha_atlas_v31_candidate as trainer
 from scripts.run_track_b_offline import alpha_atlas_v31_summary
 
@@ -176,6 +178,24 @@ def test_end_to_end_freezes_before_holdout_and_binds_certification(
     _jsonl(all_path, train_rows + test_rows)
     monkeypatch.setenv("MASSIVE_API_KEY", "test-key")
     output = tmp_path / "alpha_atlas_v31"
+    v3_path = tmp_path / "alpha_atlas_v3" / "candidate_alpha_atlas_v3_clean.json"
+    v3_path.parent.mkdir()
+    v3_feature = ALPHA_ATLAS_V3_FEATURES[0]
+    save_artifact(
+        BaselineModelArtifact(
+            version="candidate-alpha-atlas-v3-clean-v1",
+            feature_columns=[v3_feature],
+            means=[0.0],
+            stds=[1.0],
+            weights=[0.0],
+            bias=-10.0,
+            decision_threshold=0.55,
+        ),
+        v3_path,
+    )
+    v3_payload = json.loads(v3_path.read_text())
+    v3_payload["feature_fill_values"] = {v3_feature: 0.0}
+    v3_path.write_text(json.dumps(v3_payload))
     report = trainer.train_v31(
         train_path, test_path, all_path, output, _MassiveHistory()
     )
@@ -193,3 +213,95 @@ def test_end_to_end_freezes_before_holdout_and_binds_certification(
     assert certification["candidate_artifact_sha256"]
     assert certification["passed"] is True
     assert candidate["automatic_promotion"] is False
+    comparison_path = output / "alpha_atlas_v31_candidate_iteration_comparison.json"
+    assert comparison_path.is_file()
+    comparison = json.loads(comparison_path.read_text())
+    assert comparison["bootstrap"]["metrics"]["brier_score"]["available"] is True
+    assert comparison["bootstrap"]["metrics"]["avg_selected_return"]["available"] is False
+    assert report["automatic_promotion"] is False
+
+
+def test_bootstrap_reports_metric_specific_unavailable_evidence(monkeypatch):
+    frame = pd.DataFrame(
+        {
+            "event_date": ["2026-01-01", "2026-01-02", "2026-01-03"],
+            "symbol": ["AAA", "BBB", "CCC"],
+            "return_5d": [0.01, -0.01, 0.02],
+            "label_up_5d": [1.0, 0.0, 1.0],
+        }
+    )
+
+    def metric_specific_score(sampled, probabilities, threshold, weights):
+        is_v31 = float(np.mean(probabilities)) > 0.5
+        return {
+            "brier_score": 0.10 if is_v31 else 0.20,
+            # Both candidates legitimately make zero positive selections.
+            "avg_selected_return": None,
+            # Non-finite paired deltas must also be treated as unavailable.
+            "big_loss_false_positive_rate": np.inf if is_v31 else 0.0,
+        }
+
+    monkeypatch.setattr(trainer, "_score", metric_specific_score)
+    result = trainer._date_block_bootstrap(
+        frame,
+        np.full(len(frame), 0.1),
+        np.full(len(frame), 0.9),
+        0.55,
+        0.55,
+        samples=20,
+    )
+
+    assert result["available"] is True
+    assert result["metrics"]["brier_score"] == {
+        "available": True,
+        "sample_count": 20,
+        "mean_delta": pytest.approx(-0.1),
+        "confidence_interval_95": pytest.approx([-0.1, -0.1]),
+        "probability_v31_improves": 1.0,
+    }
+    assert result["metrics"]["avg_selected_return"] == {
+        "available": False,
+        "sample_count": 0,
+        "reason": "no paired finite bootstrap observations",
+        "mean_delta": None,
+        "confidence_interval_95": None,
+        "probability_v31_improves": None,
+    }
+    assert result["metrics"]["big_loss_false_positive_rate"]["available"] is False
+
+
+def test_bootstrap_normal_case_preserves_all_metric_results(monkeypatch):
+    frame = pd.DataFrame(
+        {
+            "event_date": ["2026-01-01", "2026-01-02", "2026-01-03"],
+            "symbol": ["AAA", "BBB", "CCC"],
+        }
+    )
+
+    def complete_score(sampled, probabilities, threshold, weights):
+        is_v31 = float(np.mean(probabilities)) > 0.5
+        return {
+            "brier_score": 0.15 if is_v31 else 0.20,
+            "avg_selected_return": 0.03 if is_v31 else 0.01,
+            "big_loss_false_positive_rate": 0.01 if is_v31 else 0.02,
+        }
+
+    monkeypatch.setattr(trainer, "_score", complete_score)
+    result = trainer._date_block_bootstrap(
+        frame,
+        np.full(len(frame), 0.1),
+        np.full(len(frame), 0.9),
+        0.55,
+        0.55,
+        samples=12,
+    )
+
+    assert result["available"] is True
+    for metric in (
+        "brier_score",
+        "avg_selected_return",
+        "big_loss_false_positive_rate",
+    ):
+        assert result["metrics"][metric]["available"] is True
+        assert result["metrics"][metric]["sample_count"] == 12
+        assert result["metrics"][metric]["confidence_interval_95"] is not None

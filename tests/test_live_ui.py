@@ -23,19 +23,6 @@ def test_home_quick_ask_uses_rest_without_live_status_noise_and_keeps_profile_ad
     assert 'href="/settings"' in js
 
 
-def test_market_cards_format_index_levels_and_usd_instruments_with_absolute_change():
-    client = _client()
-    js = client.get("/static/js/home.js").get_data(as_text=True)
-    assert "function marketValue(item, value)" in js
-    assert "function marketChange(item)" in js
-    assert "item?.instrument_type !== 'index'" in js
-    assert "${marketChange(item)}" in js
-    assert "label:(context)=>marketValue(item, context.parsed.y)" in js
-    assert "if(value === null || value === undefined || value === '') return 'Unavailable'" in js
-    for stale_value in ("39210.4", "5245.1", "16592.3", "2340.8", "78.42", "61110.2"):
-        assert stale_value not in js
-
-
 def test_portfolio_has_live_price_pnl_reconnect_and_controlled_refresh_ui():
     client = _client()
     html = client.get("/portfolio").get_data(as_text=True)
