@@ -14,9 +14,10 @@ research-only. V3/V3.1, production serving, promotion and routing remain unchang
 | Executable labels | `build_training_rows_from_raw_market`, `split_adjusted_forward_return` | Entry is next eligible open; label start equals entry; five/ten-session exits are S4/S9 official closes. |
 | Corporate actions | `moneybot/services/corporate_actions.py`, `_feature_safe_splits` | Feature actions must be known by cutoff (or effective before the decision session); future-horizon action IDs/factors remain available only to realized labels. |
 | Provenance/schema | `AlphaAtlasV4TimingRecord`, row emission and `write_rows` | Rows emit timing, per-family source/availability, prices, calendar, identity, staleness, actions, commit and manifest identity under `massive-decision-training-rows.v4`. |
-| Canonical observations | `moneybot/services/alpha_atlas_v4_canonical_observations.py`; `scripts/canonicalize_alpha_atlas_v4_rows.py` | Raw requests become unit-weight canonical observations plus a request map under `alpha-atlas-v4-canonical-observation.v1` before cleaning or model research. |
+| Canonical observations | `moneybot/services/alpha_atlas_v4_canonical_observations.py`; `scripts/canonicalize_alpha_atlas_v4_rows.py` | Raw requests become unit-weight canonical observations plus a request map under `alpha-atlas-v4-canonical-observation.v2` before cleaning or model research. |
 | Canonical evaluation | `evaluate_canonical_observations`, `canonical_date_block_bootstrap`, `canonical_top_k`, `score_once_and_fan_out` | Metrics, cutoff-date bootstrap, ranking and research fan-out operate only on unique canonical IDs. |
 | Track B orchestration | `.github/workflows/track-b-offline.yml`; `validate_alpha_atlas_v4_workflow_artifacts.py` | Run-scoped raw validation, canonicalization, canonical validation, cleaning and feature materialization execute in contract order; failure evidence uploads unconditionally. |
+| Prior-request state | `build_massive_decision_training_rows.py`; canonical request map | V2 removes symbol-global prior model/recommendation history from model features, retains values/source/timestamp per request, and rejects legacy feature names. |
 
 ## Compatibility and intentionally deferred work
 
@@ -24,7 +25,7 @@ research-only. V3/V3.1, production serving, promotion and routing remain unchang
   training reader accepts V2 or V4 but rejects mixed schemas; production comparison
   and promotion evidence remain pinned to V2.
 - No V4 dataset was generated, ingested, deduplicated, trained, promoted or routed.
-- The V4 cleaner now requires `alpha-atlas-v4-canonical-observations.v1`; raw V4
+- The V4 cleaner now requires `alpha-atlas-v4-canonical-observations.v2`; raw V4
   request rows cannot bypass canonicalization. Homogeneous V4 training inputs require
   unique canonical IDs and unit model weights.
 - Timestamp-safe intraday V4 features and breadth inputs remain deferred because the

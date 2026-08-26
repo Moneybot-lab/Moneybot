@@ -225,13 +225,24 @@ def test_build_training_rows_adds_symbol_signal_history_counts():
 
     assert summary["rows_joined"] == 4
     row = next(item for item in rows if item["event_date"] == "2026-02-25")
-    assert row["feature_symbol_signal_count_7d"] == 2
-    assert row["feature_symbol_buy_count_7d"] == 1
-    assert row["feature_symbol_sell_count_7d"] == 1
-    assert row["feature_days_since_last_signal"] == 1.0
-    assert row["feature_previous_recommendation_buy"] == 1
-    assert row["feature_recommendation_changed"] == 0
-    assert row["feature_probability_up_delta_from_last_signal"] == 0.1
+    state = row["request_prior_state"]
+    assert state["symbol_signal_count_7d"] == 2
+    assert state["symbol_buy_count_7d"] == 1
+    assert state["symbol_sell_count_7d"] == 1
+    assert state["days_since_last_signal"] == 1.0
+    assert state["previous_recommendation_buy"] == 1
+    assert state["recommendation_changed"] == 0
+    assert state["probability_up_delta_from_last_signal"] == 0.1
+    assert state["prior_signal_at"].endswith("+00:00")
+    assert not {
+        "feature_probability_up_delta_from_last_signal",
+        "feature_previous_recommendation_buy",
+        "feature_recommendation_changed",
+        "feature_symbol_signal_count_7d",
+        "feature_symbol_buy_count_7d",
+        "feature_symbol_sell_count_7d",
+        "feature_days_since_last_signal",
+    }.intersection(row)
 
 
 def test_write_rows_creates_reproducible_join_manifest(tmp_path):

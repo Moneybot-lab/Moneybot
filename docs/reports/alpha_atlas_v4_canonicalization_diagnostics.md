@@ -1,6 +1,6 @@
 # Alpha Atlas V4 canonicalization diagnostics
 
-Contract: `alpha-atlas-v4-canonical-observation.v1`
+Contract: `alpha-atlas-v4-canonical-observation.v2`
 
 These are deterministic synthetic test counts, not production dataset claims.
 

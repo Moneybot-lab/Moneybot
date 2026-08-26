@@ -14,6 +14,7 @@ from moneybot.services.alpha_atlas_v4_canonical_observations import (
     CANONICAL_HASH_POLICY,
     CANONICAL_OBSERVATION_CONTRACT_VERSION,
     CANONICAL_OBSERVATION_SCHEMA_VERSION,
+    CanonicalizationError,
     canonicalize_v4_rows,
 )
 
@@ -49,12 +50,29 @@ def materialize_canonical_observations(
     raw_manifest = json.loads(raw_manifest_path.read_text(encoding="utf-8"))
     if raw_manifest.get("schema_version") != "massive-decision-training-rows.v4":
         raise ValueError("canonicalization requires raw V4 rows")
-    result = canonicalize_v4_rows(_read_jsonl(input_path))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    diagnostics_path = output_dir / "canonicalization_diagnostics.json"
+    try:
+        result = canonicalize_v4_rows(_read_jsonl(input_path))
+    except CanonicalizationError as exc:
+        diagnostics_path.write_text(
+            json.dumps(
+                {
+                    "status": "failed_closed",
+                    "error": exc.reason,
+                    **exc.diagnostics,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        raise
     observations_path = output_dir / "canonical_observations.jsonl"
     request_map_path = output_dir / "request_to_observation_map.jsonl"
     observation_hash = _write_jsonl(observations_path, result.observations)
     request_map_hash = _write_jsonl(request_map_path, result.request_map)
-    diagnostics_path = output_dir / "canonicalization_diagnostics.json"
     diagnostics_path.write_text(
         json.dumps(result.diagnostics, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -63,6 +81,9 @@ def materialize_canonical_observations(
         "schema_version": CANONICAL_OBSERVATION_SCHEMA_VERSION,
         "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
         "canonical_hash_policy": CANONICAL_HASH_POLICY,
+        "model_feature_contract_version": raw_manifest.get(
+            "model_feature_contract_version"
+        ),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "raw_input_path": str(input_path),
         "raw_input_sha256": hashlib.sha256(input_path.read_bytes()).hexdigest(),

@@ -38,6 +38,7 @@ from moneybot.services.corporate_actions import (
 SCHEMA_VERSION = "massive-decision-training-rows.v4"
 EXCHANGE_CALENDAR = ExchangeCalendar()
 DEFAULT_MAX_STALENESS_SESSIONS = 3
+V4_FEATURE_CONTRACT_VERSION = "alpha-atlas-v4-features.v2"
 SECTOR_BENCHMARK_SYMBOLS = {
     "communication services": "XLC",
     "consumer discretionary": "XLY",
@@ -1159,7 +1160,7 @@ def build_training_rows_from_raw_market(
             ),
             exchange=str(event.get("exchange") or "XNAS"),
             trading_calendar=EXCHANGE_CALENDAR.identifier,
-            model_feature_contract_version="alpha-atlas-v4-features.v1",
+            model_feature_contract_version=V4_FEATURE_CONTRACT_VERSION,
             decision_at=decision_at,
             feature_cutoff_at=decision_at,
             latest_source_bar_at=feature_source_at,
@@ -1240,29 +1241,50 @@ def build_training_rows_from_raw_market(
                 "model_version", payload.get("model_version")
             ),
             "feature_close": close,
-            "feature_symbol_signal_count_7d": signal_counts_7d["signals"],
-            "feature_symbol_buy_count_7d": signal_counts_7d["buys"],
-            "feature_symbol_sell_count_7d": signal_counts_7d["sells"],
-            "feature_days_since_last_signal": (
-                round((ts - previous_signal_ts) / 86_400, 6)
-                if previous_signal_ts is not None
-                else None
-            ),
-            "feature_previous_recommendation_buy": (
-                int(previous_action in {"BUY", "STRONG BUY"})
-                if previous_action is not None
-                else 0
-            ),
-            "feature_recommendation_changed": (
-                int(previous_action != current_action)
-                if previous_action is not None
-                else 0
-            ),
-            "feature_probability_up_delta_from_last_signal": (
-                round(current_probability - previous_probability, 6)
-                if current_probability is not None and previous_probability is not None
-                else None
-            ),
+            "request_prior_state": {
+                "symbol_signal_count_7d": signal_counts_7d["signals"],
+                "symbol_buy_count_7d": signal_counts_7d["buys"],
+                "symbol_sell_count_7d": signal_counts_7d["sells"],
+                "days_since_last_signal": (
+                    round((ts - previous_signal_ts) / 86_400, 6)
+                    if previous_signal_ts is not None
+                    else None
+                ),
+                "previous_recommendation_buy": (
+                    int(previous_action in {"BUY", "STRONG BUY"})
+                    if previous_action is not None
+                    else 0
+                ),
+                "recommendation_changed": (
+                    int(previous_action != current_action)
+                    if previous_action is not None
+                    else 0
+                ),
+                "probability_up_delta_from_last_signal": (
+                    round(current_probability - previous_probability, 6)
+                    if current_probability is not None
+                    and previous_probability is not None
+                    else None
+                ),
+                "prior_signal_at": (
+                    datetime.fromtimestamp(
+                        previous_signal_ts, tz=timezone.utc
+                    ).isoformat()
+                    if previous_signal_ts is not None
+                    else None
+                ),
+                "prior_signal_source_identifier": (
+                    str(
+                        (previous_signal.get("snapshot") or {}).get("model_version")
+                        or (previous_signal.get("payload") or {}).get("model_version")
+                        or previous_signal.get("decision_source")
+                        or "unknown"
+                    )
+                    if isinstance(previous_signal, dict)
+                    else None
+                ),
+                "classification": "request_level_prior_model_and_recommendation_history",
+            },
             "feature_sma_10": sma_10,
             "feature_sma_20": sma_20,
             "feature_sma_50": sma_50,
@@ -1388,6 +1410,7 @@ def write_rows(
             }
         ),
         "timing_contract_version": ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
+        "model_feature_contract_version": V4_FEATURE_CONTRACT_VERSION,
         "exchange_calendar": EXCHANGE_CALENDAR.identifier,
         "staleness_tolerance_sessions": DEFAULT_MAX_STALENESS_SESSIONS,
         "join_policy": "point-in-time completed daily bars; executable open entry; S0-based official close exit",

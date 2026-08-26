@@ -223,7 +223,7 @@ def _duplicate_weights(frame: pd.DataFrame) -> np.ndarray:
         and "model_sample_weight" in frame.columns
         and frame["canonicalization_contract_version"]
         .astype(str)
-        .eq("alpha-atlas-v4-canonical-observation.v1")
+        .eq("alpha-atlas-v4-canonical-observation.v2")
         .all()
     ):
         weights = frame["model_sample_weight"].astype(float).to_numpy()

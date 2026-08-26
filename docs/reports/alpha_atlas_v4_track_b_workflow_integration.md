@@ -7,7 +7,7 @@ The workflow built raw rows at
 `massive-decision-training-rows.v4`, then passed that exact raw path directly to
 `clean_training_snapshot.py`. The workflow contained no invocation of
 `canonicalize_alpha_atlas_v4_rows.py`. The cleaner correctly required
-`alpha-atlas-v4-canonical-observations.v1` and rejected the raw manifest; no stale
+`alpha-atlas-v4-canonical-observations.v2` and rejected the raw manifest; no stale
 fallback filename or independent unadjusted-price flag caused the observed error.
 
 ## Repaired run-scoped sequence
@@ -34,3 +34,11 @@ Artifact upload remains unconditional and includes available raw, canonical, cle
 and sanitized failure evidence. Local tests exercise the real build → canonicalize →
 clean → feature-store sequence. A GitHub Actions dispatch is still required to verify
 runner credentials, Massive access, and downstream hosted execution.
+
+## Prior-state conflict repair
+
+The hosted V1 canonicalization reached its intended fail-closed boundary and exposed
+request-order-dependent prior-model state. V2 preserves the complete family in the
+request map, excludes it from canonical observations, and emits bounded diagnostics for
+all unresolved material conflicts before failing. The run-scoped stage order and upload
+behavior are unchanged.

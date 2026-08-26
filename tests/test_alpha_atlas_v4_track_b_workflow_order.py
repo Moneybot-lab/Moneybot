@@ -73,7 +73,8 @@ def _canonical_fixture(tmp_path, **row_overrides):
     row = {
         "canonical_observation_id": "aav4obs_1",
         "model_sample_weight": 1.0,
-        "canonicalization_contract_version": "alpha-atlas-v4-canonical-observation.v1",
+        "canonicalization_contract_version": "alpha-atlas-v4-canonical-observation.v2",
+        "model_feature_contract_version": "alpha-atlas-v4-features.v2",
     }
     row.update(row_overrides)
     content = json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n"
@@ -82,8 +83,9 @@ def _canonical_fixture(tmp_path, **row_overrides):
     manifest.write_text(
         json.dumps(
             {
-                "schema_version": "alpha-atlas-v4-canonical-observations.v1",
-                "canonicalization_contract_version": "alpha-atlas-v4-canonical-observation.v1",
+                "schema_version": "alpha-atlas-v4-canonical-observations.v2",
+                "canonicalization_contract_version": "alpha-atlas-v4-canonical-observation.v2",
+                "model_feature_contract_version": "alpha-atlas-v4-features.v2",
                 "canonical_observations_sha256": hashlib.sha256(
                     content.encode()
                 ).hexdigest(),
@@ -183,3 +185,9 @@ def test_v2_production_boundary_and_v4_no_promotion_are_unchanged():
     assert "/api/promote-track-b-candidate" not in text
     assert '"automatic_promotion": False' in text
     assert "ready_for_live_routing=true" not in text
+    assert "V4_FEATURE_CONTRACT_VERSION: alpha-atlas-v4-features.v2" in text
+    assert (
+        "V4_CANONICALIZATION_CONTRACT_VERSION: alpha-atlas-v4-canonical-observation.v2"
+        in text
+    )
+    assert "alpha-atlas-v4-canonical-observation.v1" not in text

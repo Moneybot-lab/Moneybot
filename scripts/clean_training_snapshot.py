@@ -13,6 +13,8 @@ from moneybot.services.alpha_atlas_v4_canonical_observations import (
     CANONICAL_OBSERVATION_CONTRACT_VERSION,
     CANONICAL_OBSERVATION_SCHEMA_VERSION,
     V4_RAW_ROW_SCHEMA,
+    DEPRECATED_PRIOR_STATE_FEATURES,
+    V4_FEATURE_CONTRACT_VERSION,
 )
 
 QUALITY_SCHEMA_VERSION = "moneybot-training-quality-report.v2"
@@ -129,6 +131,11 @@ def clean_training_snapshot(
         raise ValueError(
             "Stale unadjusted Massive training snapshot cannot be cleaned as canonical data"
         )
+    if (
+        input_manifest.get("model_feature_contract_version")
+        != V4_FEATURE_CONTRACT_VERSION
+    ):
+        raise ValueError("Canonical Massive input feature contract is incompatible")
     if input_manifest.get(
         "corporate_action_normalization_passed"
     ) is not True or not input_manifest.get("split_metadata_hash"):
@@ -144,7 +151,9 @@ def clean_training_snapshot(
         != REQUIRED_CANONICAL_SCHEMA_VERSION
         or row.get("canonicalization_contract_version")
         != CANONICAL_OBSERVATION_CONTRACT_VERSION
+        or row.get("model_feature_contract_version") != V4_FEATURE_CONTRACT_VERSION
         or row.get("model_sample_weight") != 1.0
+        or bool(DEPRECATED_PRIOR_STATE_FEATURES.intersection(row))
         or row.get("split_metadata_hash") != input_manifest["split_metadata_hash"]
         or row.get("price_adjustment_policy") != "event_time_split_adjusted"
     ]
@@ -213,12 +222,13 @@ def clean_training_snapshot(
     canonical_input_sha256 = _sha256(input_path)
     cleaned_manifest_path = cleaned_path.with_suffix(".jsonl.manifest.json")
     cleaned_manifest = {
-        "schema_version": "alpha-atlas-v4-cleaned-observations.v1",
+        "schema_version": "alpha-atlas-v4-cleaned-observations.v2",
         "canonical_input_path": str(input_path),
         "canonical_input_sha256": canonical_input_sha256,
         "canonical_input_manifest": str(manifest_path),
         "canonical_input_schema_version": input_manifest["schema_version"],
         "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
+        "model_feature_contract_version": V4_FEATURE_CONTRACT_VERSION,
         "cleaned_observations_path": str(cleaned_path),
         "cleaned_observations_sha256": _sha256(cleaned_path),
         "split_metadata_hash": input_manifest["split_metadata_hash"],

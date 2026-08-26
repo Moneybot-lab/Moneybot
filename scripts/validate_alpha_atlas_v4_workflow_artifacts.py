@@ -16,7 +16,7 @@ from moneybot.services.alpha_atlas_v4_canonical_observations import (
 )
 
 TIMING_CONTRACT_VERSION = "alpha-atlas-v4-prediction-execution-contract.v1"
-FEATURE_CONTRACT_VERSION = "alpha-atlas-v4-features.v1"
+FEATURE_CONTRACT_VERSION = "alpha-atlas-v4-features.v2"
 
 
 def _sha256(path: Path) -> str:
@@ -59,6 +59,8 @@ def validate_raw(rows_path: Path, manifest_path: Path) -> dict[str, Any]:
         raise ValueError("raw manifest schema is not massive-decision-training-rows.v4")
     if manifest.get("timing_contract_version") != TIMING_CONTRACT_VERSION:
         raise ValueError("raw manifest timing contract is incompatible")
+    if manifest.get("model_feature_contract_version") != FEATURE_CONTRACT_VERSION:
+        raise ValueError("raw manifest feature contract is incompatible")
     for row in rows:
         if row.get("canonical_dataset_schema_version") != V4_RAW_ROW_SCHEMA:
             raise ValueError("raw row schema is incompatible")
@@ -83,6 +85,8 @@ def validate_canonical(rows_path: Path, manifest_path: Path) -> dict[str, Any]:
         != CANONICAL_OBSERVATION_CONTRACT_VERSION
     ):
         raise ValueError("canonicalization contract is incompatible")
+    if manifest.get("model_feature_contract_version") != FEATURE_CONTRACT_VERSION:
+        raise ValueError("canonical manifest feature contract is incompatible")
     if manifest.get("canonical_observations_sha256") != _sha256(rows_path):
         raise ValueError("canonical observation hash does not match manifest")
     identifiers = [row.get("canonical_observation_id") for row in rows]
@@ -96,6 +100,11 @@ def validate_canonical(rows_path: Path, manifest_path: Path) -> dict[str, Any]:
         for row in rows
     ):
         raise ValueError("canonical rows mix contract versions")
+    if any(
+        row.get("model_feature_contract_version") != FEATURE_CONTRACT_VERSION
+        for row in rows
+    ):
+        raise ValueError("canonical rows mix feature contract versions")
     return {
         "schema": CANONICAL_OBSERVATION_SCHEMA_VERSION,
         "rows": len(rows),

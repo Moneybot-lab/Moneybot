@@ -10,8 +10,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping
 
-CANONICAL_OBSERVATION_CONTRACT_VERSION = "alpha-atlas-v4-canonical-observation.v1"
-CANONICAL_OBSERVATION_SCHEMA_VERSION = "alpha-atlas-v4-canonical-observations.v1"
+CANONICAL_OBSERVATION_CONTRACT_VERSION = "alpha-atlas-v4-canonical-observation.v2"
+CANONICAL_OBSERVATION_SCHEMA_VERSION = "alpha-atlas-v4-canonical-observations.v2"
+V4_FEATURE_CONTRACT_VERSION = "alpha-atlas-v4-features.v2"
 CANONICAL_HASH_POLICY = "sha256-canonical-json-v1"
 V4_RAW_ROW_SCHEMA = "massive-decision-training-rows.v4"
 
@@ -40,7 +41,19 @@ _REQUEST_FIELDS = {
     "quick_ask_id",
     "alert_id",
     "ui_surface",
+    "request_prior_state",
 }
+DEPRECATED_PRIOR_STATE_FEATURES = frozenset(
+    {
+        "feature_probability_up_delta_from_last_signal",
+        "feature_previous_recommendation_buy",
+        "feature_recommendation_changed",
+        "feature_symbol_buy_count_7d",
+        "feature_symbol_sell_count_7d",
+        "feature_symbol_signal_count_7d",
+        "feature_days_since_last_signal",
+    }
+)
 _MATERIAL_EXACT_FIELDS = {
     "feature_family_source_at",
     "feature_family_available_at",
@@ -66,17 +79,30 @@ _MATERIAL_EXACT_FIELDS = {
 class CanonicalizationError(ValueError):
     """Raised when raw V4 rows cannot be canonicalized without guessing."""
 
-    def __init__(self, reason: str, *, canonical_observation_id: str | None = None):
+    def __init__(
+        self,
+        reason: str,
+        *,
+        canonical_observation_id: str | None = None,
+        diagnostics: Mapping[str, Any] | None = None,
+    ):
         super().__init__(reason)
         self.reason = reason
         self.canonical_observation_id = canonical_observation_id
-        self.diagnostics = {
-            "conflict_count": int(reason.startswith("conflicting_material_fields:")),
-            "conflicts_by_reason": (
-                {reason: 1} if reason.startswith("conflicting_material_fields:") else {}
-            ),
-            "canonical_observation_id": canonical_observation_id,
-        }
+        self.diagnostics = dict(
+            diagnostics
+            or {
+                "conflict_count": int(
+                    reason.startswith("conflicting_material_fields:")
+                ),
+                "conflicts_by_reason": (
+                    {reason: 1}
+                    if reason.startswith("conflicting_material_fields:")
+                    else {}
+                ),
+                "canonical_observation_id": canonical_observation_id,
+            }
+        )
 
 
 @dataclass(frozen=True)
@@ -121,7 +147,7 @@ def canonical_economic_key(row: Mapping[str, Any]) -> dict[str, Any]:
         raise CanonicalizationError("invalid_label_horizon_sessions")
     for field, expected in (
         ("timing_contract_version", "alpha-atlas-v4-prediction-execution-contract.v1"),
-        ("model_feature_contract_version", "alpha-atlas-v4-features.v1"),
+        ("model_feature_contract_version", V4_FEATURE_CONTRACT_VERSION),
     ):
         if key[field] != expected:
             raise CanonicalizationError(f"incompatible_version:{field}")
@@ -158,6 +184,50 @@ def _request_identity(row: Mapping[str, Any], index: int) -> str:
     return value.strip()
 
 
+def _field_family(name: str) -> str:
+    if name.startswith("feature_"):
+        return "model_feature"
+    if name.startswith(("label_", "return_")):
+        return "target"
+    if name in {
+        "entry_at",
+        "exit_at",
+        "raw_entry_price",
+        "raw_exit_price",
+        "adjusted_entry_price",
+        "adjusted_exit_price",
+    }:
+        return "execution"
+    if "split" in name or "source" in name or "available" in name:
+        return "provenance"
+    if name.endswith("contract_version") or name.endswith("schema_version"):
+        return "contract"
+    return "canonical"
+
+
+def _field_classification(name: str) -> str:
+    family = _field_family(name)
+    return {
+        "model_feature": "canonical_model_feature",
+        "target": "target_or_outcome",
+        "execution": "execution_data",
+        "provenance": "provenance_data",
+        "contract": "contract_data",
+        "canonical": "canonical_economic_data",
+    }[family]
+
+
+def _field_owner(name: str) -> str:
+    return {
+        "model_feature": "feature_builder",
+        "target": "label_builder",
+        "execution": "execution_label_builder",
+        "provenance": "point_in_time_provenance",
+        "contract": "contract_migration",
+        "canonical": "canonicalization_owner",
+    }[_field_family(name)]
+
+
 def canonicalize_v4_rows(rows: Iterable[Mapping[str, Any]]) -> CanonicalizationResult:
     """Collapse compatible requests and fail closed on economic conflicts."""
     raw = [dict(row) for row in rows]
@@ -165,6 +235,11 @@ def canonicalize_v4_rows(rows: Iterable[Mapping[str, Any]]) -> CanonicalizationR
     seen_requests: set[str] = set()
     endpoints: Counter[str] = Counter()
     for index, row in enumerate(raw):
+        deprecated = sorted(DEPRECATED_PRIOR_STATE_FEATURES.intersection(row))
+        if deprecated:
+            raise CanonicalizationError(
+                "deprecated_request_state_model_feature:" + ",".join(deprecated)
+            )
         if row.get("canonicalization_contract_version") not in {
             None,
             CANONICAL_OBSERVATION_CONTRACT_VERSION,
@@ -180,6 +255,75 @@ def canonicalize_v4_rows(rows: Iterable[Mapping[str, Any]]) -> CanonicalizationR
         groups.setdefault(observation_id, []).append((index, row))
         endpoints[str(row.get("endpoint") or "unknown")] += 1
 
+    conflicts: dict[str, dict[str, Any]] = {}
+    conflicting_groups: set[str] = set()
+    for observation_id, members in groups.items():
+        reference = _material_payload(members[0][1])
+        for _, candidate in members[1:]:
+            other = _material_payload(candidate)
+            for name in sorted(set(reference) | set(other)):
+                left, right = reference.get(name), other.get(name)
+                if left == right:
+                    continue
+                conflicting_groups.add(observation_id)
+                entry = conflicts.setdefault(
+                    name,
+                    {
+                        "conflict_count": 0,
+                        "field_family": _field_family(name),
+                        "classification": _field_classification(name),
+                        "null_versus_value_conflicts": 0,
+                        "numeric_values": [],
+                        "recommended_owner": _field_owner(name),
+                    },
+                )
+                entry["conflict_count"] += 1
+                entry["null_versus_value_conflicts"] += int(
+                    (left is None) != (right is None)
+                )
+                entry["numeric_values"].extend(
+                    float(value)
+                    for value in (left, right)
+                    if isinstance(value, (int, float)) and not isinstance(value, bool)
+                )
+    if conflicts:
+        by_field = {}
+        by_family: Counter[str] = Counter()
+        for name, entry in sorted(conflicts.items()):
+            numeric = entry.pop("numeric_values")
+            entry["numeric_range"] = (
+                {"minimum": min(numeric), "maximum": max(numeric)} if numeric else None
+            )
+            by_field[name] = entry
+            by_family[entry["field_family"]] += entry["conflict_count"]
+        multiplicity = Counter(len(members) for members in groups.values())
+        diagnostics = {
+            "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
+            "total_proposed_groups": len(groups),
+            "compatible_groups": len(groups) - len(conflicting_groups),
+            "conflicting_groups": len(conflicting_groups),
+            "conflict_count": sum(
+                entry["conflict_count"] for entry in by_field.values()
+            ),
+            "conflicts_by_reason": {
+                name: entry["conflict_count"] for name, entry in by_field.items()
+            },
+            "rows_in_conflicting_groups": sum(
+                len(groups[group]) for group in conflicting_groups
+            ),
+            "conflict_count_by_field": by_field,
+            "conflict_count_by_field_family": dict(sorted(by_family.items())),
+            "multiplicity_distribution": {
+                str(key): value for key, value in sorted(multiplicity.items())
+            },
+            "example_group_ids": sorted(conflicting_groups)[:10],
+            "examples_redacted": True,
+        }
+        fields = ",".join(sorted(conflicts)[:10])
+        raise CanonicalizationError(
+            "conflicting_material_fields:" + fields, diagnostics=diagnostics
+        )
+
     observations: list[dict[str, Any]] = []
     request_map: list[dict[str, Any]] = []
     multiplicities: Counter[int] = Counter()
@@ -189,19 +333,6 @@ def canonicalize_v4_rows(rows: Iterable[Mapping[str, Any]]) -> CanonicalizationR
     counts_by_horizon: Counter[str] = Counter()
     for observation_id in sorted(groups):
         members = groups[observation_id]
-        reference = _material_payload(members[0][1])
-        for _, candidate in members[1:]:
-            other = _material_payload(candidate)
-            if other != reference:
-                differing = sorted(
-                    name
-                    for name in set(reference) | set(other)
-                    if reference.get(name) != other.get(name)
-                )
-                reason = "conflicting_material_fields:" + ",".join(differing[:10])
-                raise CanonicalizationError(
-                    reason, canonical_observation_id=observation_id
-                )
         ordered_members = sorted(
             members, key=lambda item: _request_identity(item[1], item[0])
         )
@@ -231,6 +362,7 @@ def canonicalize_v4_rows(rows: Iterable[Mapping[str, Any]]) -> CanonicalizationR
         counts_by_lane[str(representative["lane"])] += 1
         counts_by_horizon[str(representative["label_horizon_sessions"])] += 1
         for index, member in ordered_members:
+            prior_state = member.get("request_prior_state")
             request_map.append(
                 {
                     "request_id": _request_identity(member, index),
@@ -239,6 +371,9 @@ def canonicalize_v4_rows(rows: Iterable[Mapping[str, Any]]) -> CanonicalizationR
                     "canonical_observation_id": observation_id,
                     "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
                     "decision_source": member.get("decision_source"),
+                    "prior_signal_state": (
+                        dict(prior_state) if isinstance(prior_state, Mapping) else None
+                    ),
                 }
             )
     request_map.sort(key=lambda row: row["request_id"])
@@ -252,6 +387,10 @@ def canonicalize_v4_rows(rows: Iterable[Mapping[str, Any]]) -> CanonicalizationR
     )[:10]
     diagnostics = {
         "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
+        "total_proposed_groups": len(groups),
+        "compatible_groups": len(groups),
+        "conflicting_groups": 0,
+        "rows_in_conflicting_groups": 0,
         "raw_request_rows": len(raw),
         "canonical_observations": len(observations),
         "duplicate_rows_collapsed": duplicates,
@@ -262,6 +401,9 @@ def canonicalize_v4_rows(rows: Iterable[Mapping[str, Any]]) -> CanonicalizationR
         "largest_duplicate_groups": largest,
         "conflict_count": 0,
         "conflicts_by_reason": {},
+        "conflict_count_by_field": {},
+        "conflict_count_by_field_family": {},
+        "examples_redacted": True,
         "counts_by_symbol": dict(sorted(counts_by_symbol.items())),
         "counts_by_cutoff_date": dict(sorted(counts_by_cutoff_date.items())),
         "counts_by_lane": dict(sorted(counts_by_lane.items())),

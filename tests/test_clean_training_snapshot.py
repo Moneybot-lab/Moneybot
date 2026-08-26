@@ -28,6 +28,35 @@ def test_clean_training_snapshot_rejects_raw_v4_before_canonicalization(tmp_path
         clean_training_snapshot(input_path, tmp_path / "quality")
 
 
+def test_cleaner_rejects_deprecated_prior_state_model_feature(tmp_path):
+    input_path = tmp_path / "canonical.jsonl"
+    row = {
+        "canonical_dataset_schema_version": "massive-decision-training-rows.v4",
+        "canonical_observation_schema_version": CANONICAL_OBSERVATION_SCHEMA_VERSION,
+        "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
+        "model_feature_contract_version": "alpha-atlas-v4-features.v2",
+        "canonical_observation_id": "observation-1",
+        "model_sample_weight": 1.0,
+        "split_metadata_hash": "fixture-hash",
+        "price_adjustment_policy": "event_time_split_adjusted",
+        "feature_probability_up_delta_from_last_signal": 0.1,
+    }
+    input_path.write_text(json.dumps(row) + "\n")
+    input_path.with_suffix(".jsonl.manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": CANONICAL_OBSERVATION_SCHEMA_VERSION,
+                "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
+                "model_feature_contract_version": "alpha-atlas-v4-features.v2",
+                "corporate_action_normalization_passed": True,
+                "split_metadata_hash": "fixture-hash",
+            }
+        )
+    )
+    with pytest.raises(ValueError, match="canonical split-adjusted dataset lineage"):
+        clean_training_snapshot(input_path, tmp_path / "quality")
+
+
 def test_clean_training_snapshot_drops_bad_rows_and_writes_quality_outputs(tmp_path):
     input_path = tmp_path / "rows.jsonl"
     good = {
@@ -44,6 +73,7 @@ def test_clean_training_snapshot_drops_bad_rows_and_writes_quality_outputs(tmp_p
         "canonical_dataset_schema_version": "massive-decision-training-rows.v4",
         "canonical_observation_schema_version": CANONICAL_OBSERVATION_SCHEMA_VERSION,
         "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
+        "model_feature_contract_version": "alpha-atlas-v4-features.v2",
         "canonical_observation_id": "observation-1",
         "model_sample_weight": 1.0,
         "split_metadata_hash": "fixture-hash",
@@ -85,6 +115,7 @@ def test_clean_training_snapshot_drops_bad_rows_and_writes_quality_outputs(tmp_p
             {
                 "schema_version": CANONICAL_OBSERVATION_SCHEMA_VERSION,
                 "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
+                "model_feature_contract_version": "alpha-atlas-v4-features.v2",
                 "raw_request_rows": 5,
                 "corporate_action_normalization_passed": True,
                 "split_metadata_hash": "fixture-hash",

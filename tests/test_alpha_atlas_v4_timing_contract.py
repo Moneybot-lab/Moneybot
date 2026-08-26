@@ -16,7 +16,7 @@ def _record(**overrides):
         "point_in_time_symbol_id": "massive:2026-08-25:AAPL",
         "exchange": "XNAS",
         "trading_calendar": "XNYS",
-        "model_feature_contract_version": "alpha-atlas-v4-features.v1",
+        "model_feature_contract_version": "alpha-atlas-v4-features.v2",
         "decision_at": datetime(2026, 8, 25, 12, 0, tzinfo=timezone.utc),
         "feature_cutoff_at": datetime(2026, 8, 25, 11, 59, tzinfo=timezone.utc),
         "latest_source_bar_at": {

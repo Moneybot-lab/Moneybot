@@ -220,6 +220,19 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
         {row["canonical_observation_id"] for row in canonical_rows_payload}
     ) == len(canonical_rows_payload)
     assert {row["model_sample_weight"] for row in canonical_rows_payload} == {1.0}
+    assert not any(
+        key in row
+        for row in canonical_rows_payload
+        for key in (
+            "feature_probability_up_delta_from_last_signal",
+            "feature_previous_recommendation_buy",
+            "feature_recommendation_changed",
+            "feature_symbol_signal_count_7d",
+            "feature_symbol_buy_count_7d",
+            "feature_symbol_sell_count_7d",
+            "feature_days_since_last_signal",
+        )
+    )
     assert (
         quality_report["canonical_input_sha256"]
         == canonical_manifest["canonical_observations_sha256"]
@@ -230,7 +243,7 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     )
     assert (
         quality_report["canonical_input_schema_version"]
-        == "alpha-atlas-v4-canonical-observations.v1"
+        == "alpha-atlas-v4-canonical-observations.v2"
     )
     assert (
         quality_report["split_metadata_hash"]

@@ -1,7 +1,8 @@
 # Alpha Atlas V4 canonical economic observation contract
 
-**Contract version:** `alpha-atlas-v4-canonical-observation.v1`
-**Observation schema:** `alpha-atlas-v4-canonical-observations.v1`
+**Contract version:** `alpha-atlas-v4-canonical-observation.v2`
+**Observation schema:** `alpha-atlas-v4-canonical-observations.v2`
+**Feature contract:** `alpha-atlas-v4-features.v2`
 **Canonical cleaning report:** `moneybot-training-quality-report.v2`
 **Hash policy:** `sha256-canonical-json-v1`
 **Scope:** V4 research/shadow only
@@ -72,3 +73,12 @@ Calibration, Brier, accuracy, return, utility, and Top-K operate on unique canon
 IDs. Bootstrap resamples canonical observations grouped by feature-cutoff exchange
 date, so endpoint repetition cannot narrow intervals. Fan-out is a pure research
 utility and is not connected to production recommendations or routing.
+
+## V2 prior-request-state boundary
+
+Version 2 removes the complete prior-signal/request-history family from canonical model
+content. Raw rows carry it as `request_prior_state`; canonicalization removes that object
+from observations and preserves it per request as `prior_signal_state` in the request
+map. Supplying any deprecated `feature_*` prior-state name under
+`alpha-atlas-v4-features.v2` fails closed. Genuine feature, target, execution, timing,
+and corporate-action conflicts remain material. V1 artifacts are not reinterpreted.

@@ -30,6 +30,9 @@ env:
   MASSIVE_FLATFILES_PREFIX: ${{ inputs.massive_prefix || 'us_stocks_sip/day_aggs_v1' }}
   MASSIVE_INGEST_DATE: ${{ inputs.dataset_date || '' }}
   TRACK_B_MIN_ROWS: ${{ inputs.min_rows || '200' }}
+  V4_FEATURE_CONTRACT_VERSION: alpha-atlas-v4-features.v2
+  V4_CANONICALIZATION_CONTRACT_VERSION: alpha-atlas-v4-canonical-observation.v2
+  V4_CANONICAL_OBSERVATION_SCHEMA: alpha-atlas-v4-canonical-observations.v2
   AWS_REQUEST_CHECKSUM_CALCULATION: when_required
   AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
   AWS_DEFAULT_REGION: us-east-1
@@ -330,8 +333,9 @@ jobs:
           summary = {
               "schema_version": "alpha-atlas-v4-track-b-research-run.v1",
               "timing_contract_version": "alpha-atlas-v4-prediction-execution-contract.v1",
-              "canonicalization_contract_version": "alpha-atlas-v4-canonical-observation.v1",
-              "canonical_observation_schema": "alpha-atlas-v4-canonical-observations.v1",
+              "model_feature_contract_version": os.environ["V4_FEATURE_CONTRACT_VERSION"],
+              "canonicalization_contract_version": os.environ["V4_CANONICALIZATION_CONTRACT_VERSION"],
+              "canonical_observation_schema": os.environ["V4_CANONICAL_OBSERVATION_SCHEMA"],
               "raw_request_rows": canonical["raw_request_rows"],
               "canonical_observations": canonical["canonical_observations"],
               "cleaned_observations": quality["cleaned_rows"],

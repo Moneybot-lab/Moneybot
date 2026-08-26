@@ -37,7 +37,7 @@ def _row(request_id="request-1", endpoint="quick_ask", **overrides):
         "lane": "track_b_research",
         "universe_policy_version": "track-b-us-equities.v1",
         "timing_contract_version": "alpha-atlas-v4-prediction-execution-contract.v1",
-        "model_feature_contract_version": "alpha-atlas-v4-features.v1",
+        "model_feature_contract_version": "alpha-atlas-v4-features.v2",
         "execution_cost_policy_version": None,
         "canonical_dataset_schema_version": "massive-decision-training-rows.v4",
         "exchange_calendar": "XNYS-rule-calendar.v1",
@@ -70,13 +70,26 @@ def _row(request_id="request-1", endpoint="quick_ask", **overrides):
 
 def _duplicate_rows():
     return [
-        _row("quick-1", "quick_ask"),
+        _row(
+            "quick-1",
+            "quick_ask",
+            request_prior_state={
+                "probability_up_delta_from_last_signal": 0.15,
+                "prior_signal_source_identifier": "frozen-v3",
+                "prior_signal_at": "2026-03-20T15:00:00+00:00",
+            },
+        ),
         _row(
             "watch-1",
             "user_watchlist",
             decision_at="2026-03-23T12:01:00+00:00",
             user_id=99,
             watchlist_id=123,
+            request_prior_state={
+                "probability_up_delta_from_last_signal": -0.2,
+                "prior_signal_source_identifier": "legacy-rule",
+                "prior_signal_at": "2026-03-21T15:00:00+00:00",
+            },
         ),
     ]
 
@@ -86,11 +99,38 @@ def test_identical_economics_from_multiple_endpoints_collapse_once():
     assert len(result.observations) == 1
     assert len(result.request_map) == 2
     assert result.observations[0]["raw_request_count"] == 2
+    assert "request_prior_state" not in result.observations[0]
+    assert "feature_probability_up_delta_from_last_signal" not in result.observations[0]
+    assert [
+        row["prior_signal_state"]["probability_up_delta_from_last_signal"]
+        for row in result.request_map
+    ] == [0.15, -0.2]
 
 
 def test_request_metadata_does_not_change_canonical_id():
     first, second = _duplicate_rows()
     assert canonical_observation_id(first) == canonical_observation_id(second)
+
+
+def test_deprecated_prior_state_feature_is_rejected_from_v2_model_contract():
+    with pytest.raises(CanonicalizationError, match="deprecated_request_state"):
+        canonicalize_v4_rows([_row(feature_probability_up_delta_from_last_signal=0.1)])
+
+
+def test_prior_state_multiplicity_does_not_change_metrics_ranking_or_bootstrap():
+    single = canonicalize_v4_rows([_duplicate_rows()[0]])
+    repeated = canonicalize_v4_rows(_duplicate_rows())
+    observation_id = single.observations[0]["canonical_observation_id"]
+    scores = {observation_id: 0.8}
+    assert evaluate_canonical_observations(single.observations, scores) | {
+        "raw_request_count": 2
+    } == evaluate_canonical_observations(repeated.observations, scores)
+    assert canonical_top_k(single.observations, scores, k=1) == canonical_top_k(
+        repeated.observations, scores, k=1
+    )
+    assert canonical_date_block_bootstrap(
+        single.observations, scores, resamples=20
+    ) == canonical_date_block_bootstrap(repeated.observations, scores, resamples=20)
 
 
 def test_input_order_does_not_change_outputs_or_ids():
@@ -138,6 +178,43 @@ def test_conflicting_material_duplicates_fail_closed(overrides, reason):
         canonicalize_v4_rows([_row(), _row("request-2", **overrides)])
     assert captured.value.diagnostics["conflict_count"] == 1
     assert captured.value.diagnostics["conflicts_by_reason"]
+
+
+def test_conflict_diagnostic_reports_all_fields_and_sanitized_ranges():
+    with pytest.raises(CanonicalizationError) as captured:
+        canonicalize_v4_rows(
+            [
+                _row(),
+                _row(
+                    "request-2",
+                    feature_close=999.0,
+                    label_up_5d=0,
+                    raw_entry_price=None,
+                    label_split_adjustment_factor=2.0,
+                ),
+            ]
+        )
+    diagnostic = captured.value.diagnostics
+    assert diagnostic["total_proposed_groups"] == 1
+    assert diagnostic["conflicting_groups"] == 1
+    assert diagnostic["rows_in_conflicting_groups"] == 2
+    assert set(diagnostic["conflict_count_by_field"]) == {
+        "feature_close",
+        "label_split_adjustment_factor",
+        "label_up_5d",
+        "raw_entry_price",
+    }
+    assert (
+        diagnostic["conflict_count_by_field"]["raw_entry_price"][
+            "null_versus_value_conflicts"
+        ]
+        == 1
+    )
+    assert diagnostic["conflict_count_by_field"]["feature_close"]["numeric_range"] == {
+        "minimum": 114.0,
+        "maximum": 999.0,
+    }
+    assert diagnostic["examples_redacted"] is True
 
 
 @pytest.mark.parametrize(
@@ -331,3 +408,34 @@ def test_materialization_writes_observation_map_manifest_and_diagnostics(tmp_pat
     assert (tmp_path / "canonical" / "canonical_observations.jsonl").is_file()
     assert (tmp_path / "canonical" / "request_to_observation_map.jsonl").is_file()
     assert (tmp_path / "canonical" / "canonicalization_diagnostics.json").is_file()
+
+
+def test_materialization_writes_bounded_diagnostic_before_conflict_exit(tmp_path):
+    import json
+
+    raw_path = tmp_path / "raw.jsonl"
+    raw_path.write_text(
+        "".join(
+            json.dumps(row) + "\n"
+            for row in [
+                _row(),
+                _row("request-2", feature_close=999.0, label_up_5d=0),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    raw_path.with_suffix(".jsonl.manifest.json").write_text(
+        json.dumps({"schema_version": "massive-decision-training-rows.v4"}),
+        encoding="utf-8",
+    )
+    output = tmp_path / "canonical"
+    with pytest.raises(CanonicalizationError):
+        materialize_canonical_observations(raw_path, output)
+    diagnostic = json.loads(
+        (output / "canonicalization_diagnostics.json").read_text(encoding="utf-8")
+    )
+    assert diagnostic["status"] == "failed_closed"
+    assert set(diagnostic["conflict_count_by_field"]) == {
+        "feature_close",
+        "label_up_5d",
+    }
