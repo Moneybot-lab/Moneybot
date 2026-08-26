@@ -143,9 +143,10 @@ class MarketDataProvider(ABC):
 
 
 class ExchangeCalendar:
-    """Small NYSE holiday/session calendar used until a full calendar dependency is justified."""
+    """Rule-based XNYS session resolver with UTC boundaries and early closes."""
 
     timezone = ZoneInfo("America/New_York")
+    identifier = "XNYS-rule-calendar.v1"
 
     @staticmethod
     def _observed(day: date) -> date:
@@ -203,16 +204,61 @@ class ExchangeCalendar:
     def is_trading_day(self, day: date) -> bool:
         return day.weekday() < 5 and day not in self.holidays(day.year)
 
+    def local_date(self, timestamp: datetime) -> date:
+        if timestamp.tzinfo is None:
+            raise ValueError("exchange timestamps must be timezone-aware")
+        return timestamp.astimezone(self.timezone).date()
+
+    def previous_session(self, day: date, *, include_current: bool = False) -> date:
+        candidate = day if include_current else day - timedelta(days=1)
+        while not self.is_trading_day(candidate):
+            candidate -= timedelta(days=1)
+        return candidate
+
+    def next_session(self, day: date, *, include_current: bool = False) -> date:
+        candidate = day if include_current else day + timedelta(days=1)
+        while not self.is_trading_day(candidate):
+            candidate += timedelta(days=1)
+        return candidate
+
+    def is_early_close(self, day: date) -> bool:
+        if not self.is_trading_day(day):
+            return False
+        thanksgiving = self._nth_weekday(day.year, 11, 3, 4)
+        if day == thanksgiving + timedelta(days=1):
+            return True
+        if day.month == 12 and day.day == 24:
+            return True
+        return day.month == 7 and day.day == 3 and date(day.year, 7, 4).weekday() not in {0, 6}
+
+    def session_open(self, day: date) -> datetime:
+        if not self.is_trading_day(day):
+            raise ValueError(f"{day} is not an XNYS trading session")
+        return datetime.combine(day, dt_time(9, 30), tzinfo=self.timezone).astimezone(timezone.utc)
+
+    def session_close(self, day: date) -> datetime:
+        if not self.is_trading_day(day):
+            raise ValueError(f"{day} is not an XNYS trading session")
+        close = dt_time(13, 0) if self.is_early_close(day) else dt_time(16, 0)
+        return datetime.combine(day, close, tzinfo=self.timezone).astimezone(timezone.utc)
+
+    def entry_session_after(self, decision_at: datetime) -> date:
+        local_day = self.local_date(decision_at)
+        if self.is_trading_day(local_day) and decision_at < self.session_open(local_day):
+            return local_day
+        return self.next_session(local_day)
+
     def session_at(self, timestamp: datetime) -> str:
         local = timestamp.astimezone(self.timezone)
         if not self.is_trading_day(local.date()):
             return "closed"
         current = local.time().replace(tzinfo=None)
+        close = dt_time(13, 0) if self.is_early_close(local.date()) else dt_time(16, 0)
         if dt_time(4, 0) <= current < dt_time(9, 30):
             return "pre"
-        if dt_time(9, 30) <= current < dt_time(16, 0):
+        if dt_time(9, 30) <= current < close:
             return "regular"
-        if dt_time(16, 0) <= current < dt_time(20, 0):
+        if close <= current < dt_time(20, 0):
             return "after"
         return "closed"
 

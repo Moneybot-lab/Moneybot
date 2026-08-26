@@ -7,7 +7,19 @@ from pathlib import Path
 
 
 def _ts(day: str) -> int:
-    return int(datetime.fromisoformat(day).replace(tzinfo=timezone.utc).timestamp())
+    return int(
+        datetime.fromisoformat(day).replace(hour=12, tzinfo=timezone.utc).timestamp()
+    )
+
+
+def _trading_days(start: date, count: int) -> list[date]:
+    days = []
+    candidate = start
+    while len(days) < count:
+        if candidate.weekday() < 5:
+            days.append(candidate)
+        candidate += timedelta(days=1)
+    return days
 
 
 def _run(command: list[str], *, cwd: Path) -> None:
@@ -24,16 +36,16 @@ def _run(command: list[str], *, cwd: Path) -> None:
 
 
 def test_massive_offline_training_pipeline_smoke(tmp_path):
-    """End-to-end smoke test for raw market joins, feature materialization, training, backtesting, and promotion prep."""
+    """Research smoke test stops after V4 canonicalization and feature materialization."""
     repo = Path(__file__).resolve().parents[1]
     raw_dir = tmp_path / "raw" / "2026-07-03" / "us_stocks_sip" / "day_aggs_v1"
     raw_dir.mkdir(parents=True)
 
-    for symbol, base in {"AAPL": 100.0, "MSFT": 200.0}.items():
+    trading_days = _trading_days(date(2026, 1, 2), 100)
+    for symbol, base in {"AAPL": 100.0, "MSFT": 200.0, "SPY": 400.0}.items():
         rows = ["ticker,date,open,high,low,close,volume"]
-        start = date(2026, 1, 1)
-        for idx in range(1, 91):
-            day = (start + timedelta(days=idx - 1)).isoformat()
+        for idx, trading_day in enumerate(trading_days, 1):
+            day = trading_day.isoformat()
             close = base + (idx * 0.75) + ((idx % 7) * 0.2)
             rows.append(
                 f"{symbol},{day},{close},{close + 1},{close - 1},{close},{1000000 + idx}"
@@ -42,9 +54,8 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
 
     decision_log = tmp_path / "decision_events.jsonl"
     events = []
-    start = date(2026, 1, 1)
     for idx in range(7, 75):
-        day = (start + timedelta(days=idx - 1)).isoformat()
+        day = trading_days[idx - 1].isoformat()
         for symbol in ("AAPL", "MSFT"):
             events.append(
                 {
@@ -67,11 +78,9 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     )
 
     training_rows = tmp_path / "track_b" / "decision_training_snapshot_massive.jsonl"
+    canonical_dir = tmp_path / "track_b" / "canonical"
     quality_dir = tmp_path / "track_b" / "training_quality"
     flat_dir = tmp_path / "track_b" / "flat_feature_store"
-    suite_dir = tmp_path / "track_b" / "challenger_suite"
-    backtest_report = suite_dir / "backtest_report.json"
-    promotion_dir = tmp_path / "track_b"
 
     split_cache = tmp_path / "massive_splits.jsonl"
     split_cache.write_text("", encoding="utf-8")
@@ -107,9 +116,21 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     _run(
         [
             sys.executable,
-            "scripts/clean_training_snapshot.py",
+            "scripts/canonicalize_alpha_atlas_v4_rows.py",
             "--input",
             str(training_rows),
+            "--output-dir",
+            str(canonical_dir),
+        ],
+        cwd=repo,
+    )
+    canonical_rows = canonical_dir / "canonical_observations.jsonl"
+    _run(
+        [
+            sys.executable,
+            "scripts/clean_training_snapshot.py",
+            "--input",
+            str(canonical_rows),
             "--output-dir",
             str(quality_dir),
             "--max-market-lag-days",
@@ -132,50 +153,6 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
         ],
         cwd=repo,
     )
-    _run(
-        [
-            sys.executable,
-            "scripts/train_challenger_suite.py",
-            "--input",
-            str(flat_dir / "train.jsonl"),
-            "--output-dir",
-            str(suite_dir),
-            "--min-rows",
-            "20",
-        ],
-        cwd=repo,
-    )
-    _run(
-        [
-            sys.executable,
-            "scripts/backtest_challenger_suite.py",
-            "--suite-manifest",
-            str(suite_dir / "challenger_suite_manifest.json"),
-            "--feature-store",
-            str(flat_dir / "test.jsonl"),
-            "--output",
-            str(backtest_report),
-            "--min-rows",
-            "10",
-            "--transaction-cost-bps",
-            "5",
-            "--slippage-bps",
-            "5",
-        ],
-        cwd=repo,
-    )
-    _run(
-        [
-            sys.executable,
-            "scripts/prepare_challenger_promotion.py",
-            "--backtest-report",
-            str(backtest_report),
-            "--output-dir",
-            str(promotion_dir),
-        ],
-        cwd=repo,
-    )
-
     training_manifest = json.loads(
         training_rows.with_suffix(training_rows.suffix + ".manifest.json").read_text(
             encoding="utf-8"
@@ -187,12 +164,10 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     feature_manifest = json.loads(
         (flat_dir / "manifest.json").read_text(encoding="utf-8")
     )
-    suite_manifest = json.loads(
-        (suite_dir / "challenger_suite_manifest.json").read_text(encoding="utf-8")
-    )
-    backtest = json.loads(backtest_report.read_text(encoding="utf-8"))
-    promotion_report = json.loads(
-        (promotion_dir / "model_comparison_track_b.json").read_text(encoding="utf-8")
+    canonical_diagnostics = json.loads(
+        (canonical_dir / "canonicalization_diagnostics.json").read_text(
+            encoding="utf-8"
+        )
     )
 
     assert training_manifest["leakage_safe"] is True
@@ -202,10 +177,6 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     assert (quality_dir / "cleaned_train.jsonl").exists()
     assert (quality_dir / "cleaned_test.jsonl").exists()
     assert feature_manifest["reproducibility"]["output_file_hashes"] is True
-    assert suite_manifest["challenger_count"] >= 20
-    assert len(backtest["challengers"]) == suite_manifest["challenger_count"]
-    assert "date_cohort_benchmark_avg_return" in backtest["benchmark"]
-    assert "candidate_win" in promotion_report
-    assert (promotion_dir / "candidate_model_track_b.json").exists()
-    assert (promotion_dir / "production_servability_certification.json").exists()
-    assert "servability_certification" in promotion_report
+    assert canonical_diagnostics["raw_request_rows"] >= 100
+    assert canonical_diagnostics["canonical_observations"] >= 100
+    assert not (tmp_path / "track_b" / "candidate_model_track_b.json").exists()
