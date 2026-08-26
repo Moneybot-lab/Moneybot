@@ -144,9 +144,9 @@ def test_track_b_workflow_runs_v3_after_cleaning_and_uploads_all_outputs():
     assert "v3_generation_status.json" in workflow
     assert "exit 0" in workflow
     assert "scripts/train_alpha_atlas_v3_candidate.py" in workflow
-    assert "--train data/track_b/training_quality/cleaned_train.jsonl" in workflow
-    assert "--test data/track_b/training_quality/cleaned_test.jsonl" in workflow
-    assert "--all-cleaned data/track_b/training_quality/cleaned_all.jsonl" in workflow
+    assert '--train "$CLEANED_DIR/cleaned_train.jsonl"' in workflow
+    assert '--test "$CLEANED_DIR/cleaned_test.jsonl"' in workflow
+    assert '--all-cleaned "$CLEANED_DIR/cleaned_all.jsonl"' in workflow
     assert "data/track_b/**" in workflow
     for name in (
         "candidate_alpha_atlas_v3_clean.json",
