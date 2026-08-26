@@ -118,7 +118,7 @@ def test_workflow_runs_v31_after_cleaning_and_uploads_directory():
     v31 = workflow.index("Train Alpha Atlas V3.1 human-review candidate")
     assert clean < v31
     assert "scripts/train_alpha_atlas_v31_candidate.py" in workflow
-    assert "data/track_b/alpha_atlas_v31/**" in workflow
+    assert "${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v31/**" in workflow
     assert "MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}" in workflow
 
 
@@ -217,7 +217,9 @@ def test_end_to_end_freezes_before_holdout_and_binds_certification(
     assert comparison_path.is_file()
     comparison = json.loads(comparison_path.read_text())
     assert comparison["bootstrap"]["metrics"]["brier_score"]["available"] is True
-    assert comparison["bootstrap"]["metrics"]["avg_selected_return"]["available"] is False
+    assert (
+        comparison["bootstrap"]["metrics"]["avg_selected_return"]["available"] is False
+    )
     assert report["automatic_promotion"] is False
 
 

@@ -2,6 +2,10 @@ import json
 import pytest
 
 from scripts.clean_training_snapshot import clean_training_snapshot
+from moneybot.services.alpha_atlas_v4_canonical_observations import (
+    CANONICAL_OBSERVATION_CONTRACT_VERSION,
+    CANONICAL_OBSERVATION_SCHEMA_VERSION,
+)
 
 
 def test_clean_training_snapshot_rejects_stale_unadjusted_schema(tmp_path):
@@ -9,6 +13,16 @@ def test_clean_training_snapshot_rejects_stale_unadjusted_schema(tmp_path):
     input_path.write_text("{}\n")
     input_path.with_suffix(input_path.suffix + ".manifest.json").write_text(
         json.dumps({"schema_version": "massive-decision-training-rows.v1"})
+    )
+    with pytest.raises(ValueError, match="Stale unadjusted"):
+        clean_training_snapshot(input_path, tmp_path / "quality")
+
+
+def test_clean_training_snapshot_rejects_raw_v4_before_canonicalization(tmp_path):
+    input_path = tmp_path / "raw_v4.jsonl"
+    input_path.write_text("{}\n")
+    input_path.with_suffix(input_path.suffix + ".manifest.json").write_text(
+        json.dumps({"schema_version": "massive-decision-training-rows.v4"})
     )
     with pytest.raises(ValueError, match="Stale unadjusted"):
         clean_training_snapshot(input_path, tmp_path / "quality")
@@ -27,17 +41,41 @@ def test_clean_training_snapshot_drops_bad_rows_and_writes_quality_outputs(tmp_p
         "feature_return_1d_lagged": 0.01,
         "feature_return_5d_lagged": 0.03,
         "feature_volume": 1000,
-        "canonical_dataset_schema_version": "massive-decision-training-rows.v2",
+        "canonical_dataset_schema_version": "massive-decision-training-rows.v4",
+        "canonical_observation_schema_version": CANONICAL_OBSERVATION_SCHEMA_VERSION,
+        "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
+        "canonical_observation_id": "observation-1",
+        "model_sample_weight": 1.0,
         "split_metadata_hash": "fixture-hash",
         "price_adjustment_policy": "event_time_split_adjusted",
     }
     rows = [
         good,
-        dict(good),
-        {**good, "ts": 2, "label_up_5d": None},
-        {**good, "ts": 3, "feature_volume": None},
-        {**good, "ts": 4, "event_date": "2026-01-10", "market_asof_date": "2026-01-01"},
-        {**good, "ts": 5, "probability_up": None},
+        {
+            **good,
+            "ts": 2,
+            "canonical_observation_id": "observation-2",
+            "label_up_5d": None,
+        },
+        {
+            **good,
+            "ts": 3,
+            "canonical_observation_id": "observation-3",
+            "feature_volume": None,
+        },
+        {
+            **good,
+            "ts": 4,
+            "canonical_observation_id": "observation-4",
+            "event_date": "2026-01-10",
+            "market_asof_date": "2026-01-01",
+        },
+        {
+            **good,
+            "ts": 5,
+            "canonical_observation_id": "observation-5",
+            "probability_up": None,
+        },
     ]
     input_path.write_text(
         "".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8"
@@ -45,7 +83,9 @@ def test_clean_training_snapshot_drops_bad_rows_and_writes_quality_outputs(tmp_p
     input_path.with_suffix(input_path.suffix + ".manifest.json").write_text(
         json.dumps(
             {
-                "schema_version": "massive-decision-training-rows.v2",
+                "schema_version": CANONICAL_OBSERVATION_SCHEMA_VERSION,
+                "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
+                "raw_request_rows": 5,
                 "corporate_action_normalization_passed": True,
                 "split_metadata_hash": "fixture-hash",
                 "split_events_loaded": 0,
@@ -58,8 +98,8 @@ def test_clean_training_snapshot_drops_bad_rows_and_writes_quality_outputs(tmp_p
         input_path, tmp_path / "quality", train_ratio=0.5, max_market_lag_days=3
     )
 
-    assert report["raw_rows"] == 6
-    assert report["drop_counts"]["duplicates"] == 1
+    assert report["raw_rows"] == 5
+    assert report["drop_counts"]["duplicates"] == 0
     assert report["drop_counts"]["missing_label"] == 1
     assert report["drop_counts"]["missing_required_features"] == 1
     assert report["drop_counts"]["stale_market_asof_date"] == 1

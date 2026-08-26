@@ -109,12 +109,29 @@ def _load_jsonl(path: Path) -> pd.DataFrame:
             raise ValueError(
                 f"Cleaned Massive input lacks corporate-action lineage: {sorted(missing)}"
             )
-        if set(frame["canonical_dataset_schema_version"].dropna().astype(str)) != {
-            "massive-decision-training-rows.v2"
+        schemas = set(frame["canonical_dataset_schema_version"].dropna().astype(str))
+        if len(schemas) != 1 or not schemas <= {
+            "massive-decision-training-rows.v2",
+            "massive-decision-training-rows.v4",
         }:
             raise ValueError(
-                "Cleaned Massive input uses a stale canonical dataset schema"
+                "Cleaned Massive input mixes or uses an unsupported canonical dataset schema"
             )
+        if schemas == {"massive-decision-training-rows.v4"}:
+            required_v4 = {
+                "canonical_observation_id",
+                "canonicalization_contract_version",
+                "model_sample_weight",
+            }
+            missing_v4 = required_v4.difference(frame.columns)
+            if missing_v4 or set(frame["model_sample_weight"].astype(float)) != {1.0}:
+                raise ValueError(
+                    "V4 cleaned input must contain unique unit-weight canonical observations"
+                )
+            if frame["canonical_observation_id"].duplicated().any():
+                raise ValueError(
+                    "V4 cleaned input contains duplicate canonical observations"
+                )
         if set(frame["price_adjustment_policy"].dropna().astype(str)) != {
             "event_time_split_adjusted"
         }:
@@ -201,6 +218,18 @@ def _temporal_train_periods(
 
 
 def _duplicate_weights(frame: pd.DataFrame) -> np.ndarray:
+    if (
+        "canonicalization_contract_version" in frame.columns
+        and "model_sample_weight" in frame.columns
+        and frame["canonicalization_contract_version"]
+        .astype(str)
+        .eq("alpha-atlas-v4-canonical-observation.v1")
+        .all()
+    ):
+        weights = frame["model_sample_weight"].astype(float).to_numpy()
+        if not np.allclose(weights, 1.0):
+            raise ValueError("V4 canonical model sample weights must all equal one")
+        return np.ones(len(frame), dtype=float)
     keys = pd.DataFrame(index=frame.index)
     for column in GROUP_COLUMNS:
         keys[column] = (
