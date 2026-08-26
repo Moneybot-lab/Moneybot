@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -33,6 +34,16 @@ def _run(command: list[str], *, cwd: Path) -> None:
         "stdout": completed.stdout,
         "stderr": completed.stderr,
     }
+
+
+def _run_failure(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(cwd)
+    completed = subprocess.run(
+        command, cwd=cwd, env=env, capture_output=True, text=True, check=False
+    )
+    assert completed.returncode != 0
+    return completed
 
 
 def test_massive_offline_training_pipeline_smoke(tmp_path):
@@ -113,6 +124,19 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
         ],
         cwd=repo,
     )
+    rejected = _run_failure(
+        [
+            sys.executable,
+            "scripts/canonicalize_alpha_atlas_v4_rows.py",
+            "--input",
+            str(training_rows),
+            "--output-dir",
+            str(tmp_path / "must_not_clean_raw"),
+        ],
+        cwd=repo,
+    )
+    assert "Stale unadjusted Massive training snapshot" in rejected.stderr
+    assert not (tmp_path / "must_not_clean_raw" / "cleaned_all.jsonl").exists()
     _run(
         [
             sys.executable,
@@ -161,6 +185,9 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     quality_report = json.loads(
         (quality_dir / "model_quality_report.json").read_text(encoding="utf-8")
     )
+    cleaned_manifest = json.loads(
+        (quality_dir / "cleaned_all.jsonl.manifest.json").read_text(encoding="utf-8")
+    )
     feature_manifest = json.loads(
         (flat_dir / "manifest.json").read_text(encoding="utf-8")
     )
@@ -169,6 +196,12 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
             encoding="utf-8"
         )
     )
+    canonical_manifest = json.loads(
+        canonical_rows.with_suffix(".jsonl.manifest.json").read_text(encoding="utf-8")
+    )
+    canonical_rows_payload = [
+        json.loads(line) for line in canonical_rows.read_text().splitlines() if line
+    ]
 
     assert training_manifest["leakage_safe"] is True
     assert training_manifest["rows_joined"] >= 100
@@ -179,4 +212,32 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     assert feature_manifest["reproducibility"]["output_file_hashes"] is True
     assert canonical_diagnostics["raw_request_rows"] >= 100
     assert canonical_diagnostics["canonical_observations"] >= 100
+    assert (
+        canonical_diagnostics["raw_request_rows"]
+        >= canonical_diagnostics["canonical_observations"]
+    )
+    assert len(
+        {row["canonical_observation_id"] for row in canonical_rows_payload}
+    ) == len(canonical_rows_payload)
+    assert {row["model_sample_weight"] for row in canonical_rows_payload} == {1.0}
+    assert (
+        quality_report["canonical_input_sha256"]
+        == canonical_manifest["canonical_observations_sha256"]
+    )
+    assert (
+        cleaned_manifest["canonical_input_sha256"]
+        == canonical_manifest["canonical_observations_sha256"]
+    )
+    assert (
+        quality_report["canonical_input_schema_version"]
+        == "alpha-atlas-v4-canonical-observations.v1"
+    )
+    assert (
+        quality_report["split_metadata_hash"]
+        == training_manifest["split_metadata_hash"]
+    )
+    assert (
+        canonical_manifest["raw_input_sha256"]
+        == hashlib.sha256(training_rows.read_bytes()).hexdigest()
+    )
     assert not (tmp_path / "track_b" / "candidate_model_track_b.json").exists()

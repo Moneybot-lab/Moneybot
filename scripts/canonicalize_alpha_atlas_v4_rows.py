@@ -65,6 +65,7 @@ def materialize_canonical_observations(
         "canonical_hash_policy": CANONICAL_HASH_POLICY,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "raw_input_path": str(input_path),
+        "raw_input_sha256": hashlib.sha256(input_path.read_bytes()).hexdigest(),
         "canonical_observations_path": str(observations_path),
         "request_map_path": str(request_map_path),
         "canonical_observations_sha256": observation_hash,

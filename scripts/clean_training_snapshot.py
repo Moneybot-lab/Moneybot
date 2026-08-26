@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -47,6 +48,10 @@ def _write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8") as fh:
         for row in rows:
             fh.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _parse_day(value: Any) -> date | None:
@@ -205,10 +210,31 @@ def clean_training_snapshot(
     _write_jsonl(test_path, test_rows)
     _write_jsonl(eval_path, eval_rows)
 
+    canonical_input_sha256 = _sha256(input_path)
+    cleaned_manifest_path = cleaned_path.with_suffix(".jsonl.manifest.json")
+    cleaned_manifest = {
+        "schema_version": "alpha-atlas-v4-cleaned-observations.v1",
+        "canonical_input_path": str(input_path),
+        "canonical_input_sha256": canonical_input_sha256,
+        "canonical_input_manifest": str(manifest_path),
+        "canonical_input_schema_version": input_manifest["schema_version"],
+        "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
+        "cleaned_observations_path": str(cleaned_path),
+        "cleaned_observations_sha256": _sha256(cleaned_path),
+        "split_metadata_hash": input_manifest["split_metadata_hash"],
+        "model_sample_weight_policy": "unit_weight_only",
+    }
+    cleaned_manifest_path.write_text(
+        json.dumps(cleaned_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
     report = {
         "schema_version": QUALITY_SCHEMA_VERSION,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "input_path": str(input_path),
+        "canonical_input_sha256": canonical_input_sha256,
+        "canonical_manifest_path": str(manifest_path),
         "output_dir": str(output_dir),
         "label_column": label_column,
         "required_features": required,
@@ -227,6 +253,7 @@ def clean_training_snapshot(
             "cleaned_train": str(train_path),
             "cleaned_test": str(test_path),
             "evaluation_probability_rows": str(eval_path),
+            "cleaned_manifest": str(cleaned_manifest_path),
         },
         "training_ready": bool(train_rows and test_rows),
         "evaluation_ready": bool(eval_rows),

@@ -16,6 +16,7 @@ research-only. V3/V3.1, production serving, promotion and routing remain unchang
 | Provenance/schema | `AlphaAtlasV4TimingRecord`, row emission and `write_rows` | Rows emit timing, per-family source/availability, prices, calendar, identity, staleness, actions, commit and manifest identity under `massive-decision-training-rows.v4`. |
 | Canonical observations | `moneybot/services/alpha_atlas_v4_canonical_observations.py`; `scripts/canonicalize_alpha_atlas_v4_rows.py` | Raw requests become unit-weight canonical observations plus a request map under `alpha-atlas-v4-canonical-observation.v1` before cleaning or model research. |
 | Canonical evaluation | `evaluate_canonical_observations`, `canonical_date_block_bootstrap`, `canonical_top_k`, `score_once_and_fan_out` | Metrics, cutoff-date bootstrap, ranking and research fan-out operate only on unique canonical IDs. |
+| Track B orchestration | `.github/workflows/track-b-offline.yml`; `validate_alpha_atlas_v4_workflow_artifacts.py` | Run-scoped raw validation, canonicalization, canonical validation, cleaning and feature materialization execute in contract order; failure evidence uploads unconditionally. |
 
 ## Compatibility and intentionally deferred work
 
