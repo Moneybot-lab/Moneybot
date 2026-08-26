@@ -1201,8 +1201,10 @@ def build_training_rows_from_raw_market(
             "decision_at": timing.decision_at.isoformat(),
             "feature_cutoff_at": timing.feature_cutoff_at.isoformat(),
             "entry_at": timing.entry_at.isoformat(),
+            "entry_session_date": entry_session,
             "label_start_at": timing.label_start_at.isoformat(),
             "exit_at": timing.exit_at.isoformat(),
+            "exit_session_date": exit_session,
             "market_session_date": event_day,
             "feature_family_source_at": {
                 key: value.isoformat() for key, value in feature_source_at.items()

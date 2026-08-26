@@ -82,3 +82,6 @@ from observations and preserves it per request as `prior_signal_state` in the re
 map. Supplying any deprecated `feature_*` prior-state name under
 `alpha-atlas-v4-features.v2` fails closed. Genuine feature, target, execution, timing,
 and corporate-action conflicts remain material. V1 artifacts are not reinterpreted.
+When compatible requests have different non-economic decision timestamps, the canonical
+row records the latest decision as its conservative timing envelope plus the minimum and
+maximum originating timestamps; every original timestamp remains in the request map.

@@ -249,74 +249,97 @@ jobs:
             --output-dir "$FEATURE_STORE_DIR" \
             --train-ratio 0.8
 
+      - name: Assess V4 challenger temporal-split feasibility
+        id: split_preflight
+        run: |
+          set -euo pipefail
+          echo "TRACK_B_FAILED_STAGE=split_preflight" >> "$GITHUB_ENV"
+          python3 scripts/plan_alpha_atlas_v4_temporal_split.py \
+            --input "$FEATURE_STORE_DIR/all.jsonl" \
+            --output-dir "$TRACK_B_ARTIFACT_DIR/challenger_suite" \
+            --train-ratio 0.8 \
+            --embargo-sessions 1 \
+            --min-train-dates 5 \
+            --min-test-dates 2 \
+            --min-observations "$TRACK_B_MIN_ROWS"
+          test -s "$TRACK_B_ARTIFACT_DIR/challenger_suite/challenger_split_diagnostics.json"
+          test -s "$TRACK_B_ARTIFACT_DIR/challenger_suite/challenger_split_plan.json"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          plan = json.loads((Path(os.environ["TRACK_B_ARTIFACT_DIR"]) / "challenger_suite/challenger_split_plan.json").read_text())
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as out:
+              out.write(f"status={plan['status']}\n")
+              out.write(f"feasible={'true' if plan['status'] == 'FEASIBLE' else 'false'}\n")
+          PY
+
       - name: Train offline challenger suite
+        if: steps.split_preflight.outputs.feasible == 'true'
         run: |
           python3 scripts/train_challenger_suite.py \
-            --input "$FEATURE_STORE_DIR/train.jsonl" \
+            --input "$FEATURE_STORE_DIR/all.jsonl" \
             --output-dir "$TRACK_B_ARTIFACT_DIR/challenger_suite" \
+            --split-plan "$TRACK_B_ARTIFACT_DIR/challenger_suite/challenger_split_plan.json" \
+            --train-ratio 0.8 \
+            --horizon-days 5 \
             --min-rows "$TRACK_B_MIN_ROWS"
 
       - name: Backtest and gate challenger suite
+        if: steps.split_preflight.outputs.feasible == 'true'
         run: |
           python3 scripts/backtest_challenger_suite.py \
             --suite-manifest "$TRACK_B_ARTIFACT_DIR/challenger_suite"/challenger_suite_manifest.json \
-            --feature-store "$FEATURE_STORE_DIR/test.jsonl" \
+            --feature-store "$TRACK_B_ARTIFACT_DIR/challenger_suite/challenger_test.jsonl" \
             --output "$TRACK_B_ARTIFACT_DIR/challenger_suite"/backtest_report.json \
             --min-rows "$TRACK_B_MIN_ROWS" \
             --transaction-cost-bps 5 \
             --slippage-bps 5
 
-      - name: Train and certify Alpha Atlas V3 human-review candidate
-        env:
-          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+      - name: Record V3 and V3.1 compatibility boundary
         run: |
           set -euo pipefail
-          if [ -z "$MASSIVE_API_KEY" ]; then
-            echo "MASSIVE_API_KEY is not configured; skipping V3 candidate generation while allowing the base Track B challenger run to continue."
-            mkdir -p "$TRACK_B_ARTIFACT_DIR/alpha_atlas_v3"
-            python3 - <<'PY'
+          mkdir -p "$TRACK_B_ARTIFACT_DIR/alpha_atlas_v3" "$TRACK_B_ARTIFACT_DIR/alpha_atlas_v31"
+          python3 - <<'PY'
           import json
+          import os
           from pathlib import Path
-
+          root = Path(os.environ["TRACK_B_ARTIFACT_DIR"])
           status = {
-              "schema_version": "moneybot-alpha-atlas-v3-generation-status.v1",
-              "candidate_generated": False,
-              "certification_generated": False,
-              "status": "skipped_missing_massive_api_key",
-              "blocking_reason": "MASSIVE_API_KEY is not configured for real serving dry runs",
-              "target_name": "label_up_5d",
-              "forecast_horizon": "5d",
-              "comparison_mode": "recovery_rebaseline",
+              "schema_version": "alpha-atlas-v4-legacy-comparator-boundary.v1",
+              "status": "skipped_incompatible_v4_executable_label_lineage",
+              "v4_input_consumed": False,
+              "v3_behavior_changed": False,
+              "v31_behavior_changed": False,
               "automatic_promotion": False,
+              "ready_for_live_routing": False,
           }
-          Path("data/track_b/v3_generation_status.json").write_text(
-              json.dumps(status, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
+          for directory, name in (("alpha_atlas_v3", "v3_generation_status.json"), ("alpha_atlas_v31", "v31_generation_status.json")):
+              (root / directory / name).write_text(json.dumps(status, indent=2, sort_keys=True) + "\n")
           PY
-            mv data/track_b/v3_generation_status.json "$TRACK_B_ARTIFACT_DIR/alpha_atlas_v3/v3_generation_status.json"
-            exit 0
-          fi
-          python3 scripts/train_alpha_atlas_v3_candidate.py \
-            --train "$CLEANED_DIR/cleaned_train.jsonl" \
-            --test "$CLEANED_DIR/cleaned_test.jsonl" \
-            --all-cleaned "$CLEANED_DIR/cleaned_all.jsonl" \
-            --output-dir "$TRACK_B_ARTIFACT_DIR/alpha_atlas_v3"
 
-      - name: Train Alpha Atlas V3.1 human-review candidate
-        env:
-          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+      - name: Write controlled insufficient-coverage summary
+        if: steps.split_preflight.outputs.feasible != 'true'
         run: |
-          set -euo pipefail
-          if [ -z "$MASSIVE_API_KEY" ]; then
-            echo "MASSIVE_API_KEY is not configured; skipping V3.1 without generating a candidate or certification."
-            exit 0
-          fi
-          python3 scripts/train_alpha_atlas_v31_candidate.py \
-            --train "$CLEANED_DIR/cleaned_train.jsonl" \
-            --test "$CLEANED_DIR/cleaned_test.jsonl" \
-            --all-cleaned "$CLEANED_DIR/cleaned_all.jsonl" \
-            --output-dir "$TRACK_B_ARTIFACT_DIR/alpha_atlas_v31"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["TRACK_B_ARTIFACT_DIR"])
+          diagnostics = json.loads((root / "challenger_suite/challenger_split_diagnostics.json").read_text())
+          summary = {
+              "schema_version": "alpha-atlas-v4-no-candidate.v1",
+              "status": "NO_CANDIDATE_INSUFFICIENT_TEMPORAL_COVERAGE",
+              "research_only": True,
+              "candidate_win": False,
+              "automatic_promotion": False,
+              "ready_for_live_routing": False,
+              "training_attempted": False,
+              "backtest_attempted": False,
+              "split_diagnostics": diagnostics,
+          }
+          (root / "no_candidate_insufficient_temporal_coverage.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+          PY
 
       - name: Write V4 research-only run summary
         run: |
@@ -330,6 +353,7 @@ jobs:
           root = Path(os.environ["TRACK_B_ARTIFACT_DIR"])
           canonical = json.loads(Path(os.environ["CANONICAL_DIAGNOSTICS"]).read_text())
           quality = json.loads(Path(os.environ["CLEANING_QUALITY_REPORT"]).read_text())
+          split_plan = json.loads((root / "challenger_suite/challenger_split_plan.json").read_text())
           summary = {
               "schema_version": "alpha-atlas-v4-track-b-research-run.v1",
               "timing_contract_version": "alpha-atlas-v4-prediction-execution-contract.v1",
@@ -343,7 +367,8 @@ jobs:
               "automatic_promotion": False,
               "ready_for_live_routing": False,
               "v2_production_comparison_performed": False,
-              "status": "completed_research_pipeline",
+              "status": ("completed_research_pipeline" if split_plan["status"] == "FEASIBLE" else split_plan["status"]),
+              "split_plan_sha256": split_plan["plan_sha256"],
           }
           (root / "track_b_v4_research_summary.json").write_text(
               json.dumps(summary, indent=2, sort_keys=True) + "\n",

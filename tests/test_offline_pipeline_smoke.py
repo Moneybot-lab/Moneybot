@@ -177,6 +177,20 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
         ],
         cwd=repo,
     )
+    split_dir = tmp_path / "track_b" / "challenger_suite"
+    _run(
+        [
+            sys.executable,
+            "scripts/plan_alpha_atlas_v4_temporal_split.py",
+            "--input",
+            str(flat_dir / "all.jsonl"),
+            "--output-dir",
+            str(split_dir),
+            "--min-observations",
+            "20",
+        ],
+        cwd=repo,
+    )
     training_manifest = json.loads(
         training_rows.with_suffix(training_rows.suffix + ".manifest.json").read_text(
             encoding="utf-8"
@@ -190,6 +204,12 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     )
     feature_manifest = json.loads(
         (flat_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+    split_plan = json.loads(
+        (split_dir / "challenger_split_plan.json").read_text(encoding="utf-8")
+    )
+    split_diagnostics = json.loads(
+        (split_dir / "challenger_split_diagnostics.json").read_text(encoding="utf-8")
     )
     canonical_diagnostics = json.loads(
         (canonical_dir / "canonicalization_diagnostics.json").read_text(
@@ -210,6 +230,13 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     assert (quality_dir / "cleaned_train.jsonl").exists()
     assert (quality_dir / "cleaned_test.jsonl").exists()
     assert feature_manifest["reproducibility"]["output_file_hashes"] is True
+    assert split_plan["status"] == "FEASIBLE"
+    assert split_plan["input_sha256"] == feature_manifest["files"][4]["sha256"]
+    assert split_diagnostics["canonical_observations"] == feature_manifest["rows"]
+    assert (split_dir / "challenger_train.jsonl").is_file()
+    assert (split_dir / "challenger_test.jsonl").is_file()
+    assert split_diagnostics["challenger_train.jsonl_sha256"]
+    assert split_diagnostics["challenger_test.jsonl_sha256"]
     assert canonical_diagnostics["raw_request_rows"] >= 100
     assert canonical_diagnostics["canonical_observations"] >= 100
     assert (

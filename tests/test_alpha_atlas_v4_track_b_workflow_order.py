@@ -44,6 +44,31 @@ def test_v4_workflow_orders_build_validate_canonicalize_clean_and_feature_store(
     assert names.index("Clean and quality-gate training rows") < names.index(
         "Materialize reproducible flat feature store"
     )
+    assert (
+        names.index("Materialize reproducible flat feature store")
+        < names.index("Assess V4 challenger temporal-split feasibility")
+        < names.index("Train offline challenger suite")
+    )
+
+
+def test_workflow_freezes_split_plan_and_controls_insufficient_coverage():
+    steps = _workflow_steps()
+    preflight = steps["Assess V4 challenger temporal-split feasibility"]
+    training = steps["Train offline challenger suite"]
+    backtest = steps["Backtest and gate challenger suite"]
+    hold = steps["Write controlled insufficient-coverage summary"]
+    assert '--input "$FEATURE_STORE_DIR/all.jsonl"' in preflight
+    assert "challenger_split_plan.json" in preflight
+    assert "challenger_split_diagnostics.json" in preflight
+    assert "--split-plan" in training
+    assert "challenger_test.jsonl" in backtest
+    assert "outputs.feasible == 'true'" in training
+    assert "outputs.feasible == 'true'" in backtest
+    assert "NO_CANDIDATE_INSUFFICIENT_TEMPORAL_COVERAGE" in hold
+    assert '"training_attempted": False' in hold
+    assert '"backtest_attempted": False' in hold
+    assert '"automatic_promotion": False' in hold
+    assert '"ready_for_live_routing": False' in hold
 
 
 def test_cleaner_consumes_only_declared_canonical_output():

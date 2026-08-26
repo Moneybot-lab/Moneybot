@@ -18,6 +18,7 @@ research-only. V3/V3.1, production serving, promotion and routing remain unchang
 | Canonical evaluation | `evaluate_canonical_observations`, `canonical_date_block_bootstrap`, `canonical_top_k`, `score_once_and_fan_out` | Metrics, cutoff-date bootstrap, ranking and research fan-out operate only on unique canonical IDs. |
 | Track B orchestration | `.github/workflows/track-b-offline.yml`; `validate_alpha_atlas_v4_workflow_artifacts.py` | Run-scoped raw validation, canonicalization, canonical validation, cleaning and feature materialization execute in contract order; failure evidence uploads unconditionally. |
 | Prior-request state | `build_massive_decision_training_rows.py`; canonical request map | V2 removes symbol-global prior model/recommendation history from model features, retains values/source/timestamp per request, and rejects legacy feature names. |
+| Purged temporal split | `alpha_atlas_v4_temporal_split.py`; `plan_alpha_atlas_v4_temporal_split.py`; challenger `--split-plan` | V4 groups canonical observations by cutoff exchange date, purges actual entry/exit overlap, embargoes eligible sessions, freezes hashes, and emits a controlled no-candidate outcome when coverage is valid but insufficient. |
 
 ## Compatibility and intentionally deferred work
 

@@ -112,14 +112,14 @@ def test_track_b_summary_keeps_v31_separate_and_never_promotes(tmp_path):
     assert summary["automatic_promotion"] is False
 
 
-def test_workflow_runs_v31_after_cleaning_and_uploads_directory():
+def test_workflow_keeps_v31_out_of_incompatible_v4_lineage():
     workflow = Path(".github/workflows/track-b-offline.yml").read_text()
     clean = workflow.index("Clean and quality-gate training rows")
-    v31 = workflow.index("Train Alpha Atlas V3.1 human-review candidate")
+    v31 = workflow.index("Record V3 and V3.1 compatibility boundary")
     assert clean < v31
-    assert "scripts/train_alpha_atlas_v31_candidate.py" in workflow
+    assert "scripts/train_alpha_atlas_v31_candidate.py" not in workflow
     assert "${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v31/**" in workflow
-    assert "MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}" in workflow
+    assert "skipped_incompatible_v4_executable_label_lineage" in workflow
 
 
 def _canonical_rows(start, dates, symbols):

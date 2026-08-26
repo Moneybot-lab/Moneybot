@@ -126,38 +126,20 @@ def test_dry_run_rejects_non_massive_history(tmp_path):
     assert runs[0]["feature_contract_servable"] is False
 
 
-def test_track_b_workflow_runs_v3_after_cleaning_and_uploads_all_outputs():
+def test_track_b_workflow_keeps_v3_out_of_incompatible_v4_lineage():
     workflow = Path(".github/workflows/track-b-offline.yml").read_text(encoding="utf-8")
     clean_position = workflow.index("Clean and quality-gate training rows")
     backtest_position = workflow.index("Backtest and gate challenger suite")
-    v3_position = workflow.index(
-        "Train and certify Alpha Atlas V3 human-review candidate"
-    )
+    v3_position = workflow.index("Record V3 and V3.1 compatibility boundary")
     upload_position = workflow.index("Upload Track B artifacts")
 
     assert clean_position < backtest_position < v3_position < upload_position
-    assert "MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}" in workflow
-    assert (
-        "skipping V3 candidate generation while allowing the base Track B challenger run to continue"
-        in workflow
-    )
+    assert "skipped_incompatible_v4_executable_label_lineage" in workflow
+    assert '"v4_input_consumed": False' in workflow
     assert "v3_generation_status.json" in workflow
-    assert "exit 0" in workflow
-    assert "scripts/train_alpha_atlas_v3_candidate.py" in workflow
-    assert '--train "$CLEANED_DIR/cleaned_train.jsonl"' in workflow
-    assert '--test "$CLEANED_DIR/cleaned_test.jsonl"' in workflow
-    assert '--all-cleaned "$CLEANED_DIR/cleaned_all.jsonl"' in workflow
+    assert "scripts/train_alpha_atlas_v3_candidate.py" not in workflow
     assert "data/track_b/**" in workflow
-    for name in (
-        "candidate_alpha_atlas_v3_clean.json",
-        "alpha_atlas_v3_model_report.json",
-        "alpha_atlas_v3_feature_coverage_report.json",
-        "alpha_atlas_v3_backtest_report.json",
-        "alpha_atlas_v3_representative_serving_dry_runs.json",
-        "production_servability_certification.json",
-        "alpha_atlas_v3_recovery_rebaseline_report.json",
-    ):
-        assert name in workflow
+    assert "v3_generation_status.json" in workflow
     assert "day14_promote_candidate.py" not in workflow
     assert "/api/promote-track-b-candidate" not in workflow
 

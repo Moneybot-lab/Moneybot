@@ -353,6 +353,9 @@ def canonicalize_v4_rows(rows: Iterable[Mapping[str, Any]]) -> CanonicalizationR
                 "model_sample_weight": 1.0,
                 "originating_decision_at_min": decisions[0],
                 "originating_decision_at_max": decisions[-1],
+                # The latest compatible decision is the conservative canonical timing
+                # envelope; every original value remains in the request map.
+                "decision_at": decisions[-1],
             }
         )
         observations.append(representative)
