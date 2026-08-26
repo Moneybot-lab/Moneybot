@@ -8,9 +8,14 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from moneybot.services.decision_target import TARGET_NAME
+from moneybot.services.alpha_atlas_v4_canonical_observations import (
+    CANONICAL_OBSERVATION_CONTRACT_VERSION,
+    CANONICAL_OBSERVATION_SCHEMA_VERSION,
+    V4_RAW_ROW_SCHEMA,
+)
 
-QUALITY_SCHEMA_VERSION = "moneybot-training-quality-report.v1"
-REQUIRED_CANONICAL_SCHEMA_VERSION = "massive-decision-training-rows.v4"
+QUALITY_SCHEMA_VERSION = "moneybot-training-quality-report.v2"
+REQUIRED_CANONICAL_SCHEMA_VERSION = CANONICAL_OBSERVATION_SCHEMA_VERSION
 DEFAULT_REQUIRED_FEATURES = (
     "feature_close",
     "feature_return_1d_lagged",
@@ -129,8 +134,12 @@ def clean_training_snapshot(
     invalid_lineage = [
         row
         for row in raw_rows
-        if row.get("canonical_dataset_schema_version")
+        if row.get("canonical_dataset_schema_version") != V4_RAW_ROW_SCHEMA
+        or row.get("canonical_observation_schema_version")
         != REQUIRED_CANONICAL_SCHEMA_VERSION
+        or row.get("canonicalization_contract_version")
+        != CANONICAL_OBSERVATION_CONTRACT_VERSION
+        or row.get("model_sample_weight") != 1.0
         or row.get("split_metadata_hash") != input_manifest["split_metadata_hash"]
         or row.get("price_adjustment_policy") != "event_time_split_adjusted"
     ]
@@ -138,7 +147,12 @@ def clean_training_snapshot(
         raise ValueError(
             "Training rows do not match the canonical split-adjusted dataset lineage"
         )
-    deduped, duplicate_rows_dropped = _dedupe_rows(raw_rows)
+    canonical_ids = [row.get("canonical_observation_id") for row in raw_rows]
+    if not all(canonical_ids) or len(canonical_ids) != len(set(canonical_ids)):
+        raise ValueError(
+            "Canonical observation input contains duplicate or missing IDs"
+        )
+    deduped, duplicate_rows_dropped = raw_rows, 0
     required = [str(feature) for feature in required_features if str(feature).strip()]
 
     kept: list[dict[str, Any]] = []
@@ -225,6 +239,9 @@ def clean_training_snapshot(
         "label_split_boundary_errors": 0,
         "suspicious_return_rows_after_adjustment": 0,
         "canonical_input_schema_version": input_manifest["schema_version"],
+        "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
+        "raw_request_rows": int(input_manifest.get("raw_request_rows") or 0),
+        "canonical_observations": len(raw_rows),
     }
     before_after_path = output_dir / "split_adjustment_before_after_report.json"
     if before_after_path.is_file():

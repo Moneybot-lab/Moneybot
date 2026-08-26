@@ -830,6 +830,7 @@ def build_training_rows_from_raw_market(
     signal_index = _signal_history_index(events)
     date_index = _market_date_index(market)
     feature_cache: dict[tuple[str, int], dict[str, Any]] = {}
+    event_identity_counts: dict[str, int] = {}
     for event in events:
         summary["events_scanned"] += 1
         symbol = str(event.get("symbol") or "").strip().upper()
@@ -1108,6 +1109,14 @@ def build_training_rows_from_raw_market(
             else None
         )
         sector_return_5d = _lagged_return(sector_history, sector_idx, 5)
+        event_fingerprint = hashlib.sha256(
+            json.dumps(
+                event, sort_keys=True, default=str, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+        event_occurrence = event_identity_counts.get(event_fingerprint, 0)
+        event_identity_counts[event_fingerprint] = event_occurrence + 1
+        fallback_decision_id = f"event_{event_fingerprint}_{event_occurrence}"
         entry_at = EXCHANGE_CALENDAR.session_open(entry_session)
         exit_at = EXCHANGE_CALENDAR.session_close(exit_session)
         feature_source_at = {
@@ -1143,7 +1152,7 @@ def build_training_rows_from_raw_market(
                 sector_available_at.isoformat() if sector_available_at else None
             )
         timing = AlphaAtlasV4TimingRecord(
-            decision_id=str(event.get("decision_id") or f"{symbol}:{ts}"),
+            decision_id=str(event.get("decision_id") or fallback_decision_id),
             symbol=symbol,
             point_in_time_symbol_id=str(
                 event.get("point_in_time_symbol_id") or f"{symbol}:{event_day}"
@@ -1175,11 +1184,19 @@ def build_training_rows_from_raw_market(
         )
         row = {
             "ts": ts,
+            "decision_id": timing.decision_id,
             "event_date": event_day,
             "market_asof_date": asof["date"],
             "feature_market_asof_date": asof["date"],
             "label_asof_date": future["date"],
             "timing_contract_version": ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
+            "model_feature_contract_version": timing.model_feature_contract_version,
+            "label_horizon_sessions": max(1, horizon_days),
+            "lane": str(event.get("lane") or "track_b_research"),
+            "universe_policy_version": str(
+                event.get("universe_policy_version") or "track-b-us-equities.v1"
+            ),
+            "execution_cost_policy_version": event.get("execution_cost_policy_version"),
             "decision_at": timing.decision_at.isoformat(),
             "feature_cutoff_at": timing.feature_cutoff_at.isoformat(),
             "entry_at": timing.entry_at.isoformat(),
