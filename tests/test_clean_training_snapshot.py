@@ -27,7 +27,7 @@ def test_clean_training_snapshot_drops_bad_rows_and_writes_quality_outputs(tmp_p
         "feature_return_1d_lagged": 0.01,
         "feature_return_5d_lagged": 0.03,
         "feature_volume": 1000,
-        "canonical_dataset_schema_version": "massive-decision-training-rows.v2",
+        "canonical_dataset_schema_version": "massive-decision-training-rows.v4",
         "split_metadata_hash": "fixture-hash",
         "price_adjustment_policy": "event_time_split_adjusted",
     }
@@ -45,7 +45,7 @@ def test_clean_training_snapshot_drops_bad_rows_and_writes_quality_outputs(tmp_p
     input_path.with_suffix(input_path.suffix + ".manifest.json").write_text(
         json.dumps(
             {
-                "schema_version": "massive-decision-training-rows.v2",
+                "schema_version": "massive-decision-training-rows.v4",
                 "corporate_action_normalization_passed": True,
                 "split_metadata_hash": "fixture-hash",
                 "split_events_loaded": 0,

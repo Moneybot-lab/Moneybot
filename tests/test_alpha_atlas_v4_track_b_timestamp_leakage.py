@@ -1,11 +1,9 @@
 """Adversarial evidence for legacy Track B timestamp defects.
 
-These tests state the V4-required result. Confirmed legacy violations are strict
-xfails: an implementation repair therefore becomes an XPASS and fails the suite
-until Prompt 3 removes the marker. The legacy row has no entry/label timestamps or
-provider-availability timestamps, so tests assert the earliest observable violation
-rather than inventing fields. Breadth is likewise deferred because the current row
-schema has no breadth feature family.
+These tests state the V4-required result. The former strict xfails are normal
+regression tests after Prompt 3 repairs. Timing, execution and per-family provenance
+are asserted directly. Breadth remains deferred because the current row schema has
+no breadth feature family.
 """
 
 from datetime import date, datetime, time, timedelta, timezone
@@ -96,18 +94,20 @@ def _row(market, local_time: time, *, horizon_days: int = 5, splits=()):
     return rows[0]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy _event_day/_row_before_or_on_indexed includes the premarket decision session's completed daily bar",
-)
+def _with_current_availability(market):
+    copied = {symbol: [dict(row) for row in rows] for symbol, rows in market.items()}
+    available_at = _utc("2026-03-23", time(16, 1)).isoformat()
+    for rows in copied.values():
+        next(row for row in rows if row["date"] == "2026-03-23")[
+            "available_at"
+        ] = available_at
+    return copied
+
+
 def test_premarket_uses_only_previous_completed_daily_session(daily_market):
     assert _row(daily_market, time(8, 0))["market_asof_date"] == "2026-03-20"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy build_training_rows_from_raw_market leaks premarket same-session final close and full-day volume into symbol features",
-)
 def test_premarket_excludes_current_session_final_symbol_ohlcv(daily_market):
     row = _row(daily_market, time(8, 0))
     assert row["feature_close"] != 950.0
@@ -115,10 +115,6 @@ def test_premarket_excludes_current_session_final_symbol_ohlcv(daily_market):
     assert row["feature_drawdown_from_20d_high"] != pytest.approx(950.0 / 999.0 - 1)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy SPY/sector/regime joins use the same date-inclusive premarket daily-bar selection",
-)
 def test_premarket_market_context_uses_same_previous_session_cutoff(daily_market):
     row = _row(daily_market, time(8, 0))
     expected_spy_previous = round(428.0 / 418.0 - 1, 6)
@@ -129,10 +125,6 @@ def test_premarket_market_context_uses_same_previous_session_cutoff(daily_market
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy forward label starts at the selected same-day close instead of the executable entry open and S0-S4 exit close",
-)
 def test_premarket_label_is_entry_open_to_fifth_session_close(daily_market):
     row = _row(daily_market, time(8, 0))
     entry_open = 900.0
@@ -143,22 +135,14 @@ def test_premarket_label_is_entry_open_to_fifth_session_close(daily_market):
     assert row["label_asof_date"] == "2026-03-27"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy regular-session date-inclusive selection uses final daily OHLCV and daily-derived indicators before the close",
-)
 def test_regular_session_excludes_current_daily_bar_and_derivatives(daily_market):
     row = _row(daily_market, time(12, 0))
     assert row["market_asof_date"] == "2026-03-20"
     assert row["feature_close"] != 950.0
     assert row["feature_volume"] != 9_999_999.0
-    assert row["feature_return_1d_lagged"] == pytest.approx(114.0 / 113.0 - 1)
+    assert row["feature_return_1d_lagged"] == round(114.0 / 113.0 - 1, 6)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy regular-session SPY/sector/regime joins include completed same-session context aggregates before they are available",
-)
 def test_regular_session_context_obeys_symbol_feature_cutoff(daily_market):
     regular_context = _row(daily_market, time(12, 0))
     assert regular_context["feature_spy_return_5d"] == round(428.0 / 418.0 - 1, 6)
@@ -168,10 +152,6 @@ def test_regular_session_context_obeys_symbol_feature_cutoff(daily_market):
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy regular-session label is same-close close-to-close and has no next-session executable entry timestamp",
-)
 def test_regular_session_label_starts_at_next_eligible_open(daily_market):
     row = _row(daily_market, time(12, 0))
     next_open = next(
@@ -184,10 +164,6 @@ def test_regular_session_label_starts_at_next_eligible_open(daily_market):
     assert row["label_asof_date"] == "2026-03-30"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy after-hours daily rows have calendar dates but no provider availability timestamp and do not fail closed",
-)
 def test_after_hours_requires_proven_current_bar_availability(daily_market):
     rows, _ = build_training_rows_from_raw_market(
         [_event("2026-03-23", time(18, 0))], daily_market, split_events=[]
@@ -195,12 +171,8 @@ def test_after_hours_requires_proven_current_bar_availability(daily_market):
     assert rows == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy after-hours forward label starts at the current close rather than the next eligible regular-session open",
-)
 def test_after_hours_label_starts_at_next_eligible_open(daily_market):
-    row = _row(daily_market, time(18, 0))
+    row = _row(_with_current_availability(daily_market), time(18, 0))
     next_open = next(
         bar["open"] for bar in daily_market["LEAK"] if bar["date"] == "2026-03-24"
     )
@@ -211,28 +183,16 @@ def test_after_hours_label_starts_at_next_eligible_open(daily_market):
     assert row["label_asof_date"] == "2026-03-30"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy normalize_unix_ts does not normalize millisecond epochs and treats them as seconds",
-)
 def test_unix_normalization_preserves_the_decision_instant():
     decision = _utc("2026-03-23", time(8, 0))
     assert normalize_unix_ts(decision.timestamp() * 1_000) == int(decision.timestamp())
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy event_market_date uses the UTC calendar date instead of the America/New_York exchange-session date",
-)
 def test_outcome_market_date_uses_new_york_date_when_utc_date_differs():
     instant = datetime(2026, 1, 3, 0, 30, tzinfo=timezone.utc)  # Jan 2, 19:30 ET
     assert event_market_date(int(instant.timestamp())) == date(2026, 1, 2)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy _event_day uses UTC date alone across the daylight-saving boundary instead of New York session semantics",
-)
 def test_builder_event_day_uses_new_york_date_across_dst_boundary():
     instant = datetime(2026, 3, 9, 0, 30, tzinfo=timezone.utc)  # Mar 8, 20:30 EDT
     assert _event_day(int(instant.timestamp())) == "2026-03-08"
@@ -266,19 +226,11 @@ def test_weekend_and_holiday_do_not_create_fictional_market_bars(daily_market):
     assert holiday_rows[0]["market_asof_date"] == "2026-07-02"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy ExchangeCalendar hardcodes a 16:00 regular close and does not model official early-close sessions",
-)
 def test_official_early_close_ends_regular_session_at_1300_eastern():
     early_close = datetime(2026, 11, 27, 14, 0, tzinfo=NY)
     assert ExchangeCalendar().session_at(early_close) != "regular"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy Track B rows carry no source availability/staleness timestamp and accept a stale symbol daily bar",
-)
 def test_stale_symbol_bar_fails_closed(daily_market):
     stale = {symbol: list(rows) for symbol, rows in daily_market.items()}
     stale["LEAK"] = [
@@ -292,10 +244,6 @@ def test_stale_symbol_bar_fails_closed(daily_market):
     assert rows == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy Track B accepts rows when SPY/required regime context is missing instead of rejecting the row",
-)
 def test_missing_required_spy_and_regime_context_fails_closed(daily_market):
     rows, _ = build_training_rows_from_raw_market(
         [_event("2026-03-23", time(8, 0))],
@@ -305,10 +253,6 @@ def test_missing_required_spy_and_regime_context_fails_closed(daily_market):
     assert rows == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy Track B has no per-family staleness timestamp and accepts stale SPY/regime bars when symbol data is current",
-)
 def test_stale_spy_and_regime_context_fails_closed(daily_market):
     stale = {symbol: list(rows) for symbol, rows in daily_market.items()}
     stale["SPY"] = [
@@ -322,10 +266,6 @@ def test_stale_spy_and_regime_context_fails_closed(daily_market):
     assert rows == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy Track B labels from closes and accepts a premarket row even when the required executable entry open is missing",
-)
 def test_missing_required_entry_open_fails_closed(daily_market):
     market = {
         symbol: [dict(row) for row in rows] for symbol, rows in daily_market.items()
@@ -369,7 +309,7 @@ def test_contract_rejects_feature_source_after_cutoff():
 
 
 def test_missing_forward_price_rejects_row(daily_market):
-    truncated = {symbol: rows[:16] for symbol, rows in daily_market.items()}
+    truncated = {symbol: rows[:17] for symbol, rows in daily_market.items()}
     rows, summary = build_training_rows_from_raw_market(
         [_event("2026-03-23", time(8, 0))], truncated, split_events=[]
     )
@@ -377,10 +317,6 @@ def test_missing_forward_price_rejects_row(daily_market):
     assert summary["insufficient_forward_window"] == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="legacy split adjustment applies a decision-date action without proving its publication was available before the premarket cutoff",
-)
 def test_premarket_split_requires_point_in_time_action_availability(daily_market):
     split = canonical_splits(
         [
@@ -411,7 +347,7 @@ def test_split_in_forward_horizon_is_adjusted_and_provenanced(daily_market):
             }
         ]
     )
-    row = _row(daily_market, time(18, 0), splits=split)
+    row = _row(_with_current_availability(daily_market), time(18, 0), splits=split)
     assert row["label_split_ids"] == ["horizon-split"]
     assert row["label_split_adjustment_factor"] == 0.5
 
@@ -438,7 +374,10 @@ def test_ticker_change_without_point_in_time_identity_mapping_fails_closed(
 
 
 def test_delisting_or_missing_terminal_price_fails_closed(daily_market):
-    market = {symbol: rows[:16] for symbol, rows in daily_market.items()}
+    market = {
+        symbol: rows[:17]
+        for symbol, rows in _with_current_availability(daily_market).items()
+    }
     rows, summary = build_training_rows_from_raw_market(
         [_event("2026-03-23", time(18, 0))], market, split_events=[]
     )
@@ -463,4 +402,44 @@ def test_load_market_history_keeps_daily_date_but_does_not_claim_availability(tm
     )
     row = load_market_history(root)["LEAK"][0]
     assert row["date"] == "2026-03-23"
-    assert "available_at" not in row
+    assert row["available_at"] is None
+
+
+@pytest.mark.parametrize(
+    "unit", ["seconds", "milliseconds", "microseconds", "nanoseconds"]
+)
+def test_unix_normalization_accepts_supported_epoch_units(unit):
+    expected = int(_utc("2026-03-23", time(8, 0)).timestamp())
+    multiplier = {
+        "seconds": 1,
+        "milliseconds": 1_000,
+        "microseconds": 1_000_000,
+        "nanoseconds": 1_000_000_000,
+    }[unit]
+    assert normalize_unix_ts(expected * multiplier) == expected
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -1, 10**25, "1.5"])
+def test_unix_normalization_rejects_nonfinite_impossible_or_ambiguous_values(value):
+    assert normalize_unix_ts(value) is None
+
+
+@pytest.mark.parametrize("decision_time", [time(9, 31), time(12, 0), time(15, 59)])
+def test_regular_session_boundary_has_v4_timing_and_provenance(
+    daily_market, decision_time
+):
+    row = _row(daily_market, decision_time)
+    assert row["feature_market_asof_date"] == "2026-03-20"
+    assert row["feature_close"] != 950.0
+    assert row["feature_volume"] != 9_999_999.0
+    assert row["entry_at"] == _utc("2026-03-24", time(9, 30)).isoformat()
+    assert row["entry_at"] == row["label_start_at"]
+    decision_at = datetime.fromisoformat(row["decision_at"])
+    cutoff_at = datetime.fromisoformat(row["feature_cutoff_at"])
+    entry_at = datetime.fromisoformat(row["entry_at"])
+    exit_at = datetime.fromisoformat(row["exit_at"])
+    assert cutoff_at <= decision_at < entry_at < exit_at
+    assert all(
+        datetime.fromisoformat(source_at) <= cutoff_at
+        for source_at in row["feature_family_source_at"].values()
+    )

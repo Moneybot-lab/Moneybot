@@ -109,11 +109,13 @@ def _load_jsonl(path: Path) -> pd.DataFrame:
             raise ValueError(
                 f"Cleaned Massive input lacks corporate-action lineage: {sorted(missing)}"
             )
-        if set(frame["canonical_dataset_schema_version"].dropna().astype(str)) != {
-            "massive-decision-training-rows.v2"
+        schemas = set(frame["canonical_dataset_schema_version"].dropna().astype(str))
+        if len(schemas) != 1 or not schemas <= {
+            "massive-decision-training-rows.v2",
+            "massive-decision-training-rows.v4",
         }:
             raise ValueError(
-                "Cleaned Massive input uses a stale canonical dataset schema"
+                "Cleaned Massive input mixes or uses an unsupported canonical dataset schema"
             )
         if set(frame["price_adjustment_policy"].dropna().astype(str)) != {
             "event_time_split_adjusted"

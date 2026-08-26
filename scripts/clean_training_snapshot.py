@@ -10,7 +10,7 @@ from typing import Any, Iterable
 from moneybot.services.decision_target import TARGET_NAME
 
 QUALITY_SCHEMA_VERSION = "moneybot-training-quality-report.v1"
-REQUIRED_CANONICAL_SCHEMA_VERSION = "massive-decision-training-rows.v2"
+REQUIRED_CANONICAL_SCHEMA_VERSION = "massive-decision-training-rows.v4"
 DEFAULT_REQUIRED_FEATURES = (
     "feature_close",
     "feature_return_1d_lagged",

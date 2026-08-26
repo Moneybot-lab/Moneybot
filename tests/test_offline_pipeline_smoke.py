@@ -7,7 +7,19 @@ from pathlib import Path
 
 
 def _ts(day: str) -> int:
-    return int(datetime.fromisoformat(day).replace(tzinfo=timezone.utc).timestamp())
+    return int(
+        datetime.fromisoformat(day).replace(hour=12, tzinfo=timezone.utc).timestamp()
+    )
+
+
+def _trading_days(start: date, count: int) -> list[date]:
+    days = []
+    candidate = start
+    while len(days) < count:
+        if candidate.weekday() < 5:
+            days.append(candidate)
+        candidate += timedelta(days=1)
+    return days
 
 
 def _run(command: list[str], *, cwd: Path) -> None:
@@ -29,11 +41,11 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     raw_dir = tmp_path / "raw" / "2026-07-03" / "us_stocks_sip" / "day_aggs_v1"
     raw_dir.mkdir(parents=True)
 
-    for symbol, base in {"AAPL": 100.0, "MSFT": 200.0}.items():
+    trading_days = _trading_days(date(2026, 1, 2), 100)
+    for symbol, base in {"AAPL": 100.0, "MSFT": 200.0, "SPY": 400.0}.items():
         rows = ["ticker,date,open,high,low,close,volume"]
-        start = date(2026, 1, 1)
-        for idx in range(1, 91):
-            day = (start + timedelta(days=idx - 1)).isoformat()
+        for idx, trading_day in enumerate(trading_days, 1):
+            day = trading_day.isoformat()
             close = base + (idx * 0.75) + ((idx % 7) * 0.2)
             rows.append(
                 f"{symbol},{day},{close},{close + 1},{close - 1},{close},{1000000 + idx}"
@@ -42,9 +54,8 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
 
     decision_log = tmp_path / "decision_events.jsonl"
     events = []
-    start = date(2026, 1, 1)
     for idx in range(7, 75):
-        day = (start + timedelta(days=idx - 1)).isoformat()
+        day = trading_days[idx - 1].isoformat()
         for symbol in ("AAPL", "MSFT"):
             events.append(
                 {
