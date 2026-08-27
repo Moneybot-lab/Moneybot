@@ -19,6 +19,7 @@ research-only. V3/V3.1, production serving, promotion and routing remain unchang
 | Track B orchestration | `.github/workflows/track-b-offline.yml`; `validate_alpha_atlas_v4_workflow_artifacts.py` | Run-scoped raw validation, canonicalization, canonical validation, cleaning and feature materialization execute in contract order; failure evidence uploads unconditionally. |
 | Prior-request state | `build_massive_decision_training_rows.py`; canonical request map | V2 removes symbol-global prior model/recommendation history from model features, retains values/source/timestamp per request, and rejects legacy feature names. |
 | Purged temporal split | `alpha_atlas_v4_temporal_split.py`; `plan_alpha_atlas_v4_temporal_split.py`; challenger `--split-plan` | V4 groups canonical observations by cutoff exchange date, purges actual entry/exit overlap, embargoes eligible sessions, freezes hashes, and emits a controlled no-candidate outcome when coverage is valid but insufficient. |
+| Historical-data entitlement inventory | `scripts/audit_massive_historical_entitlement.py`; `docs/reports/alpha_atlas_v4_massive_historical_inventory.{md,json}` | Read-only, opt-in bounded probes and repository evidence map V4 sources and explicitly leave account entitlement, licensing, point-in-time reference coverage and backfill authorization unverified. |
 
 ## Compatibility and intentionally deferred work
 
@@ -33,3 +34,6 @@ research-only. V3/V3.1, production serving, promotion and routing remain unchang
   current Track B daily row schema has neither family.
 - A maintained external exchange-calendar package can replace the versioned rule
   adapter later; that change requires parity tests and a new calendar identifier.
+- Historical backfill remains blocked pending account-specific entitlement and
+  retention evidence plus a point-in-time inactive/delisted universe contract. The
+  inventory command has no download or backfill mode and is not workflow-scheduled.
