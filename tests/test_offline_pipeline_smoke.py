@@ -127,7 +127,7 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     rejected = _run_failure(
         [
             sys.executable,
-            "scripts/clean_training_snapshot.py",
+            "scripts/canonicalize_alpha_atlas_v4_rows.py",
             "--input",
             str(training_rows),
             "--output-dir",
