@@ -47,7 +47,7 @@ behavior are unchanged.
 
 New runs materialize the versioned feature registry and execute the reconstructability
 verifier against the exact feature-store artifact. The verifier writes an artifact-bound
-temporal-safety certification. Research challenger execution is reported separately from
-Phase 0 certification: a missing-lineage or failed reconstruction result cannot become
-`VERIFIED_FOR_THIS_ARTIFACT`, even when downstream research training completes. V4
-remains research-only, and the uploaded challenger fill policy records fit-only medians.
+temporal-safety certification. The Phase 0 gate now fails the workflow before challenger
+training when reconstruction is missing, partial, stale, or invalid; the unconditional
+artifact-upload step still preserves the failure evidence. A research-pipeline execution
+can no longer be mistaken for Phase 0 certification. V4 remains research-only.

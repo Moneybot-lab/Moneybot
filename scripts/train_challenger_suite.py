@@ -485,8 +485,8 @@ def _apply_walk_forward_metrics(
                 continue
             if fit_source is not None:
                 fold_policy = fit_feature_fill_policy(fold_train, feature_columns)
-                fold_train = apply_feature_fill_policy(fold_train, fold_policy)
-                fold_test = apply_feature_fill_policy(fold_test, fold_policy)
+                fold_train = apply_feature_fill_policy(fold_train, fold_policy, expected_feature_contract_version="alpha-atlas-v4-features.v2")
+                fold_test = apply_feature_fill_policy(fold_test, fold_policy, expected_feature_contract_version="alpha-atlas-v4-features.v2")
             y_train = fold_train[target_col].to_numpy(dtype=float)
             X_test = fold_test[feature_columns].to_numpy(dtype=float)
             y_test = fold_test[target_col].to_numpy(dtype=float)
@@ -2740,7 +2740,7 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         if fit_rows.empty:
             raise ValueError("V4 fill policy has no frozen-plan fit rows")
         fill_policy = fit_feature_fill_policy(fit_rows, feature_columns)
-        clean = apply_feature_fill_policy(unfilled, fill_policy)
+        clean = apply_feature_fill_policy(unfilled, fill_policy, expected_feature_contract_version="alpha-atlas-v4-features.v2")
         fill_values = {name: float(spec["fitted_value"]) for name, spec in fill_policy["features"].items()}
     else:
         clean, fill_values = _fill_feature_gaps(df, feature_columns)

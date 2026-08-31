@@ -13,7 +13,7 @@ The old count of 43 is the intended numeric model vector. The hosted count of 48
 
 | Column | Classification | Source family | Calculation | Lookback | Missing/fill policy | Reconstructability |
 |---|---|---|---|---:|---|---|
-| `feature_above_vwap` | model_input | symbol | 1 iff close(T)>VWAP(T) | 1 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
+| `feature_above_vwap` | model_input | symbol | 1 iff close(T)>VWAP(T) | 20 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 | `feature_atr_14` | model_input | symbol | mean true range over T-13..T | 14 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 | `feature_close` | model_input | symbol | split-basis close(T) | 1 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 | `feature_cutoff_at` | provenance | lineage | lineage field | — | required_for_reconstruction | lineage only |
@@ -24,17 +24,17 @@ The old count of 43 is the intended numeric model vector. The hosted count of 48
 | `feature_ema_20` | model_input | symbol | EMA20(close through T) | 20 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 | `feature_family_available_at` | provenance | lineage | lineage field | — | required_for_reconstruction | lineage only |
 | `feature_family_source_at` | provenance | lineage | lineage field | — | required_for_reconstruction | lineage only |
-| `feature_gap_percent` | model_input | symbol | open(T)/close(T-1)-1 | 1 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
+| `feature_gap_percent` | model_input | symbol | open(T)/close(T-1)-1 | 2 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 | `feature_macd` | model_input | symbol | EMA12(close)-EMA26(close) | 35 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 | `feature_macd_hist` | model_input | symbol | MACD-MACD signal | 35 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 | `feature_macd_signal` | model_input | symbol | EMA9(MACD) | 35 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 | `feature_market_asof_date` | provenance | lineage | lineage field | — | required_for_reconstruction | lineage only |
-| `feature_market_regime_risk_on` | model_input | spy_context | 1 iff SPY return5>0 and SPY close>=SMA20 | 1 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
-| `feature_market_volatility_proxy` | model_input | spy_context | population stddev of SPY backward returns | 1 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
+| `feature_market_regime_risk_on` | model_input | spy_context | 1 iff SPY return5>0 and SPY close>=SMA20 | 20 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
+| `feature_market_volatility_proxy` | model_input | spy_context | population stddev of SPY backward returns | 21 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 | `feature_momentum_5d_vs_20d` | model_input | symbol | return5-return20 | 20 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 | `feature_price_vs_sma_20` | model_input | symbol | close(T)/SMA20-1 | 20 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 | `feature_price_vs_sma_50` | model_input | symbol | close(T)/SMA50-1 | 50 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
-| `feature_price_vs_vwap` | model_input | symbol | close(T)/VWAP(T)-1 | 1 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
+| `feature_price_vs_vwap` | model_input | symbol | close(T)/VWAP(T)-1 | 20 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 | `feature_relative_volume_5d` | model_input | symbol | volume(T)/mean(volume T-4..T) | 5 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 | `feature_return_10d_lagged` | model_input | symbol | close(T)/close(T-10)-1 | 10 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 | `feature_return_1d_lagged` | model_input | symbol | close(T)/close(T-1)-1 | 1 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
@@ -59,7 +59,7 @@ The old count of 43 is the intended numeric model vector. The hosted count of 48
 | `feature_volume` | model_input | symbol | split-basis volume(T) | 1 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 | `feature_volume_ratio_20d` | model_input | symbol | volume(T)/mean(volume T-19..T) | 20 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 | `feature_volume_zscore_20d` | model_input | symbol | (volume(T)-mean20)/population_stddev20 | 20 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
-| `feature_vwap` | model_input | symbol | provider VWAP(T), else typical-price fallback under builder contract | 1 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
-| `feature_vwap_slope` | model_input | symbol | OLS slope of VWAP over configured trailing window | 1 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
+| `feature_vwap` | model_input | symbol | sum(close*volume T-19..T)/sum(volume T-19..T) | 20 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
+| `feature_vwap_slope` | model_input | symbol | OLS slope of VWAP over configured trailing window | 29 | fit_period_median_after_required-family fail_closed checks | REQUIRES_IMMUTABLE_SOURCE_LINEAGE |
 
 Prior-request state, including `feature_probability_up_delta_from_last_signal`, is not registered as a model input and remains request-audit metadata only.

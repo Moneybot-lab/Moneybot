@@ -177,9 +177,14 @@ def validate_fill_policy(
 
 
 def apply_feature_fill_policy(
-    frame: pd.DataFrame, policy: Mapping[str, Any]
+    frame: pd.DataFrame,
+    policy: Mapping[str, Any],
+    *,
+    expected_feature_contract_version: str | None = None,
 ) -> pd.DataFrame:
-    validate_fill_policy(policy)
+    validate_fill_policy(
+        policy, expected_feature_contract_version=expected_feature_contract_version
+    )
     out = frame.copy()
     for column, spec in sorted(policy["features"].items()):
         if column not in out:
@@ -235,7 +240,7 @@ def feature_registry() -> dict[str, Any]:
         "feature_trend_slope_10d": "OLS slope of close over 10 sessions",
         "feature_trend_slope_20d": "OLS slope of close over 20 sessions",
         "feature_vwap_slope": "OLS slope of VWAP over configured trailing window",
-        "feature_vwap": "provider VWAP(T), else typical-price fallback under builder contract",
+        "feature_vwap": "sum(close*volume T-19..T)/sum(volume T-19..T)",
     }
     lookbacks = {name: 1 for name in MODEL_FEATURES}
     for name in MODEL_FEATURES:
@@ -251,6 +256,17 @@ def feature_registry() -> dict[str, Any]:
         ):
             if token in name:
                 lookbacks[name] = max(lookbacks[name], sessions)
+    lookbacks.update(
+        {
+            "feature_above_vwap": 20,
+            "feature_gap_percent": 2,
+            "feature_market_regime_risk_on": 20,
+            "feature_market_volatility_proxy": 21,
+            "feature_price_vs_vwap": 20,
+            "feature_vwap": 20,
+            "feature_vwap_slope": 29,
+        }
+    )
     records = []
     for name in MODEL_FEATURES:
         family = "symbol"
@@ -325,14 +341,97 @@ def validate_feature_registry(
         raise ValueError("prior-request state cannot be V4 model evidence")
 
 
-def _resolve_source_value(source: Any, row_index: int, field: str) -> float:
+def _source_rows(source: Any) -> list[dict[str, Any]]:
     rows = source if isinstance(source, list) else source.get("rows")
-    if not isinstance(rows, list) or row_index < 0 or row_index >= len(rows):
-        raise ValueError("missing selected source row")
-    value = rows[row_index].get(field) if isinstance(rows[row_index], dict) else None
-    if not isinstance(value, (int, float)):
-        raise ValueError(f"missing numeric source field: {field}")
-    return float(value)
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        raise ValueError("source does not contain normalized rows")
+    return rows
+
+
+def _replay_v4_features(
+    loaded: Mapping[str, Any], lineage: Mapping[str, Any]
+) -> dict[str, float | int | None]:
+    """Replay the production V4 builder formulas from hash-verified bar histories."""
+    if lineage.get("replay_engine_version") != "massive-v4-feature-replay.v1":
+        raise ValueError("unsupported feature replay engine")
+    from scripts import build_massive_decision_training_rows as builder
+
+    symbol = _source_rows(loaded["symbol"])
+    spy = _source_rows(loaded["spy"])
+    sector = _source_rows(loaded["sector"])
+    indices = lineage.get("source_indices") or {}
+    idx = int(indices["symbol"])
+    spy_idx = int(indices["spy"])
+    sector_idx = int(indices["sector"])
+    if idx < 50 or spy_idx < 35 or sector_idx < 5:
+        raise ValueError("insufficient source lookback for complete replay")
+    asof = symbol[idx]
+    close = float(asof["close"])
+    sma10 = builder._rolling_close_mean(symbol, idx, 10)
+    sma20 = builder._rolling_close_mean(symbol, idx, 20)
+    sma50 = builder._rolling_close_mean(symbol, idx, 50)
+    return5 = builder._lagged_return(symbol, idx, 5)
+    return20 = builder._lagged_return(symbol, idx, 20)
+    spy_return5 = builder._lagged_return(spy, spy_idx, 5)
+    sector_return5 = builder._lagged_return(sector, sector_idx, 5)
+    volume = builder._coerce_float(asof.get("volume"))
+    volume5 = builder._rolling_numeric_mean(symbol, idx, 5, "volume")
+    volume20 = builder._rolling_numeric_mean(symbol, idx, 20, "volume")
+    high20 = builder._rolling_extreme(symbol, idx, 20, "high", high=True)
+    low20 = builder._rolling_extreme(symbol, idx, 20, "low", high=False)
+    vwap = builder._rolling_vwap(symbol, idx, 20)
+    macd, macd_signal, macd_hist = builder._macd_components_at(symbol, idx)
+    return {
+        "feature_close": close,
+        "feature_sma_10": sma10,
+        "feature_sma_20": sma20,
+        "feature_sma_50": sma50,
+        "feature_sma_10_over_20": builder._ratio(sma10, sma20),
+        "feature_sma_20_over_50": builder._ratio(sma20, sma50),
+        "feature_trend_slope_10d": builder._trend_slope(symbol, idx, 10),
+        "feature_trend_slope_20d": builder._trend_slope(symbol, idx, 20),
+        "feature_volatility_5d": builder._return_volatility(symbol, idx, 5),
+        "feature_volatility_20d": builder._return_volatility(symbol, idx, 20),
+        "feature_drawdown_from_20d_high": builder._pct(close, high20),
+        "feature_distance_from_20d_low": builder._pct(close, low20),
+        "feature_gap_percent": builder._pct(
+            asof.get("open"), symbol[idx - 1].get("close")
+        ),
+        "feature_ema_10": builder._ema_at(symbol, idx, 10),
+        "feature_ema_20": builder._ema_at(symbol, idx, 20),
+        "feature_price_vs_sma_20": builder._pct(close, sma20),
+        "feature_price_vs_sma_50": builder._pct(close, sma50),
+        "feature_rsi_14": builder._rsi_at(symbol, idx, 14),
+        "feature_macd": macd,
+        "feature_macd_signal": macd_signal,
+        "feature_macd_hist": macd_hist,
+        "feature_atr_14": builder._atr_at(symbol, idx, 14),
+        "feature_spy_return_1d": builder._lagged_return(spy, spy_idx, 1),
+        "feature_spy_return_5d": spy_return5,
+        "feature_symbol_minus_spy_5d": round(return5 - spy_return5, 6),
+        "feature_symbol_beta_20d": builder._beta_to_benchmark(
+            symbol, spy, idx, spy_idx, 20
+        ),
+        "feature_sector_relative_return_5d": round(return5 - sector_return5, 6),
+        "feature_market_regime_risk_on": builder._market_regime_risk_on(spy, spy_idx),
+        "feature_market_volatility_proxy": builder._return_volatility(spy, spy_idx, 20),
+        "feature_return_1d_lagged": builder._lagged_return(symbol, idx, 1),
+        "feature_return_5d_lagged": return5,
+        "feature_return_10d_lagged": builder._lagged_return(symbol, idx, 10),
+        "feature_return_20d_lagged": return20,
+        "feature_momentum_5d_vs_20d": round(return5 - return20, 6),
+        "feature_volume": volume,
+        "feature_volume_ratio_20d": builder._ratio(volume, volume20),
+        "feature_relative_volume_5d": builder._ratio(volume, volume5),
+        "feature_volume_zscore_20d": builder._rolling_zscore(symbol, idx, 20, "volume"),
+        "feature_vwap": vwap,
+        "feature_price_vs_vwap": builder._pct(close, vwap),
+        "feature_vwap_slope": builder._vwap_slope(symbol, idx, 10, 20),
+        "feature_above_vwap": int(close > vwap) if vwap is not None else None,
+        "feature_dollar_volume": (
+            round(close * volume, 6) if volume is not None else None
+        ),
+    }
 
 
 def verify_observation(
@@ -402,41 +501,28 @@ def verify_observation(
     fill_policy = lineage.get("fill_policy")
     if fill_policy:
         try:
-            validate_fill_policy(fill_policy)
+            validate_fill_policy(
+                fill_policy,
+                expected_feature_contract_version=FEATURE_CONTRACT_VERSION,
+            )
         except ValueError:
             failures.append("fill_policy_mismatch")
-    calculations = lineage.get("feature_calculations") or {}
+    try:
+        replayed_features = _replay_v4_features(loaded, lineage)
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        replayed_features = {}
+        failures.append("feature_replay_engine_failed")
     for feature in MODEL_FEATURES:
-        spec = calculations.get(feature)
-        if not isinstance(spec, dict):
-            failures.append(f"missing_feature_calculation:{feature}")
-            continue
-        try:
-            values = [
-                _resolve_source_value(
-                    loaded[i["family"]], int(i["row_index"]), str(i["field"])
-                )
-                for i in spec.get("inputs", [])
-            ]
-            operator = spec.get("operator")
-            if operator == "identity" and len(values) == 1:
-                replay = values[0]
-            elif operator == "ratio" and len(values) == 2:
-                replay = values[0] / values[1]
-            elif operator == "pct" and len(values) == 2:
-                replay = values[0] / values[1] - 1.0
-            elif operator == "difference" and len(values) == 2:
-                replay = values[0] - values[1]
-            elif operator == "constant" and isinstance(spec.get("value"), (int, float)):
-                replay = float(spec["value"])
-            else:
-                raise ValueError("unsupported calculation")
-            if not np.isclose(
-                replay, float(row[feature]), rtol=tolerance, atol=tolerance
-            ):
-                failures.append(f"feature_mismatch:{feature}")
-        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        replay = replayed_features.get(feature)
+        observed = row.get(feature)
+        if not isinstance(replay, (int, float)) or not isinstance(
+            observed, (int, float)
+        ):
             failures.append(f"feature_replay_failed:{feature}")
+        elif not np.isclose(
+            float(replay), float(observed), rtol=tolerance, atol=tolerance
+        ):
+            failures.append(f"feature_mismatch:{feature}")
     execution = lineage.get("execution") or {}
     try:
         entry = float(execution["entry_price"])
@@ -465,8 +551,37 @@ def verify_observation(
     action_path = (root / action_relative).resolve()
     if not action_relative or not action_path.is_file():
         failures.append("missing_corporate_action_source")
-    elif sha256_file(action_path) != action_source.get("sha256"):
-        failures.append("corporate_action_source_hash_mismatch")
+    else:
+        action_hash = sha256_file(action_path)
+        if action_hash != action_source.get("sha256"):
+            failures.append("corporate_action_source_hash_mismatch")
+        if row.get("corporate_action_manifest_sha256") != action_hash:
+            failures.append("corporate_action_manifest_hash_mismatch")
+        try:
+            action_payload = json.loads(action_path.read_text())
+            actions = action_payload.get("actions", action_payload)
+            if not isinstance(actions, list):
+                raise ValueError("actions are not a list")
+            by_id = {
+                str(action.get("id") or ""): action
+                for action in actions
+                if isinstance(action, dict) and action.get("id")
+            }
+            for action_id in row.get("feature_split_ids") or []:
+                action = by_id.get(str(action_id))
+                if action is None:
+                    failures.append(f"missing_feature_action:{action_id}")
+                    continue
+                available = pd.to_datetime(
+                    action.get("available_at"), utc=True, errors="coerce"
+                )
+                if pd.isna(available) or (not pd.isna(cutoff) and available > cutoff):
+                    failures.append(f"unproven_feature_action_availability:{action_id}")
+            for action_id in row.get("label_split_ids") or []:
+                if str(action_id) not in by_id:
+                    failures.append(f"missing_label_action:{action_id}")
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            failures.append("corporate_action_source_invalid")
     if lineage.get("corporate_action_manifest_sha256") != row.get(
         "corporate_action_manifest_sha256"
     ):
@@ -490,19 +605,67 @@ def build_temporal_safety_certification(
     report_hash = sha256_value(report_core)
     rows = int(verification_report.get("rows_total") or 0)
     checked = int(verification_report.get("rows_checked") or 0)
+    results = verification_report.get("results")
+    report_integrity_failures: list[str] = []
+    if verification_report.get("schema_version") != RECONSTRUCTION_VERSION:
+        report_integrity_failures.append("verification_schema_mismatch")
+    if verification_report.get("artifact_sha256") != artifact_hash:
+        report_integrity_failures.append("verification_artifact_hash_mismatch")
+    if verification_report.get("verification_scope") != "FULL_ARTIFACT":
+        report_integrity_failures.append("verification_scope_not_full")
+    if not isinstance(results, list) or len(results) != checked:
+        report_integrity_failures.append("verification_result_count_mismatch")
+        results = []
+    identifiers = [str(item.get("canonical_observation_id") or "") for item in results]
+    if not all(identifiers) or len(identifiers) != len(set(identifiers)):
+        report_integrity_failures.append("verification_result_identity_invalid")
+    computed_failures = sum(
+        item.get("status") != "RECONSTRUCTABLE" or bool(item.get("failures"))
+        for item in results
+    )
     failures = int(verification_report.get("failure_count") or 0)
+    if computed_failures != failures:
+        report_integrity_failures.append("verification_failure_count_mismatch")
+    if verification_report.get("results_sha256") != sha256_value(results):
+        report_integrity_failures.append("verification_results_hash_mismatch")
+    reasons = [reason for item in results for reason in item.get("failures", [])]
+    timestamp_failures = sum(
+        reason.startswith(("missing_feature_cutoff", "entry_", "exit_", "calendar_"))
+        for reason in reasons
+    )
+    future_feature_failures = sum(reason.startswith("future_") for reason in reasons)
+    availability_failures = sum(
+        reason.startswith(
+            (
+                "missing_source",
+                "source_hash",
+                "stale_or_unproven_source",
+                "missing_required_context",
+            )
+        )
+        for reason in reasons
+    )
+    execution_label_failures = sum(
+        reason.startswith(("entry_", "exit_", "target_", "missing_executable"))
+        for reason in reasons
+    )
     verified = (
         rows > 0
         and checked == rows
         and failures == 0
         and verification_report.get("status") == "RECONSTRUCTABLE"
+        and not report_integrity_failures
     )
     return {
         "schema_version": TEMPORAL_CERTIFICATION_VERSION,
         "status": (
             "VERIFIED_FOR_THIS_ARTIFACT"
             if verified
-            else ("FAILED" if failures else "PARTIALLY_VERIFIED")
+            else (
+                "FAILED"
+                if failures or report_integrity_failures
+                else "PARTIALLY_VERIFIED"
+            )
         ),
         "artifact_sha256": artifact_hash,
         "timing_contract_version": timing_contract_version,
@@ -510,6 +673,11 @@ def build_temporal_safety_certification(
         "rows_total": rows,
         "rows_checked": checked,
         "reconstructability_failures": failures,
+        "timestamp_invariant_failures": timestamp_failures,
+        "future_feature_failures": future_feature_failures,
+        "availability_failures": availability_failures,
+        "execution_label_failures": execution_label_failures,
+        "report_integrity_failures": report_integrity_failures,
         "verification_report_sha256": report_hash,
         "legacy_leakage_safe_accepted": False,
     }
@@ -531,6 +699,13 @@ def validate_temporal_safety_certification(
         dict(verification_report)
     ):
         raise ValueError("temporal-safety verification report hash mismatch")
+    rebuilt = build_temporal_safety_certification(
+        artifact_path=artifact_path,
+        verification_report=verification_report,
+        timing_contract_version=str(certification.get("timing_contract_version") or ""),
+    )
+    if dict(certification) != rebuilt:
+        raise ValueError("temporal-safety certification contents are stale or forged")
     if (
         not certification.get("rows_total")
         or certification.get("rows_checked") != certification.get("rows_total")

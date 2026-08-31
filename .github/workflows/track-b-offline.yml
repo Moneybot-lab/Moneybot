@@ -252,7 +252,6 @@ jobs:
 
       - name: Evaluate V4 Phase 0 reconstructability gate
         id: phase0_certification
-        continue-on-error: true  # Research may continue; this can never convert certification to PASS.
         run: |
           set -euo pipefail
           echo "TRACK_B_FAILED_STAGE=phase0_reconstructability" >> "$GITHUB_ENV"

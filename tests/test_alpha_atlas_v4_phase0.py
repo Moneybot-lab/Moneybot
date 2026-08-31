@@ -10,6 +10,7 @@ from moneybot.services.alpha_atlas_v4_canonical_observations import (
 from moneybot.services.alpha_atlas_v4_phase0 import (
     FEATURE_STORE_PROVENANCE_COLUMNS,
     MODEL_FEATURES,
+    _replay_v4_features,
     apply_feature_fill_policy,
     build_temporal_safety_certification,
     feature_registry,
@@ -54,6 +55,21 @@ def test_each_walk_forward_fit_is_independent_of_later_fold():
     assert fit_feature_fill_policy(fold_one, ["feature_a"]) == first
 
 
+def test_v4_apply_rejects_a_policy_from_an_incompatible_feature_contract():
+    frame = pd.DataFrame({"feature_a": [1.0, None]})
+    policy = fit_feature_fill_policy(
+        frame,
+        ["feature_a"],
+        feature_contract_version="legacy-feature-contract.v1",
+    )
+    with pytest.raises(ValueError, match="contract mismatch"):
+        apply_feature_fill_policy(
+            frame,
+            policy,
+            expected_feature_contract_version="alpha-atlas-v4-features.v2",
+        )
+
+
 def test_feature_registry_exactly_reconciles_43_plus_5():
     registry = feature_registry()
     assert len(MODEL_FEATURES) == registry["model_input_count"] == 43
@@ -76,8 +92,37 @@ def test_feature_registry_exactly_reconciles_43_plus_5():
 
 
 def _lineage_row(tmp_path: Path):
-    source = tmp_path / "bars.json"
-    source.write_text(json.dumps({"rows": [{"close": 10.0}]}, sort_keys=True))
+    rows = [
+        {
+            "date": f"2025-{(index // 28) + 10:02d}-{(index % 28) + 1:02d}",
+            "open": 100.0 + index,
+            "high": 102.0 + index,
+            "low": 99.0 + index,
+            "close": 101.0 + index + ((index % 3) * 0.1),
+            "volume": 1_000_000.0 + (index * 1000),
+        }
+        for index in range(60)
+    ]
+    source_paths = {}
+    for family, multiplier in (("symbol", 1.0), ("spy", 2.0), ("sector", 1.5)):
+        path = tmp_path / f"{family}.json"
+        family_rows = [
+            {
+                **item,
+                "open": item["open"] * multiplier,
+                "high": item["high"] * multiplier,
+                "low": item["low"] * multiplier,
+                "close": item["close"] * multiplier,
+            }
+            for item in rows
+        ]
+        path.write_text(json.dumps({"rows": family_rows}, sort_keys=True))
+        source_paths[family] = path
+    reference = tmp_path / "reference.json"
+    reference.write_text(
+        json.dumps({"rows": [{"security_id": "SEC-1"}]}, sort_keys=True)
+    )
+    source_paths["reference"] = reference
     actions = tmp_path / "actions.json"
     actions.write_text(json.dumps({"actions": []}, sort_keys=True))
     base = {
@@ -94,15 +139,13 @@ def _lineage_row(tmp_path: Path):
         "execution_cost_policy_version": None,
         "exchange_calendar": "XNYS-rule-calendar.v1",
         "return_5d": 0.1,
-        "corporate_action_manifest_sha256": "actions-hash",
+        "corporate_action_manifest_sha256": sha256_file(actions),
     }
-    base.update({feature: 10.0 for feature in MODEL_FEATURES})
-    base["canonical_observation_id"] = canonical_observation_id(base)
     sources = [
         {
             "family": family,
-            "path": source.name,
-            "sha256": sha256_file(source),
+            "path": source_paths[family].name,
+            "sha256": sha256_file(source_paths[family]),
             "event_at": "2026-01-02T21:00:00+00:00",
             "available_at": "2026-01-02T21:01:00+00:00",
             "staleness_status": "fresh",
@@ -113,13 +156,8 @@ def _lineage_row(tmp_path: Path):
         "sources": sources,
         "feature_contract_version": "alpha-atlas-v4-features.v2",
         "calendar_contract_version": "XNYS-rule-calendar.v1",
-        "feature_calculations": {
-            feature: {
-                "operator": "identity",
-                "inputs": [{"family": "symbol", "row_index": 0, "field": "close"}],
-            }
-            for feature in MODEL_FEATURES
-        },
+        "replay_engine_version": "massive-v4-feature-replay.v1",
+        "source_indices": {"symbol": 59, "spy": 59, "sector": 59},
         "execution": {
             "entry_at": base["entry_at"],
             "exit_at": base["exit_at"],
@@ -133,9 +171,14 @@ def _lineage_row(tmp_path: Path):
             "path": actions.name,
             "sha256": sha256_file(actions),
         },
-        "corporate_action_manifest_sha256": "actions-hash",
+        "corporate_action_manifest_sha256": sha256_file(actions),
     }
-    return base, source
+    loaded = {
+        family: json.loads(path.read_text()) for family, path in source_paths.items()
+    }
+    base.update(_replay_v4_features(loaded, base["reconstruction_lineage"]))
+    base["canonical_observation_id"] = canonical_observation_id(base)
+    return base, source_paths["symbol"]
 
 
 def test_exact_reconstruction_and_fail_closed_variants(tmp_path):
@@ -179,6 +222,38 @@ def test_missing_context_action_and_execution_lineage_fail_closed(tmp_path):
     assert "missing_executable_label_lineage" in failures
 
 
+def test_split_near_decision_requires_point_in_time_action_availability(tmp_path):
+    row, _ = _lineage_row(tmp_path)
+    action_path = (
+        tmp_path / row["reconstruction_lineage"]["corporate_action_source"]["path"]
+    )
+    action_path.write_text(
+        json.dumps(
+            {
+                "actions": [
+                    {
+                        "id": "split-1",
+                        "execution_date": "2026-01-05",
+                        "available_at": "2026-01-05T15:00:00+00:00",
+                        "split_from": 1,
+                        "split_to": 2,
+                    }
+                ]
+            },
+            sort_keys=True,
+        )
+    )
+    action_hash = sha256_file(action_path)
+    row["feature_split_ids"] = ["split-1"]
+    row["corporate_action_manifest_sha256"] = action_hash
+    row["reconstruction_lineage"]["corporate_action_manifest_sha256"] = action_hash
+    row["reconstruction_lineage"]["corporate_action_source"]["sha256"] = action_hash
+    assert (
+        "unproven_feature_action_availability:split-1"
+        in verify_observation(row, root=tmp_path)["failures"]
+    )
+
+
 def test_stale_context_ticker_identity_holiday_and_early_close(tmp_path):
     row, _ = _lineage_row(tmp_path)
     row["reconstruction_lineage"]["sources"][1]["staleness_status"] = "stale"
@@ -215,14 +290,10 @@ def test_stale_context_ticker_identity_holiday_and_early_close(tmp_path):
 
 
 def test_temporal_certification_is_hash_bound_and_never_trusts_legacy_boolean(tmp_path):
+    row, _ = _lineage_row(tmp_path)
     artifact = tmp_path / "rows.jsonl"
-    artifact.write_text('{"leakage_safe": true}\n')
-    report = {
-        "status": "RECONSTRUCTABLE",
-        "rows_total": 1,
-        "rows_checked": 1,
-        "failure_count": 0,
-    }
+    artifact.write_text(json.dumps(row, sort_keys=True) + "\n")
+    report = verify_artifact(artifact, root=tmp_path)
     certification = build_temporal_safety_certification(
         artifact_path=artifact,
         verification_report=report,
@@ -233,22 +304,37 @@ def test_temporal_certification_is_hash_bound_and_never_trusts_legacy_boolean(tm
     validate_temporal_safety_certification(
         certification, artifact_path=artifact, verification_report=report
     )
-    artifact.write_text('{"leakage_safe": true, "forged": true}\n')
+    artifact.write_text(json.dumps({**row, "forged": True}, sort_keys=True) + "\n")
     with pytest.raises(ValueError, match="artifact hash mismatch"):
         validate_temporal_safety_certification(
             certification, artifact_path=artifact, verification_report=report
         )
-    partial = build_temporal_safety_certification(
-        artifact_path=artifact,
-        verification_report={
-            "status": "PARTIAL",
-            "rows_total": 2,
-            "rows_checked": 1,
-            "failure_count": 0,
-        },
+    legacy_only = tmp_path / "legacy.jsonl"
+    legacy_only.write_text('{"leakage_safe": true}\n')
+    forged_report = {
+        "status": "RECONSTRUCTABLE",
+        "rows_total": 1,
+        "rows_checked": 1,
+        "failure_count": 0,
+    }
+    forged = build_temporal_safety_certification(
+        artifact_path=legacy_only,
+        verification_report=forged_report,
         timing_contract_version="timing.v1",
     )
-    assert partial["status"] == "PARTIALLY_VERIFIED"
+    assert forged["status"] == "FAILED"
+    assert forged["report_integrity_failures"]
+
+    partial_report = verify_artifact(
+        artifact, root=tmp_path, observation_id=row["canonical_observation_id"]
+    )
+    partial = build_temporal_safety_certification(
+        artifact_path=artifact,
+        verification_report=partial_report,
+        timing_contract_version="timing.v1",
+    )
+    assert partial["status"] == "FAILED"
+    assert "verification_scope_not_full" in partial["report_integrity_failures"]
 
 
 def test_lineage_free_current_style_row_is_not_reconstructable(tmp_path):
@@ -269,6 +355,10 @@ def test_v31_freeze_and_workflow_remain_non_promoting_and_separate():
     assert benchmark["model_artifact_evidence"] == "UNVERIFIED_EXTERNAL_ARTIFACT"
     workflow = Path(".github/workflows/track-b-offline.yml").read_text()
     assert "Evaluate V4 Phase 0 reconstructability gate" in workflow
+    gate = workflow.split("Evaluate V4 Phase 0 reconstructability gate", 1)[1].split(
+        "Assess V4 challenger temporal-split feasibility", 1
+    )[0]
+    assert "continue-on-error" not in gate
     assert "phase0_certification_passed" in workflow
     assert "Record V3 and V3.1 compatibility boundary" in workflow
     assert '"automatic_promotion": False' in workflow

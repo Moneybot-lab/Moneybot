@@ -35,19 +35,22 @@
   "next_permitted_step": "Persist immutable source row/object and corporate-action lineage, obtain run #156/#157 artifacts, then rerun Phase 0 certification. Phase 1/backfill and Phase 2 modeling remain prohibited.",
   "reconstructability": {
     "adversarial_failure_classes_tested": [
-      "missing_source",
-      "source_hash_mismatch",
-      "future_source_availability",
-      "stale_context",
-      "ticker_identity_mismatch",
-      "holiday_entry",
-      "early_close",
-      "missing_context",
       "corporate_action_mismatch",
-      "missing_entry_price",
+      "early_close",
+      "fabricated_verification_report",
       "feature_mismatch",
+      "future_corporate_action_availability",
+      "future_source_availability",
+      "holiday_entry",
+      "missing_context",
+      "missing_entry_price",
+      "missing_source",
+      "partial_verification_scope",
+      "source_hash_mismatch",
+      "stale_certification",
+      "stale_context",
       "target_mismatch",
-      "stale_certification"
+      "ticker_identity_mismatch"
     ],
     "failed": 0,
     "observations_tested": 0,
@@ -68,7 +71,7 @@
     "v3_behavior_changed": false
   },
   "schema_version": "alpha-atlas-v4-phase0-closeout.v1",
-  "starting_commit": "a7f4a1f0aecebafdf0c393da2515d90d630d6775",
+  "starting_commit": "c5812e70ac237a20328b2be5d3ea5c6ba2777bc9",
   "temporal_safety_certification": {
     "artifact_sha256": null,
     "failures": null,

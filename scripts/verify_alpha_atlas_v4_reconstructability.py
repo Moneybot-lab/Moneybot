@@ -12,22 +12,40 @@ if str(PROJECT_ROOT) not in sys.path:
 from moneybot.services.alpha_atlas_v4_phase0 import (
     RECONSTRUCTION_VERSION,
     build_temporal_safety_certification,
+    sha256_file,
+    sha256_value,
     verify_observation,
 )
 
 
-def verify_artifact(input_path: Path, *, root: Path, max_observations: int = 0) -> dict:
+def verify_artifact(
+    input_path: Path,
+    *,
+    root: Path,
+    max_observations: int = 0,
+    observation_id: str | None = None,
+) -> dict:
     rows = []
     with input_path.open(encoding="utf-8") as handle:
         for line in handle:
             if line.strip():
                 rows.append(json.loads(line))
-    selected = rows if max_observations <= 0 else rows[:max_observations]
+    if observation_id:
+        selected = [
+            row
+            for row in rows
+            if str(row.get("canonical_observation_id") or "") == observation_id
+        ]
+        if not selected:
+            raise ValueError("requested canonical observation ID was not found")
+    else:
+        selected = rows if max_observations <= 0 else rows[:max_observations]
     cache = {}
     results = [verify_observation(row, root=root, cache=cache) for row in selected]
     reasons = Counter(reason for result in results for reason in result["failures"])
     failures = sum(result["status"] != "RECONSTRUCTABLE" for result in results)
-    return {
+    full_scope = len(selected) == len(rows) and not observation_id
+    report = {
         "schema_version": RECONSTRUCTION_VERSION,
         "status": (
             "RECONSTRUCTABLE"
@@ -35,6 +53,9 @@ def verify_artifact(input_path: Path, *, root: Path, max_observations: int = 0) 
             else ("NOT_RECONSTRUCTABLE" if failures else "PARTIAL")
         ),
         "artifact_path_label": input_path.name,
+        "artifact_sha256": sha256_file(input_path),
+        "verification_scope": "FULL_ARTIFACT" if full_scope else "BOUNDED_SAMPLE",
+        "requested_observation_id": observation_id,
         "rows_total": len(rows),
         "rows_checked": len(selected),
         "reconstructable_rows": len(selected) - failures,
@@ -42,6 +63,8 @@ def verify_artifact(input_path: Path, *, root: Path, max_observations: int = 0) 
         "failure_reasons": dict(sorted(reasons.items())),
         "results": results,
     }
+    report["results_sha256"] = sha256_value(results)
+    return report
 
 
 def main() -> int:
@@ -51,10 +74,14 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument("--certification-output", required=True)
     parser.add_argument("--max-observations", type=int, default=0)
+    parser.add_argument("--observation-id")
     args = parser.parse_args()
     input_path = Path(args.input)
     report = verify_artifact(
-        input_path, root=Path(args.root), max_observations=max(0, args.max_observations)
+        input_path,
+        root=Path(args.root),
+        max_observations=max(0, args.max_observations),
+        observation_id=args.observation_id,
     )
     certification = build_temporal_safety_certification(
         artifact_path=input_path,
