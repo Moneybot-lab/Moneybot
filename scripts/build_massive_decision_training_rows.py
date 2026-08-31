@@ -5,15 +5,21 @@ import argparse
 import bisect
 import csv
 import gzip
+import hashlib
 import json
 import re
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import normalize_action, normalize_unix_ts
 from moneybot.services.alpha_atlas_v3_features import build_alpha_atlas_v3_features
+from moneybot.services.alpha_atlas_v4_timing_contract import (
+    ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
+    AlphaAtlasV4TimingRecord,
+)
+from moneybot.services.market_data_providers import ExchangeCalendar
 from moneybot.services.decision_target import (
     TARGET_NAME,
     label_from_forward_return,
@@ -29,7 +35,10 @@ from moneybot.services.corporate_actions import (
     split_source_hash,
 )
 
-SCHEMA_VERSION = "massive-decision-training-rows.v2"
+SCHEMA_VERSION = "massive-decision-training-rows.v4"
+EXCHANGE_CALENDAR = ExchangeCalendar()
+DEFAULT_MAX_STALENESS_SESSIONS = 3
+V4_FEATURE_CONTRACT_VERSION = "alpha-atlas-v4-features.v2"
 SECTOR_BENCHMARK_SYMBOLS = {
     "communication services": "XLC",
     "consumer discretionary": "XLY",
@@ -96,6 +105,11 @@ def _normalize_market_row(row: dict[str, Any]) -> dict[str, Any] | None:
     close = _coerce_float(row.get("close") or row.get("c") or row.get("Close"))
     if not symbol or not day or close is None:
         return None
+    available_at = _parse_utc_datetime(
+        row.get("available_at")
+        or row.get("provider_available_at")
+        or row.get("received_timestamp")
+    )
     return {
         "symbol": symbol,
         "date": day,
@@ -104,7 +118,24 @@ def _normalize_market_row(row: dict[str, Any]) -> dict[str, Any] | None:
         "low": _coerce_float(row.get("low") or row.get("l") or row.get("Low")),
         "close": close,
         "volume": _coerce_float(row.get("volume") or row.get("v") or row.get("Volume")),
+        "available_at": available_at.isoformat() if available_at else None,
     }
+
+
+def _parse_utc_datetime(value: Any) -> datetime | None:
+    if value in {None, ""}:
+        return None
+    try:
+        parsed = (
+            value
+            if isinstance(value, datetime)
+            else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        )
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
 
 
 _PATH_DATE_RE = re.compile(r"(20\d{2})[-/](\d{2})[-/](\d{2})")
@@ -332,7 +363,8 @@ def _row_before_or_on_indexed(
 
 
 def _event_day(ts: int) -> str:
-    return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
+    instant = datetime.fromtimestamp(ts, tz=timezone.utc)
+    return EXCHANGE_CALENDAR.local_date(instant).isoformat()
 
 
 def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
@@ -672,12 +704,98 @@ def _pct(newer: float, older: float | None) -> float | None:
     return round((newer / float(older)) - 1.0, 6)
 
 
+def _session_distance(older: date, newer: date) -> int:
+    count = 0
+    candidate = older
+    while candidate < newer:
+        candidate += timedelta(days=1)
+        if EXCHANGE_CALENDAR.is_trading_day(candidate):
+            count += 1
+    return count
+
+
+def _bar_availability(row: dict[str, Any]) -> datetime | None:
+    return _parse_utc_datetime(row.get("available_at"))
+
+
+def _feature_index_for_decision(
+    rows: list[dict[str, Any]],
+    dates: list[str],
+    decision_at: datetime,
+    *,
+    max_staleness_sessions: int,
+) -> tuple[int | None, datetime | None, str | None]:
+    local_day = EXCHANGE_CALENDAR.local_date(decision_at)
+    current_idx = _row_before_or_on_indexed({"_": dates}, "_", local_day.isoformat())
+    current_row = rows[current_idx] if current_idx is not None else None
+    current_is_today = bool(
+        current_row and str(current_row.get("date")) == local_day.isoformat()
+    )
+    after_close = bool(
+        EXCHANGE_CALENDAR.is_trading_day(local_day)
+        and decision_at >= EXCHANGE_CALENDAR.session_close(local_day)
+    )
+    if current_is_today and after_close:
+        available_at = _bar_availability(current_row)
+        if available_at is None or available_at > decision_at:
+            return None, None, "current_session_provider_availability_unproven"
+        idx = current_idx
+        source_at = EXCHANGE_CALENDAR.session_close(local_day)
+        availability_at = available_at
+    else:
+        permitted_day = EXCHANGE_CALENDAR.previous_session(local_day)
+        idx = _row_before_or_on_indexed({"_": dates}, "_", permitted_day.isoformat())
+        if idx is None:
+            return None, None, "missing_completed_daily_bar"
+        source_day = date.fromisoformat(str(rows[idx]["date"]))
+        source_at = EXCHANGE_CALENDAR.session_close(source_day)
+        availability_at = _bar_availability(rows[idx]) or source_at
+        if availability_at > decision_at:
+            return None, None, "daily_bar_available_after_feature_cutoff"
+    source_day = date.fromisoformat(str(rows[idx]["date"]))
+    reference_day = (
+        local_day
+        if EXCHANGE_CALENDAR.is_trading_day(local_day)
+        else EXCHANGE_CALENDAR.previous_session(local_day, include_current=True)
+    )
+    if _session_distance(source_day, reference_day) > max_staleness_sessions:
+        return None, None, "stale_daily_bar"
+    return idx, availability_at, None
+
+
+def _exact_row_index(dates: list[str], day: date) -> int | None:
+    pos = bisect.bisect_left(dates, day.isoformat())
+    return pos if pos < len(dates) and dates[pos] == day.isoformat() else None
+
+
+def _advance_session(day: date, count: int) -> date:
+    result = day
+    for _ in range(max(0, count)):
+        result = EXCHANGE_CALENDAR.next_session(result)
+    return result
+
+
+def _feature_safe_splits(
+    events: list[dict[str, Any]], decision_at: datetime, market_session: date
+) -> list[dict[str, Any]]:
+    safe = []
+    for event in events:
+        execution_day = date.fromisoformat(str(event["execution_date"]))
+        available_at = _parse_utc_datetime(event.get("available_at"))
+        if available_at is not None and available_at <= decision_at:
+            safe.append(event)
+        elif execution_day < market_session:
+            safe.append(event)
+    return safe
+
+
 def build_training_rows_from_raw_market(
     events: list[dict[str, Any]],
     market: dict[str, list[dict[str, Any]]],
     *,
     horizon_days: int = 5,
     split_events: list[dict[str, Any]] | None = None,
+    max_staleness_sessions: int = DEFAULT_MAX_STALENESS_SESSIONS,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     label_name = (
         TARGET_NAME
@@ -695,6 +813,10 @@ def build_training_rows_from_raw_market(
         "missing_symbol_history": 0,
         "insufficient_history": 0,
         "insufficient_forward_window": 0,
+        "rejected_unproven_availability": 0,
+        "rejected_stale_feature_family": 0,
+        "rejected_missing_context": 0,
+        "rejected_missing_entry_price": 0,
         "split_events_loaded": len(split_events),
         "training_rows_affected": 0,
         "feature_windows_crossing_splits": 0,
@@ -709,6 +831,7 @@ def build_training_rows_from_raw_market(
     signal_index = _signal_history_index(events)
     date_index = _market_date_index(market)
     feature_cache: dict[tuple[str, int], dict[str, Any]] = {}
+    event_identity_counts: dict[str, int] = {}
     for event in events:
         summary["events_scanned"] += 1
         symbol = str(event.get("symbol") or "").strip().upper()
@@ -728,33 +851,87 @@ def build_training_rows_from_raw_market(
             ts,
             window_days=7,
         )
+        decision_at = datetime.fromtimestamp(ts, tz=timezone.utc)
         event_day = _event_day(ts)
+        market_session = date.fromisoformat(event_day)
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        snapshot = (
+            event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
+        )
+        sector_benchmark_symbol = _sector_benchmark_symbol(event, payload, snapshot)
         raw_history = market[symbol]
+        if len(raw_history) < 6:
+            summary["insufficient_history"] += 1
+            continue
+        idx, symbol_available_at, symbol_rejection = _feature_index_for_decision(
+            raw_history,
+            date_index.get(symbol, []),
+            decision_at,
+            max_staleness_sessions=max_staleness_sessions,
+        )
+        if idx is None:
+            if symbol_rejection == "stale_daily_bar":
+                summary["rejected_stale_feature_family"] += 1
+            else:
+                summary["rejected_unproven_availability"] += 1
+            continue
+        feature_day = str(raw_history[idx]["date"])
+        feature_splits = _feature_safe_splits(
+            splits_by_symbol.get(symbol, []), decision_at, market_session
+        )
         history = adjust_bars_to_asof(
-            raw_history, splits_by_symbol.get(symbol, []), event_day, audit=summary
+            raw_history, feature_splits, feature_day, audit=summary
         )
         raw_spy_history = market.get("SPY")
+        context_required = True
+        if context_required and raw_spy_history is None:
+            summary["rejected_missing_context"] += 1
+            continue
+        spy_idx = None
+        spy_available_at = None
+        if raw_spy_history:
+            spy_idx, spy_available_at, spy_rejection = _feature_index_for_decision(
+                raw_spy_history,
+                date_index.get("SPY", []),
+                decision_at,
+                max_staleness_sessions=max_staleness_sessions,
+            )
+            if spy_idx is None:
+                if spy_rejection == "stale_daily_bar":
+                    summary["rejected_stale_feature_family"] += 1
+                else:
+                    summary["rejected_unproven_availability"] += 1
+                continue
         spy_history = (
             adjust_bars_to_asof(
                 raw_spy_history,
-                splits_by_symbol.get("SPY", []),
-                event_day,
+                _feature_safe_splits(
+                    splits_by_symbol.get("SPY", []), decision_at, market_session
+                ),
+                str(raw_spy_history[spy_idx]["date"]),
                 audit=summary,
             )
             if raw_spy_history
             else None
         )
-        spy_idx = (
-            _row_before_or_on_indexed(date_index, "SPY", event_day)
-            if spy_history
-            else None
-        )
-        idx = _row_before_or_on_indexed(date_index, symbol, event_day)
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
-        label_idx = idx + max(1, horizon_days)
-        if label_idx >= len(history):
+
+        entry_session = EXCHANGE_CALENDAR.entry_session_after(decision_at)
+        exit_session = _advance_session(entry_session, max(1, horizon_days) - 1)
+        entry_idx = _exact_row_index(date_index.get(symbol, []), entry_session)
+        label_idx = _exact_row_index(date_index.get(symbol, []), exit_session)
+        if (
+            entry_idx is None
+            or _coerce_float(raw_history[entry_idx].get("open")) is None
+        ):
+            summary["rejected_missing_entry_price"] += 1
+            continue
+        if (
+            label_idx is None
+            or _coerce_float(raw_history[label_idx].get("close")) is None
+        ):
             summary["insufficient_forward_window"] += 1
             continue
 
@@ -764,16 +941,17 @@ def build_training_rows_from_raw_market(
         prev5 = history[idx - 5]
         prev10 = history[idx - 10] if idx >= 10 else {}
         prev20 = history[idx - 20] if idx >= 20 else {}
+        entry = raw_history[entry_idx]
         future = raw_history[label_idx]
         close = float(asof["close"])
         label_factor = price_factor_between(
-            splits_by_symbol.get(symbol, []), str(raw_asof["date"]), str(future["date"])
+            splits_by_symbol.get(symbol, []), str(entry["date"]), str(future["date"])
         )
         return_fwd = round(
             split_adjusted_forward_return(
-                float(raw_asof["close"]),
+                float(entry["open"]),
                 float(future["close"]),
-                str(raw_asof["date"]),
+                str(entry["date"]),
                 str(future["date"]),
                 splits_by_symbol.get(symbol, []),
             ),
@@ -790,7 +968,7 @@ def build_training_rows_from_raw_market(
         label_split_ids = [
             str(item.get("id") or "")
             for item in splits_by_symbol.get(symbol, [])
-            if str(raw_asof["date"]) < item["execution_date"] <= str(future["date"])
+            if str(entry["date"]) < item["execution_date"] <= str(future["date"])
         ]
         if feature_split_ids:
             summary["feature_windows_crossing_splits"] += 1
@@ -819,10 +997,6 @@ def build_training_rows_from_raw_market(
                     "label_cumulative_adjustment_factor": label_factor,
                 }
             )
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        snapshot = (
-            event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
-        )
         current_action = normalize_action(event)
         current_probability = _event_probability_up(event)
         cache_key = (symbol, idx, event_day)
@@ -895,29 +1069,157 @@ def build_training_rows_from_raw_market(
             asof_date=event_day,
         )
         spy_return_5d = _lagged_return(spy_history, spy_idx, 5)
-        sector_benchmark_symbol = _sector_benchmark_symbol(event, payload, snapshot)
         raw_sector_history = market.get(sector_benchmark_symbol)
+        sector_idx = None
+        sector_available_at = None
+        if sector_benchmark_symbol != "SPY" and context_required:
+            if raw_sector_history is None:
+                summary["rejected_missing_context"] += 1
+                continue
+            (
+                sector_idx,
+                sector_available_at,
+                sector_rejection,
+            ) = _feature_index_for_decision(
+                raw_sector_history,
+                date_index.get(sector_benchmark_symbol, []),
+                decision_at,
+                max_staleness_sessions=max_staleness_sessions,
+            )
+            if sector_idx is None:
+                if sector_rejection == "stale_daily_bar":
+                    summary["rejected_stale_feature_family"] += 1
+                else:
+                    summary["rejected_unproven_availability"] += 1
+                continue
+        elif sector_benchmark_symbol == "SPY":
+            sector_idx = spy_idx
+            sector_available_at = spy_available_at
         sector_history = (
             adjust_bars_to_asof(
                 raw_sector_history,
-                splits_by_symbol.get(sector_benchmark_symbol, []),
-                event_day,
+                _feature_safe_splits(
+                    splits_by_symbol.get(sector_benchmark_symbol, []),
+                    decision_at,
+                    market_session,
+                ),
+                str(raw_sector_history[sector_idx]["date"]),
                 audit=summary,
             )
             if raw_sector_history
             else None
         )
-        sector_idx = (
-            _row_before_or_on_indexed(date_index, sector_benchmark_symbol, event_day)
-            if sector_history
-            else None
-        )
         sector_return_5d = _lagged_return(sector_history, sector_idx, 5)
+        event_fingerprint = hashlib.sha256(
+            json.dumps(
+                event, sort_keys=True, default=str, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+        event_occurrence = event_identity_counts.get(event_fingerprint, 0)
+        event_identity_counts[event_fingerprint] = event_occurrence + 1
+        fallback_decision_id = f"event_{event_fingerprint}_{event_occurrence}"
+        entry_at = EXCHANGE_CALENDAR.session_open(entry_session)
+        exit_at = EXCHANGE_CALENDAR.session_close(exit_session)
+        feature_source_at = {
+            "symbol_daily": EXCHANGE_CALENDAR.session_close(
+                date.fromisoformat(str(asof["date"]))
+            )
+        }
+        feature_availability_at = {
+            "symbol_daily": (
+                symbol_available_at.isoformat() if symbol_available_at else None
+            )
+        }
+        if spy_history and spy_idx is not None:
+            feature_source_at["spy_daily"] = EXCHANGE_CALENDAR.session_close(
+                date.fromisoformat(str(spy_history[spy_idx]["date"]))
+            )
+            feature_availability_at["spy_daily"] = (
+                spy_available_at.isoformat() if spy_available_at else None
+            )
+            feature_source_at["market_regime"] = feature_source_at["spy_daily"]
+            feature_availability_at["market_regime"] = feature_availability_at[
+                "spy_daily"
+            ]
+            feature_source_at["volatility_proxy"] = feature_source_at["spy_daily"]
+            feature_availability_at["volatility_proxy"] = feature_availability_at[
+                "spy_daily"
+            ]
+        if sector_history and sector_idx is not None:
+            feature_source_at["sector_daily"] = EXCHANGE_CALENDAR.session_close(
+                date.fromisoformat(str(sector_history[sector_idx]["date"]))
+            )
+            feature_availability_at["sector_daily"] = (
+                sector_available_at.isoformat() if sector_available_at else None
+            )
+        timing = AlphaAtlasV4TimingRecord(
+            decision_id=str(event.get("decision_id") or fallback_decision_id),
+            symbol=symbol,
+            point_in_time_symbol_id=str(
+                event.get("point_in_time_symbol_id") or f"{symbol}:{event_day}"
+            ),
+            exchange=str(event.get("exchange") or "XNAS"),
+            trading_calendar=EXCHANGE_CALENDAR.identifier,
+            model_feature_contract_version=V4_FEATURE_CONTRACT_VERSION,
+            decision_at=decision_at,
+            feature_cutoff_at=decision_at,
+            latest_source_bar_at=feature_source_at,
+            entry_at=entry_at,
+            label_start_at=entry_at,
+            exit_at=exit_at,
+            entry_price_source="official_regular_session_open",
+            exit_price_source="official_regular_session_close",
+            data_provider_id=str(event.get("data_provider_id") or "massive-flatfile"),
+            corporate_action_adjustment_ids=tuple(
+                sorted(set(feature_split_ids + label_split_ids))
+            ),
+            staleness_status="fresh",
+            rejection_reason=None,
+            code_commit=str(event.get("code_commit") or "unrecorded-research-commit"),
+            dataset_manifest_hash=str(
+                event.get("dataset_manifest_hash") or "pending-write-manifest"
+            ),
+            transaction_cost_bps=None,
+            entry_slippage_bps=None,
+            exit_slippage_bps=None,
+        )
         row = {
             "ts": ts,
+            "decision_id": timing.decision_id,
             "event_date": event_day,
             "market_asof_date": asof["date"],
+            "feature_market_asof_date": asof["date"],
             "label_asof_date": future["date"],
+            "timing_contract_version": ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
+            "model_feature_contract_version": timing.model_feature_contract_version,
+            "label_horizon_sessions": max(1, horizon_days),
+            "lane": str(event.get("lane") or "track_b_research"),
+            "universe_policy_version": str(
+                event.get("universe_policy_version") or "track-b-us-equities.v1"
+            ),
+            "execution_cost_policy_version": event.get("execution_cost_policy_version"),
+            "decision_at": timing.decision_at.isoformat(),
+            "feature_cutoff_at": timing.feature_cutoff_at.isoformat(),
+            "entry_at": timing.entry_at.isoformat(),
+            "entry_session_date": entry_session,
+            "label_start_at": timing.label_start_at.isoformat(),
+            "exit_at": timing.exit_at.isoformat(),
+            "exit_session_date": exit_session,
+            "market_session_date": event_day,
+            "feature_family_source_at": {
+                key: value.isoformat() for key, value in feature_source_at.items()
+            },
+            "feature_family_available_at": feature_availability_at,
+            "entry_price_source": timing.entry_price_source,
+            "exit_price_source": timing.exit_price_source,
+            "exchange_calendar": timing.trading_calendar,
+            "staleness_status": timing.staleness_status,
+            "staleness_tolerance_sessions": max_staleness_sessions,
+            "rejection_reason": None,
+            "point_in_time_symbol_id": timing.point_in_time_symbol_id,
+            "corporate_action_availability_policy": "feature_actions_known_by_cutoff;label_actions_realized_in_horizon",
+            "code_commit": timing.code_commit,
+            "dataset_manifest_hash": timing.dataset_manifest_hash,
             "corporate_action_schema_version": CORPORATE_ACTION_SCHEMA_VERSION,
             "canonical_dataset_schema_version": SCHEMA_VERSION,
             "split_metadata_hash": metadata_hash,
@@ -926,6 +1228,10 @@ def build_training_rows_from_raw_market(
             "feature_split_ids": feature_split_ids,
             "label_split_ids": label_split_ids,
             "label_split_adjustment_factor": label_factor,
+            "raw_entry_price": float(entry["open"]),
+            "adjusted_entry_price": float(entry["open"]) * label_factor,
+            "raw_exit_price": float(future["close"]),
+            "adjusted_exit_price": float(future["close"]),
             "symbol": symbol,
             "endpoint": str(event.get("endpoint") or "unknown"),
             "decision_source": str(event.get("decision_source") or "unknown"),
@@ -937,29 +1243,50 @@ def build_training_rows_from_raw_market(
                 "model_version", payload.get("model_version")
             ),
             "feature_close": close,
-            "feature_symbol_signal_count_7d": signal_counts_7d["signals"],
-            "feature_symbol_buy_count_7d": signal_counts_7d["buys"],
-            "feature_symbol_sell_count_7d": signal_counts_7d["sells"],
-            "feature_days_since_last_signal": (
-                round((ts - previous_signal_ts) / 86_400, 6)
-                if previous_signal_ts is not None
-                else None
-            ),
-            "feature_previous_recommendation_buy": (
-                int(previous_action in {"BUY", "STRONG BUY"})
-                if previous_action is not None
-                else 0
-            ),
-            "feature_recommendation_changed": (
-                int(previous_action != current_action)
-                if previous_action is not None
-                else 0
-            ),
-            "feature_probability_up_delta_from_last_signal": (
-                round(current_probability - previous_probability, 6)
-                if current_probability is not None and previous_probability is not None
-                else None
-            ),
+            "request_prior_state": {
+                "symbol_signal_count_7d": signal_counts_7d["signals"],
+                "symbol_buy_count_7d": signal_counts_7d["buys"],
+                "symbol_sell_count_7d": signal_counts_7d["sells"],
+                "days_since_last_signal": (
+                    round((ts - previous_signal_ts) / 86_400, 6)
+                    if previous_signal_ts is not None
+                    else None
+                ),
+                "previous_recommendation_buy": (
+                    int(previous_action in {"BUY", "STRONG BUY"})
+                    if previous_action is not None
+                    else 0
+                ),
+                "recommendation_changed": (
+                    int(previous_action != current_action)
+                    if previous_action is not None
+                    else 0
+                ),
+                "probability_up_delta_from_last_signal": (
+                    round(current_probability - previous_probability, 6)
+                    if current_probability is not None
+                    and previous_probability is not None
+                    else None
+                ),
+                "prior_signal_at": (
+                    datetime.fromtimestamp(
+                        previous_signal_ts, tz=timezone.utc
+                    ).isoformat()
+                    if previous_signal_ts is not None
+                    else None
+                ),
+                "prior_signal_source_identifier": (
+                    str(
+                        (previous_signal.get("snapshot") or {}).get("model_version")
+                        or (previous_signal.get("payload") or {}).get("model_version")
+                        or previous_signal.get("decision_source")
+                        or "unknown"
+                    )
+                    if isinstance(previous_signal, dict)
+                    else None
+                ),
+                "classification": "request_level_prior_model_and_recommendation_history",
+            },
             "feature_sma_10": sma_10,
             "feature_sma_20": sma_20,
             "feature_sma_50": sma_50,
@@ -1024,7 +1351,7 @@ def build_training_rows_from_raw_market(
             ),
             f"return_{horizon_days}d": return_fwd,
             label_name: label_from_forward_return(return_fwd),
-            "leakage_guard": "features_asof_market_close_on_or_before_decision_date_labels_after_decision_date",
+            "leakage_guard": "v4_features_at_or_before_cutoff_executable_open_entry_s0_close_exit",
         }
         # The V3 allowlist is always materialized by the shared train/serve
         # engine so production cannot drift from these training definitions.
@@ -1045,8 +1372,19 @@ def write_rows(
     split_metadata_hash: str,
 ) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_manifest_hash = hashlib.sha256(
+        "".join(
+            json.dumps(row, sort_keys=True, default=str, separators=(",", ":")) + "\n"
+            for row in rows
+        ).encode("utf-8")
+    ).hexdigest()
     with path.open("w", encoding="utf-8") as fh:
         for row in rows:
+            if (
+                row.get("timing_contract_version")
+                == ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION
+            ):
+                row["dataset_manifest_hash"] = dataset_manifest_hash
             fh.write(json.dumps(row, sort_keys=True, default=str) + "\n")
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -1055,13 +1393,19 @@ def write_rows(
         "decision_log": str(decision_log),
         "output_path": str(path),
         "horizon_days": horizon_days,
-        "leakage_safe": True,
+        "temporal_safety": {
+            "schema_version": "alpha-atlas-v4-temporal-safety-certification.v1",
+            "status": "NOT_EVALUATED",
+            "reason": "builder output has not yet been independently reconstructed and hash-certified",
+            "legacy_leakage_safe_accepted": False,
+        },
         "corporate_action_normalization_required": True,
         "corporate_action_normalization_passed": True,
         "price_adjustment_policy": "event_time_split_adjusted",
         "volume_adjustment_policy": "inverse_split_factor",
         "split_source": "massive",
         "split_metadata_hash": split_metadata_hash,
+        "dataset_manifest_hash": dataset_manifest_hash,
         "corporate_action_schema_version": CORPORATE_ACTION_SCHEMA_VERSION,
         "decision_target": (
             target_metadata()
@@ -1072,7 +1416,11 @@ def write_rows(
                 "positive_class_semantics": "strictly positive forward return",
             }
         ),
-        "join_policy": "last_market_row_on_or_before_decision_date; labels strictly after that row",
+        "timing_contract_version": ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
+        "model_feature_contract_version": V4_FEATURE_CONTRACT_VERSION,
+        "exchange_calendar": EXCHANGE_CALENDAR.identifier,
+        "staleness_tolerance_sessions": DEFAULT_MAX_STALENESS_SESSIONS,
+        "join_policy": "point-in-time completed daily bars; executable open entry; S0-based official close exit",
         **{key: value for key, value in summary.items() if key != "split_provenance"},
     }
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
