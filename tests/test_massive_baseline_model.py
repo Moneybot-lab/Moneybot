@@ -51,7 +51,7 @@ def _rows(start: str, dates: int, rows_per_date: int = 2):
                     "probability_up": 0.95,
                     "recommendation": "BUY",
                     "model_version": "legacy",
-                    "canonical_dataset_schema_version": "massive-decision-training-rows.v2",
+                    "canonical_dataset_schema_version": "massive-decision-training-rows.v4",
                     "split_metadata_hash": "fixture-split-hash",
                     "price_adjustment_policy": "event_time_split_adjusted",
                 }
