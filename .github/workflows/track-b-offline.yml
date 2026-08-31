@@ -30,10 +30,27 @@ env:
   MASSIVE_FLATFILES_PREFIX: ${{ inputs.massive_prefix || 'us_stocks_sip/day_aggs_v1' }}
   MASSIVE_INGEST_DATE: ${{ inputs.dataset_date || '' }}
   TRACK_B_MIN_ROWS: ${{ inputs.min_rows || '200' }}
+  V4_FEATURE_CONTRACT_VERSION: alpha-atlas-v4-features.v2
+  V4_CANONICALIZATION_CONTRACT_VERSION: alpha-atlas-v4-canonical-observation.v2
+  V4_CANONICAL_OBSERVATION_SCHEMA: alpha-atlas-v4-canonical-observations.v2
   AWS_REQUEST_CHECKSUM_CALCULATION: when_required
   AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
   AWS_DEFAULT_REGION: us-east-1
   AWS_EC2_METADATA_DISABLED: "true"
+  TRACK_B_RUN_DIR: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}
+  RAW_V4_ROWS: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/raw/decision_training_snapshot_massive.jsonl
+  RAW_V4_MANIFEST: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/raw/decision_training_snapshot_massive.jsonl.manifest.json
+  CANONICAL_DIR: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/canonical
+  CANONICAL_OBSERVATIONS: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/canonical/canonical_observations.jsonl
+  REQUEST_OBSERVATION_MAP: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/canonical/request_to_observation_map.jsonl
+  CANONICAL_DIAGNOSTICS: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/canonical/canonicalization_diagnostics.json
+  CANONICAL_MANIFEST: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/canonical/canonical_observations.jsonl.manifest.json
+  CLEANED_DIR: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/training_quality
+  CLEANED_OBSERVATIONS: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/training_quality/cleaned_all.jsonl
+  CLEANING_QUALITY_REPORT: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/training_quality/model_quality_report.json
+  FEATURE_STORE_DIR: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/flat_feature_store
+  PHASE0_DIR: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/phase0
+  TRACK_B_ARTIFACT_DIR: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
   run-track-b:
@@ -82,7 +99,7 @@ jobs:
           set -euo pipefail
           test -n "$MONEYBOT_BASE_URL" || (echo "Missing secret: MONEYBOT_BASE_URL" && exit 1)
           test -n "$DAILY_OPS_TOKEN" || (echo "Missing secret: DAILY_OPS_TOKEN" && exit 1)
-          mkdir -p data data/track_b
+          mkdir -p data "$TRACK_B_RUN_DIR"
 
           CURL_OPTS=(
             --fail
@@ -177,107 +194,216 @@ jobs:
       - name: Build leakage-safe Massive decision training rows
         run: |
           set -euo pipefail
+          echo "TRACK_B_FAILED_STAGE=build_raw" >> "$GITHUB_ENV"
           timeout 600 python3 scripts/build_massive_decision_training_rows.py \
             --raw-root data/raw/massive_flatfiles \
             --decision-log data/decision_events.jsonl \
-            --output data/track_b/decision_training_snapshot_massive.jsonl \
+            --output "$RAW_V4_ROWS" \
             --split-cache data/track_b/corporate_actions/massive_splits.jsonl \
             --limit 50000 \
             --horizon-days 5
           echo "Training-row manifest:"
-          sed -n '1,200p' data/track_b/decision_training_snapshot_massive.jsonl.manifest.json
+          test -s "$RAW_V4_ROWS"
+          test -s "$RAW_V4_MANIFEST"
+          sed -n '1,200p' "$RAW_V4_MANIFEST"
+
+      - name: Validate raw V4 timing and schema
+        run: |
+          set -euo pipefail
+          echo "TRACK_B_FAILED_STAGE=validate_raw" >> "$GITHUB_ENV"
+          python3 scripts/validate_alpha_atlas_v4_workflow_artifacts.py \
+            --stage raw --rows "$RAW_V4_ROWS" --manifest "$RAW_V4_MANIFEST"
+
+      - name: Canonicalize V4 economic observations
+        run: |
+          set -euo pipefail
+          echo "TRACK_B_FAILED_STAGE=canonicalize" >> "$GITHUB_ENV"
+          python3 scripts/canonicalize_alpha_atlas_v4_rows.py \
+            --input "$RAW_V4_ROWS" --output-dir "$CANONICAL_DIR"
+          test -s "$CANONICAL_OBSERVATIONS"
+          test -s "$REQUEST_OBSERVATION_MAP"
+          test -s "$CANONICAL_DIAGNOSTICS"
+          test -s "$CANONICAL_MANIFEST"
+
+      - name: Validate canonical V4 observations
+        run: |
+          set -euo pipefail
+          echo "TRACK_B_FAILED_STAGE=validate_canonical" >> "$GITHUB_ENV"
+          python3 scripts/validate_alpha_atlas_v4_workflow_artifacts.py \
+            --stage canonical --rows "$CANONICAL_OBSERVATIONS" --manifest "$CANONICAL_MANIFEST"
 
       - name: Clean and quality-gate training rows
         run: |
+          set -euo pipefail
+          echo "TRACK_B_FAILED_STAGE=clean" >> "$GITHUB_ENV"
+          test "$CANONICAL_OBSERVATIONS" = "$CANONICAL_DIR/canonical_observations.jsonl"
           python3 scripts/clean_training_snapshot.py \
-            --input data/track_b/decision_training_snapshot_massive.jsonl \
-            --output-dir data/track_b/training_quality \
+            --input "$CANONICAL_OBSERVATIONS" \
+            --output-dir "$CLEANED_DIR" \
             --max-market-lag-days 3 \
             --train-ratio 0.8
 
       - name: Materialize reproducible flat feature store
         run: |
           python3 scripts/day15_materialize_flat_feature_store.py \
-            --input data/track_b/training_quality/cleaned_all.jsonl \
-            --output-dir data/track_b/flat_feature_store \
+            --input "$CLEANED_OBSERVATIONS" \
+            --output-dir "$FEATURE_STORE_DIR" \
             --train-ratio 0.8
 
+      - name: Evaluate V4 Phase 0 reconstructability gate
+        id: phase0_certification
+        continue-on-error: true  # Research may continue; this can never convert certification to PASS.
+        run: |
+          set -euo pipefail
+          echo "TRACK_B_FAILED_STAGE=phase0_reconstructability" >> "$GITHUB_ENV"
+          mkdir -p "$PHASE0_DIR"
+          cp docs/reports/alpha_atlas_v4_feature_registry.json "$PHASE0_DIR/feature_registry.json"
+          python3 scripts/verify_alpha_atlas_v4_reconstructability.py \
+            --input "$FEATURE_STORE_DIR/all.jsonl" \
+            --root . \
+            --output "$PHASE0_DIR/reconstructability_report.json" \
+            --certification-output "$PHASE0_DIR/temporal_safety_certification.json"
+
+      - name: Assess V4 challenger temporal-split feasibility
+        id: split_preflight
+        run: |
+          set -euo pipefail
+          echo "TRACK_B_FAILED_STAGE=split_preflight" >> "$GITHUB_ENV"
+          python3 scripts/plan_alpha_atlas_v4_temporal_split.py \
+            --input "$FEATURE_STORE_DIR/all.jsonl" \
+            --output-dir "$TRACK_B_ARTIFACT_DIR/challenger_suite" \
+            --train-ratio 0.8 \
+            --embargo-sessions 1 \
+            --min-train-dates 5 \
+            --min-test-dates 2 \
+            --min-observations "$TRACK_B_MIN_ROWS"
+          test -s "$TRACK_B_ARTIFACT_DIR/challenger_suite/challenger_split_diagnostics.json"
+          test -s "$TRACK_B_ARTIFACT_DIR/challenger_suite/challenger_split_plan.json"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          plan = json.loads((Path(os.environ["TRACK_B_ARTIFACT_DIR"]) / "challenger_suite/challenger_split_plan.json").read_text())
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as out:
+              out.write(f"status={plan['status']}\n")
+              out.write(f"feasible={'true' if plan['status'] == 'FEASIBLE' else 'false'}\n")
+          PY
+
       - name: Train offline challenger suite
+        if: steps.split_preflight.outputs.feasible == 'true'
         run: |
           python3 scripts/train_challenger_suite.py \
-            --input data/track_b/flat_feature_store/train.jsonl \
-            --output-dir data/track_b/challenger_suite \
+            --input "$FEATURE_STORE_DIR/all.jsonl" \
+            --output-dir "$TRACK_B_ARTIFACT_DIR/challenger_suite" \
+            --split-plan "$TRACK_B_ARTIFACT_DIR/challenger_suite/challenger_split_plan.json" \
+            --train-ratio 0.8 \
+            --horizon-days 5 \
             --min-rows "$TRACK_B_MIN_ROWS"
 
       - name: Backtest and gate challenger suite
+        if: steps.split_preflight.outputs.feasible == 'true'
         run: |
           python3 scripts/backtest_challenger_suite.py \
-            --suite-manifest data/track_b/challenger_suite/challenger_suite_manifest.json \
-            --feature-store data/track_b/flat_feature_store/test.jsonl \
-            --output data/track_b/challenger_suite/backtest_report.json \
+            --suite-manifest "$TRACK_B_ARTIFACT_DIR/challenger_suite"/challenger_suite_manifest.json \
+            --feature-store "$TRACK_B_ARTIFACT_DIR/challenger_suite/challenger_test.jsonl" \
+            --output "$TRACK_B_ARTIFACT_DIR/challenger_suite"/backtest_report.json \
             --min-rows "$TRACK_B_MIN_ROWS" \
             --transaction-cost-bps 5 \
             --slippage-bps 5
 
-      - name: Train and certify Alpha Atlas V3 human-review candidate
-        env:
-          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+      - name: Record V3 and V3.1 compatibility boundary
         run: |
           set -euo pipefail
-          if [ -z "$MASSIVE_API_KEY" ]; then
-            echo "MASSIVE_API_KEY is not configured; skipping V3 candidate generation while allowing the base Track B challenger run to continue."
-            mkdir -p data/track_b/alpha_atlas_v3
-            python3 - <<'PY'
+          mkdir -p "$TRACK_B_ARTIFACT_DIR/alpha_atlas_v3" "$TRACK_B_ARTIFACT_DIR/alpha_atlas_v31"
+          python3 - <<'PY'
           import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["TRACK_B_ARTIFACT_DIR"])
+          status = {
+              "schema_version": "alpha-atlas-v4-legacy-comparator-boundary.v1",
+              "status": "skipped_incompatible_v4_executable_label_lineage",
+              "v4_input_consumed": False,
+              "v3_behavior_changed": False,
+              "v31_behavior_changed": False,
+              "automatic_promotion": False,
+              "ready_for_live_routing": False,
+          }
+          for directory, name in (("alpha_atlas_v3", "v3_generation_status.json"), ("alpha_atlas_v31", "v31_generation_status.json")):
+              (root / directory / name).write_text(json.dumps(status, indent=2, sort_keys=True) + "\n")
+          PY
+
+      - name: Write controlled insufficient-coverage summary
+        if: steps.split_preflight.outputs.feasible != 'true'
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["TRACK_B_ARTIFACT_DIR"])
+          diagnostics = json.loads((root / "challenger_suite/challenger_split_diagnostics.json").read_text())
+          summary = {
+              "schema_version": "alpha-atlas-v4-no-candidate.v1",
+              "status": "NO_CANDIDATE_INSUFFICIENT_TEMPORAL_COVERAGE",
+              "research_only": True,
+              "candidate_win": False,
+              "automatic_promotion": False,
+              "ready_for_live_routing": False,
+              "training_attempted": False,
+              "backtest_attempted": False,
+              "split_diagnostics": diagnostics,
+          }
+          (root / "no_candidate_insufficient_temporal_coverage.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+          PY
+
+      - name: Write V4 research-only run summary
+        run: |
+          set -euo pipefail
+          echo "TRACK_B_FAILED_STAGE=research_summary" >> "$GITHUB_ENV"
+          python3 - <<'PY'
+          import json
+          import os
           from pathlib import Path
 
-          status = {
-              "schema_version": "moneybot-alpha-atlas-v3-generation-status.v1",
-              "candidate_generated": False,
-              "certification_generated": False,
-              "status": "skipped_missing_massive_api_key",
-              "blocking_reason": "MASSIVE_API_KEY is not configured for real serving dry runs",
-              "target_name": "label_up_5d",
-              "forecast_horizon": "5d",
-              "comparison_mode": "recovery_rebaseline",
+          root = Path(os.environ["TRACK_B_ARTIFACT_DIR"])
+          canonical = json.loads(Path(os.environ["CANONICAL_DIAGNOSTICS"]).read_text())
+          quality = json.loads(Path(os.environ["CLEANING_QUALITY_REPORT"]).read_text())
+          split_plan = json.loads((root / "challenger_suite/challenger_split_plan.json").read_text())
+          certification_path = Path(os.environ["PHASE0_DIR"]) / "temporal_safety_certification.json"
+          certification = json.loads(certification_path.read_text()) if certification_path.is_file() else {"status": "NOT_EVALUATED"}
+          summary = {
+              "schema_version": "alpha-atlas-v4-track-b-research-run.v1",
+              "timing_contract_version": "alpha-atlas-v4-prediction-execution-contract.v1",
+              "model_feature_contract_version": os.environ["V4_FEATURE_CONTRACT_VERSION"],
+              "canonicalization_contract_version": os.environ["V4_CANONICALIZATION_CONTRACT_VERSION"],
+              "canonical_observation_schema": os.environ["V4_CANONICAL_OBSERVATION_SCHEMA"],
+              "raw_request_rows": canonical["raw_request_rows"],
+              "canonical_observations": canonical["canonical_observations"],
+              "cleaned_observations": quality["cleaned_rows"],
+              "research_only": True,
               "automatic_promotion": False,
+              "ready_for_live_routing": False,
+              "v2_production_comparison_performed": False,
+              "status": ("completed_research_pipeline" if split_plan["status"] == "FEASIBLE" else split_plan["status"]),
+              "phase0_certification_status": certification["status"],
+              "phase0_certification_passed": certification["status"] == "VERIFIED_FOR_THIS_ARTIFACT",
+              "split_plan_sha256": split_plan["plan_sha256"],
           }
-          Path("data/track_b/alpha_atlas_v3/v3_generation_status.json").write_text(
-              json.dumps(status, indent=2, sort_keys=True) + "\n",
+          (root / "track_b_v4_research_summary.json").write_text(
+              json.dumps(summary, indent=2, sort_keys=True) + "\n",
               encoding="utf-8",
           )
           PY
-            exit 0
-          fi
-          python3 scripts/train_alpha_atlas_v3_candidate.py \
-            --train data/track_b/training_quality/cleaned_train.jsonl \
-            --test data/track_b/training_quality/cleaned_test.jsonl \
-            --all-cleaned data/track_b/training_quality/cleaned_all.jsonl \
-            --output-dir data/track_b/alpha_atlas_v3
 
-      - name: Train Alpha Atlas V3.1 human-review candidate
-        env:
-          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+      - name: Write sanitized Track B failure summary
+        if: failure()
         run: |
-          set -euo pipefail
-          if [ -z "$MASSIVE_API_KEY" ]; then
-            echo "MASSIVE_API_KEY is not configured; skipping V3.1 without generating a candidate or certification."
-            exit 0
-          fi
-          python3 scripts/train_alpha_atlas_v31_candidate.py \
-            --train data/track_b/training_quality/cleaned_train.jsonl \
-            --test data/track_b/training_quality/cleaned_test.jsonl \
-            --all-cleaned data/track_b/training_quality/cleaned_all.jsonl \
-            --output-dir data/track_b/alpha_atlas_v31
-
-      - name: Prepare manual Render promotion artifacts
-        run: |
-          python3 scripts/run_track_b_offline.py \
-            --input-log data/decision_events.jsonl \
-            --output-dir data/track_b \
-            --production-model data/track_b/production_model.json \
-            --min-rows "$TRACK_B_MIN_ROWS" \
-            --dataset-limit 50000
+          python3 scripts/validate_alpha_atlas_v4_workflow_artifacts.py \
+            --stage failure-summary \
+            --failed-stage "${TRACK_B_FAILED_STAGE:-unknown}" \
+            --input-label "run_scoped_track_b_artifact" \
+            --manifest "$CANONICAL_MANIFEST" \
+            --output "$TRACK_B_RUN_DIR/track_b_failure_summary.json"
 
       - name: Upload Track B artifacts
         if: always()
@@ -285,16 +411,23 @@ jobs:
         with:
           name: track-b-offline-output
           path: |
+            ${{ env.RAW_V4_MANIFEST }}
+            ${{ env.CANONICAL_DIAGNOSTICS }}
+            ${{ env.CANONICAL_MANIFEST }}
+            ${{ env.CLEANING_QUALITY_REPORT }}
+            ${{ env.PHASE0_DIR }}/**
+            ${{ env.TRACK_B_ARTIFACT_DIR }}/challenger_suite/feature_fill_policy.json
+            ${{ env.TRACK_B_RUN_DIR }}/track_b_failure_summary.json
             data/track_b/**
-            data/track_b/alpha_atlas_v3/candidate_alpha_atlas_v3_clean.json
-            data/track_b/alpha_atlas_v3/alpha_atlas_v3_model_report.json
-            data/track_b/alpha_atlas_v3/alpha_atlas_v3_feature_coverage_report.json
-            data/track_b/alpha_atlas_v3/alpha_atlas_v3_backtest_report.json
-            data/track_b/alpha_atlas_v3/alpha_atlas_v3_representative_serving_dry_runs.json
-            data/track_b/alpha_atlas_v3/production_servability_certification.json
-            data/track_b/alpha_atlas_v3/alpha_atlas_v3_recovery_rebaseline_report.json
-            data/track_b/alpha_atlas_v3/v3_generation_status.json
-            data/track_b/alpha_atlas_v31/**
+            ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v3/**
+            ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v3/candidate_alpha_atlas_v3_clean.json
+            ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v3/alpha_atlas_v3_model_report.json
+            ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v3/alpha_atlas_v3_feature_coverage_report.json
+            ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v3/alpha_atlas_v3_backtest_report.json
+            ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v3/alpha_atlas_v3_representative_serving_dry_runs.json
+            ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v3/production_servability_certification.json
+            ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v3/alpha_atlas_v3_recovery_rebaseline_report.json
+            ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v31/**
             data/decision_events.jsonl
             data/_response_headers.txt
             data/track_b/_production_model_headers.txt

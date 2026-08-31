@@ -18,8 +18,10 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from moneybot.services.deterministic_model import fit_probability_calibration, load_artifact, predict_proba, summarize_binary_predictions, train_logistic_baseline
 from moneybot.services.temporal_validation import purged_embargoed_split
+from moneybot.services.alpha_atlas_v4_temporal_split import validate_split_plan
 from moneybot.services.decision_target import HORIZON_DAYS, TARGET_NAME, target_metadata
 from scripts.day10_train_candidate_model import _backtest_compatible_feature_columns, _chronological_split, _fill_feature_gaps, _future_safe_feature_columns, _prepare_frame, _select_feature_columns
+from moneybot.services.alpha_atlas_v4_phase0 import apply_feature_fill_policy, fit_feature_fill_policy
 
 SUITE_SCHEMA_VERSION = "moneybot-challenger-suite.v2"
 LINEAGE_SCHEMA_VERSION = "moneybot-challenger-lineage.v1"
@@ -463,14 +465,16 @@ def _apply_walk_forward_metrics(
     target_col: str,
     return_col: str | None,
     horizon_days: int,
+    fit_source: pd.DataFrame | None = None,
 ) -> None:
     if not folds:
         return
     for challenger in challengers:
         fold_metrics: list[dict[str, Any]] = []
         for train_start, train_end, test_end in folds:
-            fold_train = clean.iloc[train_start:train_end]
-            fold_test = clean.iloc[train_end:test_end]
+            source = fit_source if fit_source is not None else clean
+            fold_train = source.iloc[train_start:train_end]
+            fold_test = source.iloc[train_end:test_end]
             fold_train, fold_test, _ = purged_embargoed_split(
                 fold_train,
                 fold_test,
@@ -479,6 +483,10 @@ def _apply_walk_forward_metrics(
             )
             if fold_train.empty or fold_test.empty:
                 continue
+            if fit_source is not None:
+                fold_policy = fit_feature_fill_policy(fold_train, feature_columns)
+                fold_train = apply_feature_fill_policy(fold_train, fold_policy)
+                fold_test = apply_feature_fill_policy(fold_test, fold_policy)
             y_train = fold_train[target_col].to_numpy(dtype=float)
             X_test = fold_test[feature_columns].to_numpy(dtype=float)
             y_test = fold_test[target_col].to_numpy(dtype=float)
@@ -2700,11 +2708,20 @@ def _add_baseline_challengers(challengers: list[dict[str, Any]], *, output_dir: 
         challengers.append({"model_version": model_version, "model_type": "baseline_classifier", "model_path": str(model_path), "metrics": metrics, "spec": spec, "lineage": lineage})
 
 
-def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: float = 0.8, horizon_days: int = 5, min_rows: int = 200) -> dict[str, Any]:
+def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: float = 0.8, horizon_days: int = 5, min_rows: int = 200, split_plan_path: Path | None = None) -> dict[str, Any]:
     df = _load_jsonl(input_path)
     if df.empty:
         raise ValueError("No rows available in input dataset")
     persisted_feature_columns = {str(col) for col in df.columns if str(col).startswith("feature_")}
+    is_v4 = "canonicalization_contract_version" in df.columns
+    frozen_plan = None
+    train_ids: set[str] = set()
+    test_ids: set[str] = set()
+    if is_v4:
+        if split_plan_path is None or not split_plan_path.is_file():
+            raise ValueError("V4 challenger training requires a frozen temporal split plan")
+        frozen_plan = json.loads(split_plan_path.read_text(encoding="utf-8"))
+        train_ids, test_ids = validate_split_plan(frozen_plan, input_path=input_path)
     if "ts" in df.columns:
         df = df.sort_values("ts").reset_index(drop=True)
     df = _prepare_frame(df)
@@ -2714,16 +2731,45 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
     feature_columns = _backtest_compatible_feature_columns(_future_safe_feature_columns(_select_feature_columns(df)), persisted_feature_columns)
     if not feature_columns:
         raise ValueError("No numeric feature columns found")
-    clean, fill_values = _fill_feature_gaps(df, feature_columns)
+    unfilled = df.copy()
+    fill_policy = None
+    if is_v4:
+        if "canonical_observation_id" not in unfilled.columns:
+            raise ValueError("V4 challenger input lacks canonical observation IDs")
+        fit_rows = unfilled.loc[unfilled["canonical_observation_id"].astype(str).isin(train_ids)].copy()
+        if fit_rows.empty:
+            raise ValueError("V4 fill policy has no frozen-plan fit rows")
+        fill_policy = fit_feature_fill_policy(fit_rows, feature_columns)
+        clean = apply_feature_fill_policy(unfilled, fill_policy)
+        fill_values = {name: float(spec["fitted_value"]) for name, spec in fill_policy["features"].items()}
+    else:
+        clean, fill_values = _fill_feature_gaps(df, feature_columns)
     if len(clean) < max(1, min_rows):
         raise ValueError(f"Not enough rows to train challenger suite (have={len(clean)}, need={min_rows})")
-    train_df, test_df = _chronological_split(clean, train_ratio)
-    train_df, test_df, holdout_temporal_split = purged_embargoed_split(
-        train_df,
-        test_df,
-        horizon_days=horizon_days,
-        embargo_days=EMBARGO_DAYS,
-    )
+    if is_v4:
+        if "canonical_observation_id" not in clean.columns:
+            raise ValueError("V4 challenger input lacks canonical observation IDs")
+        available = set(clean["canonical_observation_id"].astype(str))
+        if not (train_ids | test_ids) <= available:
+            raise ValueError("Frozen split plan references rows removed before training")
+        train_df = clean.loc[clean["canonical_observation_id"].astype(str).isin(train_ids)].copy()
+        test_df = clean.loc[clean["canonical_observation_id"].astype(str).isin(test_ids)].copy()
+        holdout_temporal_split = {
+            "method": "alpha-atlas-v4-purged-temporal-split.v1",
+            "plan_sha256": frozen_plan["plan_sha256"],
+            "input_sha256": frozen_plan["input_sha256"],
+            "boundary_date": frozen_plan["boundary_date"],
+            "train_rows_after": len(train_df),
+            "test_rows_after": len(test_df),
+        }
+    else:
+        train_df, test_df = _chronological_split(clean, train_ratio)
+        train_df, test_df, holdout_temporal_split = purged_embargoed_split(
+            train_df,
+            test_df,
+            horizon_days=horizon_days,
+            embargo_days=EMBARGO_DAYS,
+        )
     if train_df.empty or test_df.empty:
         raise ValueError("purging/embargo leaves an empty challenger train or test period")
     if len(train_df) + len(test_df) < max(1, min_rows):
@@ -2736,6 +2782,8 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
     test_returns = test_df[return_col].to_numpy(dtype=float) if return_col else None
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    if fill_policy is not None:
+        (output_dir / "feature_fill_policy.json").write_text(json.dumps(fill_policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     mistake_slices = _write_daily_mistake_slices(clean, output_dir, return_col)
     challengers: list[dict[str, Any]] = []
     _add_logistic_challengers(challengers, output_dir=output_dir, X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test, feature_columns=feature_columns, test_returns=test_returns)
@@ -2818,6 +2866,7 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         target_col=target_col,
         return_col=return_col,
         horizon_days=horizon_days,
+        fit_source=unfilled if is_v4 else None,
     )
 
     ranked = sorted(
@@ -2879,7 +2928,12 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         "train_rows": len(train_df),
         "test_rows": len(test_df),
         "temporal_split": holdout_temporal_split,
-        "temporal_validation_policy": {"purged": True, "label_horizon_days": int(horizon_days), "embargo_days": EMBARGO_DAYS},
+        "temporal_validation_policy": {
+            "purged": True,
+            "label_horizon_days": int(horizon_days),
+            "embargo_days": EMBARGO_DAYS,
+            **({"split_plan_sha256": frozen_plan["plan_sha256"], "split_input_sha256": frozen_plan["input_sha256"]} if frozen_plan else {}),
+        },
         "walk_forward_windows": walk_forward_windows,
         "target_column": target_col,
         "decision_target": target_metadata(),
@@ -2889,6 +2943,7 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         "ranking_metric_names": ["top_k_precision", "top_k_avg_return", "pairwise_ranking_loss", "big_gain_capture", "big_loss_demotion", "ranking_objective", "walk_forward_ranking_objective", "walk_forward_passed"],
         "feature_columns": feature_columns,
         "feature_fill_values": fill_values,
+        "feature_fill_policy": fill_policy,
         "model_type_counts": model_type_counts,
         "specialized_challenger_families": list(SPECIALIZED_CHALLENGER_FAMILIES),
         "phase_2_candidate_families": {
@@ -2929,8 +2984,9 @@ def main() -> None:
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--horizon-days", type=int, default=5)
     parser.add_argument("--min-rows", type=int, default=200)
+    parser.add_argument("--split-plan")
     args = parser.parse_args()
-    manifest = train_challenger_suite(Path(args.input), Path(args.output_dir), train_ratio=args.train_ratio, horizon_days=args.horizon_days, min_rows=args.min_rows)
+    manifest = train_challenger_suite(Path(args.input), Path(args.output_dir), train_ratio=args.train_ratio, horizon_days=args.horizon_days, min_rows=args.min_rows, split_plan_path=Path(args.split_plan) if args.split_plan else None)
     print(json.dumps(manifest, indent=2, sort_keys=True))
 
 
