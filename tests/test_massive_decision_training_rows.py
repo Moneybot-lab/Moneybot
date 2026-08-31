@@ -261,7 +261,8 @@ def test_write_rows_creates_reproducible_join_manifest(tmp_path):
     manifest_path = out.with_suffix(out.suffix + ".manifest.json")
     saved = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["schema_version"] == "massive-decision-training-rows.v4"
-    assert saved["leakage_safe"] is True
+    assert "leakage_safe" not in saved
+    assert saved["temporal_safety"]["status"] == "NOT_EVALUATED"
     assert (
         saved["join_policy"]
         == "point-in-time completed daily bars; executable open entry; S0-based official close exit"

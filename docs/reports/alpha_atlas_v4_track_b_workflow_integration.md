@@ -42,3 +42,12 @@ request-order-dependent prior-model state. V2 preserves the complete family in t
 request map, excludes it from canonical observations, and emits bounded diagnostics for
 all unresolved material conflicts before failing. The run-scoped stage order and upload
 behavior are unchanged.
+
+## Phase 0 evidence gate
+
+New runs materialize the versioned feature registry and execute the reconstructability
+verifier against the exact feature-store artifact. The verifier writes an artifact-bound
+temporal-safety certification. Research challenger execution is reported separately from
+Phase 0 certification: a missing-lineage or failed reconstruction result cannot become
+`VERIFIED_FOR_THIS_ARTIFACT`, even when downstream research training completes. V4
+remains research-only, and the uploaded challenger fill policy records fit-only medians.

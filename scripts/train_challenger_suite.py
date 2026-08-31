@@ -21,6 +21,7 @@ from moneybot.services.temporal_validation import purged_embargoed_split
 from moneybot.services.alpha_atlas_v4_temporal_split import validate_split_plan
 from moneybot.services.decision_target import HORIZON_DAYS, TARGET_NAME, target_metadata
 from scripts.day10_train_candidate_model import _backtest_compatible_feature_columns, _chronological_split, _fill_feature_gaps, _future_safe_feature_columns, _prepare_frame, _select_feature_columns
+from moneybot.services.alpha_atlas_v4_phase0 import apply_feature_fill_policy, fit_feature_fill_policy
 
 SUITE_SCHEMA_VERSION = "moneybot-challenger-suite.v2"
 LINEAGE_SCHEMA_VERSION = "moneybot-challenger-lineage.v1"
@@ -464,14 +465,16 @@ def _apply_walk_forward_metrics(
     target_col: str,
     return_col: str | None,
     horizon_days: int,
+    fit_source: pd.DataFrame | None = None,
 ) -> None:
     if not folds:
         return
     for challenger in challengers:
         fold_metrics: list[dict[str, Any]] = []
         for train_start, train_end, test_end in folds:
-            fold_train = clean.iloc[train_start:train_end]
-            fold_test = clean.iloc[train_end:test_end]
+            source = fit_source if fit_source is not None else clean
+            fold_train = source.iloc[train_start:train_end]
+            fold_test = source.iloc[train_end:test_end]
             fold_train, fold_test, _ = purged_embargoed_split(
                 fold_train,
                 fold_test,
@@ -480,6 +483,10 @@ def _apply_walk_forward_metrics(
             )
             if fold_train.empty or fold_test.empty:
                 continue
+            if fit_source is not None:
+                fold_policy = fit_feature_fill_policy(fold_train, feature_columns)
+                fold_train = apply_feature_fill_policy(fold_train, fold_policy)
+                fold_test = apply_feature_fill_policy(fold_test, fold_policy)
             y_train = fold_train[target_col].to_numpy(dtype=float)
             X_test = fold_test[feature_columns].to_numpy(dtype=float)
             y_test = fold_test[target_col].to_numpy(dtype=float)
@@ -2724,7 +2731,19 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
     feature_columns = _backtest_compatible_feature_columns(_future_safe_feature_columns(_select_feature_columns(df)), persisted_feature_columns)
     if not feature_columns:
         raise ValueError("No numeric feature columns found")
-    clean, fill_values = _fill_feature_gaps(df, feature_columns)
+    unfilled = df.copy()
+    fill_policy = None
+    if is_v4:
+        if "canonical_observation_id" not in unfilled.columns:
+            raise ValueError("V4 challenger input lacks canonical observation IDs")
+        fit_rows = unfilled.loc[unfilled["canonical_observation_id"].astype(str).isin(train_ids)].copy()
+        if fit_rows.empty:
+            raise ValueError("V4 fill policy has no frozen-plan fit rows")
+        fill_policy = fit_feature_fill_policy(fit_rows, feature_columns)
+        clean = apply_feature_fill_policy(unfilled, fill_policy)
+        fill_values = {name: float(spec["fitted_value"]) for name, spec in fill_policy["features"].items()}
+    else:
+        clean, fill_values = _fill_feature_gaps(df, feature_columns)
     if len(clean) < max(1, min_rows):
         raise ValueError(f"Not enough rows to train challenger suite (have={len(clean)}, need={min_rows})")
     if is_v4:
@@ -2763,6 +2782,8 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
     test_returns = test_df[return_col].to_numpy(dtype=float) if return_col else None
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    if fill_policy is not None:
+        (output_dir / "feature_fill_policy.json").write_text(json.dumps(fill_policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     mistake_slices = _write_daily_mistake_slices(clean, output_dir, return_col)
     challengers: list[dict[str, Any]] = []
     _add_logistic_challengers(challengers, output_dir=output_dir, X_train=X_train, y_train=y_train, X_test=X_test, y_test=y_test, feature_columns=feature_columns, test_returns=test_returns)
@@ -2845,6 +2866,7 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         target_col=target_col,
         return_col=return_col,
         horizon_days=horizon_days,
+        fit_source=unfilled if is_v4 else None,
     )
 
     ranked = sorted(
@@ -2921,6 +2943,7 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         "ranking_metric_names": ["top_k_precision", "top_k_avg_return", "pairwise_ranking_loss", "big_gain_capture", "big_loss_demotion", "ranking_objective", "walk_forward_ranking_objective", "walk_forward_passed"],
         "feature_columns": feature_columns,
         "feature_fill_values": fill_values,
+        "feature_fill_policy": fill_policy,
         "model_type_counts": model_type_counts,
         "specialized_challenger_families": list(SPECIALIZED_CHALLENGER_FAMILIES),
         "phase_2_candidate_families": {

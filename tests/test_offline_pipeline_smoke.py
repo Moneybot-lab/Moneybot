@@ -205,6 +205,21 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     feature_manifest = json.loads(
         (flat_dir / "manifest.json").read_text(encoding="utf-8")
     )
+    assert (
+        feature_manifest["feature_registry_version"]
+        == "alpha-atlas-v4-feature-registry.v1"
+    )
+    assert len(feature_manifest["feature_columns"]) == 48
+    assert len(feature_manifest["model_input_feature_columns"]) == 43
+    assert set(feature_manifest["feature_columns"]) - set(
+        feature_manifest["model_input_feature_columns"]
+    ) == {
+        "feature_cutoff_at",
+        "feature_family_available_at",
+        "feature_family_source_at",
+        "feature_market_asof_date",
+        "feature_split_ids",
+    }
     split_plan = json.loads(
         (split_dir / "challenger_split_plan.json").read_text(encoding="utf-8")
     )
@@ -223,7 +238,9 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
         json.loads(line) for line in canonical_rows.read_text().splitlines() if line
     ]
 
-    assert training_manifest["leakage_safe"] is True
+    assert "leakage_safe" not in training_manifest
+    assert training_manifest["temporal_safety"]["status"] == "NOT_EVALUATED"
+    assert training_manifest["temporal_safety"]["legacy_leakage_safe_accepted"] is False
     assert training_manifest["rows_joined"] >= 100
     assert quality_report["training_ready"] is True
     assert quality_report["evaluation_ready"] is True

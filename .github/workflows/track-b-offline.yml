@@ -49,6 +49,7 @@ env:
   CLEANED_OBSERVATIONS: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/training_quality/cleaned_all.jsonl
   CLEANING_QUALITY_REPORT: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/training_quality/model_quality_report.json
   FEATURE_STORE_DIR: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/flat_feature_store
+  PHASE0_DIR: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/phase0
   TRACK_B_ARTIFACT_DIR: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
@@ -249,6 +250,20 @@ jobs:
             --output-dir "$FEATURE_STORE_DIR" \
             --train-ratio 0.8
 
+      - name: Evaluate V4 Phase 0 reconstructability gate
+        id: phase0_certification
+        continue-on-error: true  # Research may continue; this can never convert certification to PASS.
+        run: |
+          set -euo pipefail
+          echo "TRACK_B_FAILED_STAGE=phase0_reconstructability" >> "$GITHUB_ENV"
+          mkdir -p "$PHASE0_DIR"
+          cp docs/reports/alpha_atlas_v4_feature_registry.json "$PHASE0_DIR/feature_registry.json"
+          python3 scripts/verify_alpha_atlas_v4_reconstructability.py \
+            --input "$FEATURE_STORE_DIR/all.jsonl" \
+            --root . \
+            --output "$PHASE0_DIR/reconstructability_report.json" \
+            --certification-output "$PHASE0_DIR/temporal_safety_certification.json"
+
       - name: Assess V4 challenger temporal-split feasibility
         id: split_preflight
         run: |
@@ -354,6 +369,8 @@ jobs:
           canonical = json.loads(Path(os.environ["CANONICAL_DIAGNOSTICS"]).read_text())
           quality = json.loads(Path(os.environ["CLEANING_QUALITY_REPORT"]).read_text())
           split_plan = json.loads((root / "challenger_suite/challenger_split_plan.json").read_text())
+          certification_path = Path(os.environ["PHASE0_DIR"]) / "temporal_safety_certification.json"
+          certification = json.loads(certification_path.read_text()) if certification_path.is_file() else {"status": "NOT_EVALUATED"}
           summary = {
               "schema_version": "alpha-atlas-v4-track-b-research-run.v1",
               "timing_contract_version": "alpha-atlas-v4-prediction-execution-contract.v1",
@@ -368,6 +385,8 @@ jobs:
               "ready_for_live_routing": False,
               "v2_production_comparison_performed": False,
               "status": ("completed_research_pipeline" if split_plan["status"] == "FEASIBLE" else split_plan["status"]),
+              "phase0_certification_status": certification["status"],
+              "phase0_certification_passed": certification["status"] == "VERIFIED_FOR_THIS_ARTIFACT",
               "split_plan_sha256": split_plan["plan_sha256"],
           }
           (root / "track_b_v4_research_summary.json").write_text(
@@ -396,6 +415,8 @@ jobs:
             ${{ env.CANONICAL_DIAGNOSTICS }}
             ${{ env.CANONICAL_MANIFEST }}
             ${{ env.CLEANING_QUALITY_REPORT }}
+            ${{ env.PHASE0_DIR }}/**
+            ${{ env.TRACK_B_ARTIFACT_DIR }}/challenger_suite/feature_fill_policy.json
             ${{ env.TRACK_B_RUN_DIR }}/track_b_failure_summary.json
             data/track_b/**
             ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v3/**

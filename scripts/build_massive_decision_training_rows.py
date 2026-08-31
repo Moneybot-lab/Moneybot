@@ -1393,7 +1393,12 @@ def write_rows(
         "decision_log": str(decision_log),
         "output_path": str(path),
         "horizon_days": horizon_days,
-        "leakage_safe": True,
+        "temporal_safety": {
+            "schema_version": "alpha-atlas-v4-temporal-safety-certification.v1",
+            "status": "NOT_EVALUATED",
+            "reason": "builder output has not yet been independently reconstructed and hash-certified",
+            "legacy_leakage_safe_accepted": False,
+        },
         "corporate_action_normalization_required": True,
         "corporate_action_normalization_passed": True,
         "price_adjustment_policy": "event_time_split_adjusted",
