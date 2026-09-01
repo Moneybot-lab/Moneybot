@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+import math
 from statistics import mean
 from typing import Any, Callable, Dict
 
@@ -47,14 +48,10 @@ class OutcomeHistoryDiagnostics:
 
 
 def event_market_date(ts: int) -> datetime.date:
-    """Use the UTC event date as the daily-bar entry date convention.
+    """Return the America/New_York calendar date containing the event instant."""
+    from .market_data_providers import ExchangeCalendar
 
-    Paper P&L uses the close for the event's UTC date when Yahoo has that daily
-    bar. If the event date is not a market session, the next available completed
-    daily close in the downloaded history becomes the entry close. Returns are
-    never produced unless enough completed close bars are present.
-    """
-    return datetime.fromtimestamp(int(ts), tz=timezone.utc).date()
+    return ExchangeCalendar().local_date(datetime.fromtimestamp(int(ts), tz=timezone.utc))
 
 
 def dated_close_values(history) -> list[tuple[datetime.date, float]]:
@@ -219,20 +216,38 @@ def normalize_unix_ts(value: Any) -> int | None:
     """
     if isinstance(value, bool):
         return None
-    if isinstance(value, int):
-        return value if value > 0 else None
-    if isinstance(value, float):
-        if value <= 0:
-            return None
-        return int(value)
+    number: float | int
+    if isinstance(value, (int, float)):
+        number = value
     if isinstance(value, str):
         raw = value.strip()
-        if not raw:
+        if not raw or not raw.isdigit():
             return None
-        if raw.isdigit():
-            parsed = int(raw)
-            return parsed if parsed > 0 else None
-    return None
+        number = int(raw)
+    elif not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(float(number)) or float(number) <= 0:
+        return None
+    magnitude = abs(float(number))
+    if magnitude < 100_000_000_000:
+        divisor = 1
+    elif magnitude < 100_000_000_000_000:
+        divisor = 1_000
+    elif magnitude < 100_000_000_000_000_000:
+        divisor = 1_000_000
+    elif magnitude < 100_000_000_000_000_000_000:
+        divisor = 1_000_000_000
+    else:
+        return None
+    seconds = float(number) / divisor
+    if not seconds.is_integer() and divisor == 1:
+        seconds = int(seconds)
+    try:
+        normalized = int(seconds)
+        datetime.fromtimestamp(normalized, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+    return normalized if 100_000_000 <= normalized < 100_000_000_000 else None
 
 
 def normalize_action(event: Dict[str, Any]) -> str | None:
