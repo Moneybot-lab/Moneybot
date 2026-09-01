@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 from datetime import date, datetime
@@ -630,11 +631,12 @@ def verify_observation(
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    return [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    text = (
+        gzip.decompress(path.read_bytes()).decode("utf-8")
+        if path.name.endswith(".gz")
+        else path.read_text(encoding="utf-8")
+    )
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
 def _resolve_evidence_bundle(
@@ -663,15 +665,103 @@ def _resolve_evidence_bundle(
         if manifest.get("schema_version") != RECONSTRUCTION_LINEAGE_VERSION:
             return {}, dict(lineage), ["source_evidence_manifest_schema_mismatch"]
         tables = {}
-        for name, spec in sorted((manifest.get("files") or {}).items()):
-            path = manifest_path.parent / name
-            if not path.is_file() or sha256_file(path) != spec.get("sha256"):
-                failures.append(f"evidence_ledger_hash_mismatch:{name}")
-                continue
-            records = _read_jsonl(path)
-            if len(records) != int(spec.get("records", -1)):
-                failures.append(f"evidence_ledger_record_count_mismatch:{name}")
-            tables[name] = records
+        if manifest.get("sections"):
+            if (
+                manifest.get("partition_contract_version")
+                != "alpha-atlas-v4-evidence-partitions.v1"
+            ):
+                failures.append("evidence_partition_contract_mismatch")
+            required_sections = {
+                "source_objects",
+                "selected_market_rows",
+                "corporate_action_evidence",
+                "security_identity_evidence",
+                "observation_lineage",
+            }
+            failures.extend(
+                f"missing_evidence_section:{section}"
+                for section in sorted(
+                    required_sections.difference(manifest["sections"])
+                )
+            )
+            seen_partition_paths: set[str] = set()
+            for section, partitions in sorted(manifest["sections"].items()):
+                records = []
+                expected_offset = 0
+                for spec in partitions:
+                    name = str(spec.get("path") or "")
+                    if name in seen_partition_paths:
+                        failures.append(f"duplicate_evidence_partition_path:{name}")
+                    seen_partition_paths.add(name)
+                    path = (manifest_path.parent / name).resolve()
+                    try:
+                        path.relative_to(manifest_path.parent.resolve())
+                    except ValueError:
+                        failures.append(
+                            f"evidence_partition_path_outside_root:{section}"
+                        )
+                        continue
+                    if not path.is_file():
+                        failures.append(f"missing_evidence_partition:{section}:{name}")
+                        continue
+                    if sha256_file(path) != spec.get("sha256"):
+                        failures.append(
+                            f"evidence_partition_hash_mismatch:{section}:{name}"
+                        )
+                        continue
+                    if path.stat().st_size != int(spec.get("compressed_bytes", -1)):
+                        failures.append(
+                            f"evidence_partition_compressed_size_mismatch:{section}:{name}"
+                        )
+                    if int(spec.get("record_offset_start", -1)) != expected_offset:
+                        failures.append(
+                            f"evidence_partition_offset_mismatch:{section}:{name}"
+                        )
+                    try:
+                        raw_partition = gzip.decompress(path.read_bytes())
+                        if len(raw_partition) != int(
+                            spec.get("uncompressed_bytes", -1)
+                        ):
+                            failures.append(
+                                f"evidence_partition_uncompressed_size_mismatch:{section}:{name}"
+                            )
+                        partition_records = [
+                            json.loads(line)
+                            for line in raw_partition.decode("utf-8").splitlines()
+                            if line.strip()
+                        ]
+                    except (
+                        OSError,
+                        UnicodeDecodeError,
+                        gzip.BadGzipFile,
+                        json.JSONDecodeError,
+                    ):
+                        failures.append(f"evidence_partition_invalid:{section}:{name}")
+                        continue
+                    if len(partition_records) != int(spec.get("records", -1)):
+                        failures.append(
+                            f"evidence_partition_record_count_mismatch:{section}:{name}"
+                        )
+                    records.extend(partition_records)
+                    expected_offset += len(partition_records)
+                    if (
+                        int(spec.get("record_offset_end_exclusive", -1))
+                        != expected_offset
+                    ):
+                        failures.append(
+                            f"evidence_partition_offset_mismatch:{section}:{name}"
+                        )
+                tables[section] = records
+        else:
+            for name, spec in sorted((manifest.get("files") or {}).items()):
+                path = manifest_path.parent / name
+                if not path.is_file() or sha256_file(path) != spec.get("sha256"):
+                    failures.append(f"evidence_ledger_hash_mismatch:{name}")
+                    continue
+                records = _read_jsonl(path)
+                if len(records) != int(spec.get("records", -1)):
+                    failures.append(f"evidence_ledger_record_count_mismatch:{name}")
+                tables[name.removesuffix(".jsonl")] = records
         source_root = (
             manifest_path.parent / str(manifest.get("source_root_relative_path") or ".")
         ).resolve()
@@ -685,7 +775,7 @@ def _resolve_evidence_bundle(
             "corporate_action_source_sha256"
         ):
             failures.append("corporate_action_source_hash_mismatch")
-        for source in tables.get("source_objects.jsonl", []):
+        for source in tables.get("source_objects", []):
             source_path = (
                 source_root / str(source.get("relative_source_path") or "")
             ).resolve()
@@ -707,8 +797,7 @@ def _resolve_evidence_bundle(
     manifest, tables, cached_failures = cache[cache_key]
     failures.extend(cached_failures)
     by_lineage = {
-        item.get("lineage_id"): item
-        for item in tables.get("observation_lineage.jsonl", [])
+        item.get("lineage_id"): item for item in tables.get("observation_lineage", [])
     }
     record = by_lineage.get(lineage.get("lineage_id"))
     if not isinstance(record, dict):
@@ -717,7 +806,7 @@ def _resolve_evidence_bundle(
         failures.append("lineage_canonical_observation_id_mismatch")
     rows_by_id = {
         item.get("source_row_id"): item
-        for item in tables.get("selected_market_rows.jsonl", [])
+        for item in tables.get("selected_market_rows", [])
     }
 
     calendar = ExchangeCalendar()
@@ -777,7 +866,7 @@ def _resolve_evidence_bundle(
     }
     identity_by_id = {
         item.get("security_identity_evidence_id"): item
-        for item in tables.get("security_identity_evidence.jsonl", [])
+        for item in tables.get("security_identity_evidence", [])
     }
     identity = identity_by_id.get(record.get("security_identity_evidence_id"))
     if not isinstance(identity, dict):
@@ -788,7 +877,7 @@ def _resolve_evidence_bundle(
         failures.append("security_identity_mismatch")
     action_by_id = {
         item.get("corporate_action_evidence_id"): item
-        for item in tables.get("corporate_action_evidence.jsonl", [])
+        for item in tables.get("corporate_action_evidence", [])
     }
     loaded["corporate_actions"] = action_by_id.get(
         record.get("corporate_action_evidence_id")

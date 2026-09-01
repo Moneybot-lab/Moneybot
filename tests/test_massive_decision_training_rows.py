@@ -1,6 +1,8 @@
 import json
 from datetime import date, datetime, timedelta, timezone
 
+import pytest
+
 from scripts.build_massive_decision_training_rows import (
     build_training_rows_from_raw_market,
     emit_phase0_evidence_bundle,
@@ -140,8 +142,37 @@ def test_duplicate_requests_reuse_selected_rows_and_canonical_lineage(tmp_path):
     assert rows[0]["reconstruction_lineage"] == rows[1]["reconstruction_lineage"]
     assert manifest["metrics"]["raw_request_observations"] == 2
     assert manifest["metrics"]["canonical_economic_observations"] == 1
-    assert manifest["files"]["observation_lineage.jsonl"]["records"] == 1
-    assert manifest["files"]["security_identity_evidence.jsonl"]["records"] == 1
+    assert (
+        sum(item["records"] for item in manifest["sections"]["observation_lineage"])
+        == 1
+    )
+    assert (
+        sum(
+            item["records"]
+            for item in manifest["sections"]["security_identity_evidence"]
+        )
+        == 1
+    )
+
+    too_small = tmp_path / "too-small-evidence"
+    with pytest.raises(ValueError, match="PHASE0_EVIDENCE_PRIMARY_MANIFEST_TOO_LARGE"):
+        emit_phase0_evidence_bundle(
+            rows=rows,
+            market=market,
+            split_events=[],
+            split_cache_path=split_cache,
+            raw_root=raw,
+            evidence_dir=too_small,
+            max_selected_rows=10_000,
+            max_bundle_bytes=100,
+        )
+    diagnostics = json.loads(
+        (too_small / "evidence_bundle_diagnostics.json").read_text()
+    )
+    assert diagnostics["configured_primary_manifest_byte_limit"] == 100
+    assert diagnostics["primary_manifest_bytes"] > 100
+    assert diagnostics["selected_row_count"] > 0
+    assert diagnostics["largest_sections"][0]["compressed_bytes"] > 0
 
 
 def test_build_training_rows_adds_phase_1_technical_features(tmp_path):

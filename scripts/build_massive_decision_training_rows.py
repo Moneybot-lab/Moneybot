@@ -1542,6 +1542,64 @@ def _write_jsonl_records(path: Path, records: Iterable[dict[str, Any]]) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def _write_partitioned_jsonl_records(
+    directory: Path,
+    *,
+    section: str,
+    records: list[dict[str, Any]],
+    max_uncompressed_bytes: int,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Write stable gzip partitions without truncating a single evidence record."""
+    partitions: list[dict[str, Any]] = []
+    payloads: list[bytes] = []
+    current: list[bytes] = []
+    current_bytes = 0
+    for record in records:
+        encoded = (
+            json.dumps(record, sort_keys=True, default=str, separators=(",", ":"))
+            + "\n"
+        ).encode("utf-8")
+        if current and current_bytes + len(encoded) > max_uncompressed_bytes:
+            payloads.append(b"".join(current))
+            current, current_bytes = [], 0
+        current.append(encoded)
+        current_bytes += len(encoded)
+    if current or not records:
+        payloads.append(b"".join(current))
+
+    record_offset = 0
+    compressed_total = 0
+    uncompressed_total = 0
+    for index, payload in enumerate(payloads):
+        name = f"{section}.part-{index:05d}.jsonl.gz"
+        path = directory / name
+        compressed = gzip.compress(payload, compresslevel=6, mtime=0)
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_bytes(compressed)
+        temporary.replace(path)
+        count = payload.count(b"\n")
+        entry = {
+            "path": name,
+            "sha256": hashlib.sha256(compressed).hexdigest(),
+            "compressed_bytes": len(compressed),
+            "uncompressed_bytes": len(payload),
+            "records": count,
+            "record_offset_start": record_offset,
+            "record_offset_end_exclusive": record_offset + count,
+            "compression": "gzip",
+        }
+        partitions.append(entry)
+        record_offset += count
+        compressed_total += len(compressed)
+        uncompressed_total += len(payload)
+    return partitions, {
+        "records": len(records),
+        "partitions": len(partitions),
+        "compressed_bytes": compressed_total,
+        "uncompressed_bytes": uncompressed_total,
+    }
+
+
 def _evidence_market_record(bar: dict[str, Any], *, basis: str) -> dict[str, Any]:
     values = {
         key: bar.get(key)
@@ -1600,6 +1658,8 @@ def emit_phase0_evidence_bundle(
     evidence_dir: Path,
     max_selected_rows: int,
     max_bundle_bytes: int,
+    max_partition_bytes: int = 16_777_216,
+    max_total_evidence_bytes: int = 4_294_967_296,
     telemetry: BuildTelemetry | None = None,
 ) -> dict[str, Any]:
     """Persist compact, deduplicated evidence used by the production V4 builder."""
@@ -1898,37 +1958,53 @@ def emit_phase0_evidence_bundle(
         telemetry.count("selected_source_rows", len(selected))
         telemetry.count("canonical_lineages", len(lineages))
 
-    files = {
-        "source_objects.jsonl": sorted(
+    sections = {
+        "source_objects": sorted(
             source_objects.values(), key=lambda item: item["source_object_id"]
         ),
-        "selected_market_rows.jsonl": sorted(
+        "selected_market_rows": sorted(
             selected.values(), key=lambda item: item["source_row_id"]
         ),
-        "corporate_action_evidence.jsonl": sorted(
+        "corporate_action_evidence": sorted(
             actions.values(), key=lambda item: item["corporate_action_evidence_id"]
         ),
-        "security_identity_evidence.jsonl": sorted(
+        "security_identity_evidence": sorted(
             identities.values(), key=lambda item: item["security_identity_evidence_id"]
         ),
-        "observation_lineage.jsonl": sorted(
+        "observation_lineage": sorted(
             lineages.values(), key=lambda item: item["lineage_id"]
         ),
     }
     serialization_started = time.perf_counter()
-    file_entries = {}
-    for name, records in files.items():
-        digest = _write_jsonl_records(evidence_dir / name, records)
-        file_entries[name] = {
-            "sha256": digest,
-            "records": len(records),
-            "size_bytes": (evidence_dir / name).stat().st_size,
-        }
+    section_index = {}
+    section_sizes = {}
+    for name, records in sections.items():
+        partitions, sizes = _write_partitioned_jsonl_records(
+            evidence_dir,
+            section=name,
+            records=records,
+            max_uncompressed_bytes=max(1, max_partition_bytes),
+        )
+        section_index[name] = partitions
+        section_sizes[name] = sizes
     manifest = {
         "schema_version": RECONSTRUCTION_LINEAGE_VERSION,
         "availability_policy_version": MARKET_AVAILABILITY_POLICY_VERSION,
         "feature_contract_version": V4_FEATURE_CONTRACT_VERSION,
         "timing_contract_version": ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
+        "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
+        "calendar_contract_version": EXCHANGE_CALENDAR.identifier,
+        "calculation_engine_version": CALCULATION_ENGINE_VERSION,
+        "configuration": {
+            "label_horizon_sessions": sorted(
+                {int(row["label_horizon_sessions"]) for row in rows}
+            ),
+            "price_adjustment_policy": "event_time_split_adjusted",
+            "volume_adjustment_policy": "inverse_split_factor",
+            "primary_manifest_byte_limit": max_bundle_bytes,
+            "partition_uncompressed_byte_limit": max(1, max_partition_bytes),
+            "total_compressed_evidence_byte_limit": max_total_evidence_bytes,
+        },
         "source_root_relative_path": os.path.relpath(
             raw_root.resolve(), evidence_dir.resolve()
         ),
@@ -1936,40 +2012,75 @@ def emit_phase0_evidence_bundle(
             split_cache_path.resolve(), evidence_dir.resolve()
         ),
         "corporate_action_source_sha256": split_cache_hash,
-        "files": file_entries,
+        "partition_contract_version": "alpha-atlas-v4-evidence-partitions.v1",
+        "partition_max_uncompressed_bytes": max(1, max_partition_bytes),
+        "sections": section_index,
         "metrics": {
             "unique_source_objects": len(source_objects),
             "selected_source_rows": len(selected),
             "raw_request_observations": len(rows),
             "canonical_economic_observations": len(lineages),
+            "partition_count": sum(len(items) for items in section_index.values()),
+            "compressed_evidence_bytes": sum(
+                item["compressed_bytes"] for item in section_sizes.values()
+            ),
+            "uncompressed_evidence_bytes": sum(
+                item["uncompressed_bytes"] for item in section_sizes.values()
+            ),
+        },
+        "lineage_summary": {
+            "all_canonical_lineages_indexed": len(lineages),
+            "all_selected_rows_indexed": len(selected),
+            "source_object_count": len(source_objects),
+            "security_identity_count": len(identities),
+            "corporate_action_evidence_count": len(actions),
+            "evidence_truncated": False,
         },
     }
+    manifest["metrics"]["evidence_bundle_bytes"] = manifest["metrics"][
+        "compressed_evidence_bytes"
+    ]
+    manifest["metrics"]["average_bytes_per_observation"] = round(
+        manifest["metrics"]["compressed_evidence_bytes"] / max(1, len(rows)), 3
+    )
     manifest_path = evidence_dir / "source_evidence_manifest.json"
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    manifest_hash = _sha256_file(manifest_path)
-    for row in rows:
-        row["reconstruction_lineage"]["source_evidence_manifest_sha256"] = manifest_hash
-    for _ in range(4):
-        bundle_bytes = sum(
-            path.stat().st_size for path in evidence_dir.iterdir() if path.is_file()
-        )
-        metrics = {
-            "evidence_bundle_bytes": bundle_bytes,
-            "average_bytes_per_observation": round(bundle_bytes / max(1, len(rows)), 3),
-        }
-        if all(manifest["metrics"].get(key) == value for key, value in metrics.items()):
-            break
-        manifest["metrics"].update(metrics)
-        manifest_path.write_text(
-            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
-    bundle_bytes = sum(
-        path.stat().st_size for path in evidence_dir.iterdir() if path.is_file()
+    primary_manifest_bytes = manifest_path.stat().st_size
+    total_evidence_bytes = (
+        primary_manifest_bytes + manifest["metrics"]["compressed_evidence_bytes"]
     )
-    if bundle_bytes > max_bundle_bytes:
-        raise ValueError("PHASE0_EVIDENCE_BUNDLE_TOO_LARGE:byte_limit")
+    diagnostics = {
+        "schema_version": "alpha-atlas-v4-evidence-bundle-diagnostics.v1",
+        "configured_primary_manifest_byte_limit": max_bundle_bytes,
+        "configured_partition_uncompressed_byte_limit": max(1, max_partition_bytes),
+        "configured_total_evidence_byte_limit": max_total_evidence_bytes,
+        "primary_manifest_bytes": primary_manifest_bytes,
+        "total_serialized_evidence_bytes": total_evidence_bytes,
+        "selected_row_count": len(selected),
+        "section_sizes": section_sizes,
+        "largest_sections": sorted(
+            ({"section": name, **sizes} for name, sizes in section_sizes.items()),
+            key=lambda item: (-item["compressed_bytes"], item["section"]),
+        ),
+    }
+    diagnostics_path = evidence_dir / "evidence_bundle_diagnostics.json"
+    diagnostics_path.write_text(
+        json.dumps(diagnostics, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    if telemetry:
+        telemetry.progress(
+            "evidence_serialized",
+            partitions=manifest["metrics"]["partition_count"],
+            primary_manifest_bytes=primary_manifest_bytes,
+            selected_rows=len(selected),
+            total_evidence_bytes=total_evidence_bytes,
+        )
+    if primary_manifest_bytes > max_bundle_bytes:
+        raise ValueError("PHASE0_EVIDENCE_PRIMARY_MANIFEST_TOO_LARGE:byte_limit")
+    if total_evidence_bytes > max_total_evidence_bytes:
+        raise ValueError("PHASE0_EVIDENCE_BUNDLE_TOO_LARGE:total_byte_limit")
     final_hash = _sha256_file(manifest_path)
     for row in rows:
         row["reconstruction_lineage"]["source_evidence_manifest_sha256"] = final_hash
@@ -2137,7 +2248,11 @@ def main() -> None:
     )
     parser.add_argument("--phase0-evidence-dir")
     parser.add_argument("--phase0-max-selected-rows", type=int, default=2_000_000)
-    parser.add_argument("--phase0-max-evidence-bytes", type=int, default=1_073_741_824)
+    parser.add_argument("--phase0-max-evidence-bytes", type=int, default=1_048_576)
+    parser.add_argument("--phase0-max-partition-bytes", type=int, default=16_777_216)
+    parser.add_argument(
+        "--phase0-max-total-evidence-bytes", type=int, default=4_294_967_296
+    )
     parser.add_argument("--performance-output")
     args = parser.parse_args()
     telemetry = BuildTelemetry(
@@ -2229,6 +2344,8 @@ def main() -> None:
             evidence_dir=evidence_staging,
             max_selected_rows=max(1, args.phase0_max_selected_rows),
             max_bundle_bytes=max(1, args.phase0_max_evidence_bytes),
+            max_partition_bytes=max(1, args.phase0_max_partition_bytes),
+            max_total_evidence_bytes=max(1, args.phase0_max_total_evidence_bytes),
             telemetry=telemetry,
         )
         summary["phase0_evidence"] = evidence_manifest["metrics"]

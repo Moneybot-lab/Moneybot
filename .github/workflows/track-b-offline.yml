@@ -208,9 +208,10 @@ jobs:
           test -s "$RAW_V4_ROWS"
           test -s "$RAW_V4_MANIFEST"
           test -s "$PHASE0_DIR/source_evidence/source_evidence_manifest.json"
-          test -s "$PHASE0_DIR/source_evidence/observation_lineage.jsonl"
-          test -s "$PHASE0_DIR/source_evidence/selected_market_rows.jsonl"
-          test -s "$PHASE0_DIR/source_evidence/corporate_action_evidence.jsonl"
+          test -s "$PHASE0_DIR/source_evidence/evidence_bundle_diagnostics.json"
+          find "$PHASE0_DIR/source_evidence" -name 'observation_lineage.part-*.jsonl.gz' -print -quit | grep -q .
+          find "$PHASE0_DIR/source_evidence" -name 'selected_market_rows.part-*.jsonl.gz' -print -quit | grep -q .
+          find "$PHASE0_DIR/source_evidence" -name 'corporate_action_evidence.part-*.jsonl.gz' -print -quit | grep -q .
           sed -n '1,200p' "$RAW_V4_MANIFEST"
 
       - name: Validate raw V4 timing and schema

@@ -19,7 +19,20 @@
     "exit_4_every_feature_label_reconstructable": "PASS_LOCAL_PRODUCTION_PATH_FIXTURE;BLOCKED_HOSTED_EVIDENCE",
     "exit_5_no_unsupported_manifest_claim": "PASS_FOR_NEW_V4_MANIFESTS"
   },
-  "executive_result": "PHASE_0_BLOCKED_BUILDER_PERFORMANCE",
+  "evidence_partition_repair": {
+    "evidence_truncated": false,
+    "former_exact_serialized_bytes": null,
+    "former_size_lower_bound_bytes": 1073741825,
+    "former_whole_bundle_limit_bytes": 1073741824,
+    "hosted_observations_emitted": 41268,
+    "hosted_observations_processed": 50000,
+    "hosted_selected_rows": 84723,
+    "partition_uncompressed_target_bytes": 16777216,
+    "primary_manifest_limit_bytes": 1048576,
+    "status": "IMPLEMENTED_LOCAL_HOSTED_RERUN_REQUIRED",
+    "total_compressed_evidence_limit_bytes": 4294967296
+  },
+  "executive_result": "PHASE_0_BLOCKED_EVIDENCE_BUNDLE_HOSTED_RERUN_REQUIRED",
   "feature_reconciliation": {
     "feature_store_columns": 48,
     "model_inputs": 43,
@@ -43,7 +56,7 @@
     "artifact_sha256": null,
     "last_run_id": 33463597909,
     "rows_checked": 0,
-    "status": "BLOCKED_RUN_168_BUILDER_TIMEOUT;OPTIMIZED_RERUN_REQUIRED"
+    "status": "BLOCKED_EVIDENCE_BUNDLE_BYTE_LIMIT;PARTITIONED_RERUN_REQUIRED"
   },
   "implementation_readiness": {
     "builder_emits_certifiable_lineage": true,
@@ -62,7 +75,7 @@
     "selected_source_rows": 229,
     "source_objects": 3
   },
-  "next_permitted_step": "Rerun Recover V3.1 Benchmark Evidence once for additional hashes/metrics, then dispatch exactly one Track B Offline Challenger and require it to reach the full Phase 0 reconstruction gate. Phase 1 remains prohibited.",
+  "next_permitted_step": "Dispatch one Track B Offline Challenger and require partitioned evidence generation plus full-artifact Phase 0 reconstruction. Phase 1 remains prohibited.",
   "reconstructability": {
     "adversarial_failure_classes_tested": [
       "corporate_action_mismatch",
@@ -101,7 +114,7 @@
     "v3_behavior_changed": false
   },
   "schema_version": "alpha-atlas-v4-phase0-closeout.v1",
-  "starting_commit": "ec9485d88c3df91b297acd4e7ab5dc703b7add26",
+  "starting_commit": "da7e59047bc06ec065eadce40920a21bccbb4750",
   "temporal_safety_certification": {
     "artifact_sha256": null,
     "failures": 0,

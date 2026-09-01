@@ -1,10 +1,10 @@
 # Alpha Atlas V4 Phase 0 closeout
 
 **Schema:** `alpha-atlas-v4-phase0-closeout.v1`
-**Executive result:** `PHASE_0_BLOCKED_BUILDER_PERFORMANCE`
+**Executive result:** `PHASE_0_BLOCKED_EVIDENCE_BUNDLE_HOSTED_RERUN_REQUIRED`
 **Starting checkout commit:** `ec9485d88c3df91b297acd4e7ab5dc703b7add26`
 
-Track B #168 (`33463597909`) timed out after 600 seconds in `build_raw`; the Phase 0 verifier was never reached. The builder performance regression is repaired locally, but Phase 0 remains blocked until one optimized hosted run completes the builder and reaches full-artifact reconstruction.
+Track B #168 (`33463597909`) timed out after 600 seconds in `build_raw`. A later hosted build completed optimized observation and lineage construction (50,000 processed, 41,268 emitted, 84,723 selected evidence rows) but failed the former whole-directory 1 GiB evidence guard. The evidence is now deterministically gzip-partitioned behind a compact hash index; Phase 0 remains blocked until a hosted run reaches full-artifact reconstruction.
 
 ## Current evidence
 

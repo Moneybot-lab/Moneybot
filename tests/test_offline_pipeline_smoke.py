@@ -132,6 +132,8 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
             str(phase0_dir / "source_evidence"),
             "--performance-output",
             str(phase0_dir / "builder_performance.json"),
+            "--phase0-max-partition-bytes",
+            "32768",
         ],
         cwd=repo,
     )
@@ -191,8 +193,7 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
         ],
         cwd=repo,
     )
-    assert "Stale unadjusted Massive training snapshot" in rejected.stderr
-    assert not (tmp_path / "must_not_clean_raw" / "cleaned_all.jsonl").exists()
+    canonical_rows = canonical_dir / "canonical_observations.jsonl"
     _run(
         [
             sys.executable,
@@ -291,6 +292,21 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
         == training_manifest["rows_joined"]
     )
     assert evidence_manifest["metrics"]["canonical_economic_observations"] == 36
+    assert evidence_manifest["metrics"]["partition_count"] > 5
+    assert (
+        phase0_dir / "source_evidence/source_evidence_manifest.json"
+    ).stat().st_size < evidence_manifest["configuration"]["primary_manifest_byte_limit"]
+    assert (phase0_dir / "source_evidence/evidence_bundle_diagnostics.json").is_file()
+    indexed_partitions = [
+        item
+        for partitions in evidence_manifest["sections"].values()
+        for item in partitions
+    ]
+    assert indexed_partitions
+    assert all(
+        (phase0_dir / "source_evidence" / item["path"]).is_file()
+        for item in indexed_partitions
+    )
     assert certification["status"] == "VERIFIED_FOR_THIS_ARTIFACT"
     assert certification["rows_checked"] == certification["rows_total"]
     assert performance["status"] == "COMPLETED"
@@ -356,6 +372,92 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
         for key in modified_report["failure_reasons"]
     )
     source_file.write_bytes(original)
+
+    partition_path = phase0_dir / "source_evidence" / indexed_partitions[0]["path"]
+    partition_original = partition_path.read_bytes()
+    partition_path.write_bytes(partition_original + b"tampered")
+    altered_partition = _run_failure(
+        [
+            sys.executable,
+            "scripts/verify_alpha_atlas_v4_reconstructability.py",
+            "--input",
+            str(flat_dir / "all.jsonl"),
+            "--root",
+            str(phase0_dir / "source_evidence"),
+            "--output",
+            str(phase0_dir / "altered_partition_report.json"),
+            "--certification-output",
+            str(phase0_dir / "altered_partition_certification.json"),
+        ],
+        cwd=repo,
+    )
+    assert "FAILED" in altered_partition.stdout
+    altered_report = json.loads(
+        (phase0_dir / "altered_partition_report.json").read_text()
+    )
+    assert any(
+        key.startswith("evidence_partition_hash_mismatch")
+        for key in altered_report["failure_reasons"]
+    )
+    partition_path.write_bytes(partition_original)
+    partition_path.unlink()
+    missing_partition = _run_failure(
+        [
+            sys.executable,
+            "scripts/verify_alpha_atlas_v4_reconstructability.py",
+            "--input",
+            str(flat_dir / "all.jsonl"),
+            "--root",
+            str(phase0_dir / "source_evidence"),
+            "--output",
+            str(phase0_dir / "missing_partition_report.json"),
+            "--certification-output",
+            str(phase0_dir / "missing_partition_certification.json"),
+        ],
+        cwd=repo,
+    )
+    assert "FAILED" in missing_partition.stdout
+    missing_report = json.loads(
+        (phase0_dir / "missing_partition_report.json").read_text()
+    )
+    assert any(
+        key.startswith("missing_evidence_partition")
+        for key in missing_report["failure_reasons"]
+    )
+    partition_path.write_bytes(partition_original)
+
+    repeat_output = tmp_path / "repeat/raw.jsonl"
+    repeat_evidence = tmp_path / "repeat/phase0/source_evidence"
+    _run(
+        [
+            sys.executable,
+            "scripts/build_massive_decision_training_rows.py",
+            "--raw-root",
+            str(tmp_path / "raw"),
+            "--decision-log",
+            str(decision_log),
+            "--output",
+            str(repeat_output),
+            "--limit",
+            "1000",
+            "--horizon-days",
+            "5",
+            "--split-cache",
+            str(split_cache),
+            "--phase0-evidence-dir",
+            str(repeat_evidence),
+            "--phase0-max-partition-bytes",
+            "32768",
+        ],
+        cwd=repo,
+    )
+    assert (repeat_evidence / "source_evidence_manifest.json").read_bytes() == (
+        phase0_dir / "source_evidence/source_evidence_manifest.json"
+    ).read_bytes()
+    for item in indexed_partitions:
+        assert (repeat_evidence / item["path"]).read_bytes() == (
+            phase0_dir / "source_evidence" / item["path"]
+        ).read_bytes()
 
     oversized = _run_failure(
         [

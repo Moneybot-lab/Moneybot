@@ -44,3 +44,9 @@ research-only. V3/V3.1, production serving, promotion and routing remain unchang
 ## Prompt 8C operational repair
 
 Track B #168 exposed repeated per-observation split adjustment and source-window hashing. The builder now caches economically equivalent adjustment views, row identities, context windows, and duplicate canonical lineage; emits run-scoped performance telemetry; atomically finalizes artifacts; and retains the unchanged fail-closed reconstruction gate. The recovery parser recognizes only the exact V3.1 candidate filename. A hosted rerun is required before changing Phase 0 status.
+
+The subsequent hosted build completed observation and lineage construction but
+failed the former whole-directory byte guard at 84,723 selected rows. Evidence v1
+now keeps a compact primary manifest and stores every high-cardinality ledger in
+deterministic gzip partitions with hash/count/offset indexes. Diagnostics record
+the configured limits and per-section sizes before any fail-closed limit error.

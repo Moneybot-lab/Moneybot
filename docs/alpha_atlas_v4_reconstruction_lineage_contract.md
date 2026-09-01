@@ -13,17 +13,25 @@ The production builder writes a normalized evidence bundle:
 
 | File | Purpose |
 | --- | --- |
-| `source_objects.jsonl` | Massive source-object paths, byte sizes, families, and SHA-256 values. |
-| `selected_market_rows.jsonl` | Deduplicated raw-row identities plus the exact split-basis OHLCV values used by replay. |
-| `corporate_action_evidence.jsonl` | Relevant actions, or an explicit no-relevant-action disposition, bound to the inspected split cache. |
-| `security_identity_evidence.jsonl` | Auditable request-event identity evidence; request-only records are not historical-universe eligible. |
-| `observation_lineage.jsonl` | Canonical-ID keyed source windows, context, execution rows, contracts, and calculation-engine identity. |
+| `source_objects.part-NNNNN.jsonl.gz` | Massive source-object paths, byte sizes, families, and SHA-256 values. |
+| `selected_market_rows.part-NNNNN.jsonl.gz` | Deduplicated raw-row identities plus the exact split-basis OHLCV values used by replay. |
+| `corporate_action_evidence.part-NNNNN.jsonl.gz` | Relevant actions, or an explicit no-relevant-action disposition, bound to the inspected split cache. |
+| `security_identity_evidence.part-NNNNN.jsonl.gz` | Auditable request-event identity evidence; request-only records are not historical-universe eligible. |
+| `observation_lineage.part-NNNNN.jsonl.gz` | Canonical-ID keyed source windows, context, execution rows, contracts, and calculation-engine identity. |
 | `source_evidence_manifest.json` | Schema, policies, per-ledger hashes/counts/sizes, source-root reference, and bundle metrics. |
+| `evidence_bundle_diagnostics.json` | Operational configured limits and per-section compressed/uncompressed sizes. |
 
 Every JSONL file is deterministically ordered. Source objects and selected rows
 are deduplicated by content-derived identifiers. Observations contain only a
 compact lineage reference and the exact manifest SHA-256; evidence is never part
 of the 43-feature model vector.
+
+High-cardinality sections use deterministic, canonically sorted gzip partitions
+under `alpha-atlas-v4-evidence-partitions.v1`. The compact primary manifest indexes
+every partition with its SHA-256, compression, byte counts, record counts, and
+contiguous record offsets. Verification follows the complete index and fails on a
+missing, modified, malformed, reordered, or count-mismatched partition. No row is
+sampled or truncated.
 
 ## Availability
 
@@ -50,5 +58,6 @@ Verification fails on a missing or modified source object, ledger or manifest;
 unresolved row/action/identity identifier; unavailable feature input; identity,
 calendar, contract, feature, execution, or target mismatch; or incomplete
 full-artifact coverage. The builder fails with
+`PHASE0_EVIDENCE_PRIMARY_MANIFEST_TOO_LARGE` or
 `PHASE0_EVIDENCE_BUNDLE_TOO_LARGE` rather than truncating evidence when configured
-row or byte limits are exceeded.
+row, primary-manifest, partition, or total compressed-byte limits are exceeded.
