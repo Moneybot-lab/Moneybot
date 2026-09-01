@@ -978,6 +978,41 @@ def _resolve_evidence_bundle(
         if effective.get(endpoint_key) != (common[-1] if common else None):
             failures.append(f"common_source_endpoint_mismatch:{label}")
 
+    family_ids = {
+        "symbol": list(record.get("symbol_row_ids") or []),
+        "spy": list(record.get("spy_row_ids") or []),
+        "sector": list(record.get("sector_row_ids") or []),
+    }
+    effective = record.get("source_family_effective_asof") or {}
+    for family, ids in family_ids.items():
+        endpoint = (rows_by_id.get(ids[-1]) or {}).get("date") if ids else None
+        if effective.get(family) != endpoint:
+            failures.append(f"source_family_effective_asof_mismatch:{family}")
+
+    for label, left_family, right_family, endpoint_key in (
+        ("symbol_spy", "symbol", "spy", "symbol_spy_common"),
+        ("symbol_sector", "symbol", "sector", "symbol_sector_common"),
+    ):
+        left_by_day = {
+            str((rows_by_id.get(source_id) or {}).get("date")): source_id
+            for source_id in family_ids[left_family]
+        }
+        right_by_day = {
+            str((rows_by_id.get(source_id) or {}).get("date")): source_id
+            for source_id in family_ids[right_family]
+        }
+        common = sorted(left_by_day.keys() & right_by_day.keys())
+        expected_alignment = {
+            "symbol": [left_by_day[day] for day in common],
+            "comparison": [right_by_day[day] for day in common],
+        }
+        if (record.get("aligned_source_row_ids") or {}).get(
+            label
+        ) != expected_alignment:
+            failures.append(f"aligned_source_row_ids_mismatch:{label}")
+        if effective.get(endpoint_key) != (common[-1] if common else None):
+            failures.append(f"common_source_endpoint_mismatch:{label}")
+
     calendar = ExchangeCalendar()
 
     def resolve_rows(ids: Iterable[str], family: str) -> list[dict[str, Any]]:
