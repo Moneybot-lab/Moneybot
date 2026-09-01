@@ -1902,26 +1902,33 @@ def emit_phase0_evidence_bundle(
             ),
             feature_day,
         )
+        family_asof = row.get("source_family_effective_asof") or {}
+        spy_day = str(family_asof.get("spy") or "")
+        sector_day = str(family_asof.get("sector") or "")
         spy_raw = market["SPY"]
-        spy_idx = bisect.bisect_right(date_indices["SPY"], feature_day) - 1
+        spy_idx = positions["SPY"].get(spy_day, -1)
+        if spy_idx < 0:
+            raise ValueError("PHASE0_LINEAGE_INVALID:missing_spy_effective_asof")
         spy_history, spy_split_ids = adjusted(
             "SPY",
             spy_raw,
             _feature_safe_splits(
                 splits_by_symbol.get("SPY", []), cutoff, market_session
             ),
-            str(spy_raw[spy_idx]["date"]),
+            spy_day,
         )
         sector_symbol = str(row.get("sector_benchmark_symbol") or "SPY")
         sector_raw = market[sector_symbol]
-        sector_idx = bisect.bisect_right(date_indices[sector_symbol], feature_day) - 1
+        sector_idx = positions[sector_symbol].get(sector_day, -1)
+        if sector_idx < 0:
+            raise ValueError("PHASE0_LINEAGE_INVALID:missing_sector_effective_asof")
         sector_history, sector_split_ids = adjusted(
             sector_symbol,
             sector_raw,
             _feature_safe_splits(
                 splits_by_symbol.get(sector_symbol, []), cutoff, market_session
             ),
-            str(sector_raw[sector_idx]["date"]),
+            sector_day,
         )
         entry_idx = positions[symbol][str(row["entry_session_date"])]
         exit_idx = positions[symbol][str(row["exit_session_date"])]

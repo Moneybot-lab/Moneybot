@@ -914,18 +914,69 @@ def _resolve_evidence_bundle(
         failures = []
     manifest, tables, cached_failures = cache[cache_key]
     failures.extend(cached_failures)
-    by_lineage = {
-        item.get("lineage_id"): item for item in tables.get("observation_lineage", [])
-    }
+    indexes_key = f"bundle-indexes:{manifest_path}"
+    if indexes_key not in cache:
+        cache[indexes_key] = {
+            "lineage": {
+                item.get("lineage_id"): item
+                for item in tables.get("observation_lineage", [])
+            },
+            "rows": {
+                item.get("source_row_id"): item
+                for item in tables.get("selected_market_rows", [])
+            },
+            "identities": {
+                item.get("security_identity_evidence_id"): item
+                for item in tables.get("security_identity_evidence", [])
+            },
+            "actions": {
+                item.get("corporate_action_evidence_id"): item
+                for item in tables.get("corporate_action_evidence", [])
+            },
+        }
+    indexes = cache[indexes_key]
+    by_lineage = indexes["lineage"]
     record = by_lineage.get(lineage.get("lineage_id"))
     if not isinstance(record, dict):
         return {}, dict(lineage), failures + ["missing_observation_lineage_record"]
     if record.get("canonical_observation_id") != row.get("canonical_observation_id"):
         failures.append("lineage_canonical_observation_id_mismatch")
-    rows_by_id = {
-        item.get("source_row_id"): item
-        for item in tables.get("selected_market_rows", [])
+    rows_by_id = indexes["rows"]
+
+    family_ids = {
+        "symbol": list(record.get("symbol_row_ids") or []),
+        "spy": list(record.get("spy_row_ids") or []),
+        "sector": list(record.get("sector_row_ids") or []),
     }
+    effective = record.get("source_family_effective_asof") or {}
+    for family, ids in family_ids.items():
+        endpoint = (rows_by_id.get(ids[-1]) or {}).get("date") if ids else None
+        if effective.get(family) != endpoint:
+            failures.append(f"source_family_effective_asof_mismatch:{family}")
+
+    for label, left_family, right_family, endpoint_key in (
+        ("symbol_spy", "symbol", "spy", "symbol_spy_common"),
+        ("symbol_sector", "symbol", "sector", "symbol_sector_common"),
+    ):
+        left_by_day = {
+            str((rows_by_id.get(source_id) or {}).get("date")): source_id
+            for source_id in family_ids[left_family]
+        }
+        right_by_day = {
+            str((rows_by_id.get(source_id) or {}).get("date")): source_id
+            for source_id in family_ids[right_family]
+        }
+        common = sorted(left_by_day.keys() & right_by_day.keys())
+        expected_alignment = {
+            "symbol": [left_by_day[day] for day in common],
+            "comparison": [right_by_day[day] for day in common],
+        }
+        if (record.get("aligned_source_row_ids") or {}).get(
+            label
+        ) != expected_alignment:
+            failures.append(f"aligned_source_row_ids_mismatch:{label}")
+        if effective.get(endpoint_key) != (common[-1] if common else None):
+            failures.append(f"common_source_endpoint_mismatch:{label}")
 
     family_ids = {
         "symbol": list(record.get("symbol_row_ids") or []),
@@ -1017,10 +1068,7 @@ def _resolve_evidence_bundle(
         "sector": resolve_rows(record.get("sector_row_ids") or [], "sector"),
         "reference": {},
     }
-    identity_by_id = {
-        item.get("security_identity_evidence_id"): item
-        for item in tables.get("security_identity_evidence", [])
-    }
+    identity_by_id = indexes["identities"]
     identity = identity_by_id.get(record.get("security_identity_evidence_id"))
     if not isinstance(identity, dict):
         failures.append("missing_security_identity_evidence")
@@ -1028,10 +1076,7 @@ def _resolve_evidence_bundle(
         "point_in_time_symbol_id"
     ) != row.get("point_in_time_symbol_id"):
         failures.append("security_identity_mismatch")
-    action_by_id = {
-        item.get("corporate_action_evidence_id"): item
-        for item in tables.get("corporate_action_evidence", [])
-    }
+    action_by_id = indexes["actions"]
     loaded["corporate_actions"] = action_by_id.get(
         record.get("corporate_action_evidence_id")
     )

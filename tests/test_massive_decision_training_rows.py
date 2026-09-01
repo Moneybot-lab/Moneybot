@@ -3,6 +3,10 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
+from moneybot.services.alpha_atlas_v4_canonical_observations import canonicalize_v4_rows
+from moneybot.services.alpha_atlas_v4_phase0 import build_temporal_safety_certification
+from scripts.verify_alpha_atlas_v4_reconstructability import verify_artifact
+
 from scripts.build_massive_decision_training_rows import (
     _aligned_relative_returns,
     _date_aligned_beta,
@@ -102,6 +106,114 @@ def test_humaw_rnwww_mixed_family_asof_uses_exact_session_alignment():
         )
         == beta
     )
+
+
+def test_mixed_family_asof_end_to_end_evidence_and_certification(tmp_path):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    calendar = ExchangeCalendar()
+    sessions = []
+    candidate = date(2026, 4, 1)
+    while candidate <= date(2026, 7, 31):
+        try:
+            calendar.session_close(candidate)
+        except ValueError:
+            pass
+        else:
+            sessions.append(candidate)
+        candidate += timedelta(days=1)
+
+    def write_symbol(symbol, *, omit=()):
+        lines = ["ticker,date,open,high,low,close,volume"]
+        for index, day in enumerate(sessions):
+            if day.isoformat() in omit:
+                continue
+            close = 100.0 + index
+            if symbol == "SPY":
+                close = {
+                    "2026-07-16": 750.72,
+                    "2026-07-21": 748.28,
+                    "2026-07-22": 747.41,
+                    "2026-07-23": 738.18,
+                }.get(day.isoformat(), 700.0 + index)
+            lines.append(
+                f"{symbol},{day.isoformat()},{close},{close + 1},{close - 1},{close},1000"
+            )
+        (raw / f"{symbol}.csv").write_text("\n".join(lines) + "\n")
+
+    write_symbol("HUMAW", omit={"2026-07-23"})
+    write_symbol("SPY")
+    market = load_market_history(raw)
+    event_at = datetime(2026, 7, 24, 9, 45, 15, tzinfo=timezone.utc)
+    rows, _ = build_training_rows_from_raw_market(
+        [
+            {
+                "ts": int(event_at.timestamp()),
+                "decision_id": "humaw-hosted-shape",
+                "symbol": "HUMAW",
+                "endpoint": "quick_ask",
+                "payload": {"recommendation": "BUY"},
+            }
+        ],
+        market,
+        horizon_days=5,
+        split_events=[],
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["source_family_effective_asof"] == {
+        "symbol": "2026-07-22",
+        "spy": "2026-07-23",
+        "sector": "2026-07-23",
+        "symbol_spy_common": "2026-07-22",
+        "symbol_sector_common": "2026-07-22",
+    }
+    assert row["feature_spy_return_1d"] == -0.012349
+
+    split_cache = tmp_path / "splits.jsonl"
+    split_cache.write_text("")
+    evidence = tmp_path / "evidence"
+    emit_phase0_evidence_bundle(
+        rows=rows,
+        market=market,
+        split_events=[],
+        split_cache_path=split_cache,
+        raw_root=raw,
+        evidence_dir=evidence,
+        max_selected_rows=100_000,
+        max_bundle_bytes=10_000_000,
+    )
+    canonical = canonicalize_v4_rows(rows).observations[0]
+    artifact = tmp_path / "all.jsonl"
+    artifact.write_text(json.dumps(canonical, sort_keys=True, default=str) + "\n")
+    report = verify_artifact(artifact, root=evidence)
+    certification = build_temporal_safety_certification(
+        artifact_path=artifact,
+        verification_report=report,
+        timing_contract_version="alpha-atlas-v4-prediction-execution-contract.v1",
+    )
+    assert report["status"] == "RECONSTRUCTABLE"
+    assert certification["status"] == "VERIFIED_FOR_THIS_ARTIFACT"
+    assert report["results"][0]["feature_mismatches"] == []
+
+    import gzip
+
+    manifest = json.loads((evidence / "source_evidence_manifest.json").read_text())
+
+    def section(name):
+        records = []
+        for spec in manifest["sections"][name]:
+            payload = gzip.decompress((evidence / spec["path"]).read_bytes()).decode()
+            records.extend(json.loads(line) for line in payload.splitlines())
+        return records
+
+    lineage = section("observation_lineage")[0]
+    selected = {item["source_row_id"]: item for item in section("selected_market_rows")}
+    assert lineage["source_family_effective_asof"]["spy"] == "2026-07-23"
+    assert lineage["source_family_effective_asof"]["symbol_spy_common"] == "2026-07-22"
+    assert selected[lineage["spy_row_ids"][-1]]["date"] == "2026-07-23"
+    aligned_terminal = lineage["aligned_source_row_ids"]["symbol_spy"]["comparison"][-1]
+    assert selected[aligned_terminal]["date"] == "2026-07-22"
 
 
 def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):
