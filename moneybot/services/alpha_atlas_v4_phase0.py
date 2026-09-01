@@ -17,6 +17,9 @@ from moneybot.services.alpha_atlas_v4_canonical_observations import (
     canonical_observation_id,
 )
 from moneybot.services.market_data_providers import ExchangeCalendar
+from moneybot.services.corporate_actions import (
+    CORPORATE_ACTION_AVAILABILITY_POLICY_VERSION,
+)
 
 FEATURE_CONTRACT_VERSION = "alpha-atlas-v4-features.v2"
 FEATURE_REGISTRY_VERSION = "alpha-atlas-v4-feature-registry.v1"
@@ -365,8 +368,8 @@ def _replay_v4_features(
     idx = int(indices["symbol"])
     spy_idx = int(indices["spy"])
     sector_idx = int(indices["sector"])
-    if idx < 50 or spy_idx < 35 or sector_idx < 5:
-        raise ValueError("insufficient source lookback for complete replay")
+    if idx < 5 or spy_idx < 5 or sector_idx < 5:
+        raise ValueError("insufficient source lookback for builder eligibility")
     asof = symbol[idx]
     close = float(asof["close"])
     sma10 = builder._rolling_close_mean(symbol, idx, 10)
@@ -383,7 +386,7 @@ def _replay_v4_features(
     low20 = builder._rolling_extreme(symbol, idx, 20, "low", high=False)
     vwap = builder._rolling_vwap(symbol, idx, 20)
     macd, macd_signal, macd_hist = builder._macd_components_at(symbol, idx)
-    return {
+    replayed = {
         "feature_close": close,
         "feature_sma_10": sma10,
         "feature_sma_20": sma20,
@@ -410,18 +413,30 @@ def _replay_v4_features(
         "feature_atr_14": builder._atr_at(symbol, idx, 14),
         "feature_spy_return_1d": builder._lagged_return(spy, spy_idx, 1),
         "feature_spy_return_5d": spy_return5,
-        "feature_symbol_minus_spy_5d": round(return5 - spy_return5, 6),
+        "feature_symbol_minus_spy_5d": (
+            round(return5 - spy_return5, 6)
+            if return5 is not None and spy_return5 is not None
+            else None
+        ),
         "feature_symbol_beta_20d": builder._beta_to_benchmark(
             symbol, spy, idx, spy_idx, 20
         ),
-        "feature_sector_relative_return_5d": round(return5 - sector_return5, 6),
+        "feature_sector_relative_return_5d": (
+            round(return5 - sector_return5, 6)
+            if return5 is not None and sector_return5 is not None
+            else None
+        ),
         "feature_market_regime_risk_on": builder._market_regime_risk_on(spy, spy_idx),
         "feature_market_volatility_proxy": builder._return_volatility(spy, spy_idx, 20),
         "feature_return_1d_lagged": builder._lagged_return(symbol, idx, 1),
         "feature_return_5d_lagged": return5,
         "feature_return_10d_lagged": builder._lagged_return(symbol, idx, 10),
         "feature_return_20d_lagged": return20,
-        "feature_momentum_5d_vs_20d": round(return5 - return20, 6),
+        "feature_momentum_5d_vs_20d": (
+            round(return5 - return20, 6)
+            if return5 is not None and return20 is not None
+            else None
+        ),
         "feature_volume": volume,
         "feature_volume_ratio_20d": builder._ratio(volume, volume20),
         "feature_relative_volume_5d": builder._ratio(volume, volume5),
@@ -434,6 +449,18 @@ def _replay_v4_features(
             round(close * volume, 6) if volume is not None else None
         ),
     }
+    # The builder deliberately overlays the shared V3 train/serve calculations.
+    # Replay that same final write, including its exact insufficient-history None.
+    from moneybot.services.alpha_atlas_v3_features import build_alpha_atlas_v3_features
+
+    replayed.update(
+        build_alpha_atlas_v3_features(
+            symbol_bars=symbol[: idx + 1],
+            spy_bars=spy[: spy_idx + 1],
+            asof_date=asof["date"],
+        )
+    )
+    return replayed
 
 
 def verify_observation(
@@ -446,6 +473,7 @@ def verify_observation(
     """Independently replay a lineage-bearing observation; fail closed otherwise."""
     cache = cache if cache is not None else {}
     failures: list[str] = []
+    mismatches: list[dict[str, Any]] = []
     lineage = row.get("reconstruction_lineage")
     if not isinstance(lineage, dict):
         return {
@@ -527,6 +555,8 @@ def verify_observation(
     for feature in MODEL_FEATURES:
         replay = replayed_features.get(feature)
         observed = row.get(feature)
+        if replay is None and observed is None:
+            continue
         if not isinstance(replay, (int, float)) or not isinstance(
             observed, (int, float)
         ):
@@ -535,6 +565,28 @@ def verify_observation(
             float(replay), float(observed), rtol=tolerance, atol=tolerance
         ):
             failures.append(f"feature_mismatch:{feature}")
+            absolute = abs(float(replay) - float(observed))
+            mismatches.append(
+                {
+                    "feature": feature,
+                    "stored_value": observed,
+                    "replayed_value": replay,
+                    "absolute_difference": absolute,
+                    "relative_difference": (
+                        absolute / abs(float(observed))
+                        if float(observed) != 0.0
+                        else None
+                    ),
+                    "accepted_rtol": tolerance,
+                    "accepted_atol": tolerance,
+                    "symbol_source_row_ids": lineage.get("symbol_row_ids") or [],
+                    "spy_source_row_ids": lineage.get("spy_row_ids") or [],
+                    "sector_source_row_ids": lineage.get("sector_row_ids") or [],
+                    "calculation_engine_version": lineage.get(
+                        "calculation_engine_version"
+                    ),
+                }
+            )
     execution = lineage.get("execution") or {}
     try:
         entry = float(execution["entry_price"])
@@ -577,9 +629,38 @@ def verify_observation(
                 if action is None:
                     failures.append(f"missing_feature_action:{action_id}")
                     continue
-                available = pd.to_datetime(
-                    action.get("available_at"), utc=True, errors="coerce"
-                )
+                evidence = action.get("availability_evidence") or {}
+                kind = evidence.get("kind")
+                available = pd.NaT
+                if kind == "EXPLICIT_PROVIDER_AVAILABILITY":
+                    available = pd.to_datetime(
+                        evidence.get("available_at"), utc=True, errors="coerce"
+                    )
+                elif kind == "EXECUTED_ACTION_SESSION_CLOSE":
+                    try:
+                        execution_day = date.fromisoformat(
+                            str(action["execution_date"])
+                        )
+                        computed = pd.Timestamp(calendar.session_close(execution_day))
+                        claimed = pd.to_datetime(
+                            evidence.get("available_at"), utc=True, errors="coerce"
+                        )
+                        if (
+                            evidence.get("execution_date") == execution_day.isoformat()
+                            and evidence.get("policy_version")
+                            == CORPORATE_ACTION_AVAILABILITY_POLICY_VERSION
+                            and evidence.get("calendar_contract_version")
+                            == calendar.identifier
+                            and claimed == computed
+                        ):
+                            available = computed
+                    except (KeyError, TypeError, ValueError):
+                        available = pd.NaT
+                elif action.get("available_at"):
+                    # Backward-compatible immutable bundles with provider timestamps.
+                    available = pd.to_datetime(
+                        action.get("available_at"), utc=True, errors="coerce"
+                    )
                 if pd.isna(available) or (not pd.isna(cutoff) and available > cutoff):
                     failures.append(f"unproven_feature_action_availability:{action_id}")
             for action_id in row.get("label_split_ids") or []:
@@ -627,6 +708,7 @@ def verify_observation(
         "canonical_observation_id": row.get("canonical_observation_id"),
         "status": status,
         "failures": sorted(set(failures)),
+        "feature_mismatches": mismatches,
     }
 
 

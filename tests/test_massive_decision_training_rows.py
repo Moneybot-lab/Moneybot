@@ -4,6 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from scripts.build_massive_decision_training_rows import (
+    _feature_safe_splits,
     build_training_rows_from_raw_market,
     emit_phase0_evidence_bundle,
     load_market_history,
@@ -27,6 +28,31 @@ def _trading_days(start: date, count: int) -> list[date]:
             days.append(candidate)
         candidate += timedelta(days=1)
     return days
+
+
+def test_split_availability_distinguishes_execution_and_future_session_boundaries():
+    calendar = ExchangeCalendar()
+    execution = date(2026, 4, 6)
+    action = {"id": "split", "execution_date": execution.isoformat()}
+    before_close = calendar.session_close(execution) - timedelta(microseconds=1)
+    at_close = calendar.session_close(execution)
+    assert _feature_safe_splits([action], before_close, execution) == []
+    assert _feature_safe_splits([action], at_close, execution) == [action]
+
+    announced_future = {
+        **action,
+        "execution_date": "2026-04-07",
+        "available_at": before_close.isoformat(),
+    }
+    assert _feature_safe_splits([announced_future], before_close, execution) == [
+        announced_future
+    ]
+    first_known_later = {
+        **action,
+        "execution_date": "2026-04-07",
+        "available_at": "2026-04-08T20:00:00+00:00",
+    }
+    assert _feature_safe_splits([first_known_later], before_close, execution) == []
 
 
 def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):
