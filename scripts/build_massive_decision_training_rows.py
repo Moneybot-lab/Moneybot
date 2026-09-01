@@ -30,6 +30,7 @@ from moneybot.services.decision_target import (
     target_metadata,
 )
 from moneybot.services.corporate_actions import (
+    CORPORATE_ACTION_AVAILABILITY_POLICY_VERSION,
     CORPORATE_ACTION_SCHEMA_VERSION,
     adjust_bars_to_asof,
     index_splits,
@@ -892,9 +893,10 @@ def _feature_safe_splits(
     for event in events:
         execution_day = date.fromisoformat(str(event["execution_date"]))
         available_at = _parse_utc_datetime(event.get("available_at"))
+        execution_available_at = EXCHANGE_CALENDAR.session_close(execution_day)
         if available_at is not None and available_at <= decision_at:
             safe.append(event)
-        elif execution_day < market_session:
+        elif execution_available_at <= decision_at:
             safe.append(event)
     return safe
 
@@ -947,7 +949,7 @@ def build_training_rows_from_raw_market(
     date_index = _market_date_index(market)
     if telemetry:
         telemetry.add("market_history_indexing", time.perf_counter() - indexing_started)
-    feature_cache: dict[tuple[str, int], dict[str, Any]] = {}
+    feature_cache: dict[tuple[str, int, tuple[str, ...]], dict[str, Any]] = {}
     adjusted_history_cache: dict[
         tuple[str, str, tuple[str, ...]], list[dict[str, Any]]
     ] = {}
@@ -1149,7 +1151,11 @@ def build_training_rows_from_raw_market(
             )
         current_action = normalize_action(event)
         current_probability = _event_probability_up(event)
-        cache_key = (symbol, idx, event_day)
+        cache_key = (
+            symbol,
+            idx,
+            tuple(sorted(str(item.get("id") or "") for item in feature_splits)),
+        )
         cached_features = feature_cache.get(cache_key)
         if cached_features is None:
             feature_started = time.perf_counter()
@@ -1375,7 +1381,7 @@ def build_training_rows_from_raw_market(
             "staleness_tolerance_sessions": max_staleness_sessions,
             "rejection_reason": None,
             "point_in_time_symbol_id": timing.point_in_time_symbol_id,
-            "corporate_action_availability_policy": "feature_actions_known_by_cutoff;label_actions_realized_in_horizon",
+            "corporate_action_availability_policy": CORPORATE_ACTION_AVAILABILITY_POLICY_VERSION,
             "code_commit": timing.code_commit,
             "dataset_manifest_hash": timing.dataset_manifest_hash,
             "corporate_action_schema_version": CORPORATE_ACTION_SCHEMA_VERSION,
@@ -1875,10 +1881,29 @@ def emit_phase0_evidence_bundle(
             )
         )
         relevant = [
-            item
+            dict(item)
             for item in splits_by_symbol.get(symbol, [])
             if str(item.get("id")) in relevant_ids
         ]
+        for item in relevant:
+            explicit = _parse_utc_datetime(item.get("available_at"))
+            execution_day = date.fromisoformat(str(item["execution_date"]))
+            item["availability_evidence"] = (
+                {
+                    "kind": "EXPLICIT_PROVIDER_AVAILABILITY",
+                    "available_at": explicit.isoformat(),
+                }
+                if explicit is not None
+                else {
+                    "kind": "EXECUTED_ACTION_SESSION_CLOSE",
+                    "policy_version": CORPORATE_ACTION_AVAILABILITY_POLICY_VERSION,
+                    "available_at": EXCHANGE_CALENDAR.session_close(
+                        execution_day
+                    ).isoformat(),
+                    "execution_date": execution_day.isoformat(),
+                    "calendar_contract_version": EXCHANGE_CALENDAR.identifier,
+                }
+            )
         action_started = time.perf_counter()
         action_id = "corporate_actions_" + _json_sha256(
             {
@@ -1910,6 +1935,9 @@ def emit_phase0_evidence_bundle(
             {
                 "canonical_observation_id": canonical_id,
                 "symbol_row_ids": symbol_ids,
+                "spy_row_ids": spy_ids,
+                "sector_symbol": sector_symbol,
+                "sector_row_ids": sector_ids,
                 "entry_row_id": entry_id,
                 "exit_row_id": exit_id,
             }
