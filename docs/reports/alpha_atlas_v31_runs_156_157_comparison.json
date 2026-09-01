@@ -1,0 +1,25 @@
+{
+  "benchmark_only": true,
+  "recovery_status": "RECOVERY_WORKFLOW_REQUIRED",
+  "runs": [
+    {
+      "actions_run_id": 32700956267,
+      "artifact_digest": "sha256:a5061e01cae5ee15e0ef55810ca9932d952eae5ab27684b6dfd699ef0299376a",
+      "artifact_id": 9510663000,
+      "artifact_name": "track-b-offline-output",
+      "head_sha": "058a7030cce899de3c7e3f0aaa304e7d3ed143ce",
+      "run_number": 156,
+      "status": "RECOVERY_WORKFLOW_REQUIRED"
+    },
+    {
+      "actions_run_id": 32820019463,
+      "artifact_digest": "sha256:12103332cdbda5a443d762780af94ba81a546093be9cd9e5481deb6b3b443d58",
+      "artifact_id": 9553009280,
+      "artifact_name": "track-b-offline-output",
+      "head_sha": "058a7030cce899de3c7e3f0aaa304e7d3ed143ce",
+      "run_number": 157,
+      "status": "RECOVERY_WORKFLOW_REQUIRED"
+    }
+  ],
+  "schema_version": "alpha-atlas-v31-benchmark-recovery.v1"
+}

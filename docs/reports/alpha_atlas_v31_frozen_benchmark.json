@@ -1,0 +1,52 @@
+{
+  "automatic_promotion": false,
+  "candidate_version": "candidate-alpha-atlas-v31-clean-v1",
+  "constraints": [
+    "must not be V4 training evidence",
+    "must not automatically promote",
+    "must not automatically route live",
+    "does not establish paid-recommendation readiness"
+  ],
+  "feature_columns": [
+    "feature_return_1d_lagged",
+    "feature_return_5d_lagged",
+    "feature_return_20d_lagged",
+    "feature_rsi_14",
+    "feature_macd_hist",
+    "feature_volume_ratio_20d",
+    "feature_price_vs_sma_20",
+    "feature_volatility_20d",
+    "feature_spy_return_5d",
+    "feature_symbol_minus_spy_5d",
+    "feature_market_regime_risk_on"
+  ],
+  "feature_columns_sha256": "7638eed893fdecc7bfc978e8b827871907d826692f344fc517a354defb530703",
+  "feature_contract_version": "moneybot-serving-features.v1",
+  "generated_at_utc": "2026-08-31T00:00:00+00:00",
+  "metadata_artifact_sha256": null,
+  "model_artifact_evidence": "RECOVERY_WORKFLOW_REQUIRED",
+  "model_artifact_path": "data/track_b/alpha_atlas_v31/candidate_alpha_atlas_v31_clean.json",
+  "model_artifact_sha256": null,
+  "paid_recommendation_readiness": false,
+  "production_servability": "NOT_CERTIFIED_FROM_AVAILABLE_REPOSITORY_EVIDENCE",
+  "promotion_status": "NOT_PROMOTED_BENCHMARK_ONLY",
+  "quantitative_status": "REJECTED_OR_UNVERIFIED_EXTERNAL_ARTIFACT",
+  "ready_for_live_routing": false,
+  "schema_version": "alpha-atlas-v31-frozen-benchmark.v1",
+  "status": "BENCHMARK_ONLY_RECOVERY_WORKFLOW_REQUIRED",
+  "track_b_runs": {
+    "156": {
+      "actions_run_id": 32700956267,
+      "artifact_digest": "sha256:a5061e01cae5ee15e0ef55810ca9932d952eae5ab27684b6dfd699ef0299376a",
+      "artifact_id": 9510663000,
+      "status": "RECOVERY_WORKFLOW_REQUIRED"
+    },
+    "157": {
+      "actions_run_id": 32820019463,
+      "artifact_digest": "sha256:12103332cdbda5a443d762780af94ba81a546093be9cd9e5481deb6b3b443d58",
+      "artifact_id": 9553009280,
+      "status": "RECOVERY_WORKFLOW_REQUIRED"
+    }
+  },
+  "training_evaluation_dataset_identity": null
+}

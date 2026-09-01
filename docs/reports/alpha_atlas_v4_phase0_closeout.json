@@ -1,0 +1,114 @@
+{
+  "checklist": {
+    "0.1_frozen_benchmark": "BLOCKED_RECOVERY_WORKFLOW_REQUIRED",
+    "0.2_prediction_execution_clock": "PASS_REPOSITORY_TEST_EVIDENCE",
+    "0.3_daily_context_cutoff": "PASS_REPOSITORY_TEST_EVIDENCE",
+    "0.3_fit_only_filling": "PASS_IMPLEMENTATION_AND_SYNTHETIC_TEST_EVIDENCE",
+    "0.4_adversarial_leakage_tests": "PASS_REPOSITORY_TEST_EVIDENCE",
+    "0.5_canonical_observations": "PASS_REPOSITORY_TEST_EVIDENCE",
+    "exit_1_all_training_rows_timestamp_invariant": "BLOCKED_POST_LINEAGE_HOSTED_RUN_REQUIRED",
+    "exit_2_same_day_close_tests": "PASS",
+    "exit_3_duplicates_canonicalized": "PASS",
+    "exit_4_every_feature_label_reconstructable": "PASS_LOCAL_PRODUCTION_PATH_FIXTURE;BLOCKED_HOSTED_EVIDENCE",
+    "exit_5_no_unsupported_manifest_claim": "PASS_FOR_NEW_V4_MANIFESTS"
+  },
+  "executive_result": "PHASE_0_BLOCKED_HOSTED_RUN_REQUIRED",
+  "feature_reconciliation": {
+    "feature_store_columns": 48,
+    "model_inputs": 43,
+    "provenance_columns": [
+      "feature_cutoff_at",
+      "feature_family_available_at",
+      "feature_family_source_at",
+      "feature_market_asof_date",
+      "feature_split_ids"
+    ],
+    "status": "PASS"
+  },
+  "fit_only_filling": {
+    "new_behavior": "main and walk-forward policies fit only their applicable prior training rows",
+    "old_behavior": "V4 challenger medians were fitted on the complete prepared frame before the frozen split",
+    "policy_schema": "alpha-atlas-v4-feature-fill-policy.v1",
+    "status": "PASS_IMPLEMENTATION_AND_SYNTHETIC_EVIDENCE"
+  },
+  "generated_at_utc": "2026-08-31T00:00:00+00:00",
+  "hosted_certification": {
+    "artifact_sha256": null,
+    "rows_checked": 0,
+    "status": "BLOCKED_POST_LINEAGE_HOSTED_RUN_REQUIRED"
+  },
+  "implementation_readiness": {
+    "builder_emits_certifiable_lineage": true,
+    "lineage_contract_version": "alpha-atlas-v4-reconstruction-lineage.v1",
+    "production_path_fixture_certified": true
+  },
+  "local_production_path_fixture": {
+    "artifact_sha256": "4b78eaad72d1ba65d36160b59e9d285f7c77d85ea47336a6074ff078f26ff157",
+    "canonical_economic_observations": 36,
+    "certification_status": "VERIFIED_FOR_THIS_ARTIFACT",
+    "cleaned_feature_store_observations": 34,
+    "evidence_bundle_bytes": 816005,
+    "failure_count": 0,
+    "raw_request_observations": 36,
+    "rows_checked": 34,
+    "selected_source_rows": 229,
+    "source_objects": 3
+  },
+  "next_permitted_step": "After merge, run exactly Recover V3.1 Benchmark Evidence and Track B Offline Challenger; inspect compact benchmark recovery and full-artifact Phase 0 evidence. Phase 1 remains prohibited.",
+  "reconstructability": {
+    "adversarial_failure_classes_tested": [
+      "corporate_action_mismatch",
+      "early_close",
+      "fabricated_verification_report",
+      "feature_mismatch",
+      "future_corporate_action_availability",
+      "future_source_availability",
+      "holiday_entry",
+      "missing_context",
+      "missing_entry_price",
+      "missing_source",
+      "partial_verification_scope",
+      "source_hash_mismatch",
+      "stale_certification",
+      "stale_context",
+      "target_mismatch",
+      "ticker_identity_mismatch"
+    ],
+    "failed": 0,
+    "observations_tested": 34,
+    "reason": "The production builder now emits hash-bound normalized lineage and the local production-path fixture fully certifies; no post-lineage hosted artifact has yet been certified.",
+    "reconstructable": 34,
+    "status": "PASS_LOCAL_PRODUCTION_PATH_FIXTURE;BLOCKED_HOSTED_EVIDENCE",
+    "synthetic_failed": 0,
+    "synthetic_observations_tested": 1,
+    "synthetic_reconstructable": 1
+  },
+  "safety": {
+    "customer_behavior_changed": false,
+    "historical_backfill": false,
+    "live_routing": false,
+    "model_tuning": false,
+    "promotion": false,
+    "v31_behavior_changed": false,
+    "v3_behavior_changed": false
+  },
+  "schema_version": "alpha-atlas-v4-phase0-closeout.v1",
+  "starting_commit": "e3ba5eb4e42bfa0182dd3686f8338b6bd4744f3b",
+  "temporal_safety_certification": {
+    "artifact_sha256": null,
+    "failures": 0,
+    "reason": "A production-builder fixture received full exact-artifact certification. Phase 0 still requires a real hosted Track B artifact hash.",
+    "rows_checked": 34,
+    "status": "VERIFIED_LOCAL_FIXTURE_ONLY;HOSTED_NOT_EVALUATED"
+  },
+  "v31_benchmark": {
+    "automatic_promotion": false,
+    "candidate_version": "candidate-alpha-atlas-v31-clean-v1",
+    "feature_contract_version": "moneybot-serving-features.v1",
+    "metadata_sha256": null,
+    "model_sha256": null,
+    "ready_for_live_routing": false,
+    "runs_156_157": "RECOVERY_WORKFLOW_REQUIRED",
+    "status": "BLOCKED_RECOVERY_WORKFLOW_REQUIRED"
+  }
+}
