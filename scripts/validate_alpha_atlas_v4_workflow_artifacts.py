@@ -122,7 +122,9 @@ def write_failure_summary(
     manifest = _json(manifest_path) if manifest_path and manifest_path.is_file() else {}
     detected = manifest.get("schema_version")
     kind = (
-        "canonical"
+        "decision_log_export"
+        if failed_stage == "fetch_decision_log"
+        else "canonical"
         if detected == CANONICAL_OBSERVATION_SCHEMA_VERSION
         else "raw" if detected == V4_RAW_ROW_SCHEMA else "unknown"
     )
@@ -133,7 +135,9 @@ def write_failure_summary(
         "input_kind": kind,
         "detected_schema": detected,
         "expected_schema": (
-            CANONICAL_OBSERVATION_SCHEMA_VERSION
+            "application/x-ndjson"
+            if failed_stage == "fetch_decision_log"
+            else CANONICAL_OBSERVATION_SCHEMA_VERSION
             if failed_stage in {"clean", "feature_store", "training", "evaluation"}
             else V4_RAW_ROW_SCHEMA
         ),
@@ -144,7 +148,9 @@ def write_failure_summary(
         "manifest_hash": manifest.get("dataset_manifest_hash")
         or manifest.get("canonical_observations_sha256"),
         "recommended_corrective_stage": (
-            "canonicalize_raw_v4_rows"
+            "retry_or_inspect_decision_log_export"
+            if failed_stage == "fetch_decision_log"
+            else "canonicalize_raw_v4_rows"
             if kind != "canonical"
             else "inspect_failed_stage_diagnostics"
         ),
