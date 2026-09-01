@@ -422,6 +422,7 @@ jobs:
             ${{ env.CANONICAL_MANIFEST }}
             ${{ env.CLEANING_QUALITY_REPORT }}
             ${{ env.PHASE0_DIR }}/**
+            ${{ env.FEATURE_STORE_DIR }}/all.jsonl
             ${{ env.TRACK_B_ARTIFACT_DIR }}/challenger_suite/feature_fill_policy.json
             ${{ env.TRACK_B_RUN_DIR }}/track_b_failure_summary.json
             ${{ env.TRACK_B_RUN_DIR }}/builder_performance.json
