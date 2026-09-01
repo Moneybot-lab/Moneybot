@@ -1,6 +1,6 @@
 # Alpha Atlas V4 feature registry
 
-**Schema:** `alpha-atlas-v4-feature-registry.v1`  
+**Schema:** `alpha-atlas-v4-feature-registry.v2`
 **Feature contract:** `alpha-atlas-v4-features.v2`
 
 ## Exact reconciliation
