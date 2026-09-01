@@ -186,6 +186,28 @@ def test_failure_summary_is_sanitized_and_recommends_canonicalization(tmp_path):
     assert str(tmp_path) not in json.dumps(result)
 
 
+def test_fetch_failure_summary_does_not_claim_canonicalization_defect(tmp_path):
+    result = write_failure_summary(
+        tmp_path / "failure.json",
+        failed_stage="fetch_decision_log",
+        input_label="run_scoped_track_b_artifact",
+        manifest_path=None,
+    )
+    assert result["failed_stage"] == "fetch_decision_log"
+    assert result["input_kind"] == "decision_log_export"
+    assert result["expected_schema"] == "application/x-ndjson"
+    assert result["recommended_corrective_stage"] == "retry_or_inspect_decision_log_export"
+
+
+def test_decision_log_fetch_uses_curl_final_status_not_first_retry_header():
+    fetch = _workflow_steps()["Fetch real decision log export"]
+    assert "--write-out '%{http_code}'" in fetch
+    assert 'HTTP_STATUS=$(timeout 150 curl "${CURL_OPTS[@]}" "$URL")' in fetch
+    assert "awk 'NR==1{print $2}'" not in fetch
+    assert "scripts/validate_decision_log_export.py" in fetch
+    assert 'TRACK_B_FAILED_STAGE=fetch_decision_log' in fetch
+
+
 def test_upload_keeps_canonical_evidence_and_failure_summary_on_failure():
     steps = _workflow_steps()
     upload = steps["Upload Track B artifacts"]
@@ -199,6 +221,7 @@ def test_upload_keeps_canonical_evidence_and_failure_summary_on_failure():
         assert variable in upload
     assert "track_b_failure_summary.json" in upload
     assert "builder_performance.json" in upload
+    assert "${{ env.FEATURE_STORE_DIR }}/all.jsonl" in upload
 
 
 def test_builder_has_optimized_timeout_and_performance_telemetry():

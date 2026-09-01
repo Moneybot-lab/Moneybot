@@ -97,6 +97,7 @@ jobs:
           DAILY_OPS_TOKEN: ${{ secrets.DAILY_OPS_TOKEN }}
         run: |
           set -euo pipefail
+          echo "TRACK_B_FAILED_STAGE=fetch_decision_log" >> "$GITHUB_ENV"
           test -n "$MONEYBOT_BASE_URL" || (echo "Missing secret: MONEYBOT_BASE_URL" && exit 1)
           test -n "$DAILY_OPS_TOKEN" || (echo "Missing secret: DAILY_OPS_TOKEN" && exit 1)
           mkdir -p data "$TRACK_B_RUN_DIR"
@@ -113,13 +114,17 @@ jobs:
             --location
             --output data/decision_events.jsonl
             --dump-header data/_response_headers.txt
+            --write-out '%{http_code}'
             -H "X-Daily-Ops-Token: $DAILY_OPS_TOKEN"
           )
 
           URL="$MONEYBOT_BASE_URL/api/export-decision-log?limit=50000"
           echo "Fetching decision log from: $URL"
-          timeout 150 curl "${CURL_OPTS[@]}" "$URL" || {
-            CURL_EXIT=$?
+          set +e
+          HTTP_STATUS=$(timeout 150 curl "${CURL_OPTS[@]}" "$URL")
+          CURL_EXIT=$?
+          set -e
+          if [ "$CURL_EXIT" -ne 0 ]; then
             echo "curl failed with exit code: $CURL_EXIT"
             echo "Response headers:"
             sed -n '1,200p' data/_response_headers.txt || true
@@ -129,18 +134,12 @@ jobs:
             fi
             echo "Decision log fetch failed. Exiting."
             exit 1
-          }
-
-          HTTP_STATUS=$(awk 'NR==1{print $2}' data/_response_headers.txt || echo "")
-          if [[ "$HTTP_STATUS" =~ ^[0-9]+$ ]] && [ "$HTTP_STATUS" -ne 200 ]; then
-            echo "Non-200 HTTP status: $HTTP_STATUS"
-            sed -n '1,200p' data/_response_headers.txt || true
-            echo "Fetched file size:"
-            ls -lh data/decision_events.jsonl || true
-            exit 1
           fi
 
-          test -s data/decision_events.jsonl || (echo "Exported decision log is empty" && exit 1)
+          python3 scripts/validate_decision_log_export.py \
+            --artifact data/decision_events.jsonl \
+            --headers data/_response_headers.txt \
+            --final-status "$HTTP_STATUS"
           echo "Decision log lines:"
           wc -l data/decision_events.jsonl
           echo "Response headers (first 100 lines):"
@@ -422,6 +421,7 @@ jobs:
             ${{ env.CANONICAL_MANIFEST }}
             ${{ env.CLEANING_QUALITY_REPORT }}
             ${{ env.PHASE0_DIR }}/**
+            ${{ env.FEATURE_STORE_DIR }}/all.jsonl
             ${{ env.TRACK_B_ARTIFACT_DIR }}/challenger_suite/feature_fill_policy.json
             ${{ env.TRACK_B_RUN_DIR }}/track_b_failure_summary.json
             ${{ env.TRACK_B_RUN_DIR }}/builder_performance.json
