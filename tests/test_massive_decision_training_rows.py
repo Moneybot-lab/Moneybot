@@ -6,6 +6,7 @@ from scripts.build_massive_decision_training_rows import (
     load_market_history,
     write_rows,
 )
+import scripts.build_massive_decision_training_rows as builder
 
 
 def _ts(day: str) -> int:
@@ -57,6 +58,33 @@ def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):
     assert row["return_3d"] == round(21 / 16 - 1, 6)
     assert row["label_up_3d"] == 1
     assert row["leakage_guard"].startswith("v4_features_at_or_before_cutoff")
+
+
+def test_market_loader_hashes_each_source_file_once_and_reuses_row_identity(
+    tmp_path, monkeypatch
+):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    source = raw / "daily.csv"
+    source.write_text(
+        "ticker,date,open,high,low,close,volume\n"
+        "AAPL,2026-01-02,1,2,1,2,100\n"
+        "SPY,2026-01-02,3,4,3,4,200\n"
+    )
+    calls = []
+    real = builder._sha256_file
+    monkeypatch.setattr(
+        builder, "_sha256_file", lambda path: calls.append(path) or real(path)
+    )
+    market = load_market_history(raw)
+    assert calls == [source]
+    assert (
+        market["AAPL"][0]["_source_object_id"] == market["SPY"][0]["_source_object_id"]
+    )
+    assert (
+        market["AAPL"][0]["_source_raw_row_sha256"]
+        != market["SPY"][0]["_source_raw_row_sha256"]
+    )
 
 
 def test_build_training_rows_adds_phase_1_technical_features(tmp_path):

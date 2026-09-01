@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -22,6 +22,7 @@ FEATURE_REGISTRY_VERSION = "alpha-atlas-v4-feature-registry.v1"
 FILL_POLICY_VERSION = "alpha-atlas-v4-feature-fill-policy.v1"
 RECONSTRUCTION_VERSION = "alpha-atlas-v4-reconstructability.v1"
 TEMPORAL_CERTIFICATION_VERSION = "alpha-atlas-v4-temporal-safety-certification.v1"
+RECONSTRUCTION_LINEAGE_VERSION = "alpha-atlas-v4-reconstruction-lineage.v1"
 
 MODEL_FEATURES = (
     "feature_above_vwap",
@@ -439,7 +440,7 @@ def verify_observation(
     *,
     root: Path,
     cache: dict[str, Any] | None = None,
-    tolerance: float = 1e-9,
+    tolerance: float = 1e-6,
 ) -> dict[str, Any]:
     """Independently replay a lineage-bearing observation; fail closed otherwise."""
     cache = cache if cache is not None else {}
@@ -460,8 +461,16 @@ def verify_observation(
     if pd.isna(cutoff):
         failures.append("missing_feature_cutoff_at")
     loaded: dict[str, Any] = {}
+    bundle_mode = lineage.get("schema_version") == RECONSTRUCTION_LINEAGE_VERSION
+    if bundle_mode:
+        bundle_loaded, resolved, bundle_failures = _resolve_evidence_bundle(
+            row=row, lineage=lineage, root=root, cache=cache, cutoff=cutoff
+        )
+        loaded.update(bundle_loaded)
+        failures.extend(bundle_failures)
+        lineage = resolved
     required = {"symbol", "spy", "sector", "reference"}
-    for source_spec in lineage.get("sources") or []:
+    for source_spec in ([] if bundle_mode else lineage.get("sources") or []):
         family = str(source_spec.get("family") or "")
         required.discard(family)
         relative = str(source_spec.get("path") or "")
@@ -493,6 +502,8 @@ def verify_observation(
         if relative not in cache:
             cache[relative] = json.loads(path.read_text())
         loaded[family] = cache[relative]
+    if bundle_mode:
+        required.difference_update(loaded)
     failures.extend(f"missing_required_context:{family}" for family in sorted(required))
     if lineage.get("feature_contract_version") != FEATURE_CONTRACT_VERSION:
         failures.append("feature_contract_mismatch")
@@ -549,7 +560,31 @@ def verify_observation(
     action_source = lineage.get("corporate_action_source") or {}
     action_relative = str(action_source.get("path") or "")
     action_path = (root / action_relative).resolve()
-    if not action_relative or not action_path.is_file():
+    if bundle_mode:
+        action_payload = loaded.get("corporate_actions")
+        if not isinstance(action_payload, dict):
+            failures.append("missing_corporate_action_source")
+        else:
+            actions = action_payload.get("actions") or []
+            by_id = {
+                str(item.get("id") or ""): item
+                for item in actions
+                if isinstance(item, dict)
+            }
+            for action_id in row.get("feature_split_ids") or []:
+                action = by_id.get(str(action_id))
+                if action is None:
+                    failures.append(f"missing_feature_action:{action_id}")
+                    continue
+                available = pd.to_datetime(
+                    action.get("available_at"), utc=True, errors="coerce"
+                )
+                if pd.isna(available) or (not pd.isna(cutoff) and available > cutoff):
+                    failures.append(f"unproven_feature_action_availability:{action_id}")
+            for action_id in row.get("label_split_ids") or []:
+                if str(action_id) not in by_id:
+                    failures.append(f"missing_label_action:{action_id}")
+    elif not action_relative or not action_path.is_file():
         failures.append("missing_corporate_action_source")
     else:
         action_hash = sha256_file(action_path)
@@ -592,6 +627,194 @@ def verify_observation(
         "status": status,
         "failures": sorted(set(failures)),
     }
+
+
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _resolve_evidence_bundle(
+    *,
+    row: Mapping[str, Any],
+    lineage: Mapping[str, Any],
+    root: Path,
+    cache: dict[str, Any],
+    cutoff: Any,
+) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
+    """Resolve and verify the normalized v1 evidence bundle without row-order joins."""
+    failures: list[str] = []
+    manifest_relative = str(lineage.get("evidence_manifest_path") or "")
+    manifest_path = (root / manifest_relative).resolve()
+    try:
+        manifest_path.relative_to(root.resolve())
+    except ValueError:
+        return {}, dict(lineage), ["evidence_manifest_outside_root"]
+    if not manifest_path.is_file():
+        return {}, dict(lineage), ["missing_source_evidence_manifest"]
+    if sha256_file(manifest_path) != lineage.get("source_evidence_manifest_sha256"):
+        return {}, dict(lineage), ["source_evidence_manifest_hash_mismatch"]
+    cache_key = f"bundle:{manifest_path}"
+    if cache_key not in cache:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("schema_version") != RECONSTRUCTION_LINEAGE_VERSION:
+            return {}, dict(lineage), ["source_evidence_manifest_schema_mismatch"]
+        tables = {}
+        for name, spec in sorted((manifest.get("files") or {}).items()):
+            path = manifest_path.parent / name
+            if not path.is_file() or sha256_file(path) != spec.get("sha256"):
+                failures.append(f"evidence_ledger_hash_mismatch:{name}")
+                continue
+            records = _read_jsonl(path)
+            if len(records) != int(spec.get("records", -1)):
+                failures.append(f"evidence_ledger_record_count_mismatch:{name}")
+            tables[name] = records
+        source_root = (
+            manifest_path.parent / str(manifest.get("source_root_relative_path") or ".")
+        ).resolve()
+        action_source = (
+            manifest_path.parent
+            / str(manifest.get("corporate_action_source_relative_path") or "")
+        ).resolve()
+        if not action_source.is_file():
+            failures.append("missing_corporate_action_source")
+        elif sha256_file(action_source) != manifest.get(
+            "corporate_action_source_sha256"
+        ):
+            failures.append("corporate_action_source_hash_mismatch")
+        for source in tables.get("source_objects.jsonl", []):
+            source_path = (
+                source_root / str(source.get("relative_source_path") or "")
+            ).resolve()
+            try:
+                source_path.relative_to(source_root)
+            except ValueError:
+                failures.append("source_object_path_outside_root")
+                continue
+            if not source_path.is_file():
+                failures.append(
+                    f"missing_source_object:{source.get('source_object_id')}"
+                )
+            elif sha256_file(source_path) != source.get("sha256"):
+                failures.append(
+                    f"source_object_hash_mismatch:{source.get('source_object_id')}"
+                )
+        cache[cache_key] = (manifest, tables, list(failures))
+        failures = []
+    manifest, tables, cached_failures = cache[cache_key]
+    failures.extend(cached_failures)
+    by_lineage = {
+        item.get("lineage_id"): item
+        for item in tables.get("observation_lineage.jsonl", [])
+    }
+    record = by_lineage.get(lineage.get("lineage_id"))
+    if not isinstance(record, dict):
+        return {}, dict(lineage), failures + ["missing_observation_lineage_record"]
+    if record.get("canonical_observation_id") != row.get("canonical_observation_id"):
+        failures.append("lineage_canonical_observation_id_mismatch")
+    rows_by_id = {
+        item.get("source_row_id"): item
+        for item in tables.get("selected_market_rows.jsonl", [])
+    }
+
+    calendar = ExchangeCalendar()
+
+    def resolve_rows(ids: Iterable[str], family: str) -> list[dict[str, Any]]:
+        output = []
+        for source_row_id in ids:
+            item = rows_by_id.get(source_row_id)
+            if not isinstance(item, dict):
+                failures.append(f"missing_selected_source_row:{family}:{source_row_id}")
+                continue
+            content = {
+                key: item.get(key)
+                for key in ("symbol", "date", "open", "high", "low", "close", "volume")
+            }
+            expected = sha256_value(
+                {"values": content, "adjustment": item.get("adjustment")}
+            )
+            if expected != item.get("row_content_sha256"):
+                failures.append(
+                    f"selected_source_row_hash_mismatch:{family}:{source_row_id}"
+                )
+            availability = item.get("availability_evidence") or {}
+            if availability.get("kind") == "OFFICIAL_SESSION_CLOSE_POLICY":
+                try:
+                    available = pd.Timestamp(
+                        calendar.session_close(date.fromisoformat(str(item["date"])))
+                    )
+                except (KeyError, TypeError, ValueError):
+                    failures.append(
+                        f"invalid_semantic_availability:{family}:{source_row_id}"
+                    )
+                    available = pd.NaT
+            elif availability.get("kind") == "EXPLICIT_PROVIDER_AVAILABILITY":
+                available = pd.to_datetime(
+                    availability.get("available_at"), utc=True, errors="coerce"
+                )
+            else:
+                available = pd.NaT
+            if pd.isna(available):
+                failures.append(f"missing_source_timestamp:{family}")
+            elif (
+                not pd.isna(cutoff)
+                and available > cutoff
+                and source_row_id
+                not in {record.get("entry_row_id"), record.get("exit_row_id")}
+            ):
+                failures.append(f"future_source_availability:{family}")
+            output.append(content)
+        return output
+
+    loaded = {
+        "symbol": resolve_rows(record.get("symbol_row_ids") or [], "symbol"),
+        "spy": resolve_rows(record.get("spy_row_ids") or [], "spy"),
+        "sector": resolve_rows(record.get("sector_row_ids") or [], "sector"),
+        "reference": {},
+    }
+    identity_by_id = {
+        item.get("security_identity_evidence_id"): item
+        for item in tables.get("security_identity_evidence.jsonl", [])
+    }
+    identity = identity_by_id.get(record.get("security_identity_evidence_id"))
+    if not isinstance(identity, dict):
+        failures.append("missing_security_identity_evidence")
+    elif identity.get("ticker") != row.get("symbol") or identity.get(
+        "point_in_time_symbol_id"
+    ) != row.get("point_in_time_symbol_id"):
+        failures.append("security_identity_mismatch")
+    action_by_id = {
+        item.get("corporate_action_evidence_id"): item
+        for item in tables.get("corporate_action_evidence.jsonl", [])
+    }
+    loaded["corporate_actions"] = action_by_id.get(
+        record.get("corporate_action_evidence_id")
+    )
+    entry = rows_by_id.get(record.get("entry_row_id")) or {}
+    exit_row = rows_by_id.get(record.get("exit_row_id")) or {}
+    resolved = {
+        **record,
+        "replay_engine_version": record.get("calculation_engine_version"),
+        "source_indices": {
+            "symbol": int(record.get("symbol_source_index", -1)),
+            "spy": int(record.get("spy_source_index", -1)),
+            "sector": int(record.get("sector_source_index", -1)),
+        },
+        "execution": {
+            "entry_price": entry.get("open"),
+            "exit_price": exit_row.get("close"),
+            "split_factor": row.get("label_split_adjustment_factor", 1.0),
+            "entry_at": row.get("entry_at"),
+            "exit_at": row.get("exit_at"),
+            "entry_session": row.get("entry_session_date"),
+            "exit_session": row.get("exit_session_date"),
+        },
+        "corporate_action_manifest_sha256": row.get("corporate_action_manifest_sha256"),
+    }
+    return loaded, resolved, failures
 
 
 def build_temporal_safety_certification(

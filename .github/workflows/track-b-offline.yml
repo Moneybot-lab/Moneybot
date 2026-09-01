@@ -200,11 +200,16 @@ jobs:
             --decision-log data/decision_events.jsonl \
             --output "$RAW_V4_ROWS" \
             --split-cache data/track_b/corporate_actions/massive_splits.jsonl \
+            --phase0-evidence-dir "$PHASE0_DIR/source_evidence" \
             --limit 50000 \
             --horizon-days 5
           echo "Training-row manifest:"
           test -s "$RAW_V4_ROWS"
           test -s "$RAW_V4_MANIFEST"
+          test -s "$PHASE0_DIR/source_evidence/source_evidence_manifest.json"
+          test -s "$PHASE0_DIR/source_evidence/observation_lineage.jsonl"
+          test -s "$PHASE0_DIR/source_evidence/selected_market_rows.jsonl"
+          test -s "$PHASE0_DIR/source_evidence/corporate_action_evidence.jsonl"
           sed -n '1,200p' "$RAW_V4_MANIFEST"
 
       - name: Validate raw V4 timing and schema
@@ -259,7 +264,7 @@ jobs:
           cp docs/reports/alpha_atlas_v4_feature_registry.json "$PHASE0_DIR/feature_registry.json"
           python3 scripts/verify_alpha_atlas_v4_reconstructability.py \
             --input "$FEATURE_STORE_DIR/all.jsonl" \
-            --root . \
+            --root "$PHASE0_DIR/source_evidence" \
             --output "$PHASE0_DIR/reconstructability_report.json" \
             --certification-output "$PHASE0_DIR/temporal_safety_certification.json"
 

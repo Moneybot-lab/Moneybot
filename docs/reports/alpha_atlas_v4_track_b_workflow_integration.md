@@ -51,3 +51,12 @@ temporal-safety certification. The Phase 0 gate now fails the workflow before ch
 training when reconstruction is missing, partial, stale, or invalid; the unconditional
 artifact-upload step still preserves the failure evidence. A research-pipeline execution
 can no longer be mistaken for Phase 0 certification. V4 remains research-only.
+
+The builder now receives a run-scoped `phase0/source_evidence` directory and must
+write the v1 source manifest plus source-object, selected-row, identity,
+corporate-action, and observation-lineage ledgers before raw validation proceeds.
+The verifier resolves evidence by canonical observation ID, checks the original
+Massive file hashes and completed-session availability, and verifies the full
+feature-store artifact. Missing lineage or evidence-limit breaches fail before
+challenger training, while unconditional upload retains the evidence and failure
+stage.

@@ -7,8 +7,9 @@ import csv
 import gzip
 import hashlib
 import json
+import os
 import re
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -39,6 +40,9 @@ SCHEMA_VERSION = "massive-decision-training-rows.v4"
 EXCHANGE_CALENDAR = ExchangeCalendar()
 DEFAULT_MAX_STALENESS_SESSIONS = 3
 V4_FEATURE_CONTRACT_VERSION = "alpha-atlas-v4-features.v2"
+RECONSTRUCTION_LINEAGE_VERSION = "alpha-atlas-v4-reconstruction-lineage.v1"
+MARKET_AVAILABILITY_POLICY_VERSION = "xnys-completed-daily-bar.v1"
+CALCULATION_ENGINE_VERSION = "massive-v4-feature-replay.v1"
 SECTOR_BENCHMARK_SYMBOLS = {
     "communication services": "XLC",
     "consumer discretionary": "XLY",
@@ -152,6 +156,14 @@ def _path_market_date(path: Path) -> str | None:
     return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _read_market_file(path: Path) -> Iterable[dict[str, Any]]:
     with _iter_text(path) as fh:
         if path.name.endswith(".jsonl") or path.name.endswith(".jsonl.gz"):
@@ -200,7 +212,16 @@ def load_market_history(
             continue
         if path_day and end_date and path_day > end_date:
             continue
-        for row in _read_market_file(path):
+        object_hash = _sha256_file(path)
+        object_size = path.stat().st_size
+        relative_path = path.relative_to(raw_root).as_posix()
+        object_id = (
+            "source_object_"
+            + hashlib.sha256(
+                f"massive\0{relative_path}\0{object_hash}".encode()
+            ).hexdigest()
+        )
+        for ordinal, row in enumerate(_read_market_file(path)):
             symbol = str(row["symbol"]).upper()
             day = str(row["date"])
             if wanted and symbol not in wanted:
@@ -209,6 +230,27 @@ def load_market_history(
                 continue
             if end_date and day > end_date:
                 continue
+            row_content = {
+                key: row.get(key)
+                for key in (
+                    "symbol",
+                    "date",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "available_at",
+                )
+            }
+            row["_source_object_id"] = object_id
+            row["_source_object_sha256"] = object_hash
+            row["_source_relative_path"] = relative_path
+            row["_source_object_size"] = object_size
+            row["_source_row_ordinal"] = ordinal
+            row["_source_raw_row_sha256"] = hashlib.sha256(
+                json.dumps(row_content, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
             by_symbol.setdefault(symbol, {})[day] = row
     return {
         symbol: [rows[day] for day in sorted(rows)]
@@ -217,7 +259,7 @@ def load_market_history(
 
 
 def _market_load_window(
-    events: list[dict[str, Any]], *, horizon_days: int, history_lag_days: int = 70
+    events: list[dict[str, Any]], *, horizon_days: int, history_lag_days: int = 120
 ) -> tuple[set[str], str | None, str | None]:
     symbols: set[str] = set()
     event_days = []
@@ -936,7 +978,6 @@ def build_training_rows_from_raw_market(
             continue
 
         asof = history[idx]
-        raw_asof = raw_history[idx]
         prev1 = history[idx - 1]
         prev5 = history[idx - 5]
         prev10 = history[idx - 10] if idx >= 10 else {}
@@ -1233,6 +1274,7 @@ def build_training_rows_from_raw_market(
             "raw_exit_price": float(future["close"]),
             "adjusted_exit_price": float(future["close"]),
             "symbol": symbol,
+            "sector_benchmark_symbol": sector_benchmark_symbol,
             "endpoint": str(event.get("endpoint") or "unknown"),
             "decision_source": str(event.get("decision_source") or "unknown"),
             "recommendation": normalize_action(event),
@@ -1359,6 +1401,346 @@ def build_training_rows_from_raw_market(
         rows.append(row)
         summary["rows_joined"] += 1
     return rows, summary
+
+
+def _json_sha256(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, default=str, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _write_jsonl_records(path: Path, records: Iterable[dict[str, Any]]) -> str:
+    payload = "".join(
+        json.dumps(record, sort_keys=True, default=str, separators=(",", ":")) + "\n"
+        for record in records
+    )
+    path.write_text(payload, encoding="utf-8")
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _evidence_market_record(bar: dict[str, Any], *, basis: str) -> dict[str, Any]:
+    values = {
+        key: bar.get(key)
+        for key in ("symbol", "date", "open", "high", "low", "close", "volume")
+    }
+    adjustment = {
+        "basis": basis,
+        "split_adjustment_factor": float(bar.get("_split_adjustment_factor", 1.0)),
+        "applicable_split_ids": sorted(bar.get("_applicable_split_ids") or []),
+    }
+    source_row_id = "source_row_" + _json_sha256(
+        {
+            "source_object_id": bar.get("_source_object_id"),
+            "source_raw_row_sha256": bar.get("_source_raw_row_sha256"),
+            "values": values,
+            "adjustment": adjustment,
+        }
+    )
+    session = date.fromisoformat(str(bar["date"]))
+    explicit = _parse_utc_datetime(bar.get("available_at"))
+    availability = (
+        {
+            "kind": "EXPLICIT_PROVIDER_AVAILABILITY",
+            "available_at": explicit.isoformat(),
+        }
+        if explicit
+        else {
+            "kind": "OFFICIAL_SESSION_CLOSE_POLICY",
+            "policy_version": MARKET_AVAILABILITY_POLICY_VERSION,
+            "calendar_contract_version": EXCHANGE_CALENDAR.identifier,
+            "session_date": session.isoformat(),
+        }
+    )
+    return {
+        "source_row_id": source_row_id,
+        "source_object_id": bar.get("_source_object_id"),
+        "source_raw_row_sha256": bar.get("_source_raw_row_sha256"),
+        **values,
+        "adjustment": adjustment,
+        "source_event_timestamp": EXCHANGE_CALENDAR.session_close(session).isoformat(),
+        "source_event_timestamp_semantics": "official_regular_session_close",
+        "availability_evidence": availability,
+        "row_content_sha256": _json_sha256(
+            {"values": values, "adjustment": adjustment}
+        ),
+    }
+
+
+def emit_phase0_evidence_bundle(
+    *,
+    rows: list[dict[str, Any]],
+    market: dict[str, list[dict[str, Any]]],
+    split_events: list[dict[str, Any]],
+    split_cache_path: Path,
+    raw_root: Path,
+    evidence_dir: Path,
+    max_selected_rows: int,
+    max_bundle_bytes: int,
+) -> dict[str, Any]:
+    """Persist compact, deduplicated evidence used by the production V4 builder."""
+    from moneybot.services.alpha_atlas_v4_canonical_observations import (
+        CANONICAL_OBSERVATION_CONTRACT_VERSION,
+        canonical_observation_id,
+    )
+    from moneybot.services.alpha_atlas_v4_phase0 import feature_registry
+
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    source_objects: dict[str, dict[str, Any]] = {}
+    selected: dict[str, dict[str, Any]] = {}
+    identities: dict[str, dict[str, Any]] = {}
+    actions: dict[str, dict[str, Any]] = {}
+    lineages: dict[str, dict[str, Any]] = {}
+    splits_by_symbol = index_splits(split_events)
+    date_indices = _market_date_index(market)
+    split_cache_hash = _sha256_file(split_cache_path)
+
+    def add_window(bars: list[dict[str, Any]]) -> list[str]:
+        ids = []
+        for bar in bars:
+            object_id = str(bar.get("_source_object_id") or "")
+            if not object_id:
+                raise ValueError("market row lacks immutable source-object provenance")
+            source_objects.setdefault(
+                object_id,
+                {
+                    "source_object_id": object_id,
+                    "provider": "Massive",
+                    "dataset_family": "stocks_daily_aggregates",
+                    "relative_source_path": bar["_source_relative_path"],
+                    "sha256": bar["_source_object_sha256"],
+                    "size_bytes": int(bar["_source_object_size"]),
+                    "session_partition": str(bar["date"]),
+                    "schema_type": "normalized_daily_aggregate",
+                },
+            )
+            record = _evidence_market_record(bar, basis="event_time_split_adjusted")
+            selected.setdefault(record["source_row_id"], record)
+            ids.append(record["source_row_id"])
+            if len(selected) > max_selected_rows:
+                raise ValueError("PHASE0_EVIDENCE_BUNDLE_TOO_LARGE:selected_row_limit")
+        return ids
+
+    for row in rows:
+        symbol = str(row["symbol"])
+        cutoff = datetime.fromisoformat(str(row["feature_cutoff_at"]))
+        market_session = date.fromisoformat(str(row["market_session_date"]))
+        feature_day = str(row["feature_market_asof_date"])
+        symbol_raw = market[symbol]
+        symbol_idx = date_indices[symbol].index(feature_day)
+        symbol_history = adjust_bars_to_asof(
+            symbol_raw,
+            _feature_safe_splits(
+                splits_by_symbol.get(symbol, []), cutoff, market_session
+            ),
+            feature_day,
+        )
+        spy_raw = market["SPY"]
+        spy_idx = bisect.bisect_right(date_indices["SPY"], feature_day) - 1
+        spy_history = adjust_bars_to_asof(
+            spy_raw,
+            _feature_safe_splits(
+                splits_by_symbol.get("SPY", []), cutoff, market_session
+            ),
+            str(spy_raw[spy_idx]["date"]),
+        )
+        sector_symbol = str(row.get("sector_benchmark_symbol") or "SPY")
+        sector_raw = market[sector_symbol]
+        sector_idx = bisect.bisect_right(date_indices[sector_symbol], feature_day) - 1
+        sector_history = adjust_bars_to_asof(
+            sector_raw,
+            _feature_safe_splits(
+                splits_by_symbol.get(sector_symbol, []), cutoff, market_session
+            ),
+            str(sector_raw[sector_idx]["date"]),
+        )
+        entry_idx = date_indices[symbol].index(str(row["entry_session_date"]))
+        exit_idx = date_indices[symbol].index(str(row["exit_session_date"]))
+        symbol_ids = add_window(symbol_history[: symbol_idx + 1])
+        spy_ids = add_window(spy_history[: spy_idx + 1])
+        sector_ids = add_window(sector_history[: sector_idx + 1])
+        entry_id = add_window([symbol_raw[entry_idx]])[0]
+        exit_id = add_window([symbol_raw[exit_idx]])[0]
+
+        identity_id = "identity_" + _json_sha256(
+            {
+                "ticker": symbol,
+                "decision_at": row["decision_at"],
+                "decision_id": row["decision_id"],
+                "point_in_time_symbol_id": row["point_in_time_symbol_id"],
+            }
+        )
+        identities.setdefault(
+            identity_id,
+            {
+                "security_identity_evidence_id": identity_id,
+                "evidence_class": "REQUEST_EVENT_IDENTITY",
+                "ticker": symbol,
+                "decision_at": row["decision_at"],
+                "source": "immutable_decision_event",
+                "source_record_sha256": _json_sha256(
+                    {
+                        "decision_id": row["decision_id"],
+                        "ticker": symbol,
+                        "decision_at": row["decision_at"],
+                    }
+                ),
+                "point_in_time_symbol_id": row["point_in_time_symbol_id"],
+                "historical_universe_certification_eligible": False,
+            },
+        )
+        relevant_ids = sorted(
+            set(
+                (row.get("feature_split_ids") or [])
+                + (row.get("label_split_ids") or [])
+            )
+        )
+        relevant = [
+            item
+            for item in splits_by_symbol.get(symbol, [])
+            if str(item.get("id")) in relevant_ids
+        ]
+        action_id = "corporate_actions_" + _json_sha256(
+            {
+                "symbol": symbol,
+                "source_sha256": split_cache_hash,
+                "action_ids": relevant_ids,
+            }
+        )
+        actions.setdefault(
+            action_id,
+            {
+                "corporate_action_evidence_id": action_id,
+                "symbol": symbol,
+                "inspected_source_label": split_cache_path.name,
+                "inspected_source_sha256": split_cache_hash,
+                "disposition": (
+                    "RELEVANT_ACTIONS_RECORDED"
+                    if relevant
+                    else "NO_RELEVANT_ACTION_IN_INSPECTED_SOURCE"
+                ),
+                "actions": relevant,
+            },
+        )
+        canonical_id = canonical_observation_id(row)
+        lineage_id = "lineage_" + _json_sha256(
+            {
+                "canonical_observation_id": canonical_id,
+                "symbol_row_ids": symbol_ids,
+                "entry_row_id": entry_id,
+                "exit_row_id": exit_id,
+            }
+        )
+        lineage_record = {
+            "lineage_id": lineage_id,
+            "canonical_observation_id": canonical_id,
+            "security_identity_evidence_id": identity_id,
+            "symbol": symbol,
+            "symbol_row_ids": symbol_ids,
+            "symbol_source_index": len(symbol_ids) - 1,
+            "spy_row_ids": spy_ids,
+            "spy_source_index": len(spy_ids) - 1,
+            "sector_symbol": sector_symbol,
+            "sector_row_ids": sector_ids,
+            "sector_source_index": len(sector_ids) - 1,
+            "entry_row_id": entry_id,
+            "exit_5_row_id": (
+                exit_id if int(row["label_horizon_sessions"]) == 5 else None
+            ),
+            "exit_10_row_id": (
+                exit_id if int(row["label_horizon_sessions"]) == 10 else None
+            ),
+            "exit_row_id": exit_id,
+            "corporate_action_evidence_id": action_id,
+            "feature_contract_version": V4_FEATURE_CONTRACT_VERSION,
+            "timing_contract_version": ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
+            "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
+            "calendar_contract_version": EXCHANGE_CALENDAR.identifier,
+            "calculation_engine_version": CALCULATION_ENGINE_VERSION,
+            "feature_registry_sha256": feature_registry()["registry_sha256"],
+        }
+        lineages.setdefault(lineage_id, lineage_record)
+        row["reconstruction_lineage"] = {
+            "schema_version": RECONSTRUCTION_LINEAGE_VERSION,
+            "evidence_manifest_path": "source_evidence_manifest.json",
+            "lineage_id": lineage_id,
+        }
+
+    files = {
+        "source_objects.jsonl": sorted(
+            source_objects.values(), key=lambda item: item["source_object_id"]
+        ),
+        "selected_market_rows.jsonl": sorted(
+            selected.values(), key=lambda item: item["source_row_id"]
+        ),
+        "corporate_action_evidence.jsonl": sorted(
+            actions.values(), key=lambda item: item["corporate_action_evidence_id"]
+        ),
+        "security_identity_evidence.jsonl": sorted(
+            identities.values(), key=lambda item: item["security_identity_evidence_id"]
+        ),
+        "observation_lineage.jsonl": sorted(
+            lineages.values(), key=lambda item: item["lineage_id"]
+        ),
+    }
+    file_entries = {}
+    for name, records in files.items():
+        digest = _write_jsonl_records(evidence_dir / name, records)
+        file_entries[name] = {
+            "sha256": digest,
+            "records": len(records),
+            "size_bytes": (evidence_dir / name).stat().st_size,
+        }
+    manifest = {
+        "schema_version": RECONSTRUCTION_LINEAGE_VERSION,
+        "availability_policy_version": MARKET_AVAILABILITY_POLICY_VERSION,
+        "feature_contract_version": V4_FEATURE_CONTRACT_VERSION,
+        "timing_contract_version": ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
+        "source_root_relative_path": os.path.relpath(
+            raw_root.resolve(), evidence_dir.resolve()
+        ),
+        "corporate_action_source_relative_path": os.path.relpath(
+            split_cache_path.resolve(), evidence_dir.resolve()
+        ),
+        "corporate_action_source_sha256": split_cache_hash,
+        "files": file_entries,
+        "metrics": {
+            "unique_source_objects": len(source_objects),
+            "selected_source_rows": len(selected),
+            "raw_request_observations": len(rows),
+            "canonical_economic_observations": len(lineages),
+        },
+    }
+    manifest_path = evidence_dir / "source_evidence_manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    manifest_hash = _sha256_file(manifest_path)
+    for row in rows:
+        row["reconstruction_lineage"]["source_evidence_manifest_sha256"] = manifest_hash
+    for _ in range(4):
+        bundle_bytes = sum(
+            path.stat().st_size for path in evidence_dir.iterdir() if path.is_file()
+        )
+        metrics = {
+            "evidence_bundle_bytes": bundle_bytes,
+            "average_bytes_per_observation": round(bundle_bytes / max(1, len(rows)), 3),
+        }
+        if all(manifest["metrics"].get(key) == value for key, value in metrics.items()):
+            break
+        manifest["metrics"].update(metrics)
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    bundle_bytes = sum(
+        path.stat().st_size for path in evidence_dir.iterdir() if path.is_file()
+    )
+    if bundle_bytes > max_bundle_bytes:
+        raise ValueError("PHASE0_EVIDENCE_BUNDLE_TOO_LARGE:byte_limit")
+    final_hash = _sha256_file(manifest_path)
+    for row in rows:
+        row["reconstruction_lineage"]["source_evidence_manifest_sha256"] = final_hash
+    manifest["manifest_sha256"] = final_hash
+    return manifest
 
 
 def write_rows(
@@ -1494,6 +1876,9 @@ def main() -> None:
     parser.add_argument(
         "--split-cache", default="data/track_b/corporate_actions/massive_splits.jsonl"
     )
+    parser.add_argument("--phase0-evidence-dir")
+    parser.add_argument("--phase0-max-selected-rows", type=int, default=2_000_000)
+    parser.add_argument("--phase0-max-evidence-bytes", type=int, default=1_073_741_824)
     args = parser.parse_args()
     decision_log = Path(args.decision_log)
     events = read_decision_events(decision_log, limit=max(1, args.limit))
@@ -1539,6 +1924,21 @@ def main() -> None:
     )
     metadata_hash = split_source_hash(split_events)
     output_path = Path(args.output)
+    if args.phase0_evidence_dir:
+        evidence_manifest = emit_phase0_evidence_bundle(
+            rows=rows,
+            market=market,
+            split_events=split_events,
+            split_cache_path=Path(args.split_cache),
+            raw_root=raw_root,
+            evidence_dir=Path(args.phase0_evidence_dir),
+            max_selected_rows=max(1, args.phase0_max_selected_rows),
+            max_bundle_bytes=max(1, args.phase0_max_evidence_bytes),
+        )
+        summary["phase0_evidence"] = evidence_manifest["metrics"]
+        summary["reconstruction_lineage_contract_version"] = (
+            RECONSTRUCTION_LINEAGE_VERSION
+        )
     manifest = write_rows(
         output_path,
         rows,

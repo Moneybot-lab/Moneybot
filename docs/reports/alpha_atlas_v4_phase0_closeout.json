@@ -1,18 +1,18 @@
 {
   "checklist": {
-    "0.1_frozen_benchmark": "BLOCKED",
+    "0.1_frozen_benchmark": "BLOCKED_RECOVERY_WORKFLOW_REQUIRED",
     "0.2_prediction_execution_clock": "PASS_REPOSITORY_TEST_EVIDENCE",
     "0.3_daily_context_cutoff": "PASS_REPOSITORY_TEST_EVIDENCE",
     "0.3_fit_only_filling": "PASS_IMPLEMENTATION_AND_SYNTHETIC_TEST_EVIDENCE",
     "0.4_adversarial_leakage_tests": "PASS_REPOSITORY_TEST_EVIDENCE",
     "0.5_canonical_observations": "PASS_REPOSITORY_TEST_EVIDENCE",
-    "exit_1_all_training_rows_timestamp_invariant": "BLOCKED_NO_CURRENT_ARTIFACT_CERTIFICATION",
+    "exit_1_all_training_rows_timestamp_invariant": "BLOCKED_POST_LINEAGE_HOSTED_RUN_REQUIRED",
     "exit_2_same_day_close_tests": "PASS",
     "exit_3_duplicates_canonicalized": "PASS",
-    "exit_4_every_feature_label_reconstructable": "BLOCKED_MISSING_IMMUTABLE_SOURCE_LINEAGE",
+    "exit_4_every_feature_label_reconstructable": "PASS_LOCAL_PRODUCTION_PATH_FIXTURE;BLOCKED_HOSTED_EVIDENCE",
     "exit_5_no_unsupported_manifest_claim": "PASS_FOR_NEW_V4_MANIFESTS"
   },
-  "executive_result": "PHASE_0_BLOCKED",
+  "executive_result": "PHASE_0_BLOCKED_HOSTED_RUN_REQUIRED",
   "feature_reconciliation": {
     "feature_store_columns": 48,
     "model_inputs": 43,
@@ -32,7 +32,29 @@
     "status": "PASS_IMPLEMENTATION_AND_SYNTHETIC_EVIDENCE"
   },
   "generated_at_utc": "2026-08-31T00:00:00+00:00",
-  "next_permitted_step": "Persist immutable source row/object and corporate-action lineage, obtain run #156/#157 artifacts, then rerun Phase 0 certification. Phase 1/backfill and Phase 2 modeling remain prohibited.",
+  "hosted_certification": {
+    "artifact_sha256": null,
+    "rows_checked": 0,
+    "status": "BLOCKED_POST_LINEAGE_HOSTED_RUN_REQUIRED"
+  },
+  "implementation_readiness": {
+    "builder_emits_certifiable_lineage": true,
+    "lineage_contract_version": "alpha-atlas-v4-reconstruction-lineage.v1",
+    "production_path_fixture_certified": true
+  },
+  "local_production_path_fixture": {
+    "artifact_sha256": "4b78eaad72d1ba65d36160b59e9d285f7c77d85ea47336a6074ff078f26ff157",
+    "canonical_economic_observations": 36,
+    "certification_status": "VERIFIED_FOR_THIS_ARTIFACT",
+    "cleaned_feature_store_observations": 34,
+    "evidence_bundle_bytes": 816005,
+    "failure_count": 0,
+    "raw_request_observations": 36,
+    "rows_checked": 34,
+    "selected_source_rows": 229,
+    "source_objects": 3
+  },
+  "next_permitted_step": "After merge, run exactly Recover V3.1 Benchmark Evidence and Track B Offline Challenger; inspect compact benchmark recovery and full-artifact Phase 0 evidence. Phase 1 remains prohibited.",
   "reconstructability": {
     "adversarial_failure_classes_tested": [
       "corporate_action_mismatch",
@@ -53,10 +75,10 @@
       "ticker_identity_mismatch"
     ],
     "failed": 0,
-    "observations_tested": 0,
-    "reason": "No hosted Track B artifact or immutable per-family source-object lineage is available in the checkout; existing V4 rows do not persist reconstruction_lineage.",
-    "reconstructable": 0,
-    "status": "BLOCKED",
+    "observations_tested": 34,
+    "reason": "The production builder now emits hash-bound normalized lineage and the local production-path fixture fully certifies; no post-lineage hosted artifact has yet been certified.",
+    "reconstructable": 34,
+    "status": "PASS_LOCAL_PRODUCTION_PATH_FIXTURE;BLOCKED_HOSTED_EVIDENCE",
     "synthetic_failed": 0,
     "synthetic_observations_tested": 1,
     "synthetic_reconstructable": 1
@@ -71,13 +93,13 @@
     "v3_behavior_changed": false
   },
   "schema_version": "alpha-atlas-v4-phase0-closeout.v1",
-  "starting_commit": "c5812e70ac237a20328b2be5d3ea5c6ba2777bc9",
+  "starting_commit": "e3ba5eb4e42bfa0182dd3686f8338b6bd4744f3b",
   "temporal_safety_certification": {
     "artifact_sha256": null,
-    "failures": null,
-    "reason": "No concrete current V4 artifact with complete reconstruction lineage is available for certification. Legacy leakage_safe booleans are insufficient.",
-    "rows_checked": 0,
-    "status": "NOT_EVALUATED"
+    "failures": 0,
+    "reason": "A production-builder fixture received full exact-artifact certification. Phase 0 still requires a real hosted Track B artifact hash.",
+    "rows_checked": 34,
+    "status": "VERIFIED_LOCAL_FIXTURE_ONLY;HOSTED_NOT_EVALUATED"
   },
   "v31_benchmark": {
     "automatic_promotion": false,
@@ -86,7 +108,7 @@
     "metadata_sha256": null,
     "model_sha256": null,
     "ready_for_live_routing": false,
-    "runs_156_157": "UNVERIFIED_EXTERNAL_ARTIFACT",
-    "status": "BLOCKED_EXTERNAL_EVIDENCE"
+    "runs_156_157": "RECOVERY_WORKFLOW_REQUIRED",
+    "status": "BLOCKED_RECOVERY_WORKFLOW_REQUIRED"
   }
 }
