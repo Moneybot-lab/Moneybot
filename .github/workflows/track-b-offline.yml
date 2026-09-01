@@ -195,12 +195,13 @@ jobs:
         run: |
           set -euo pipefail
           echo "TRACK_B_FAILED_STAGE=build_raw" >> "$GITHUB_ENV"
-          timeout 600 python3 scripts/build_massive_decision_training_rows.py \
+          timeout 1800 python3 scripts/build_massive_decision_training_rows.py \
             --raw-root data/raw/massive_flatfiles \
             --decision-log data/decision_events.jsonl \
             --output "$RAW_V4_ROWS" \
             --split-cache data/track_b/corporate_actions/massive_splits.jsonl \
             --phase0-evidence-dir "$PHASE0_DIR/source_evidence" \
+            --performance-output "$TRACK_B_RUN_DIR/builder_performance.json" \
             --limit 50000 \
             --horizon-days 5
           echo "Training-row manifest:"
@@ -422,6 +423,7 @@ jobs:
             ${{ env.PHASE0_DIR }}/**
             ${{ env.TRACK_B_ARTIFACT_DIR }}/challenger_suite/feature_fill_policy.json
             ${{ env.TRACK_B_RUN_DIR }}/track_b_failure_summary.json
+            ${{ env.TRACK_B_RUN_DIR }}/builder_performance.json
             data/track_b/**
             ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v3/**
             ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v3/candidate_alpha_atlas_v3_clean.json

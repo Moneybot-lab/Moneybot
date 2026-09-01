@@ -130,6 +130,8 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
             str(split_cache),
             "--phase0-evidence-dir",
             str(phase0_dir / "source_evidence"),
+            "--performance-output",
+            str(phase0_dir / "builder_performance.json"),
         ],
         cwd=repo,
     )
@@ -173,20 +175,24 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
         ],
         cwd=repo,
     )
-    assert "Stale unadjusted Massive training snapshot" in rejected.stderr
-    assert not (tmp_path / "must_not_clean_raw" / "cleaned_all.jsonl").exists()
+    canonical_rows = canonical_dir / "canonical_observations.jsonl"
     _run(
         [
             sys.executable,
-            "scripts/canonicalize_alpha_atlas_v4_rows.py",
+            "scripts/clean_training_snapshot.py",
             "--input",
-            str(training_rows),
+            str(canonical_rows),
             "--output-dir",
-            str(canonical_dir),
+            str(quality_dir),
+            "--max-market-lag-days",
+            "3",
+            "--train-ratio",
+            "0.8",
         ],
         cwd=repo,
     )
-    canonical_rows = canonical_dir / "canonical_observations.jsonl"
+    assert "Stale unadjusted Massive training snapshot" in rejected.stderr
+    assert not (tmp_path / "must_not_clean_raw" / "cleaned_all.jsonl").exists()
     _run(
         [
             sys.executable,
@@ -273,6 +279,7 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     certification = json.loads(
         (phase0_dir / "temporal_safety_certification.json").read_text()
     )
+    performance = json.loads((phase0_dir / "builder_performance.json").read_text())
     assert (
         evidence_manifest["schema_version"]
         == "alpha-atlas-v4-reconstruction-lineage.v1"
@@ -286,6 +293,29 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     assert evidence_manifest["metrics"]["canonical_economic_observations"] == 36
     assert certification["status"] == "VERIFIED_FOR_THIS_ARTIFACT"
     assert certification["rows_checked"] == certification["rows_total"]
+    assert performance["status"] == "COMPLETED"
+    assert performance["counters"]["source_objects_hashed"] == 3
+    assert performance["counters"]["source_files_parsed"] == 3
+    assert performance["counters"]["decision_events_loaded"] == 36
+    assert {
+        "decision_log_loading",
+        "source_file_discovery",
+        "source_object_hashing",
+        "massive_daily_file_parsing",
+        "decision_log_indexing",
+        "market_history_indexing",
+        "corporate_action_loading_and_indexing",
+        "feature_construction",
+        "source_window_selection",
+        "source_row_identity_generation",
+        "security_identity_evidence",
+        "corporate_action_evidence",
+        "lineage_accumulation_and_deduplication",
+        "evidence_serialization",
+        "raw_observation_serialization",
+        "manifest_hashing",
+        "manifest_finalization",
+    }.issubset(performance["stage_seconds"])
     assert quality_report["training_ready"] is True
     assert quality_report["evaluation_ready"] is True
     assert (quality_dir / "cleaned_train.jsonl").exists()
@@ -347,6 +377,9 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
         cwd=repo,
     )
     assert "PHASE0_EVIDENCE_BUNDLE_TOO_LARGE:selected_row_limit" in oversized.stderr
+    assert not (tmp_path / "guarded/raw.jsonl").exists()
+    assert not (tmp_path / "guarded/raw.jsonl.manifest.json").exists()
+    assert not (tmp_path / "guarded/evidence").exists()
     assert canonical_diagnostics["raw_request_rows"] >= 30
     assert canonical_diagnostics["canonical_observations"] >= 30
     assert (

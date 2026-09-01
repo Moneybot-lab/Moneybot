@@ -9,6 +9,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import sys
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -57,6 +60,49 @@ SECTOR_BENCHMARK_SYMBOLS = {
     "technology": "XLK",
     "utilities": "XLU",
 }
+
+
+class BuildTelemetry:
+    """Operational timings/counters excluded from all deterministic identities."""
+
+    def __init__(self, output: Path | None = None):
+        self.started = time.perf_counter()
+        self.output = output
+        self.stages: dict[str, float] = {}
+        self.counters: dict[str, int] = {}
+
+    def add(self, stage: str, duration: float) -> None:
+        self.stages[stage] = self.stages.get(stage, 0.0) + duration
+
+    def count(self, name: str, amount: int = 1) -> None:
+        self.counters[name] = self.counters.get(name, 0) + amount
+
+    def progress(self, phase: str, **values: Any) -> None:
+        fields = " ".join(f"{key}={value}" for key, value in sorted(values.items()))
+        print(
+            f"phase={phase} {fields} elapsed={time.perf_counter() - self.started:.3f}",
+            file=sys.stderr,
+            flush=True,
+        )
+        self.flush(status="RUNNING", phase=phase)
+
+    def flush(self, *, status: str, phase: str) -> None:
+        if self.output is None:
+            return
+        payload = {
+            "schema_version": "alpha-atlas-v4-builder-performance.v1",
+            "status": status,
+            "phase": phase,
+            "elapsed_seconds": round(time.perf_counter() - self.started, 6),
+            "stage_seconds": {
+                key: round(value, 6) for key, value in sorted(self.stages.items())
+            },
+            "counters": dict(sorted(self.counters.items())),
+        }
+        self.output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.output.with_suffix(self.output.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        temporary.replace(self.output)
 
 
 def _iter_text(path: Path):
@@ -190,6 +236,7 @@ def load_market_history(
     symbols: set[str] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    telemetry: BuildTelemetry | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     wanted = {
         str(symbol).strip().upper()
@@ -197,7 +244,11 @@ def load_market_history(
         if str(symbol).strip()
     }
     by_symbol: dict[str, dict[str, dict[str, Any]]] = {}
-    for path in sorted(raw_root.rglob("*")):
+    discovery_started = time.perf_counter()
+    paths = sorted(raw_root.rglob("*"))
+    if telemetry:
+        telemetry.add("source_file_discovery", time.perf_counter() - discovery_started)
+    for path in paths:
         if not path.is_file() or path.name.startswith("_"):
             continue
         if not (
@@ -212,7 +263,13 @@ def load_market_history(
             continue
         if path_day and end_date and path_day > end_date:
             continue
+        hashing_started = time.perf_counter()
         object_hash = _sha256_file(path)
+        if telemetry:
+            telemetry.add(
+                "source_object_hashing", time.perf_counter() - hashing_started
+            )
+            telemetry.count("source_objects_hashed")
         object_size = path.stat().st_size
         relative_path = path.relative_to(raw_root).as_posix()
         object_id = (
@@ -221,6 +278,7 @@ def load_market_history(
                 f"massive\0{relative_path}\0{object_hash}".encode()
             ).hexdigest()
         )
+        parsing_started = time.perf_counter()
         for ordinal, row in enumerate(_read_market_file(path)):
             symbol = str(row["symbol"]).upper()
             day = str(row["date"])
@@ -252,6 +310,16 @@ def load_market_history(
                 json.dumps(row_content, sort_keys=True, separators=(",", ":")).encode()
             ).hexdigest()
             by_symbol.setdefault(symbol, {})[day] = row
+        if telemetry:
+            telemetry.add(
+                "massive_daily_file_parsing", time.perf_counter() - parsing_started
+            )
+            telemetry.count("source_files_parsed")
+    if telemetry:
+        telemetry.progress(
+            "market_load",
+            source_objects=telemetry.counters.get("source_objects_hashed", 0),
+        )
     return {
         symbol: [rows[day] for day in sorted(rows)]
         for symbol, rows in by_symbol.items()
@@ -838,6 +906,7 @@ def build_training_rows_from_raw_market(
     horizon_days: int = 5,
     split_events: list[dict[str, Any]] | None = None,
     max_staleness_sessions: int = DEFAULT_MAX_STALENESS_SESSIONS,
+    telemetry: BuildTelemetry | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     label_name = (
         TARGET_NAME
@@ -870,12 +939,54 @@ def build_training_rows_from_raw_market(
         "affected_label_rows": 0,
         "split_provenance": [],
     }
+    indexing_started = time.perf_counter()
     signal_index = _signal_history_index(events)
+    if telemetry:
+        telemetry.add("decision_log_indexing", time.perf_counter() - indexing_started)
+    indexing_started = time.perf_counter()
     date_index = _market_date_index(market)
+    if telemetry:
+        telemetry.add("market_history_indexing", time.perf_counter() - indexing_started)
     feature_cache: dict[tuple[str, int], dict[str, Any]] = {}
+    adjusted_history_cache: dict[
+        tuple[str, str, tuple[str, ...]], list[dict[str, Any]]
+    ] = {}
     event_identity_counts: dict[str, int] = {}
+
+    def adjusted_history(
+        symbol: str,
+        raw: list[dict[str, Any]],
+        safe_splits: list[dict[str, Any]],
+        asof_day: str,
+    ) -> list[dict[str, Any]]:
+        key = (
+            symbol,
+            asof_day,
+            tuple(sorted(str(item.get("id") or "") for item in safe_splits)),
+        )
+        cached = adjusted_history_cache.get(key)
+        if cached is None:
+            started = time.perf_counter()
+            cached = adjust_bars_to_asof(raw, safe_splits, asof_day, audit=summary)
+            adjusted_history_cache[key] = cached
+            if telemetry:
+                telemetry.add(
+                    "split_adjusted_history_preparation", time.perf_counter() - started
+                )
+                telemetry.count("split_adjusted_history_cache_misses")
+        elif telemetry:
+            telemetry.count("split_adjusted_history_cache_hits")
+        return cached
+
+    observations_started = time.perf_counter()
     for event in events:
         summary["events_scanned"] += 1
+        if telemetry and summary["events_scanned"] % 5000 == 0:
+            telemetry.progress(
+                "build",
+                observations_processed=summary["events_scanned"],
+                observations_emitted=summary["rows_joined"],
+            )
         symbol = str(event.get("symbol") or "").strip().upper()
         ts = normalize_unix_ts(event.get("ts"))
         if not symbol or ts is None or symbol not in market:
@@ -921,9 +1032,7 @@ def build_training_rows_from_raw_market(
         feature_splits = _feature_safe_splits(
             splits_by_symbol.get(symbol, []), decision_at, market_session
         )
-        history = adjust_bars_to_asof(
-            raw_history, feature_splits, feature_day, audit=summary
-        )
+        history = adjusted_history(symbol, raw_history, feature_splits, feature_day)
         raw_spy_history = market.get("SPY")
         context_required = True
         if context_required and raw_spy_history is None:
@@ -945,13 +1054,13 @@ def build_training_rows_from_raw_market(
                     summary["rejected_unproven_availability"] += 1
                 continue
         spy_history = (
-            adjust_bars_to_asof(
+            adjusted_history(
+                "SPY",
                 raw_spy_history,
                 _feature_safe_splits(
                     splits_by_symbol.get("SPY", []), decision_at, market_session
                 ),
                 str(raw_spy_history[spy_idx]["date"]),
-                audit=summary,
             )
             if raw_spy_history
             else None
@@ -1043,6 +1152,7 @@ def build_training_rows_from_raw_market(
         cache_key = (symbol, idx, event_day)
         cached_features = feature_cache.get(cache_key)
         if cached_features is None:
+            feature_started = time.perf_counter()
             sma_10_cached = _rolling_close_mean(history, idx, 10)
             sma_20_cached = _rolling_close_mean(history, idx, 20)
             sma_50_cached = _rolling_close_mean(history, idx, 50)
@@ -1085,6 +1195,13 @@ def build_training_rows_from_raw_market(
                 "vwap_slope": _vwap_slope(history, idx, 10, 20),
             }
             feature_cache[cache_key] = cached_features
+            if telemetry:
+                telemetry.add(
+                    "feature_construction", time.perf_counter() - feature_started
+                )
+                telemetry.count("feature_cache_misses")
+        elif telemetry:
+            telemetry.count("feature_cache_hits")
         sma_10 = cached_features["sma_10"]
         sma_20 = cached_features["sma_20"]
         sma_50 = cached_features["sma_50"]
@@ -1137,7 +1254,8 @@ def build_training_rows_from_raw_market(
             sector_idx = spy_idx
             sector_available_at = spy_available_at
         sector_history = (
-            adjust_bars_to_asof(
+            adjusted_history(
+                sector_benchmark_symbol,
                 raw_sector_history,
                 _feature_safe_splits(
                     splits_by_symbol.get(sector_benchmark_symbol, []),
@@ -1145,7 +1263,6 @@ def build_training_rows_from_raw_market(
                     market_session,
                 ),
                 str(raw_sector_history[sector_idx]["date"]),
-                audit=summary,
             )
             if raw_sector_history
             else None
@@ -1400,6 +1517,13 @@ def build_training_rows_from_raw_market(
         row.update(shared_v3_features)
         rows.append(row)
         summary["rows_joined"] += 1
+    if telemetry:
+        telemetry.add(
+            "observation_and_feature_construction",
+            time.perf_counter() - observations_started,
+        )
+        telemetry.count("observations_processed", summary["events_scanned"])
+        telemetry.count("observations_emitted", summary["rows_joined"])
     return rows, summary
 
 
@@ -1476,6 +1600,7 @@ def emit_phase0_evidence_bundle(
     evidence_dir: Path,
     max_selected_rows: int,
     max_bundle_bytes: int,
+    telemetry: BuildTelemetry | None = None,
 ) -> dict[str, Any]:
     """Persist compact, deduplicated evidence used by the production V4 builder."""
     from moneybot.services.alpha_atlas_v4_canonical_observations import (
@@ -1492,7 +1617,39 @@ def emit_phase0_evidence_bundle(
     lineages: dict[str, dict[str, Any]] = {}
     splits_by_symbol = index_splits(split_events)
     date_indices = _market_date_index(market)
+    positions = {
+        symbol: {day: index for index, day in enumerate(days)}
+        for symbol, days in date_indices.items()
+    }
     split_cache_hash = _sha256_file(split_cache_path)
+    adjusted_cache: dict[tuple[str, str, tuple[str, ...]], list[dict[str, Any]]] = {}
+    window_cache: dict[tuple[str, int, tuple[str, ...]], list[str]] = {}
+    market_record_cache: dict[tuple[str, float, tuple[str, ...]], dict[str, Any]] = {}
+    canonical_lineage_refs: dict[str, dict[str, Any]] = {}
+    registry_hash = feature_registry()["registry_sha256"]
+
+    def adjusted(
+        symbol: str,
+        raw: list[dict[str, Any]],
+        safe_splits: list[dict[str, Any]],
+        asof_day: str,
+    ) -> tuple[list[dict[str, Any]], tuple[str, ...]]:
+        split_ids = tuple(sorted(str(item.get("id") or "") for item in safe_splits))
+        key = (symbol, asof_day, split_ids)
+        history = adjusted_cache.get(key)
+        if history is None:
+            started = time.perf_counter()
+            history = adjust_bars_to_asof(raw, safe_splits, asof_day)
+            adjusted_cache[key] = history
+            if telemetry:
+                telemetry.add(
+                    "lineage_split_adjusted_history_preparation",
+                    time.perf_counter() - started,
+                )
+                telemetry.count("lineage_adjusted_history_cache_misses")
+        elif telemetry:
+            telemetry.count("lineage_adjusted_history_cache_hits")
+        return history, split_ids
 
     def add_window(bars: list[dict[str, Any]]) -> list[str]:
         ids = []
@@ -1513,21 +1670,53 @@ def emit_phase0_evidence_bundle(
                     "schema_type": "normalized_daily_aggregate",
                 },
             )
-            record = _evidence_market_record(bar, basis="event_time_split_adjusted")
+            record_key = (
+                str(bar.get("_source_raw_row_sha256") or ""),
+                float(bar.get("_split_adjustment_factor", 1.0)),
+                tuple(sorted(bar.get("_applicable_split_ids") or [])),
+            )
+            record = market_record_cache.get(record_key)
+            if record is None:
+                identity_started = time.perf_counter()
+                record = _evidence_market_record(bar, basis="event_time_split_adjusted")
+                market_record_cache[record_key] = record
+                if telemetry:
+                    telemetry.add(
+                        "source_row_identity_generation",
+                        time.perf_counter() - identity_started,
+                    )
+                    telemetry.count("selected_row_identities_computed")
+            elif telemetry:
+                telemetry.count("selected_row_identity_cache_hits")
             selected.setdefault(record["source_row_id"], record)
             ids.append(record["source_row_id"])
             if len(selected) > max_selected_rows:
                 raise ValueError("PHASE0_EVIDENCE_BUNDLE_TOO_LARGE:selected_row_limit")
         return ids
 
-    for row in rows:
+    lineage_started = time.perf_counter()
+    for row_number, row in enumerate(rows, 1):
+        canonical_id = canonical_observation_id(row)
+        reused = canonical_lineage_refs.get(canonical_id)
+        if reused is not None:
+            row["reconstruction_lineage"] = dict(reused)
+            if telemetry:
+                telemetry.count("duplicate_observation_lineage_reused")
+            continue
+        if telemetry and row_number % 5000 == 0:
+            telemetry.progress(
+                "lineage",
+                observations_processed=row_number,
+                selected_rows=len(selected),
+            )
         symbol = str(row["symbol"])
         cutoff = datetime.fromisoformat(str(row["feature_cutoff_at"]))
         market_session = date.fromisoformat(str(row["market_session_date"]))
         feature_day = str(row["feature_market_asof_date"])
         symbol_raw = market[symbol]
-        symbol_idx = date_indices[symbol].index(feature_day)
-        symbol_history = adjust_bars_to_asof(
+        symbol_idx = positions[symbol][feature_day]
+        symbol_history, symbol_split_ids = adjusted(
+            symbol,
             symbol_raw,
             _feature_safe_splits(
                 splits_by_symbol.get(symbol, []), cutoff, market_session
@@ -1536,7 +1725,8 @@ def emit_phase0_evidence_bundle(
         )
         spy_raw = market["SPY"]
         spy_idx = bisect.bisect_right(date_indices["SPY"], feature_day) - 1
-        spy_history = adjust_bars_to_asof(
+        spy_history, spy_split_ids = adjusted(
+            "SPY",
             spy_raw,
             _feature_safe_splits(
                 splits_by_symbol.get("SPY", []), cutoff, market_session
@@ -1546,21 +1736,47 @@ def emit_phase0_evidence_bundle(
         sector_symbol = str(row.get("sector_benchmark_symbol") or "SPY")
         sector_raw = market[sector_symbol]
         sector_idx = bisect.bisect_right(date_indices[sector_symbol], feature_day) - 1
-        sector_history = adjust_bars_to_asof(
+        sector_history, sector_split_ids = adjusted(
+            sector_symbol,
             sector_raw,
             _feature_safe_splits(
                 splits_by_symbol.get(sector_symbol, []), cutoff, market_session
             ),
             str(sector_raw[sector_idx]["date"]),
         )
-        entry_idx = date_indices[symbol].index(str(row["entry_session_date"]))
-        exit_idx = date_indices[symbol].index(str(row["exit_session_date"]))
-        symbol_ids = add_window(symbol_history[: symbol_idx + 1])
-        spy_ids = add_window(spy_history[: spy_idx + 1])
-        sector_ids = add_window(sector_history[: sector_idx + 1])
+        entry_idx = positions[symbol][str(row["entry_session_date"])]
+        exit_idx = positions[symbol][str(row["exit_session_date"])]
+
+        def window_ids(
+            key: tuple[str, int, tuple[str, ...]],
+            history: list[dict[str, Any]],
+            idx: int,
+        ) -> list[str]:
+            cached_ids = window_cache.get(key)
+            if cached_ids is None:
+                started = time.perf_counter()
+                cached_ids = add_window(history[: idx + 1])
+                window_cache[key] = cached_ids
+                if telemetry:
+                    telemetry.add(
+                        "source_window_selection", time.perf_counter() - started
+                    )
+                    telemetry.count("source_window_cache_misses")
+            elif telemetry:
+                telemetry.count("source_window_cache_hits")
+            return cached_ids
+
+        symbol_ids = window_ids(
+            (symbol, symbol_idx, symbol_split_ids), symbol_history, symbol_idx
+        )
+        spy_ids = window_ids(("SPY", spy_idx, spy_split_ids), spy_history, spy_idx)
+        sector_ids = window_ids(
+            (sector_symbol, sector_idx, sector_split_ids), sector_history, sector_idx
+        )
         entry_id = add_window([symbol_raw[entry_idx]])[0]
         exit_id = add_window([symbol_raw[exit_idx]])[0]
 
+        identity_started = time.perf_counter()
         identity_id = "identity_" + _json_sha256(
             {
                 "ticker": symbol,
@@ -1588,6 +1804,10 @@ def emit_phase0_evidence_bundle(
                 "historical_universe_certification_eligible": False,
             },
         )
+        if telemetry:
+            telemetry.add(
+                "security_identity_evidence", time.perf_counter() - identity_started
+            )
         relevant_ids = sorted(
             set(
                 (row.get("feature_split_ids") or [])
@@ -1599,6 +1819,7 @@ def emit_phase0_evidence_bundle(
             for item in splits_by_symbol.get(symbol, [])
             if str(item.get("id")) in relevant_ids
         ]
+        action_started = time.perf_counter()
         action_id = "corporate_actions_" + _json_sha256(
             {
                 "symbol": symbol,
@@ -1621,7 +1842,10 @@ def emit_phase0_evidence_bundle(
                 "actions": relevant,
             },
         )
-        canonical_id = canonical_observation_id(row)
+        if telemetry:
+            telemetry.add(
+                "corporate_action_evidence", time.perf_counter() - action_started
+            )
         lineage_id = "lineage_" + _json_sha256(
             {
                 "canonical_observation_id": canonical_id,
@@ -1656,7 +1880,7 @@ def emit_phase0_evidence_bundle(
             "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
             "calendar_contract_version": EXCHANGE_CALENDAR.identifier,
             "calculation_engine_version": CALCULATION_ENGINE_VERSION,
-            "feature_registry_sha256": feature_registry()["registry_sha256"],
+            "feature_registry_sha256": registry_hash,
         }
         lineages.setdefault(lineage_id, lineage_record)
         row["reconstruction_lineage"] = {
@@ -1664,6 +1888,15 @@ def emit_phase0_evidence_bundle(
             "evidence_manifest_path": "source_evidence_manifest.json",
             "lineage_id": lineage_id,
         }
+        canonical_lineage_refs[canonical_id] = dict(row["reconstruction_lineage"])
+
+    if telemetry:
+        telemetry.add(
+            "lineage_accumulation_and_deduplication",
+            time.perf_counter() - lineage_started,
+        )
+        telemetry.count("selected_source_rows", len(selected))
+        telemetry.count("canonical_lineages", len(lineages))
 
     files = {
         "source_objects.jsonl": sorted(
@@ -1682,6 +1915,7 @@ def emit_phase0_evidence_bundle(
             lineages.values(), key=lambda item: item["lineage_id"]
         ),
     }
+    serialization_started = time.perf_counter()
     file_entries = {}
     for name, records in files.items():
         digest = _write_jsonl_records(evidence_dir / name, records)
@@ -1740,6 +1974,13 @@ def emit_phase0_evidence_bundle(
     for row in rows:
         row["reconstruction_lineage"]["source_evidence_manifest_sha256"] = final_hash
     manifest["manifest_sha256"] = final_hash
+    if telemetry:
+        telemetry.add(
+            "evidence_serialization", time.perf_counter() - serialization_started
+        )
+        telemetry.progress(
+            "lineage_complete", selected_rows=len(selected), lineages=len(lineages)
+        )
     return manifest
 
 
@@ -1752,14 +1993,23 @@ def write_rows(
     decision_log: Path,
     horizon_days: int,
     split_metadata_hash: str,
+    output_path_label: Path | None = None,
+    telemetry: BuildTelemetry | None = None,
 ) -> dict[str, Any]:
+    hashing_started = time.perf_counter()
     path.parent.mkdir(parents=True, exist_ok=True)
-    dataset_manifest_hash = hashlib.sha256(
-        "".join(
-            json.dumps(row, sort_keys=True, default=str, separators=(",", ":")) + "\n"
-            for row in rows
-        ).encode("utf-8")
-    ).hexdigest()
+    dataset_digest = hashlib.sha256()
+    for row in rows:
+        dataset_digest.update(
+            (
+                json.dumps(row, sort_keys=True, default=str, separators=(",", ":"))
+                + "\n"
+            ).encode("utf-8")
+        )
+    dataset_manifest_hash = dataset_digest.hexdigest()
+    if telemetry:
+        telemetry.add("manifest_hashing", time.perf_counter() - hashing_started)
+    serialization_started = time.perf_counter()
     with path.open("w", encoding="utf-8") as fh:
         for row in rows:
             if (
@@ -1768,12 +2018,17 @@ def write_rows(
             ):
                 row["dataset_manifest_hash"] = dataset_manifest_hash
             fh.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+    if telemetry:
+        telemetry.add(
+            "raw_observation_serialization", time.perf_counter() - serialization_started
+        )
+    finalization_started = time.perf_counter()
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "raw_market_root": str(raw_root),
         "decision_log": str(decision_log),
-        "output_path": str(path),
+        "output_path": str(output_path_label or path),
         "horizon_days": horizon_days,
         "temporal_safety": {
             "schema_version": "alpha-atlas-v4-temporal-safety-certification.v1",
@@ -1809,6 +2064,10 @@ def write_rows(
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
     )
+    if telemetry:
+        telemetry.add(
+            "manifest_finalization", time.perf_counter() - finalization_started
+        )
     return manifest
 
 
@@ -1879,17 +2138,39 @@ def main() -> None:
     parser.add_argument("--phase0-evidence-dir")
     parser.add_argument("--phase0-max-selected-rows", type=int, default=2_000_000)
     parser.add_argument("--phase0-max-evidence-bytes", type=int, default=1_073_741_824)
+    parser.add_argument("--performance-output")
     args = parser.parse_args()
+    telemetry = BuildTelemetry(
+        Path(args.performance_output) if args.performance_output else None
+    )
+    output_path = Path(args.output)
+    output_path.unlink(missing_ok=True)
+    output_path.with_suffix(output_path.suffix + ".manifest.json").unlink(
+        missing_ok=True
+    )
+    if args.phase0_evidence_dir:
+        final_evidence = Path(args.phase0_evidence_dir)
+        if final_evidence.exists():
+            shutil.rmtree(final_evidence)
     decision_log = Path(args.decision_log)
+    started = time.perf_counter()
     events = read_decision_events(decision_log, limit=max(1, args.limit))
+    telemetry.add("decision_log_loading", time.perf_counter() - started)
+    telemetry.count("decision_events_loaded", len(events))
+    telemetry.progress("decision_log_loaded", decision_events=len(events))
     raw_root = Path(args.raw_root)
     horizon_days = max(1, args.horizon_days)
     symbols, start_date, end_date = _market_load_window(
         events, horizon_days=horizon_days
     )
     market = load_market_history(
-        raw_root, symbols=symbols, start_date=start_date, end_date=end_date
+        raw_root,
+        symbols=symbols,
+        start_date=start_date,
+        end_date=end_date,
+        telemetry=telemetry,
     )
+    actions_started = time.perf_counter()
     split_events = load_split_cache(Path(args.split_cache))
     split_manifest_path = (
         Path(args.split_cache).parent / "split_adjustment_manifest.json"
@@ -1908,11 +2189,16 @@ def main() -> None:
         raise SystemExit(
             "Canonical split metadata cache does not match its manifest/hash"
         )
-    raw_rows, _ = build_training_rows_from_raw_market(
-        events, market, horizon_days=horizon_days, split_events=[]
+    telemetry.add(
+        "corporate_action_loading_and_indexing", time.perf_counter() - actions_started
     )
+    telemetry.count("corporate_actions_loaded", len(split_events))
     rows, summary = build_training_rows_from_raw_market(
-        events, market, horizon_days=horizon_days, split_events=split_events
+        events,
+        market,
+        horizon_days=horizon_days,
+        split_events=split_events,
+        telemetry=telemetry,
     )
     summary.update(
         {
@@ -1923,30 +2209,50 @@ def main() -> None:
         }
     )
     metadata_hash = split_source_hash(split_events)
-    output_path = Path(args.output)
+    output_temp = output_path.with_suffix(output_path.suffix + ".tmp")
+    output_temp_manifest = output_temp.with_suffix(
+        output_temp.suffix + ".manifest.json"
+    )
+    for stale in (output_temp, output_temp_manifest):
+        stale.unlink(missing_ok=True)
     if args.phase0_evidence_dir:
+        evidence_dir = Path(args.phase0_evidence_dir)
+        evidence_staging = evidence_dir.with_name(evidence_dir.name + ".tmp")
+        if evidence_staging.exists():
+            shutil.rmtree(evidence_staging)
         evidence_manifest = emit_phase0_evidence_bundle(
             rows=rows,
             market=market,
             split_events=split_events,
             split_cache_path=Path(args.split_cache),
             raw_root=raw_root,
-            evidence_dir=Path(args.phase0_evidence_dir),
+            evidence_dir=evidence_staging,
             max_selected_rows=max(1, args.phase0_max_selected_rows),
             max_bundle_bytes=max(1, args.phase0_max_evidence_bytes),
+            telemetry=telemetry,
         )
         summary["phase0_evidence"] = evidence_manifest["metrics"]
         summary["reconstruction_lineage_contract_version"] = (
             RECONSTRUCTION_LINEAGE_VERSION
         )
+        if evidence_dir.exists():
+            shutil.rmtree(evidence_dir)
+        evidence_staging.replace(evidence_dir)
     manifest = write_rows(
-        output_path,
+        output_temp,
         rows,
         summary,
         raw_root=raw_root,
         decision_log=decision_log,
         horizon_days=horizon_days,
         split_metadata_hash=metadata_hash,
+        output_path_label=output_path,
+        telemetry=telemetry,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_temp.replace(output_path)
+    output_temp_manifest.replace(
+        output_path.with_suffix(output_path.suffix + ".manifest.json")
     )
     quality_dir = output_path.parent / "training_quality"
     quality_dir.mkdir(parents=True, exist_ok=True)
@@ -1999,13 +2305,29 @@ def main() -> None:
         "feature_price_vs_sma_20",
         "feature_macd_hist",
     ]
+    split_symbols = {str(item.get("ticker") or "").upper() for item in split_events}
+    affected_events = [
+        event
+        for event in events
+        if str(event.get("symbol") or "").upper() in split_symbols
+    ]
+    if affected_events:
+        raw_rows, _ = build_training_rows_from_raw_market(
+            affected_events, market, horizon_days=horizon_days, split_events=[]
+        )
+        adjusted_audit_rows = [
+            row for row in rows if row.get("symbol") in split_symbols
+        ]
+    else:
+        raw_rows = rows
+        adjusted_audit_rows = rows
     suspicious_before = _suspicious_rows(raw_rows)
-    suspicious_after = _suspicious_rows(rows)
+    suspicious_after = _suspicious_rows(adjusted_audit_rows)
     before_after = {
         "schema_version": CORPORATE_ACTION_SCHEMA_VERSION,
         "split_metadata_hash": metadata_hash,
         "before": _distribution(raw_rows, fields),
-        "after": _distribution(rows, fields),
+        "after": _distribution(adjusted_audit_rows, fields),
         "suspicious_rows_before": len(suspicious_before),
         "suspicious_rows_after": len(suspicious_after),
         "suspicious_before": suspicious_before,
@@ -2013,6 +2335,26 @@ def main() -> None:
     }
     (quality_dir / "split_adjustment_before_after_report.json").write_text(
         json.dumps(before_after, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    telemetry.progress(
+        "complete",
+        observations=len(rows),
+        selected_rows=(summary.get("phase0_evidence") or {}).get(
+            "selected_source_rows", 0
+        ),
+    )
+    telemetry.flush(status="COMPLETED", phase="complete")
+    print(
+        json.dumps(
+            {
+                "builder_performance": {
+                    "stage_seconds": telemetry.stages,
+                    "counters": telemetry.counters,
+                }
+            },
+            sort_keys=True,
+        ),
+        file=sys.stderr,
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
 

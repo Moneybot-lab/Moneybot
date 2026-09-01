@@ -6,7 +6,9 @@ from scripts.recover_v31_benchmark_evidence import recover
 
 def _fixture(root: Path, model_bytes: bytes, *, version: str) -> None:
     (root / "alpha_atlas_v31").mkdir(parents=True)
-    (root / "alpha_atlas_v31/candidate_model.joblib").write_bytes(model_bytes)
+    (root / "alpha_atlas_v31/candidate_alpha_atlas_v31_clean.json").write_bytes(
+        model_bytes
+    )
     (root / "alpha_atlas_v31/model_metadata.json").write_text(
         json.dumps(
             {
@@ -25,7 +27,9 @@ def test_recovery_is_deterministic_and_never_invents_missing_fields(tmp_path):
         run156, b"same immutable model", version="candidate-alpha-atlas-v31-clean-v1"
     )
     _fixture(
-        run157, b"same immutable model", version="candidate-alpha-atlas-v31-clean-v1"
+        run157,
+        b"independent immutable model",
+        version="candidate-alpha-atlas-v31-clean-v1",
     )
 
     first = tmp_path / "first"
@@ -33,7 +37,8 @@ def test_recovery_is_deterministic_and_never_invents_missing_fields(tmp_path):
     comparison = recover(run156, run157, first)
     recover(run156, run157, second)
 
-    assert comparison["status"] == "IMMUTABLE_MODEL_MATCH"
+    assert comparison["status"] == "INDEPENDENT_CANDIDATE_SNAPSHOTS_RECOVERED"
+    assert len(set(comparison["model_artifact_sha256_by_run"].values())) == 2
     for name in (
         "run_156_manifest.json",
         "run_157_manifest.json",
@@ -45,6 +50,9 @@ def test_recovery_is_deterministic_and_never_invents_missing_fields(tmp_path):
     assert manifest["actions_run_id"] == 32700956267
     assert manifest["artifact_id"] == 9510663000
     assert manifest["model_artifact_sha256"]
+    assert manifest["model_artifact_path"].endswith(
+        "candidate_alpha_atlas_v31_clean.json"
+    )
     assert "training_evaluation_dataset_identity" not in manifest
 
 

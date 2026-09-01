@@ -24,28 +24,34 @@
   "feature_contract_version": "moneybot-serving-features.v1",
   "generated_at_utc": "2026-08-31T00:00:00+00:00",
   "metadata_artifact_sha256": null,
-  "model_artifact_evidence": "RECOVERY_WORKFLOW_REQUIRED",
-  "model_artifact_path": "data/track_b/alpha_atlas_v31/candidate_alpha_atlas_v31_clean.json",
+  "model_artifact_evidence": "RECOVERED_HISTORICAL_WORKFLOW_EVIDENCE",
+  "model_artifact_path": "per-run: candidate_alpha_atlas_v31_clean.json",
   "model_artifact_sha256": null,
   "paid_recommendation_readiness": false,
   "production_servability": "NOT_CERTIFIED_FROM_AVAILABLE_REPOSITORY_EVIDENCE",
   "promotion_status": "NOT_PROMOTED_BENCHMARK_ONLY",
-  "quantitative_status": "REJECTED_OR_UNVERIFIED_EXTERNAL_ARTIFACT",
+  "quantitative_status": "METRICS_REQUIRE_CORRECTED_RECOVERY_RERUN",
   "ready_for_live_routing": false,
   "schema_version": "alpha-atlas-v31-frozen-benchmark.v1",
-  "status": "BENCHMARK_ONLY_RECOVERY_WORKFLOW_REQUIRED",
+  "status": "BENCHMARK_ONLY_CANDIDATE_HASHES_FROZEN",
   "track_b_runs": {
     "156": {
       "actions_run_id": 32700956267,
+      "additional_evidence_status": "RECOVERY_RERUN_REQUIRED",
       "artifact_digest": "sha256:a5061e01cae5ee15e0ef55810ca9932d952eae5ab27684b6dfd699ef0299376a",
       "artifact_id": 9510663000,
-      "status": "RECOVERY_WORKFLOW_REQUIRED"
+      "candidate_path": "candidate_alpha_atlas_v31_clean.json",
+      "candidate_sha256": "f702a4267895c1b65a6bf432cd675f761197e61e29d51780401a5a34aae69531",
+      "status": "CANDIDATE_HASH_FROZEN"
     },
     "157": {
       "actions_run_id": 32820019463,
+      "additional_evidence_status": "RECOVERY_RERUN_REQUIRED",
       "artifact_digest": "sha256:12103332cdbda5a443d762780af94ba81a546093be9cd9e5481deb6b3b443d58",
       "artifact_id": 9553009280,
-      "status": "RECOVERY_WORKFLOW_REQUIRED"
+      "candidate_path": "candidate_alpha_atlas_v31_clean.json",
+      "candidate_sha256": "9da4fb4135fdf6de546172465ee8f32b0813122a671bf489e823aa8fbd9c05b4",
+      "status": "CANDIDATE_HASH_FROZEN"
     }
   },
   "training_evaluation_dataset_identity": null

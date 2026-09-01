@@ -1,24 +1,33 @@
 {
   "benchmark_only": true,
-  "recovery_status": "RECOVERY_WORKFLOW_REQUIRED",
+  "comparison_status": "INDEPENDENT_CANDIDATE_SNAPSHOTS_DIFFERENT_HASHES_EXPECTED",
+  "recovery_status": "CANDIDATE_HASHES_FROZEN_ADDITIONAL_EVIDENCE_RERUN_REQUIRED",
   "runs": [
     {
       "actions_run_id": 32700956267,
       "artifact_digest": "sha256:a5061e01cae5ee15e0ef55810ca9932d952eae5ab27684b6dfd699ef0299376a",
       "artifact_id": 9510663000,
       "artifact_name": "track-b-offline-output",
+      "candidate_path": "candidate_alpha_atlas_v31_clean.json",
+      "candidate_sha256": "f702a4267895c1b65a6bf432cd675f761197e61e29d51780401a5a34aae69531",
       "head_sha": "058a7030cce899de3c7e3f0aaa304e7d3ed143ce",
+      "metrics": null,
+      "metrics_status": "UNVERIFIED_UNTIL_CORRECTED_PARSER_RERUN",
       "run_number": 156,
-      "status": "RECOVERY_WORKFLOW_REQUIRED"
+      "status": "CANDIDATE_HASH_FROZEN"
     },
     {
       "actions_run_id": 32820019463,
       "artifact_digest": "sha256:12103332cdbda5a443d762780af94ba81a546093be9cd9e5481deb6b3b443d58",
       "artifact_id": 9553009280,
       "artifact_name": "track-b-offline-output",
+      "candidate_path": "candidate_alpha_atlas_v31_clean.json",
+      "candidate_sha256": "9da4fb4135fdf6de546172465ee8f32b0813122a671bf489e823aa8fbd9c05b4",
       "head_sha": "058a7030cce899de3c7e3f0aaa304e7d3ed143ce",
+      "metrics": null,
+      "metrics_status": "UNVERIFIED_UNTIL_CORRECTED_PARSER_RERUN",
       "run_number": 157,
-      "status": "RECOVERY_WORKFLOW_REQUIRED"
+      "status": "CANDIDATE_HASH_FROZEN"
     }
   ],
   "schema_version": "alpha-atlas-v31-benchmark-recovery.v1"

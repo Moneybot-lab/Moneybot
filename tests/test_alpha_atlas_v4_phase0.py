@@ -349,10 +349,20 @@ def test_v31_freeze_and_workflow_remain_non_promoting_and_separate():
     benchmark = json.loads(
         Path("docs/reports/alpha_atlas_v31_frozen_benchmark.json").read_text()
     )
-    assert benchmark["status"] == "BENCHMARK_ONLY_RECOVERY_WORKFLOW_REQUIRED"
+    assert benchmark["status"] == "BENCHMARK_ONLY_CANDIDATE_HASHES_FROZEN"
     assert benchmark["automatic_promotion"] is False
     assert benchmark["ready_for_live_routing"] is False
-    assert benchmark["model_artifact_evidence"] == "RECOVERY_WORKFLOW_REQUIRED"
+    assert (
+        benchmark["model_artifact_evidence"] == "RECOVERED_HISTORICAL_WORKFLOW_EVIDENCE"
+    )
+    assert (
+        benchmark["track_b_runs"]["156"]["candidate_sha256"]
+        == "f702a4267895c1b65a6bf432cd675f761197e61e29d51780401a5a34aae69531"
+    )
+    assert (
+        benchmark["track_b_runs"]["157"]["candidate_sha256"]
+        == "9da4fb4135fdf6de546172465ee8f32b0813122a671bf489e823aa8fbd9c05b4"
+    )
     workflow = Path(".github/workflows/track-b-offline.yml").read_text()
     assert "Evaluate V4 Phase 0 reconstructability gate" in workflow
     gate = workflow.split("Evaluate V4 Phase 0 reconstructability gate", 1)[1].split(

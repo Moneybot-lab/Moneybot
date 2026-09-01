@@ -198,6 +198,20 @@ def test_upload_keeps_canonical_evidence_and_failure_summary_on_failure():
     ):
         assert variable in upload
     assert "track_b_failure_summary.json" in upload
+    assert "builder_performance.json" in upload
+
+
+def test_builder_has_optimized_timeout_and_performance_telemetry():
+    steps = _workflow_steps()
+    build = steps["Build leakage-safe Massive decision training rows"]
+    assert (
+        "timeout 1800 python3 scripts/build_massive_decision_training_rows.py" in build
+    )
+    assert '--performance-output "$TRACK_B_RUN_DIR/builder_performance.json"' in build
+    assert (
+        "timeout 600 python3 scripts/build_massive_decision_training_rows.py"
+        not in build
+    )
 
 
 def test_v2_production_boundary_and_v4_no_promotion_are_unchanged():

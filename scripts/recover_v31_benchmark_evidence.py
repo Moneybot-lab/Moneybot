@@ -36,6 +36,19 @@ def _sha256(path: Path) -> str:
 
 def _classification(path: Path) -> str:
     name = path.name.lower()
+    if name == "candidate_alpha_atlas_v31_clean.json":
+        return "v31_candidate_model"
+    exact_evidence = {
+        "alpha_atlas_v31_model_report.json": "model_report",
+        "alpha_atlas_v31_feature_coverage_report.json": "feature_coverage",
+        "alpha_atlas_v31_backtest_report.json": "evaluation",
+        "alpha_atlas_v31_representative_serving_dry_runs.json": "serving_dry_runs",
+        "production_servability_certification.json": "servability",
+        "candidate_selection_report.json": "candidate_selection",
+        "candidate_readiness_report.json": "candidate_selection",
+    }
+    if name in exact_evidence:
+        return exact_evidence[name]
     if "model" in name and path.suffix.lower() in {
         ".joblib",
         ".pkl",
@@ -94,7 +107,7 @@ def extract_run(run_number: str, directory: Path) -> dict[str, Any]:
                     }
                 }
         files.append(record)
-    models = [item for item in files if item["classification"] == "model_artifact"]
+    models = [item for item in files if item["classification"] == "v31_candidate_model"]
     metadata = [item for item in files if item["classification"] == "model_metadata"]
     return {
         "schema_version": SCHEMA_VERSION,
@@ -106,7 +119,17 @@ def extract_run(run_number: str, directory: Path) -> dict[str, Any]:
         "file_count": len(files),
         "model_artifact_found": bool(models),
         "metadata_found": bool(metadata),
+        "model_artifact_path": models[0]["path"] if len(models) == 1 else None,
         "model_artifact_sha256": models[0]["sha256"] if len(models) == 1 else None,
+        "evidence_hashes_by_classification": {
+            classification: [
+                item["sha256"]
+                for item in files
+                if item["classification"] == classification
+            ]
+            for classification in sorted({item["classification"] for item in files})
+            if classification != "other"
+        },
         "files": files,
         "unverified_fields": [] if files else ["all_extracted_benchmark_evidence"],
     }
@@ -127,8 +150,8 @@ def recover(run156: Path, run157: Path, output: Path) -> dict[str, Any]:
         "schema_version": SCHEMA_VERSION,
         "runs": [156, 157],
         "status": (
-            "IMMUTABLE_MODEL_MATCH"
-            if all(hashes) and len(set(hashes)) == 1
+            "INDEPENDENT_CANDIDATE_SNAPSHOTS_RECOVERED"
+            if all(hashes)
             else "RECOVERED_WITHOUT_UNIQUE_MATCHING_MODEL_EVIDENCE"
         ),
         "model_artifact_sha256_by_run": {

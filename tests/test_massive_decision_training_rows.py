@@ -3,10 +3,12 @@ from datetime import date, datetime, timedelta, timezone
 
 from scripts.build_massive_decision_training_rows import (
     build_training_rows_from_raw_market,
+    emit_phase0_evidence_bundle,
     load_market_history,
     write_rows,
 )
 import scripts.build_massive_decision_training_rows as builder
+from moneybot.services.market_data_providers import ExchangeCalendar
 
 
 def _ts(day: str) -> int:
@@ -85,6 +87,61 @@ def test_market_loader_hashes_each_source_file_once_and_reuses_row_identity(
         market["AAPL"][0]["_source_raw_row_sha256"]
         != market["SPY"][0]["_source_raw_row_sha256"]
     )
+
+
+def test_duplicate_requests_reuse_selected_rows_and_canonical_lineage(tmp_path):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    calendar = ExchangeCalendar()
+    days = []
+    candidate = date(2026, 1, 2)
+    while len(days) < 70:
+        try:
+            calendar.session_close(candidate)
+        except ValueError:
+            pass
+        else:
+            days.append(candidate)
+        candidate += timedelta(days=1)
+    for symbol, base in (("AAPL", 100), ("SPY", 400), ("XLK", 200)):
+        lines = ["ticker,date,open,high,low,close,volume"]
+        for index, day in enumerate(days):
+            close = base + index
+            lines.append(
+                f"{symbol},{day.isoformat()},{close},{close + 1},{close - 1},{close},1000"
+            )
+        (raw / f"{symbol}.csv").write_text("\n".join(lines) + "\n")
+    market = load_market_history(raw)
+    event = {
+        "ts": _ts(days[55].isoformat()),
+        "symbol": "AAPL",
+        "endpoint": "quick_ask",
+        "payload": {"recommendation": "BUY", "sector_etf": "XLK"},
+    }
+    rows, _ = build_training_rows_from_raw_market(
+        [event, {**event, "endpoint": "watchlist"}],
+        market,
+        horizon_days=5,
+        split_events=[],
+    )
+    split_cache = tmp_path / "splits.jsonl"
+    split_cache.write_text("")
+    manifest = emit_phase0_evidence_bundle(
+        rows=rows,
+        market=market,
+        split_events=[],
+        split_cache_path=split_cache,
+        raw_root=raw,
+        evidence_dir=tmp_path / "evidence",
+        max_selected_rows=10_000,
+        max_bundle_bytes=10_000_000,
+    )
+    assert len(rows) == 2
+    assert rows[0]["reconstruction_lineage"] == rows[1]["reconstruction_lineage"]
+    assert manifest["metrics"]["raw_request_observations"] == 2
+    assert manifest["metrics"]["canonical_economic_observations"] == 1
+    assert manifest["files"]["observation_lineage.jsonl"]["records"] == 1
+    assert manifest["files"]["security_identity_evidence.jsonl"]["records"] == 1
 
 
 def test_build_training_rows_adds_phase_1_technical_features(tmp_path):

@@ -1,4 +1,11 @@
 {
+  "builder_performance": {
+    "local_scale_events": 10000,
+    "local_wall_seconds": 21.191,
+    "optimization_status": "LOCAL_SCALE_TEST_PASSED_HOSTED_RERUN_REQUIRED",
+    "run_168_status": "TIMEOUT_600_EXIT_124_BUILD_RAW",
+    "workflow_timeout_seconds": 1800
+  },
   "checklist": {
     "0.1_frozen_benchmark": "BLOCKED_RECOVERY_WORKFLOW_REQUIRED",
     "0.2_prediction_execution_clock": "PASS_REPOSITORY_TEST_EVIDENCE",
@@ -12,7 +19,7 @@
     "exit_4_every_feature_label_reconstructable": "PASS_LOCAL_PRODUCTION_PATH_FIXTURE;BLOCKED_HOSTED_EVIDENCE",
     "exit_5_no_unsupported_manifest_claim": "PASS_FOR_NEW_V4_MANIFESTS"
   },
-  "executive_result": "PHASE_0_BLOCKED_HOSTED_RUN_REQUIRED",
+  "executive_result": "PHASE_0_BLOCKED_BUILDER_PERFORMANCE",
   "feature_reconciliation": {
     "feature_store_columns": 48,
     "model_inputs": 43,
@@ -34,8 +41,9 @@
   "generated_at_utc": "2026-08-31T00:00:00+00:00",
   "hosted_certification": {
     "artifact_sha256": null,
+    "last_run_id": 33463597909,
     "rows_checked": 0,
-    "status": "BLOCKED_POST_LINEAGE_HOSTED_RUN_REQUIRED"
+    "status": "BLOCKED_RUN_168_BUILDER_TIMEOUT;OPTIMIZED_RERUN_REQUIRED"
   },
   "implementation_readiness": {
     "builder_emits_certifiable_lineage": true,
@@ -54,7 +62,7 @@
     "selected_source_rows": 229,
     "source_objects": 3
   },
-  "next_permitted_step": "After merge, run exactly Recover V3.1 Benchmark Evidence and Track B Offline Challenger; inspect compact benchmark recovery and full-artifact Phase 0 evidence. Phase 1 remains prohibited.",
+  "next_permitted_step": "Rerun Recover V3.1 Benchmark Evidence once for additional hashes/metrics, then dispatch exactly one Track B Offline Challenger and require it to reach the full Phase 0 reconstruction gate. Phase 1 remains prohibited.",
   "reconstructability": {
     "adversarial_failure_classes_tested": [
       "corporate_action_mismatch",
@@ -93,7 +101,7 @@
     "v3_behavior_changed": false
   },
   "schema_version": "alpha-atlas-v4-phase0-closeout.v1",
-  "starting_commit": "e3ba5eb4e42bfa0182dd3686f8338b6bd4744f3b",
+  "starting_commit": "ec9485d88c3df91b297acd4e7ab5dc703b7add26",
   "temporal_safety_certification": {
     "artifact_sha256": null,
     "failures": 0,
@@ -108,7 +116,9 @@
     "metadata_sha256": null,
     "model_sha256": null,
     "ready_for_live_routing": false,
-    "runs_156_157": "RECOVERY_WORKFLOW_REQUIRED",
-    "status": "BLOCKED_RECOVERY_WORKFLOW_REQUIRED"
+    "run_156_candidate_sha256": "f702a4267895c1b65a6bf432cd675f761197e61e29d51780401a5a34aae69531",
+    "run_157_candidate_sha256": "9da4fb4135fdf6de546172465ee8f32b0813122a671bf489e823aa8fbd9c05b4",
+    "runs_156_157": "CANDIDATE_HASHES_FROZEN_ADDITIONAL_EVIDENCE_RERUN_REQUIRED",
+    "status": "BENCHMARK_ONLY_CANDIDATE_HASHES_FROZEN"
   }
 }

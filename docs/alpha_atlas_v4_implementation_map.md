@@ -40,3 +40,7 @@ research-only. V3/V3.1, production serving, promotion and routing remain unchang
 - Historical backfill remains blocked pending account-specific entitlement and
   retention evidence plus a point-in-time inactive/delisted universe contract. The
   inventory command has no download or backfill mode and is not workflow-scheduled.
+
+## Prompt 8C operational repair
+
+Track B #168 exposed repeated per-observation split adjustment and source-window hashing. The builder now caches economically equivalent adjustment views, row identities, context windows, and duplicate canonical lineage; emits run-scoped performance telemetry; atomically finalizes artifacts; and retains the unchanged fail-closed reconstruction gate. The recovery parser recognizes only the exact V3.1 candidate filename. A hosted rerun is required before changing Phase 0 status.
