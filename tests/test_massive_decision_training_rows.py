@@ -4,7 +4,10 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from scripts.build_massive_decision_training_rows import (
+    _aligned_relative_returns,
+    _date_aligned_beta,
     _feature_safe_splits,
+    _lagged_return,
     build_training_rows_from_raw_market,
     emit_phase0_evidence_bundle,
     load_market_history,
@@ -53,6 +56,52 @@ def test_split_availability_distinguishes_execution_and_future_session_boundarie
         "available_at": "2026-04-08T20:00:00+00:00",
     }
     assert _feature_safe_splits([first_known_later], before_close, execution) == []
+
+
+def test_humaw_rnwww_mixed_family_asof_uses_exact_session_alignment():
+    days = [date(2026, 6, 22) + timedelta(days=index) for index in range(32)]
+    days = [day for day in days if day.weekday() < 5]
+    spy = [
+        {"date": day.isoformat(), "close": 700.0 + index}
+        for index, day in enumerate(days)
+    ]
+    overrides = {
+        "2026-07-15": 754.81,
+        "2026-07-16": 750.72,
+        "2026-07-21": 748.28,
+        "2026-07-22": 747.41,
+        "2026-07-23": 738.18,
+    }
+    for row in spy:
+        row["close"] = overrides.get(row["date"], row["close"])
+    symbol = [
+        {"date": row["date"], "close": 30.0 + index}
+        for index, row in enumerate(spy)
+        if row["date"] != "2026-07-23"
+    ]
+
+    assert _lagged_return(spy, len(spy) - 1, 1) == -0.012349
+    assert _lagged_return(spy, len(spy) - 1, 5) == -0.016704
+    symbol_return, spy_return, common_asof = _aligned_relative_returns(
+        symbol, spy, len(symbol) - 1, len(spy) - 1, 5
+    )
+    assert common_asof == "2026-07-22"
+    assert spy_return == -0.009804
+    assert symbol_return is not None
+
+    beta = _date_aligned_beta(symbol, spy, len(symbol) - 1, len(spy) - 1, 20)
+    shuffled_symbol = list(reversed(symbol))
+    shuffled_spy = list(reversed(spy))
+    assert (
+        _date_aligned_beta(
+            shuffled_symbol,
+            shuffled_spy,
+            len(shuffled_symbol) - 1,
+            len(shuffled_spy) - 1,
+            20,
+        )
+        == beta
+    )
 
 
 def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):

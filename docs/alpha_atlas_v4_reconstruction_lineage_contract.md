@@ -73,3 +73,13 @@ derived close timestamp. An announcement does not make a future execution part
 of the feature basis, and presence in a corporate-action file downloaded later
 is not availability proof. Missing, inconsistent, or post-cutoff evidence fails
 closed.
+
+## Source-family alignment
+
+Calculation engine `massive-v4-feature-replay.v2` uses independent latest
+completed sessions for standalone symbol, SPY, sector, and volatility features.
+Cross-series relative returns inner-join exact session dates and use the same
+common ending session. Beta uses the latest 20 return pairs whose start and end
+session dates match on both sides; unequal arrays are never aligned by position.
+Lineage records every family endpoint, each common endpoint, and the aligned
+source-row IDs under `alpha-atlas-v4-source-alignment.v1`.

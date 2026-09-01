@@ -46,7 +46,7 @@ DEFAULT_MAX_STALENESS_SESSIONS = 3
 V4_FEATURE_CONTRACT_VERSION = "alpha-atlas-v4-features.v2"
 RECONSTRUCTION_LINEAGE_VERSION = "alpha-atlas-v4-reconstruction-lineage.v1"
 MARKET_AVAILABILITY_POLICY_VERSION = "xnys-completed-daily-bar.v1"
-CALCULATION_ENGINE_VERSION = "massive-v4-feature-replay.v1"
+CALCULATION_ENGINE_VERSION = "massive-v4-feature-replay.v2"
 SECTOR_BENCHMARK_SYMBOLS = {
     "communication services": "XLC",
     "consumer discretionary": "XLY",
@@ -648,6 +648,88 @@ def _beta_to_benchmark(
         / window
     )
     return round(covariance / benchmark_variance, 6)
+
+
+def _common_session_rows(
+    left: list[dict[str, Any]],
+    right: list[dict[str, Any]],
+    left_idx: int,
+    right_idx: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Inner join two bounded histories by exact exchange-session date."""
+    left_by_date = {str(row["date"]): row for row in left[: left_idx + 1]}
+    right_by_date = {str(row["date"]): row for row in right[: right_idx + 1]}
+    common = sorted(left_by_date.keys() & right_by_date.keys())
+    return [left_by_date[day] for day in common], [right_by_date[day] for day in common]
+
+
+def _aligned_relative_returns(
+    left: list[dict[str, Any]],
+    right: list[dict[str, Any]],
+    left_idx: int,
+    right_idx: int,
+    window: int = 5,
+) -> tuple[float | None, float | None, str | None]:
+    aligned_left, aligned_right = _common_session_rows(left, right, left_idx, right_idx)
+    if len(aligned_left) <= window:
+        return None, None, None
+    end = len(aligned_left) - 1
+    return (
+        _lagged_return(aligned_left, end, window),
+        _lagged_return(aligned_right, end, window),
+        str(aligned_left[end]["date"]),
+    )
+
+
+def _date_aligned_beta(
+    symbol_rows: list[dict[str, Any]],
+    benchmark_rows: list[dict[str, Any]],
+    symbol_idx: int,
+    benchmark_idx: int,
+    window: int = 20,
+) -> float | None:
+    symbol_rows = sorted(
+        symbol_rows[: symbol_idx + 1], key=lambda row: str(row["date"])
+    )
+    benchmark_rows = sorted(
+        benchmark_rows[: benchmark_idx + 1], key=lambda row: str(row["date"])
+    )
+    symbol_idx = len(symbol_rows) - 1
+    benchmark_idx = len(benchmark_rows) - 1
+    symbol_pairs = {
+        (
+            str(symbol_rows[pos - 1]["date"]),
+            str(symbol_rows[pos]["date"]),
+        ): _lagged_return(symbol_rows, pos, 1)
+        for pos in range(1, symbol_idx + 1)
+    }
+    benchmark_pairs = {
+        (
+            str(benchmark_rows[pos - 1]["date"]),
+            str(benchmark_rows[pos]["date"]),
+        ): _lagged_return(benchmark_rows, pos, 1)
+        for pos in range(1, benchmark_idx + 1)
+    }
+    keys = sorted(symbol_pairs.keys() & benchmark_pairs.keys())[-window:]
+    if len(keys) < window:
+        return None
+    symbol_returns = [float(symbol_pairs[key]) for key in keys]
+    benchmark_returns = [float(benchmark_pairs[key]) for key in keys]
+    symbol_mean = sum(symbol_returns) / window
+    benchmark_mean = sum(benchmark_returns) / window
+    variance = (
+        sum((value - benchmark_mean) ** 2 for value in benchmark_returns) / window
+    )
+    if variance == 0.0:
+        return None
+    covariance = (
+        sum(
+            (symbol_value - symbol_mean) * (benchmark_value - benchmark_mean)
+            for symbol_value, benchmark_value in zip(symbol_returns, benchmark_returns)
+        )
+        / window
+    )
+    return round(covariance / variance, 6)
 
 
 def _sector_benchmark_symbol(
@@ -1274,6 +1356,12 @@ def build_training_rows_from_raw_market(
             else None
         )
         sector_return_5d = _lagged_return(sector_history, sector_idx, 5)
+        aligned_symbol_spy_5d, aligned_spy_5d, symbol_spy_common_asof = (
+            _aligned_relative_returns(history, spy_history, idx, spy_idx, 5)
+        )
+        aligned_symbol_sector_5d, aligned_sector_5d, symbol_sector_common_asof = (
+            _aligned_relative_returns(history, sector_history, idx, sector_idx, 5)
+        )
         event_fingerprint = hashlib.sha256(
             json.dumps(
                 event, sort_keys=True, default=str, separators=(",", ":")
@@ -1353,6 +1441,13 @@ def build_training_rows_from_raw_market(
             "event_date": event_day,
             "market_asof_date": asof["date"],
             "feature_market_asof_date": asof["date"],
+            "source_family_effective_asof": {
+                "symbol": asof["date"],
+                "spy": spy_history[spy_idx]["date"],
+                "sector": sector_history[sector_idx]["date"],
+                "symbol_spy_common": symbol_spy_common_asof,
+                "symbol_sector_common": symbol_sector_common_asof,
+            },
             "label_asof_date": future["date"],
             "timing_contract_version": ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
             "model_feature_contract_version": timing.model_feature_contract_version,
@@ -1521,6 +1616,24 @@ def build_training_rows_from_raw_market(
         # The V3 allowlist is always materialized by the shared train/serve
         # engine so production cannot drift from these training definitions.
         row.update(shared_v3_features)
+        row.update(
+            {
+                "feature_symbol_minus_spy_5d": (
+                    round(aligned_symbol_spy_5d - aligned_spy_5d, 6)
+                    if aligned_symbol_spy_5d is not None and aligned_spy_5d is not None
+                    else None
+                ),
+                "feature_sector_relative_return_5d": (
+                    round(aligned_symbol_sector_5d - aligned_sector_5d, 6)
+                    if aligned_symbol_sector_5d is not None
+                    and aligned_sector_5d is not None
+                    else None
+                ),
+                "feature_symbol_beta_20d": _date_aligned_beta(
+                    history, spy_history, idx, spy_idx, 20
+                ),
+            }
+        )
         rows.append(row)
         summary["rows_joined"] += 1
     if telemetry:
@@ -1839,6 +1952,42 @@ def emit_phase0_evidence_bundle(
         sector_ids = window_ids(
             (sector_symbol, sector_idx, sector_split_ids), sector_history, sector_idx
         )
+
+        def aligned_ids(
+            left_rows: list[dict[str, Any]],
+            left_ids: list[str],
+            right_rows: list[dict[str, Any]],
+            right_ids: list[str],
+        ) -> tuple[list[str], list[str], str | None]:
+            left_by_day = {
+                str(item["date"]): source_id
+                for item, source_id in zip(left_rows, left_ids)
+            }
+            right_by_day = {
+                str(item["date"]): source_id
+                for item, source_id in zip(right_rows, right_ids)
+            }
+            common = sorted(left_by_day.keys() & right_by_day.keys())
+            return (
+                [left_by_day[day] for day in common],
+                [right_by_day[day] for day in common],
+                common[-1] if common else None,
+            )
+
+        symbol_spy_left_ids, symbol_spy_right_ids, symbol_spy_common_asof = aligned_ids(
+            symbol_history[: symbol_idx + 1],
+            symbol_ids,
+            spy_history[: spy_idx + 1],
+            spy_ids,
+        )
+        symbol_sector_left_ids, symbol_sector_right_ids, symbol_sector_common_asof = (
+            aligned_ids(
+                symbol_history[: symbol_idx + 1],
+                symbol_ids,
+                sector_history[: sector_idx + 1],
+                sector_ids,
+            )
+        )
         entry_id = add_window([symbol_raw[entry_idx]])[0]
         exit_id = add_window([symbol_raw[exit_idx]])[0]
 
@@ -1954,6 +2103,23 @@ def emit_phase0_evidence_bundle(
             "sector_symbol": sector_symbol,
             "sector_row_ids": sector_ids,
             "sector_source_index": len(sector_ids) - 1,
+            "source_family_effective_asof": {
+                "symbol": str(symbol_history[symbol_idx]["date"]),
+                "spy": str(spy_history[spy_idx]["date"]),
+                "sector": str(sector_history[sector_idx]["date"]),
+                "symbol_spy_common": symbol_spy_common_asof,
+                "symbol_sector_common": symbol_sector_common_asof,
+            },
+            "aligned_source_row_ids": {
+                "symbol_spy": {
+                    "symbol": symbol_spy_left_ids,
+                    "comparison": symbol_spy_right_ids,
+                },
+                "symbol_sector": {
+                    "symbol": symbol_sector_left_ids,
+                    "comparison": symbol_sector_right_ids,
+                },
+            },
             "entry_row_id": entry_id,
             "exit_5_row_id": (
                 exit_id if int(row["label_horizon_sessions"]) == 5 else None

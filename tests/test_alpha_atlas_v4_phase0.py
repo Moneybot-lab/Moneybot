@@ -157,7 +157,7 @@ def _lineage_row(tmp_path: Path):
         "sources": sources,
         "feature_contract_version": "alpha-atlas-v4-features.v2",
         "calendar_contract_version": "XNYS-rule-calendar.v1",
-        "replay_engine_version": "massive-v4-feature-replay.v1",
+        "replay_engine_version": "massive-v4-feature-replay.v2",
         "source_indices": {"symbol": 59, "spy": 59, "sector": 59},
         "execution": {
             "entry_at": base["entry_at"],
@@ -280,7 +280,7 @@ def test_replay_matches_builder_insufficient_history_semantics(sessions):
         "sector": bars("XLK", 60, 50),
     }
     lineage = {
-        "replay_engine_version": "massive-v4-feature-replay.v1",
+        "replay_engine_version": "massive-v4-feature-replay.v2",
         "source_indices": {"symbol": sessions - 1, "spy": 59, "sector": 59},
     }
     replayed = _replay_v4_features(loaded, lineage)

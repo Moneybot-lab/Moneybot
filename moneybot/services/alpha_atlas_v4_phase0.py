@@ -22,7 +22,7 @@ from moneybot.services.corporate_actions import (
 )
 
 FEATURE_CONTRACT_VERSION = "alpha-atlas-v4-features.v2"
-FEATURE_REGISTRY_VERSION = "alpha-atlas-v4-feature-registry.v1"
+FEATURE_REGISTRY_VERSION = "alpha-atlas-v4-feature-registry.v2"
 FILL_POLICY_VERSION = "alpha-atlas-v4-feature-fill-policy.v1"
 RECONSTRUCTION_VERSION = "alpha-atlas-v4-reconstructability.v1"
 TEMPORAL_CERTIFICATION_VERSION = "alpha-atlas-v4-temporal-safety-certification.v1"
@@ -284,6 +284,14 @@ def feature_registry() -> dict[str, Any]:
             family, dependency = "spy_context", "SPY"
         elif "sector" in name:
             family, dependency = "sector_context", "point_in_time_sector_benchmark"
+        alignment_policy = "independent_family_latest_completed_session"
+        if name in {
+            "feature_symbol_minus_spy_5d",
+            "feature_sector_relative_return_5d",
+        }:
+            alignment_policy = "exact_session_inner_join_common_return_endpoint"
+        elif name == "feature_symbol_beta_20d":
+            alignment_policy = "exact_matching_start_and_end_session_return_pairs"
         records.append(
             {
                 "name": name,
@@ -303,6 +311,7 @@ def feature_registry() -> dict[str, Any]:
                 "fill_policy": FILL_POLICY_VERSION,
                 "adjustment": "event_time_split_adjusted",
                 "context_dependency": dependency,
+                "source_alignment_policy": alignment_policy,
                 "point_in_time_security_identity_required": True,
                 "reconstructability_status": "REQUIRES_IMMUTABLE_SOURCE_LINEAGE",
                 "serving_equivalent_source": "daily aggregate history; parity not certified",
@@ -322,6 +331,7 @@ def feature_registry() -> dict[str, Any]:
         )
     return {
         "schema_version": FEATURE_REGISTRY_VERSION,
+        "source_alignment_policy_version": "alpha-atlas-v4-source-alignment.v1",
         "feature_contract_version": FEATURE_CONTRACT_VERSION,
         "feature_store_feature_columns": len(records),
         "model_input_count": len(MODEL_FEATURES),
@@ -357,7 +367,7 @@ def _replay_v4_features(
     loaded: Mapping[str, Any], lineage: Mapping[str, Any]
 ) -> dict[str, float | int | None]:
     """Replay the production V4 builder formulas from hash-verified bar histories."""
-    if lineage.get("replay_engine_version") != "massive-v4-feature-replay.v1":
+    if lineage.get("replay_engine_version") != "massive-v4-feature-replay.v2":
         raise ValueError("unsupported feature replay engine")
     from scripts import build_massive_decision_training_rows as builder
 
@@ -379,6 +389,12 @@ def _replay_v4_features(
     return20 = builder._lagged_return(symbol, idx, 20)
     spy_return5 = builder._lagged_return(spy, spy_idx, 5)
     sector_return5 = builder._lagged_return(sector, sector_idx, 5)
+    aligned_symbol_spy_5d, aligned_spy_5d, _ = builder._aligned_relative_returns(
+        symbol, spy, idx, spy_idx, 5
+    )
+    aligned_symbol_sector_5d, aligned_sector_5d, _ = builder._aligned_relative_returns(
+        symbol, sector, idx, sector_idx, 5
+    )
     volume = builder._coerce_float(asof.get("volume"))
     volume5 = builder._rolling_numeric_mean(symbol, idx, 5, "volume")
     volume20 = builder._rolling_numeric_mean(symbol, idx, 20, "volume")
@@ -414,16 +430,16 @@ def _replay_v4_features(
         "feature_spy_return_1d": builder._lagged_return(spy, spy_idx, 1),
         "feature_spy_return_5d": spy_return5,
         "feature_symbol_minus_spy_5d": (
-            round(return5 - spy_return5, 6)
-            if return5 is not None and spy_return5 is not None
+            round(aligned_symbol_spy_5d - aligned_spy_5d, 6)
+            if aligned_symbol_spy_5d is not None and aligned_spy_5d is not None
             else None
         ),
-        "feature_symbol_beta_20d": builder._beta_to_benchmark(
+        "feature_symbol_beta_20d": builder._date_aligned_beta(
             symbol, spy, idx, spy_idx, 20
         ),
         "feature_sector_relative_return_5d": (
-            round(return5 - sector_return5, 6)
-            if return5 is not None and sector_return5 is not None
+            round(aligned_symbol_sector_5d - aligned_sector_5d, 6)
+            if aligned_symbol_sector_5d is not None and aligned_sector_5d is not None
             else None
         ),
         "feature_market_regime_risk_on": builder._market_regime_risk_on(spy, spy_idx),
@@ -457,8 +473,28 @@ def _replay_v4_features(
         build_alpha_atlas_v3_features(
             symbol_bars=symbol[: idx + 1],
             spy_bars=spy[: spy_idx + 1],
-            asof_date=asof["date"],
+            asof_date=None,
         )
+    )
+    # The shared overlay owns standalone SPY features; cross-family features use
+    # the V4 exact-session alignment semantics above.
+    replayed.update(
+        {
+            "feature_symbol_minus_spy_5d": (
+                round(aligned_symbol_spy_5d - aligned_spy_5d, 6)
+                if aligned_symbol_spy_5d is not None and aligned_spy_5d is not None
+                else None
+            ),
+            "feature_sector_relative_return_5d": (
+                round(aligned_symbol_sector_5d - aligned_sector_5d, 6)
+                if aligned_symbol_sector_5d is not None
+                and aligned_sector_5d is not None
+                else None
+            ),
+            "feature_symbol_beta_20d": builder._date_aligned_beta(
+                symbol, spy, idx, spy_idx, 20
+            ),
+        }
     )
     return replayed
 
@@ -890,6 +926,41 @@ def _resolve_evidence_bundle(
         item.get("source_row_id"): item
         for item in tables.get("selected_market_rows", [])
     }
+
+    family_ids = {
+        "symbol": list(record.get("symbol_row_ids") or []),
+        "spy": list(record.get("spy_row_ids") or []),
+        "sector": list(record.get("sector_row_ids") or []),
+    }
+    effective = record.get("source_family_effective_asof") or {}
+    for family, ids in family_ids.items():
+        endpoint = (rows_by_id.get(ids[-1]) or {}).get("date") if ids else None
+        if effective.get(family) != endpoint:
+            failures.append(f"source_family_effective_asof_mismatch:{family}")
+
+    for label, left_family, right_family, endpoint_key in (
+        ("symbol_spy", "symbol", "spy", "symbol_spy_common"),
+        ("symbol_sector", "symbol", "sector", "symbol_sector_common"),
+    ):
+        left_by_day = {
+            str((rows_by_id.get(source_id) or {}).get("date")): source_id
+            for source_id in family_ids[left_family]
+        }
+        right_by_day = {
+            str((rows_by_id.get(source_id) or {}).get("date")): source_id
+            for source_id in family_ids[right_family]
+        }
+        common = sorted(left_by_day.keys() & right_by_day.keys())
+        expected_alignment = {
+            "symbol": [left_by_day[day] for day in common],
+            "comparison": [right_by_day[day] for day in common],
+        }
+        if (record.get("aligned_source_row_ids") or {}).get(
+            label
+        ) != expected_alignment:
+            failures.append(f"aligned_source_row_ids_mismatch:{label}")
+        if effective.get(endpoint_key) != (common[-1] if common else None):
+            failures.append(f"common_source_endpoint_mismatch:{label}")
 
     calendar = ExchangeCalendar()
 
