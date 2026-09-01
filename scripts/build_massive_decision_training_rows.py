@@ -5,15 +5,25 @@ import argparse
 import bisect
 import csv
 import gzip
+import hashlib
 import json
+import os
 import re
-from datetime import datetime, time, timedelta, timezone
+import shutil
+import sys
+import time
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_tracking import normalize_action, normalize_unix_ts
 from moneybot.services.alpha_atlas_v3_features import build_alpha_atlas_v3_features
+from moneybot.services.alpha_atlas_v4_timing_contract import (
+    ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
+    AlphaAtlasV4TimingRecord,
+)
+from moneybot.services.market_data_providers import ExchangeCalendar
 from moneybot.services.decision_target import (
     TARGET_NAME,
     label_from_forward_return,
@@ -29,7 +39,13 @@ from moneybot.services.corporate_actions import (
     split_source_hash,
 )
 
-SCHEMA_VERSION = "massive-decision-training-rows.v2"
+SCHEMA_VERSION = "massive-decision-training-rows.v4"
+EXCHANGE_CALENDAR = ExchangeCalendar()
+DEFAULT_MAX_STALENESS_SESSIONS = 3
+V4_FEATURE_CONTRACT_VERSION = "alpha-atlas-v4-features.v2"
+RECONSTRUCTION_LINEAGE_VERSION = "alpha-atlas-v4-reconstruction-lineage.v1"
+MARKET_AVAILABILITY_POLICY_VERSION = "xnys-completed-daily-bar.v1"
+CALCULATION_ENGINE_VERSION = "massive-v4-feature-replay.v1"
 SECTOR_BENCHMARK_SYMBOLS = {
     "communication services": "XLC",
     "consumer discretionary": "XLY",
@@ -44,6 +60,49 @@ SECTOR_BENCHMARK_SYMBOLS = {
     "technology": "XLK",
     "utilities": "XLU",
 }
+
+
+class BuildTelemetry:
+    """Operational timings/counters excluded from all deterministic identities."""
+
+    def __init__(self, output: Path | None = None):
+        self.started = time.perf_counter()
+        self.output = output
+        self.stages: dict[str, float] = {}
+        self.counters: dict[str, int] = {}
+
+    def add(self, stage: str, duration: float) -> None:
+        self.stages[stage] = self.stages.get(stage, 0.0) + duration
+
+    def count(self, name: str, amount: int = 1) -> None:
+        self.counters[name] = self.counters.get(name, 0) + amount
+
+    def progress(self, phase: str, **values: Any) -> None:
+        fields = " ".join(f"{key}={value}" for key, value in sorted(values.items()))
+        print(
+            f"phase={phase} {fields} elapsed={time.perf_counter() - self.started:.3f}",
+            file=sys.stderr,
+            flush=True,
+        )
+        self.flush(status="RUNNING", phase=phase)
+
+    def flush(self, *, status: str, phase: str) -> None:
+        if self.output is None:
+            return
+        payload = {
+            "schema_version": "alpha-atlas-v4-builder-performance.v1",
+            "status": status,
+            "phase": phase,
+            "elapsed_seconds": round(time.perf_counter() - self.started, 6),
+            "stage_seconds": {
+                key: round(value, 6) for key, value in sorted(self.stages.items())
+            },
+            "counters": dict(sorted(self.counters.items())),
+        }
+        self.output.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.output.with_suffix(self.output.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        temporary.replace(self.output)
 
 
 def _iter_text(path: Path):
@@ -96,6 +155,11 @@ def _normalize_market_row(row: dict[str, Any]) -> dict[str, Any] | None:
     close = _coerce_float(row.get("close") or row.get("c") or row.get("Close"))
     if not symbol or not day or close is None:
         return None
+    available_at = _parse_utc_datetime(
+        row.get("available_at")
+        or row.get("provider_available_at")
+        or row.get("received_timestamp")
+    )
     return {
         "symbol": symbol,
         "date": day,
@@ -104,7 +168,24 @@ def _normalize_market_row(row: dict[str, Any]) -> dict[str, Any] | None:
         "low": _coerce_float(row.get("low") or row.get("l") or row.get("Low")),
         "close": close,
         "volume": _coerce_float(row.get("volume") or row.get("v") or row.get("Volume")),
+        "available_at": available_at.isoformat() if available_at else None,
     }
+
+
+def _parse_utc_datetime(value: Any) -> datetime | None:
+    if value in {None, ""}:
+        return None
+    try:
+        parsed = (
+            value
+            if isinstance(value, datetime)
+            else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        )
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
 
 
 _PATH_DATE_RE = re.compile(r"(20\d{2})[-/](\d{2})[-/](\d{2})")
@@ -119,6 +200,14 @@ def _path_market_date(path: Path) -> str | None:
         return None
     match = matches[-1]
     return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _read_market_file(path: Path) -> Iterable[dict[str, Any]]:
@@ -147,6 +236,7 @@ def load_market_history(
     symbols: set[str] | None = None,
     start_date: str | None = None,
     end_date: str | None = None,
+    telemetry: BuildTelemetry | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     wanted = {
         str(symbol).strip().upper()
@@ -154,7 +244,11 @@ def load_market_history(
         if str(symbol).strip()
     }
     by_symbol: dict[str, dict[str, dict[str, Any]]] = {}
-    for path in sorted(raw_root.rglob("*")):
+    discovery_started = time.perf_counter()
+    paths = sorted(raw_root.rglob("*"))
+    if telemetry:
+        telemetry.add("source_file_discovery", time.perf_counter() - discovery_started)
+    for path in paths:
         if not path.is_file() or path.name.startswith("_"):
             continue
         if not (
@@ -169,7 +263,23 @@ def load_market_history(
             continue
         if path_day and end_date and path_day > end_date:
             continue
-        for row in _read_market_file(path):
+        hashing_started = time.perf_counter()
+        object_hash = _sha256_file(path)
+        if telemetry:
+            telemetry.add(
+                "source_object_hashing", time.perf_counter() - hashing_started
+            )
+            telemetry.count("source_objects_hashed")
+        object_size = path.stat().st_size
+        relative_path = path.relative_to(raw_root).as_posix()
+        object_id = (
+            "source_object_"
+            + hashlib.sha256(
+                f"massive\0{relative_path}\0{object_hash}".encode()
+            ).hexdigest()
+        )
+        parsing_started = time.perf_counter()
+        for ordinal, row in enumerate(_read_market_file(path)):
             symbol = str(row["symbol"]).upper()
             day = str(row["date"])
             if wanted and symbol not in wanted:
@@ -178,7 +288,38 @@ def load_market_history(
                 continue
             if end_date and day > end_date:
                 continue
+            row_content = {
+                key: row.get(key)
+                for key in (
+                    "symbol",
+                    "date",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "volume",
+                    "available_at",
+                )
+            }
+            row["_source_object_id"] = object_id
+            row["_source_object_sha256"] = object_hash
+            row["_source_relative_path"] = relative_path
+            row["_source_object_size"] = object_size
+            row["_source_row_ordinal"] = ordinal
+            row["_source_raw_row_sha256"] = hashlib.sha256(
+                json.dumps(row_content, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
             by_symbol.setdefault(symbol, {})[day] = row
+        if telemetry:
+            telemetry.add(
+                "massive_daily_file_parsing", time.perf_counter() - parsing_started
+            )
+            telemetry.count("source_files_parsed")
+    if telemetry:
+        telemetry.progress(
+            "market_load",
+            source_objects=telemetry.counters.get("source_objects_hashed", 0),
+        )
     return {
         symbol: [rows[day] for day in sorted(rows)]
         for symbol, rows in by_symbol.items()
@@ -186,7 +327,7 @@ def load_market_history(
 
 
 def _market_load_window(
-    events: list[dict[str, Any]], *, horizon_days: int, history_lag_days: int = 70
+    events: list[dict[str, Any]], *, horizon_days: int, history_lag_days: int = 120
 ) -> tuple[set[str], str | None, str | None]:
     symbols: set[str] = set()
     event_days = []
@@ -332,7 +473,8 @@ def _row_before_or_on_indexed(
 
 
 def _event_day(ts: int) -> str:
-    return datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
+    instant = datetime.fromtimestamp(ts, tz=timezone.utc)
+    return EXCHANGE_CALENDAR.local_date(instant).isoformat()
 
 
 def _row_before_or_on(rows: list[dict[str, Any]], day: str) -> int | None:
@@ -672,12 +814,99 @@ def _pct(newer: float, older: float | None) -> float | None:
     return round((newer / float(older)) - 1.0, 6)
 
 
+def _session_distance(older: date, newer: date) -> int:
+    count = 0
+    candidate = older
+    while candidate < newer:
+        candidate += timedelta(days=1)
+        if EXCHANGE_CALENDAR.is_trading_day(candidate):
+            count += 1
+    return count
+
+
+def _bar_availability(row: dict[str, Any]) -> datetime | None:
+    return _parse_utc_datetime(row.get("available_at"))
+
+
+def _feature_index_for_decision(
+    rows: list[dict[str, Any]],
+    dates: list[str],
+    decision_at: datetime,
+    *,
+    max_staleness_sessions: int,
+) -> tuple[int | None, datetime | None, str | None]:
+    local_day = EXCHANGE_CALENDAR.local_date(decision_at)
+    current_idx = _row_before_or_on_indexed({"_": dates}, "_", local_day.isoformat())
+    current_row = rows[current_idx] if current_idx is not None else None
+    current_is_today = bool(
+        current_row and str(current_row.get("date")) == local_day.isoformat()
+    )
+    after_close = bool(
+        EXCHANGE_CALENDAR.is_trading_day(local_day)
+        and decision_at >= EXCHANGE_CALENDAR.session_close(local_day)
+    )
+    if current_is_today and after_close:
+        available_at = _bar_availability(current_row)
+        if available_at is None or available_at > decision_at:
+            return None, None, "current_session_provider_availability_unproven"
+        idx = current_idx
+        source_at = EXCHANGE_CALENDAR.session_close(local_day)
+        availability_at = available_at
+    else:
+        permitted_day = EXCHANGE_CALENDAR.previous_session(local_day)
+        idx = _row_before_or_on_indexed({"_": dates}, "_", permitted_day.isoformat())
+        if idx is None:
+            return None, None, "missing_completed_daily_bar"
+        source_day = date.fromisoformat(str(rows[idx]["date"]))
+        source_at = EXCHANGE_CALENDAR.session_close(source_day)
+        availability_at = _bar_availability(rows[idx]) or source_at
+        if availability_at > decision_at:
+            return None, None, "daily_bar_available_after_feature_cutoff"
+    source_day = date.fromisoformat(str(rows[idx]["date"]))
+    reference_day = (
+        local_day
+        if EXCHANGE_CALENDAR.is_trading_day(local_day)
+        else EXCHANGE_CALENDAR.previous_session(local_day, include_current=True)
+    )
+    if _session_distance(source_day, reference_day) > max_staleness_sessions:
+        return None, None, "stale_daily_bar"
+    return idx, availability_at, None
+
+
+def _exact_row_index(dates: list[str], day: date) -> int | None:
+    pos = bisect.bisect_left(dates, day.isoformat())
+    return pos if pos < len(dates) and dates[pos] == day.isoformat() else None
+
+
+def _advance_session(day: date, count: int) -> date:
+    result = day
+    for _ in range(max(0, count)):
+        result = EXCHANGE_CALENDAR.next_session(result)
+    return result
+
+
+def _feature_safe_splits(
+    events: list[dict[str, Any]], decision_at: datetime, market_session: date
+) -> list[dict[str, Any]]:
+    safe = []
+    for event in events:
+        execution_day = date.fromisoformat(str(event["execution_date"]))
+        available_at = _parse_utc_datetime(event.get("available_at"))
+        if available_at is not None and available_at <= decision_at:
+            safe.append(event)
+        elif execution_day < market_session:
+            safe.append(event)
+    return safe
+
+
 def build_training_rows_from_raw_market(
     events: list[dict[str, Any]],
     market: dict[str, list[dict[str, Any]]],
     *,
     horizon_days: int = 5,
     split_events: list[dict[str, Any]] | None = None,
+    max_staleness_sessions: int = DEFAULT_MAX_STALENESS_SESSIONS,
+    telemetry: BuildTelemetry | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     label_name = (
         TARGET_NAME
@@ -695,6 +924,10 @@ def build_training_rows_from_raw_market(
         "missing_symbol_history": 0,
         "insufficient_history": 0,
         "insufficient_forward_window": 0,
+        "rejected_unproven_availability": 0,
+        "rejected_stale_feature_family": 0,
+        "rejected_missing_context": 0,
+        "rejected_missing_entry_price": 0,
         "split_events_loaded": len(split_events),
         "training_rows_affected": 0,
         "feature_windows_crossing_splits": 0,
@@ -706,11 +939,54 @@ def build_training_rows_from_raw_market(
         "affected_label_rows": 0,
         "split_provenance": [],
     }
+    indexing_started = time.perf_counter()
     signal_index = _signal_history_index(events)
+    if telemetry:
+        telemetry.add("decision_log_indexing", time.perf_counter() - indexing_started)
+    indexing_started = time.perf_counter()
     date_index = _market_date_index(market)
+    if telemetry:
+        telemetry.add("market_history_indexing", time.perf_counter() - indexing_started)
     feature_cache: dict[tuple[str, int], dict[str, Any]] = {}
+    adjusted_history_cache: dict[
+        tuple[str, str, tuple[str, ...]], list[dict[str, Any]]
+    ] = {}
+    event_identity_counts: dict[str, int] = {}
+
+    def adjusted_history(
+        symbol: str,
+        raw: list[dict[str, Any]],
+        safe_splits: list[dict[str, Any]],
+        asof_day: str,
+    ) -> list[dict[str, Any]]:
+        key = (
+            symbol,
+            asof_day,
+            tuple(sorted(str(item.get("id") or "") for item in safe_splits)),
+        )
+        cached = adjusted_history_cache.get(key)
+        if cached is None:
+            started = time.perf_counter()
+            cached = adjust_bars_to_asof(raw, safe_splits, asof_day, audit=summary)
+            adjusted_history_cache[key] = cached
+            if telemetry:
+                telemetry.add(
+                    "split_adjusted_history_preparation", time.perf_counter() - started
+                )
+                telemetry.count("split_adjusted_history_cache_misses")
+        elif telemetry:
+            telemetry.count("split_adjusted_history_cache_hits")
+        return cached
+
+    observations_started = time.perf_counter()
     for event in events:
         summary["events_scanned"] += 1
+        if telemetry and summary["events_scanned"] % 5000 == 0:
+            telemetry.progress(
+                "build",
+                observations_processed=summary["events_scanned"],
+                observations_emitted=summary["rows_joined"],
+            )
         symbol = str(event.get("symbol") or "").strip().upper()
         ts = normalize_unix_ts(event.get("ts"))
         if not symbol or ts is None or symbol not in market:
@@ -728,52 +1004,104 @@ def build_training_rows_from_raw_market(
             ts,
             window_days=7,
         )
+        decision_at = datetime.fromtimestamp(ts, tz=timezone.utc)
         event_day = _event_day(ts)
-        raw_history = market[symbol]
-        history = adjust_bars_to_asof(
-            raw_history, splits_by_symbol.get(symbol, []), event_day, audit=summary
+        market_session = date.fromisoformat(event_day)
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        snapshot = (
+            event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
         )
+        sector_benchmark_symbol = _sector_benchmark_symbol(event, payload, snapshot)
+        raw_history = market[symbol]
+        if len(raw_history) < 6:
+            summary["insufficient_history"] += 1
+            continue
+        idx, symbol_available_at, symbol_rejection = _feature_index_for_decision(
+            raw_history,
+            date_index.get(symbol, []),
+            decision_at,
+            max_staleness_sessions=max_staleness_sessions,
+        )
+        if idx is None:
+            if symbol_rejection == "stale_daily_bar":
+                summary["rejected_stale_feature_family"] += 1
+            else:
+                summary["rejected_unproven_availability"] += 1
+            continue
+        feature_day = str(raw_history[idx]["date"])
+        feature_splits = _feature_safe_splits(
+            splits_by_symbol.get(symbol, []), decision_at, market_session
+        )
+        history = adjusted_history(symbol, raw_history, feature_splits, feature_day)
         raw_spy_history = market.get("SPY")
-        spy_history = (
-            adjust_bars_to_asof(
+        context_required = True
+        if context_required and raw_spy_history is None:
+            summary["rejected_missing_context"] += 1
+            continue
+        spy_idx = None
+        spy_available_at = None
+        if raw_spy_history:
+            spy_idx, spy_available_at, spy_rejection = _feature_index_for_decision(
                 raw_spy_history,
-                splits_by_symbol.get("SPY", []),
-                event_day,
-                audit=summary,
+                date_index.get("SPY", []),
+                decision_at,
+                max_staleness_sessions=max_staleness_sessions,
+            )
+            if spy_idx is None:
+                if spy_rejection == "stale_daily_bar":
+                    summary["rejected_stale_feature_family"] += 1
+                else:
+                    summary["rejected_unproven_availability"] += 1
+                continue
+        spy_history = (
+            adjusted_history(
+                "SPY",
+                raw_spy_history,
+                _feature_safe_splits(
+                    splits_by_symbol.get("SPY", []), decision_at, market_session
+                ),
+                str(raw_spy_history[spy_idx]["date"]),
             )
             if raw_spy_history
             else None
         )
-        spy_idx = (
-            _row_before_or_on_indexed(date_index, "SPY", event_day)
-            if spy_history
-            else None
-        )
-        idx = _row_before_or_on_indexed(date_index, symbol, event_day)
         if idx is None or idx < 5:
             summary["insufficient_history"] += 1
             continue
-        label_idx = idx + max(1, horizon_days)
-        if label_idx >= len(history):
+
+        entry_session = EXCHANGE_CALENDAR.entry_session_after(decision_at)
+        exit_session = _advance_session(entry_session, max(1, horizon_days) - 1)
+        entry_idx = _exact_row_index(date_index.get(symbol, []), entry_session)
+        label_idx = _exact_row_index(date_index.get(symbol, []), exit_session)
+        if (
+            entry_idx is None
+            or _coerce_float(raw_history[entry_idx].get("open")) is None
+        ):
+            summary["rejected_missing_entry_price"] += 1
+            continue
+        if (
+            label_idx is None
+            or _coerce_float(raw_history[label_idx].get("close")) is None
+        ):
             summary["insufficient_forward_window"] += 1
             continue
 
         asof = history[idx]
-        raw_asof = raw_history[idx]
         prev1 = history[idx - 1]
         prev5 = history[idx - 5]
         prev10 = history[idx - 10] if idx >= 10 else {}
         prev20 = history[idx - 20] if idx >= 20 else {}
+        entry = raw_history[entry_idx]
         future = raw_history[label_idx]
         close = float(asof["close"])
         label_factor = price_factor_between(
-            splits_by_symbol.get(symbol, []), str(raw_asof["date"]), str(future["date"])
+            splits_by_symbol.get(symbol, []), str(entry["date"]), str(future["date"])
         )
         return_fwd = round(
             split_adjusted_forward_return(
-                float(raw_asof["close"]),
+                float(entry["open"]),
                 float(future["close"]),
-                str(raw_asof["date"]),
+                str(entry["date"]),
                 str(future["date"]),
                 splits_by_symbol.get(symbol, []),
             ),
@@ -790,7 +1118,7 @@ def build_training_rows_from_raw_market(
         label_split_ids = [
             str(item.get("id") or "")
             for item in splits_by_symbol.get(symbol, [])
-            if str(raw_asof["date"]) < item["execution_date"] <= str(future["date"])
+            if str(entry["date"]) < item["execution_date"] <= str(future["date"])
         ]
         if feature_split_ids:
             summary["feature_windows_crossing_splits"] += 1
@@ -819,15 +1147,12 @@ def build_training_rows_from_raw_market(
                     "label_cumulative_adjustment_factor": label_factor,
                 }
             )
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-        snapshot = (
-            event.get("snapshot") if isinstance(event.get("snapshot"), dict) else {}
-        )
         current_action = normalize_action(event)
         current_probability = _event_probability_up(event)
         cache_key = (symbol, idx, event_day)
         cached_features = feature_cache.get(cache_key)
         if cached_features is None:
+            feature_started = time.perf_counter()
             sma_10_cached = _rolling_close_mean(history, idx, 10)
             sma_20_cached = _rolling_close_mean(history, idx, 20)
             sma_50_cached = _rolling_close_mean(history, idx, 50)
@@ -870,6 +1195,13 @@ def build_training_rows_from_raw_market(
                 "vwap_slope": _vwap_slope(history, idx, 10, 20),
             }
             feature_cache[cache_key] = cached_features
+            if telemetry:
+                telemetry.add(
+                    "feature_construction", time.perf_counter() - feature_started
+                )
+                telemetry.count("feature_cache_misses")
+        elif telemetry:
+            telemetry.count("feature_cache_hits")
         sma_10 = cached_features["sma_10"]
         sma_20 = cached_features["sma_20"]
         sma_50 = cached_features["sma_50"]
@@ -895,29 +1227,157 @@ def build_training_rows_from_raw_market(
             asof_date=event_day,
         )
         spy_return_5d = _lagged_return(spy_history, spy_idx, 5)
-        sector_benchmark_symbol = _sector_benchmark_symbol(event, payload, snapshot)
         raw_sector_history = market.get(sector_benchmark_symbol)
-        sector_history = (
-            adjust_bars_to_asof(
+        sector_idx = None
+        sector_available_at = None
+        if sector_benchmark_symbol != "SPY" and context_required:
+            if raw_sector_history is None:
+                summary["rejected_missing_context"] += 1
+                continue
+            (
+                sector_idx,
+                sector_available_at,
+                sector_rejection,
+            ) = _feature_index_for_decision(
                 raw_sector_history,
-                splits_by_symbol.get(sector_benchmark_symbol, []),
-                event_day,
-                audit=summary,
+                date_index.get(sector_benchmark_symbol, []),
+                decision_at,
+                max_staleness_sessions=max_staleness_sessions,
+            )
+            if sector_idx is None:
+                if sector_rejection == "stale_daily_bar":
+                    summary["rejected_stale_feature_family"] += 1
+                else:
+                    summary["rejected_unproven_availability"] += 1
+                continue
+        elif sector_benchmark_symbol == "SPY":
+            sector_idx = spy_idx
+            sector_available_at = spy_available_at
+        sector_history = (
+            adjusted_history(
+                sector_benchmark_symbol,
+                raw_sector_history,
+                _feature_safe_splits(
+                    splits_by_symbol.get(sector_benchmark_symbol, []),
+                    decision_at,
+                    market_session,
+                ),
+                str(raw_sector_history[sector_idx]["date"]),
             )
             if raw_sector_history
             else None
         )
-        sector_idx = (
-            _row_before_or_on_indexed(date_index, sector_benchmark_symbol, event_day)
-            if sector_history
-            else None
-        )
         sector_return_5d = _lagged_return(sector_history, sector_idx, 5)
+        event_fingerprint = hashlib.sha256(
+            json.dumps(
+                event, sort_keys=True, default=str, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+        event_occurrence = event_identity_counts.get(event_fingerprint, 0)
+        event_identity_counts[event_fingerprint] = event_occurrence + 1
+        fallback_decision_id = f"event_{event_fingerprint}_{event_occurrence}"
+        entry_at = EXCHANGE_CALENDAR.session_open(entry_session)
+        exit_at = EXCHANGE_CALENDAR.session_close(exit_session)
+        feature_source_at = {
+            "symbol_daily": EXCHANGE_CALENDAR.session_close(
+                date.fromisoformat(str(asof["date"]))
+            )
+        }
+        feature_availability_at = {
+            "symbol_daily": (
+                symbol_available_at.isoformat() if symbol_available_at else None
+            )
+        }
+        if spy_history and spy_idx is not None:
+            feature_source_at["spy_daily"] = EXCHANGE_CALENDAR.session_close(
+                date.fromisoformat(str(spy_history[spy_idx]["date"]))
+            )
+            feature_availability_at["spy_daily"] = (
+                spy_available_at.isoformat() if spy_available_at else None
+            )
+            feature_source_at["market_regime"] = feature_source_at["spy_daily"]
+            feature_availability_at["market_regime"] = feature_availability_at[
+                "spy_daily"
+            ]
+            feature_source_at["volatility_proxy"] = feature_source_at["spy_daily"]
+            feature_availability_at["volatility_proxy"] = feature_availability_at[
+                "spy_daily"
+            ]
+        if sector_history and sector_idx is not None:
+            feature_source_at["sector_daily"] = EXCHANGE_CALENDAR.session_close(
+                date.fromisoformat(str(sector_history[sector_idx]["date"]))
+            )
+            feature_availability_at["sector_daily"] = (
+                sector_available_at.isoformat() if sector_available_at else None
+            )
+        timing = AlphaAtlasV4TimingRecord(
+            decision_id=str(event.get("decision_id") or fallback_decision_id),
+            symbol=symbol,
+            point_in_time_symbol_id=str(
+                event.get("point_in_time_symbol_id") or f"{symbol}:{event_day}"
+            ),
+            exchange=str(event.get("exchange") or "XNAS"),
+            trading_calendar=EXCHANGE_CALENDAR.identifier,
+            model_feature_contract_version=V4_FEATURE_CONTRACT_VERSION,
+            decision_at=decision_at,
+            feature_cutoff_at=decision_at,
+            latest_source_bar_at=feature_source_at,
+            entry_at=entry_at,
+            label_start_at=entry_at,
+            exit_at=exit_at,
+            entry_price_source="official_regular_session_open",
+            exit_price_source="official_regular_session_close",
+            data_provider_id=str(event.get("data_provider_id") or "massive-flatfile"),
+            corporate_action_adjustment_ids=tuple(
+                sorted(set(feature_split_ids + label_split_ids))
+            ),
+            staleness_status="fresh",
+            rejection_reason=None,
+            code_commit=str(event.get("code_commit") or "unrecorded-research-commit"),
+            dataset_manifest_hash=str(
+                event.get("dataset_manifest_hash") or "pending-write-manifest"
+            ),
+            transaction_cost_bps=None,
+            entry_slippage_bps=None,
+            exit_slippage_bps=None,
+        )
         row = {
             "ts": ts,
+            "decision_id": timing.decision_id,
             "event_date": event_day,
             "market_asof_date": asof["date"],
+            "feature_market_asof_date": asof["date"],
             "label_asof_date": future["date"],
+            "timing_contract_version": ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
+            "model_feature_contract_version": timing.model_feature_contract_version,
+            "label_horizon_sessions": max(1, horizon_days),
+            "lane": str(event.get("lane") or "track_b_research"),
+            "universe_policy_version": str(
+                event.get("universe_policy_version") or "track-b-us-equities.v1"
+            ),
+            "execution_cost_policy_version": event.get("execution_cost_policy_version"),
+            "decision_at": timing.decision_at.isoformat(),
+            "feature_cutoff_at": timing.feature_cutoff_at.isoformat(),
+            "entry_at": timing.entry_at.isoformat(),
+            "entry_session_date": entry_session,
+            "label_start_at": timing.label_start_at.isoformat(),
+            "exit_at": timing.exit_at.isoformat(),
+            "exit_session_date": exit_session,
+            "market_session_date": event_day,
+            "feature_family_source_at": {
+                key: value.isoformat() for key, value in feature_source_at.items()
+            },
+            "feature_family_available_at": feature_availability_at,
+            "entry_price_source": timing.entry_price_source,
+            "exit_price_source": timing.exit_price_source,
+            "exchange_calendar": timing.trading_calendar,
+            "staleness_status": timing.staleness_status,
+            "staleness_tolerance_sessions": max_staleness_sessions,
+            "rejection_reason": None,
+            "point_in_time_symbol_id": timing.point_in_time_symbol_id,
+            "corporate_action_availability_policy": "feature_actions_known_by_cutoff;label_actions_realized_in_horizon",
+            "code_commit": timing.code_commit,
+            "dataset_manifest_hash": timing.dataset_manifest_hash,
             "corporate_action_schema_version": CORPORATE_ACTION_SCHEMA_VERSION,
             "canonical_dataset_schema_version": SCHEMA_VERSION,
             "split_metadata_hash": metadata_hash,
@@ -926,7 +1386,12 @@ def build_training_rows_from_raw_market(
             "feature_split_ids": feature_split_ids,
             "label_split_ids": label_split_ids,
             "label_split_adjustment_factor": label_factor,
+            "raw_entry_price": float(entry["open"]),
+            "adjusted_entry_price": float(entry["open"]) * label_factor,
+            "raw_exit_price": float(future["close"]),
+            "adjusted_exit_price": float(future["close"]),
             "symbol": symbol,
+            "sector_benchmark_symbol": sector_benchmark_symbol,
             "endpoint": str(event.get("endpoint") or "unknown"),
             "decision_source": str(event.get("decision_source") or "unknown"),
             "recommendation": normalize_action(event),
@@ -937,29 +1402,50 @@ def build_training_rows_from_raw_market(
                 "model_version", payload.get("model_version")
             ),
             "feature_close": close,
-            "feature_symbol_signal_count_7d": signal_counts_7d["signals"],
-            "feature_symbol_buy_count_7d": signal_counts_7d["buys"],
-            "feature_symbol_sell_count_7d": signal_counts_7d["sells"],
-            "feature_days_since_last_signal": (
-                round((ts - previous_signal_ts) / 86_400, 6)
-                if previous_signal_ts is not None
-                else None
-            ),
-            "feature_previous_recommendation_buy": (
-                int(previous_action in {"BUY", "STRONG BUY"})
-                if previous_action is not None
-                else 0
-            ),
-            "feature_recommendation_changed": (
-                int(previous_action != current_action)
-                if previous_action is not None
-                else 0
-            ),
-            "feature_probability_up_delta_from_last_signal": (
-                round(current_probability - previous_probability, 6)
-                if current_probability is not None and previous_probability is not None
-                else None
-            ),
+            "request_prior_state": {
+                "symbol_signal_count_7d": signal_counts_7d["signals"],
+                "symbol_buy_count_7d": signal_counts_7d["buys"],
+                "symbol_sell_count_7d": signal_counts_7d["sells"],
+                "days_since_last_signal": (
+                    round((ts - previous_signal_ts) / 86_400, 6)
+                    if previous_signal_ts is not None
+                    else None
+                ),
+                "previous_recommendation_buy": (
+                    int(previous_action in {"BUY", "STRONG BUY"})
+                    if previous_action is not None
+                    else 0
+                ),
+                "recommendation_changed": (
+                    int(previous_action != current_action)
+                    if previous_action is not None
+                    else 0
+                ),
+                "probability_up_delta_from_last_signal": (
+                    round(current_probability - previous_probability, 6)
+                    if current_probability is not None
+                    and previous_probability is not None
+                    else None
+                ),
+                "prior_signal_at": (
+                    datetime.fromtimestamp(
+                        previous_signal_ts, tz=timezone.utc
+                    ).isoformat()
+                    if previous_signal_ts is not None
+                    else None
+                ),
+                "prior_signal_source_identifier": (
+                    str(
+                        (previous_signal.get("snapshot") or {}).get("model_version")
+                        or (previous_signal.get("payload") or {}).get("model_version")
+                        or previous_signal.get("decision_source")
+                        or "unknown"
+                    )
+                    if isinstance(previous_signal, dict)
+                    else None
+                ),
+                "classification": "request_level_prior_model_and_recommendation_history",
+            },
             "feature_sma_10": sma_10,
             "feature_sma_20": sma_20,
             "feature_sma_50": sma_50,
@@ -1024,14 +1510,478 @@ def build_training_rows_from_raw_market(
             ),
             f"return_{horizon_days}d": return_fwd,
             label_name: label_from_forward_return(return_fwd),
-            "leakage_guard": "features_asof_market_close_on_or_before_decision_date_labels_after_decision_date",
+            "leakage_guard": "v4_features_at_or_before_cutoff_executable_open_entry_s0_close_exit",
         }
         # The V3 allowlist is always materialized by the shared train/serve
         # engine so production cannot drift from these training definitions.
         row.update(shared_v3_features)
         rows.append(row)
         summary["rows_joined"] += 1
+    if telemetry:
+        telemetry.add(
+            "observation_and_feature_construction",
+            time.perf_counter() - observations_started,
+        )
+        telemetry.count("observations_processed", summary["events_scanned"])
+        telemetry.count("observations_emitted", summary["rows_joined"])
     return rows, summary
+
+
+def _json_sha256(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, default=str, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _write_jsonl_records(path: Path, records: Iterable[dict[str, Any]]) -> str:
+    payload = "".join(
+        json.dumps(record, sort_keys=True, default=str, separators=(",", ":")) + "\n"
+        for record in records
+    )
+    path.write_text(payload, encoding="utf-8")
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _evidence_market_record(bar: dict[str, Any], *, basis: str) -> dict[str, Any]:
+    values = {
+        key: bar.get(key)
+        for key in ("symbol", "date", "open", "high", "low", "close", "volume")
+    }
+    adjustment = {
+        "basis": basis,
+        "split_adjustment_factor": float(bar.get("_split_adjustment_factor", 1.0)),
+        "applicable_split_ids": sorted(bar.get("_applicable_split_ids") or []),
+    }
+    source_row_id = "source_row_" + _json_sha256(
+        {
+            "source_object_id": bar.get("_source_object_id"),
+            "source_raw_row_sha256": bar.get("_source_raw_row_sha256"),
+            "values": values,
+            "adjustment": adjustment,
+        }
+    )
+    session = date.fromisoformat(str(bar["date"]))
+    explicit = _parse_utc_datetime(bar.get("available_at"))
+    availability = (
+        {
+            "kind": "EXPLICIT_PROVIDER_AVAILABILITY",
+            "available_at": explicit.isoformat(),
+        }
+        if explicit
+        else {
+            "kind": "OFFICIAL_SESSION_CLOSE_POLICY",
+            "policy_version": MARKET_AVAILABILITY_POLICY_VERSION,
+            "calendar_contract_version": EXCHANGE_CALENDAR.identifier,
+            "session_date": session.isoformat(),
+        }
+    )
+    return {
+        "source_row_id": source_row_id,
+        "source_object_id": bar.get("_source_object_id"),
+        "source_raw_row_sha256": bar.get("_source_raw_row_sha256"),
+        **values,
+        "adjustment": adjustment,
+        "source_event_timestamp": EXCHANGE_CALENDAR.session_close(session).isoformat(),
+        "source_event_timestamp_semantics": "official_regular_session_close",
+        "availability_evidence": availability,
+        "row_content_sha256": _json_sha256(
+            {"values": values, "adjustment": adjustment}
+        ),
+    }
+
+
+def emit_phase0_evidence_bundle(
+    *,
+    rows: list[dict[str, Any]],
+    market: dict[str, list[dict[str, Any]]],
+    split_events: list[dict[str, Any]],
+    split_cache_path: Path,
+    raw_root: Path,
+    evidence_dir: Path,
+    max_selected_rows: int,
+    max_bundle_bytes: int,
+    telemetry: BuildTelemetry | None = None,
+) -> dict[str, Any]:
+    """Persist compact, deduplicated evidence used by the production V4 builder."""
+    from moneybot.services.alpha_atlas_v4_canonical_observations import (
+        CANONICAL_OBSERVATION_CONTRACT_VERSION,
+        canonical_observation_id,
+    )
+    from moneybot.services.alpha_atlas_v4_phase0 import feature_registry
+
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    source_objects: dict[str, dict[str, Any]] = {}
+    selected: dict[str, dict[str, Any]] = {}
+    identities: dict[str, dict[str, Any]] = {}
+    actions: dict[str, dict[str, Any]] = {}
+    lineages: dict[str, dict[str, Any]] = {}
+    splits_by_symbol = index_splits(split_events)
+    date_indices = _market_date_index(market)
+    positions = {
+        symbol: {day: index for index, day in enumerate(days)}
+        for symbol, days in date_indices.items()
+    }
+    split_cache_hash = _sha256_file(split_cache_path)
+    adjusted_cache: dict[tuple[str, str, tuple[str, ...]], list[dict[str, Any]]] = {}
+    window_cache: dict[tuple[str, int, tuple[str, ...]], list[str]] = {}
+    market_record_cache: dict[tuple[str, float, tuple[str, ...]], dict[str, Any]] = {}
+    canonical_lineage_refs: dict[str, dict[str, Any]] = {}
+    registry_hash = feature_registry()["registry_sha256"]
+
+    def adjusted(
+        symbol: str,
+        raw: list[dict[str, Any]],
+        safe_splits: list[dict[str, Any]],
+        asof_day: str,
+    ) -> tuple[list[dict[str, Any]], tuple[str, ...]]:
+        split_ids = tuple(sorted(str(item.get("id") or "") for item in safe_splits))
+        key = (symbol, asof_day, split_ids)
+        history = adjusted_cache.get(key)
+        if history is None:
+            started = time.perf_counter()
+            history = adjust_bars_to_asof(raw, safe_splits, asof_day)
+            adjusted_cache[key] = history
+            if telemetry:
+                telemetry.add(
+                    "lineage_split_adjusted_history_preparation",
+                    time.perf_counter() - started,
+                )
+                telemetry.count("lineage_adjusted_history_cache_misses")
+        elif telemetry:
+            telemetry.count("lineage_adjusted_history_cache_hits")
+        return history, split_ids
+
+    def add_window(bars: list[dict[str, Any]]) -> list[str]:
+        ids = []
+        for bar in bars:
+            object_id = str(bar.get("_source_object_id") or "")
+            if not object_id:
+                raise ValueError("market row lacks immutable source-object provenance")
+            source_objects.setdefault(
+                object_id,
+                {
+                    "source_object_id": object_id,
+                    "provider": "Massive",
+                    "dataset_family": "stocks_daily_aggregates",
+                    "relative_source_path": bar["_source_relative_path"],
+                    "sha256": bar["_source_object_sha256"],
+                    "size_bytes": int(bar["_source_object_size"]),
+                    "session_partition": str(bar["date"]),
+                    "schema_type": "normalized_daily_aggregate",
+                },
+            )
+            record_key = (
+                str(bar.get("_source_raw_row_sha256") or ""),
+                float(bar.get("_split_adjustment_factor", 1.0)),
+                tuple(sorted(bar.get("_applicable_split_ids") or [])),
+            )
+            record = market_record_cache.get(record_key)
+            if record is None:
+                identity_started = time.perf_counter()
+                record = _evidence_market_record(bar, basis="event_time_split_adjusted")
+                market_record_cache[record_key] = record
+                if telemetry:
+                    telemetry.add(
+                        "source_row_identity_generation",
+                        time.perf_counter() - identity_started,
+                    )
+                    telemetry.count("selected_row_identities_computed")
+            elif telemetry:
+                telemetry.count("selected_row_identity_cache_hits")
+            selected.setdefault(record["source_row_id"], record)
+            ids.append(record["source_row_id"])
+            if len(selected) > max_selected_rows:
+                raise ValueError("PHASE0_EVIDENCE_BUNDLE_TOO_LARGE:selected_row_limit")
+        return ids
+
+    lineage_started = time.perf_counter()
+    for row_number, row in enumerate(rows, 1):
+        canonical_id = canonical_observation_id(row)
+        reused = canonical_lineage_refs.get(canonical_id)
+        if reused is not None:
+            row["reconstruction_lineage"] = dict(reused)
+            if telemetry:
+                telemetry.count("duplicate_observation_lineage_reused")
+            continue
+        if telemetry and row_number % 5000 == 0:
+            telemetry.progress(
+                "lineage",
+                observations_processed=row_number,
+                selected_rows=len(selected),
+            )
+        symbol = str(row["symbol"])
+        cutoff = datetime.fromisoformat(str(row["feature_cutoff_at"]))
+        market_session = date.fromisoformat(str(row["market_session_date"]))
+        feature_day = str(row["feature_market_asof_date"])
+        symbol_raw = market[symbol]
+        symbol_idx = positions[symbol][feature_day]
+        symbol_history, symbol_split_ids = adjusted(
+            symbol,
+            symbol_raw,
+            _feature_safe_splits(
+                splits_by_symbol.get(symbol, []), cutoff, market_session
+            ),
+            feature_day,
+        )
+        spy_raw = market["SPY"]
+        spy_idx = bisect.bisect_right(date_indices["SPY"], feature_day) - 1
+        spy_history, spy_split_ids = adjusted(
+            "SPY",
+            spy_raw,
+            _feature_safe_splits(
+                splits_by_symbol.get("SPY", []), cutoff, market_session
+            ),
+            str(spy_raw[spy_idx]["date"]),
+        )
+        sector_symbol = str(row.get("sector_benchmark_symbol") or "SPY")
+        sector_raw = market[sector_symbol]
+        sector_idx = bisect.bisect_right(date_indices[sector_symbol], feature_day) - 1
+        sector_history, sector_split_ids = adjusted(
+            sector_symbol,
+            sector_raw,
+            _feature_safe_splits(
+                splits_by_symbol.get(sector_symbol, []), cutoff, market_session
+            ),
+            str(sector_raw[sector_idx]["date"]),
+        )
+        entry_idx = positions[symbol][str(row["entry_session_date"])]
+        exit_idx = positions[symbol][str(row["exit_session_date"])]
+
+        def window_ids(
+            key: tuple[str, int, tuple[str, ...]],
+            history: list[dict[str, Any]],
+            idx: int,
+        ) -> list[str]:
+            cached_ids = window_cache.get(key)
+            if cached_ids is None:
+                started = time.perf_counter()
+                cached_ids = add_window(history[: idx + 1])
+                window_cache[key] = cached_ids
+                if telemetry:
+                    telemetry.add(
+                        "source_window_selection", time.perf_counter() - started
+                    )
+                    telemetry.count("source_window_cache_misses")
+            elif telemetry:
+                telemetry.count("source_window_cache_hits")
+            return cached_ids
+
+        symbol_ids = window_ids(
+            (symbol, symbol_idx, symbol_split_ids), symbol_history, symbol_idx
+        )
+        spy_ids = window_ids(("SPY", spy_idx, spy_split_ids), spy_history, spy_idx)
+        sector_ids = window_ids(
+            (sector_symbol, sector_idx, sector_split_ids), sector_history, sector_idx
+        )
+        entry_id = add_window([symbol_raw[entry_idx]])[0]
+        exit_id = add_window([symbol_raw[exit_idx]])[0]
+
+        identity_started = time.perf_counter()
+        identity_id = "identity_" + _json_sha256(
+            {
+                "ticker": symbol,
+                "decision_at": row["decision_at"],
+                "decision_id": row["decision_id"],
+                "point_in_time_symbol_id": row["point_in_time_symbol_id"],
+            }
+        )
+        identities.setdefault(
+            identity_id,
+            {
+                "security_identity_evidence_id": identity_id,
+                "evidence_class": "REQUEST_EVENT_IDENTITY",
+                "ticker": symbol,
+                "decision_at": row["decision_at"],
+                "source": "immutable_decision_event",
+                "source_record_sha256": _json_sha256(
+                    {
+                        "decision_id": row["decision_id"],
+                        "ticker": symbol,
+                        "decision_at": row["decision_at"],
+                    }
+                ),
+                "point_in_time_symbol_id": row["point_in_time_symbol_id"],
+                "historical_universe_certification_eligible": False,
+            },
+        )
+        if telemetry:
+            telemetry.add(
+                "security_identity_evidence", time.perf_counter() - identity_started
+            )
+        relevant_ids = sorted(
+            set(
+                (row.get("feature_split_ids") or [])
+                + (row.get("label_split_ids") or [])
+            )
+        )
+        relevant = [
+            item
+            for item in splits_by_symbol.get(symbol, [])
+            if str(item.get("id")) in relevant_ids
+        ]
+        action_started = time.perf_counter()
+        action_id = "corporate_actions_" + _json_sha256(
+            {
+                "symbol": symbol,
+                "source_sha256": split_cache_hash,
+                "action_ids": relevant_ids,
+            }
+        )
+        actions.setdefault(
+            action_id,
+            {
+                "corporate_action_evidence_id": action_id,
+                "symbol": symbol,
+                "inspected_source_label": split_cache_path.name,
+                "inspected_source_sha256": split_cache_hash,
+                "disposition": (
+                    "RELEVANT_ACTIONS_RECORDED"
+                    if relevant
+                    else "NO_RELEVANT_ACTION_IN_INSPECTED_SOURCE"
+                ),
+                "actions": relevant,
+            },
+        )
+        if telemetry:
+            telemetry.add(
+                "corporate_action_evidence", time.perf_counter() - action_started
+            )
+        lineage_id = "lineage_" + _json_sha256(
+            {
+                "canonical_observation_id": canonical_id,
+                "symbol_row_ids": symbol_ids,
+                "entry_row_id": entry_id,
+                "exit_row_id": exit_id,
+            }
+        )
+        lineage_record = {
+            "lineage_id": lineage_id,
+            "canonical_observation_id": canonical_id,
+            "security_identity_evidence_id": identity_id,
+            "symbol": symbol,
+            "symbol_row_ids": symbol_ids,
+            "symbol_source_index": len(symbol_ids) - 1,
+            "spy_row_ids": spy_ids,
+            "spy_source_index": len(spy_ids) - 1,
+            "sector_symbol": sector_symbol,
+            "sector_row_ids": sector_ids,
+            "sector_source_index": len(sector_ids) - 1,
+            "entry_row_id": entry_id,
+            "exit_5_row_id": (
+                exit_id if int(row["label_horizon_sessions"]) == 5 else None
+            ),
+            "exit_10_row_id": (
+                exit_id if int(row["label_horizon_sessions"]) == 10 else None
+            ),
+            "exit_row_id": exit_id,
+            "corporate_action_evidence_id": action_id,
+            "feature_contract_version": V4_FEATURE_CONTRACT_VERSION,
+            "timing_contract_version": ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
+            "canonicalization_contract_version": CANONICAL_OBSERVATION_CONTRACT_VERSION,
+            "calendar_contract_version": EXCHANGE_CALENDAR.identifier,
+            "calculation_engine_version": CALCULATION_ENGINE_VERSION,
+            "feature_registry_sha256": registry_hash,
+        }
+        lineages.setdefault(lineage_id, lineage_record)
+        row["reconstruction_lineage"] = {
+            "schema_version": RECONSTRUCTION_LINEAGE_VERSION,
+            "evidence_manifest_path": "source_evidence_manifest.json",
+            "lineage_id": lineage_id,
+        }
+        canonical_lineage_refs[canonical_id] = dict(row["reconstruction_lineage"])
+
+    if telemetry:
+        telemetry.add(
+            "lineage_accumulation_and_deduplication",
+            time.perf_counter() - lineage_started,
+        )
+        telemetry.count("selected_source_rows", len(selected))
+        telemetry.count("canonical_lineages", len(lineages))
+
+    files = {
+        "source_objects.jsonl": sorted(
+            source_objects.values(), key=lambda item: item["source_object_id"]
+        ),
+        "selected_market_rows.jsonl": sorted(
+            selected.values(), key=lambda item: item["source_row_id"]
+        ),
+        "corporate_action_evidence.jsonl": sorted(
+            actions.values(), key=lambda item: item["corporate_action_evidence_id"]
+        ),
+        "security_identity_evidence.jsonl": sorted(
+            identities.values(), key=lambda item: item["security_identity_evidence_id"]
+        ),
+        "observation_lineage.jsonl": sorted(
+            lineages.values(), key=lambda item: item["lineage_id"]
+        ),
+    }
+    serialization_started = time.perf_counter()
+    file_entries = {}
+    for name, records in files.items():
+        digest = _write_jsonl_records(evidence_dir / name, records)
+        file_entries[name] = {
+            "sha256": digest,
+            "records": len(records),
+            "size_bytes": (evidence_dir / name).stat().st_size,
+        }
+    manifest = {
+        "schema_version": RECONSTRUCTION_LINEAGE_VERSION,
+        "availability_policy_version": MARKET_AVAILABILITY_POLICY_VERSION,
+        "feature_contract_version": V4_FEATURE_CONTRACT_VERSION,
+        "timing_contract_version": ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
+        "source_root_relative_path": os.path.relpath(
+            raw_root.resolve(), evidence_dir.resolve()
+        ),
+        "corporate_action_source_relative_path": os.path.relpath(
+            split_cache_path.resolve(), evidence_dir.resolve()
+        ),
+        "corporate_action_source_sha256": split_cache_hash,
+        "files": file_entries,
+        "metrics": {
+            "unique_source_objects": len(source_objects),
+            "selected_source_rows": len(selected),
+            "raw_request_observations": len(rows),
+            "canonical_economic_observations": len(lineages),
+        },
+    }
+    manifest_path = evidence_dir / "source_evidence_manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    manifest_hash = _sha256_file(manifest_path)
+    for row in rows:
+        row["reconstruction_lineage"]["source_evidence_manifest_sha256"] = manifest_hash
+    for _ in range(4):
+        bundle_bytes = sum(
+            path.stat().st_size for path in evidence_dir.iterdir() if path.is_file()
+        )
+        metrics = {
+            "evidence_bundle_bytes": bundle_bytes,
+            "average_bytes_per_observation": round(bundle_bytes / max(1, len(rows)), 3),
+        }
+        if all(manifest["metrics"].get(key) == value for key, value in metrics.items()):
+            break
+        manifest["metrics"].update(metrics)
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    bundle_bytes = sum(
+        path.stat().st_size for path in evidence_dir.iterdir() if path.is_file()
+    )
+    if bundle_bytes > max_bundle_bytes:
+        raise ValueError("PHASE0_EVIDENCE_BUNDLE_TOO_LARGE:byte_limit")
+    final_hash = _sha256_file(manifest_path)
+    for row in rows:
+        row["reconstruction_lineage"]["source_evidence_manifest_sha256"] = final_hash
+    manifest["manifest_sha256"] = final_hash
+    if telemetry:
+        telemetry.add(
+            "evidence_serialization", time.perf_counter() - serialization_started
+        )
+        telemetry.progress(
+            "lineage_complete", selected_rows=len(selected), lineages=len(lineages)
+        )
+    return manifest
 
 
 def write_rows(
@@ -1043,25 +1993,56 @@ def write_rows(
     decision_log: Path,
     horizon_days: int,
     split_metadata_hash: str,
+    output_path_label: Path | None = None,
+    telemetry: BuildTelemetry | None = None,
 ) -> dict[str, Any]:
+    hashing_started = time.perf_counter()
     path.parent.mkdir(parents=True, exist_ok=True)
+    dataset_digest = hashlib.sha256()
+    for row in rows:
+        dataset_digest.update(
+            (
+                json.dumps(row, sort_keys=True, default=str, separators=(",", ":"))
+                + "\n"
+            ).encode("utf-8")
+        )
+    dataset_manifest_hash = dataset_digest.hexdigest()
+    if telemetry:
+        telemetry.add("manifest_hashing", time.perf_counter() - hashing_started)
+    serialization_started = time.perf_counter()
     with path.open("w", encoding="utf-8") as fh:
         for row in rows:
+            if (
+                row.get("timing_contract_version")
+                == ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION
+            ):
+                row["dataset_manifest_hash"] = dataset_manifest_hash
             fh.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+    if telemetry:
+        telemetry.add(
+            "raw_observation_serialization", time.perf_counter() - serialization_started
+        )
+    finalization_started = time.perf_counter()
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "raw_market_root": str(raw_root),
         "decision_log": str(decision_log),
-        "output_path": str(path),
+        "output_path": str(output_path_label or path),
         "horizon_days": horizon_days,
-        "leakage_safe": True,
+        "temporal_safety": {
+            "schema_version": "alpha-atlas-v4-temporal-safety-certification.v1",
+            "status": "NOT_EVALUATED",
+            "reason": "builder output has not yet been independently reconstructed and hash-certified",
+            "legacy_leakage_safe_accepted": False,
+        },
         "corporate_action_normalization_required": True,
         "corporate_action_normalization_passed": True,
         "price_adjustment_policy": "event_time_split_adjusted",
         "volume_adjustment_policy": "inverse_split_factor",
         "split_source": "massive",
         "split_metadata_hash": split_metadata_hash,
+        "dataset_manifest_hash": dataset_manifest_hash,
         "corporate_action_schema_version": CORPORATE_ACTION_SCHEMA_VERSION,
         "decision_target": (
             target_metadata()
@@ -1072,13 +2053,21 @@ def write_rows(
                 "positive_class_semantics": "strictly positive forward return",
             }
         ),
-        "join_policy": "last_market_row_on_or_before_decision_date; labels strictly after that row",
+        "timing_contract_version": ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
+        "model_feature_contract_version": V4_FEATURE_CONTRACT_VERSION,
+        "exchange_calendar": EXCHANGE_CALENDAR.identifier,
+        "staleness_tolerance_sessions": DEFAULT_MAX_STALENESS_SESSIONS,
+        "join_policy": "point-in-time completed daily bars; executable open entry; S0-based official close exit",
         **{key: value for key, value in summary.items() if key != "split_provenance"},
     }
     manifest_path = path.with_suffix(path.suffix + ".manifest.json")
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8"
     )
+    if telemetry:
+        telemetry.add(
+            "manifest_finalization", time.perf_counter() - finalization_started
+        )
     return manifest
 
 
@@ -1146,17 +2135,42 @@ def main() -> None:
     parser.add_argument(
         "--split-cache", default="data/track_b/corporate_actions/massive_splits.jsonl"
     )
+    parser.add_argument("--phase0-evidence-dir")
+    parser.add_argument("--phase0-max-selected-rows", type=int, default=2_000_000)
+    parser.add_argument("--phase0-max-evidence-bytes", type=int, default=1_073_741_824)
+    parser.add_argument("--performance-output")
     args = parser.parse_args()
+    telemetry = BuildTelemetry(
+        Path(args.performance_output) if args.performance_output else None
+    )
+    output_path = Path(args.output)
+    output_path.unlink(missing_ok=True)
+    output_path.with_suffix(output_path.suffix + ".manifest.json").unlink(
+        missing_ok=True
+    )
+    if args.phase0_evidence_dir:
+        final_evidence = Path(args.phase0_evidence_dir)
+        if final_evidence.exists():
+            shutil.rmtree(final_evidence)
     decision_log = Path(args.decision_log)
+    started = time.perf_counter()
     events = read_decision_events(decision_log, limit=max(1, args.limit))
+    telemetry.add("decision_log_loading", time.perf_counter() - started)
+    telemetry.count("decision_events_loaded", len(events))
+    telemetry.progress("decision_log_loaded", decision_events=len(events))
     raw_root = Path(args.raw_root)
     horizon_days = max(1, args.horizon_days)
     symbols, start_date, end_date = _market_load_window(
         events, horizon_days=horizon_days
     )
     market = load_market_history(
-        raw_root, symbols=symbols, start_date=start_date, end_date=end_date
+        raw_root,
+        symbols=symbols,
+        start_date=start_date,
+        end_date=end_date,
+        telemetry=telemetry,
     )
+    actions_started = time.perf_counter()
     split_events = load_split_cache(Path(args.split_cache))
     split_manifest_path = (
         Path(args.split_cache).parent / "split_adjustment_manifest.json"
@@ -1175,11 +2189,16 @@ def main() -> None:
         raise SystemExit(
             "Canonical split metadata cache does not match its manifest/hash"
         )
-    raw_rows, _ = build_training_rows_from_raw_market(
-        events, market, horizon_days=horizon_days, split_events=[]
+    telemetry.add(
+        "corporate_action_loading_and_indexing", time.perf_counter() - actions_started
     )
+    telemetry.count("corporate_actions_loaded", len(split_events))
     rows, summary = build_training_rows_from_raw_market(
-        events, market, horizon_days=horizon_days, split_events=split_events
+        events,
+        market,
+        horizon_days=horizon_days,
+        split_events=split_events,
+        telemetry=telemetry,
     )
     summary.update(
         {
@@ -1190,15 +2209,50 @@ def main() -> None:
         }
     )
     metadata_hash = split_source_hash(split_events)
-    output_path = Path(args.output)
+    output_temp = output_path.with_suffix(output_path.suffix + ".tmp")
+    output_temp_manifest = output_temp.with_suffix(
+        output_temp.suffix + ".manifest.json"
+    )
+    for stale in (output_temp, output_temp_manifest):
+        stale.unlink(missing_ok=True)
+    if args.phase0_evidence_dir:
+        evidence_dir = Path(args.phase0_evidence_dir)
+        evidence_staging = evidence_dir.with_name(evidence_dir.name + ".tmp")
+        if evidence_staging.exists():
+            shutil.rmtree(evidence_staging)
+        evidence_manifest = emit_phase0_evidence_bundle(
+            rows=rows,
+            market=market,
+            split_events=split_events,
+            split_cache_path=Path(args.split_cache),
+            raw_root=raw_root,
+            evidence_dir=evidence_staging,
+            max_selected_rows=max(1, args.phase0_max_selected_rows),
+            max_bundle_bytes=max(1, args.phase0_max_evidence_bytes),
+            telemetry=telemetry,
+        )
+        summary["phase0_evidence"] = evidence_manifest["metrics"]
+        summary["reconstruction_lineage_contract_version"] = (
+            RECONSTRUCTION_LINEAGE_VERSION
+        )
+        if evidence_dir.exists():
+            shutil.rmtree(evidence_dir)
+        evidence_staging.replace(evidence_dir)
     manifest = write_rows(
-        output_path,
+        output_temp,
         rows,
         summary,
         raw_root=raw_root,
         decision_log=decision_log,
         horizon_days=horizon_days,
         split_metadata_hash=metadata_hash,
+        output_path_label=output_path,
+        telemetry=telemetry,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_temp.replace(output_path)
+    output_temp_manifest.replace(
+        output_path.with_suffix(output_path.suffix + ".manifest.json")
     )
     quality_dir = output_path.parent / "training_quality"
     quality_dir.mkdir(parents=True, exist_ok=True)
@@ -1251,13 +2305,29 @@ def main() -> None:
         "feature_price_vs_sma_20",
         "feature_macd_hist",
     ]
+    split_symbols = {str(item.get("ticker") or "").upper() for item in split_events}
+    affected_events = [
+        event
+        for event in events
+        if str(event.get("symbol") or "").upper() in split_symbols
+    ]
+    if affected_events:
+        raw_rows, _ = build_training_rows_from_raw_market(
+            affected_events, market, horizon_days=horizon_days, split_events=[]
+        )
+        adjusted_audit_rows = [
+            row for row in rows if row.get("symbol") in split_symbols
+        ]
+    else:
+        raw_rows = rows
+        adjusted_audit_rows = rows
     suspicious_before = _suspicious_rows(raw_rows)
-    suspicious_after = _suspicious_rows(rows)
+    suspicious_after = _suspicious_rows(adjusted_audit_rows)
     before_after = {
         "schema_version": CORPORATE_ACTION_SCHEMA_VERSION,
         "split_metadata_hash": metadata_hash,
         "before": _distribution(raw_rows, fields),
-        "after": _distribution(rows, fields),
+        "after": _distribution(adjusted_audit_rows, fields),
         "suspicious_rows_before": len(suspicious_before),
         "suspicious_rows_after": len(suspicious_after),
         "suspicious_before": suspicious_before,
@@ -1265,6 +2335,26 @@ def main() -> None:
     }
     (quality_dir / "split_adjustment_before_after_report.json").write_text(
         json.dumps(before_after, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    telemetry.progress(
+        "complete",
+        observations=len(rows),
+        selected_rows=(summary.get("phase0_evidence") or {}).get(
+            "selected_source_rows", 0
+        ),
+    )
+    telemetry.flush(status="COMPLETED", phase="complete")
+    print(
+        json.dumps(
+            {
+                "builder_performance": {
+                    "stage_seconds": telemetry.stages,
+                    "counters": telemetry.counters,
+                }
+            },
+            sort_keys=True,
+        ),
+        file=sys.stderr,
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
 

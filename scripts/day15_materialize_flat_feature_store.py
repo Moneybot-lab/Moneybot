@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from moneybot.services.alpha_atlas_v4_phase0 import feature_registry
+
 FEATURE_STORE_SCHEMA = "flat-feature-store.v1"
 FUTURE_RETURN_FEATURE_COLUMNS = {"feature_return_1d", "feature_return_5d"}
 
@@ -148,6 +150,11 @@ def materialize_flat_feature_store(input_path: Path, output_dir: Path, *, train_
     feature_columns = sorted(
         col for col in columns if col.startswith("feature_") and col not in FUTURE_RETURN_FEATURE_COLUMNS
     )
+    registry = feature_registry()
+    registry_by_name = {item["name"]: item for item in registry["columns"]}
+    unclassified = sorted(set(feature_columns).difference(registry_by_name))
+    if unclassified and any(row.get("model_feature_contract_version") == "alpha-atlas-v4-features.v2" for row in rows):
+        raise ValueError(f"unclassified V4 feature-store columns: {unclassified}")
     manifest = {
         "schema_version": FEATURE_STORE_SCHEMA,
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -160,6 +167,10 @@ def materialize_flat_feature_store(input_path: Path, output_dir: Path, *, train_
         "train_ratio": train_ratio,
         "columns": columns,
         "feature_columns": feature_columns,
+        "feature_registry_version": registry["schema_version"],
+        "feature_registry_sha256": registry["registry_sha256"],
+        "feature_column_classification": {column: registry_by_name.get(column, {"classification": "legacy_unregistered"})["classification"] for column in feature_columns},
+        "model_input_feature_columns": [column for column in feature_columns if registry_by_name.get(column, {}).get("model_input") is True],
         "label_columns": sorted(
             col
             for col in columns
