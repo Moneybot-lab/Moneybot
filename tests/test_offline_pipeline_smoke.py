@@ -138,7 +138,7 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     rejected = _run_failure(
         [
             sys.executable,
-            "scripts/clean_training_snapshot.py",
+            "scripts/canonicalize_alpha_atlas_v4_rows.py",
             "--input",
             str(training_rows),
             "--output-dir",
@@ -175,19 +175,24 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
         ],
         cwd=repo,
     )
+    canonical_rows = canonical_dir / "canonical_observations.jsonl"
     _run(
         [
             sys.executable,
-            "scripts/day15_materialize_flat_feature_store.py",
+            "scripts/clean_training_snapshot.py",
             "--input",
-            str(quality_dir / "cleaned_all.jsonl"),
+            str(canonical_rows),
             "--output-dir",
-            str(flat_dir),
+            str(quality_dir),
+            "--max-market-lag-days",
+            "3",
             "--train-ratio",
             "0.8",
         ],
         cwd=repo,
     )
+    assert "Stale unadjusted Massive training snapshot" in rejected.stderr
+    assert not (tmp_path / "must_not_clean_raw" / "cleaned_all.jsonl").exists()
     _run(
         [
             sys.executable,
