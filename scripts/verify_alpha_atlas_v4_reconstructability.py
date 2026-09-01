@@ -94,11 +94,29 @@ def main() -> int:
     ):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    # Keep the hosted log useful even when the certification intentionally exits 2.
+    # The full reports remain artifacts; this bounded summary identifies the violated
+    # invariant without relying on GitHub's rendering of a nested report.
     print(
         json.dumps(
             {
                 "status": report["status"],
                 "certification_status": certification["status"],
+                "rows_total": report["rows_total"],
+                "rows_checked": report["rows_checked"],
+                "failure_count": report["failure_count"],
+                "failure_reasons": report["failure_reasons"],
+                "artifact_sha256": certification["artifact_sha256"],
+                "verification_report_sha256": certification[
+                    "verification_report_sha256"
+                ],
+                "timing_contract_version": certification[
+                    "timing_contract_version"
+                ],
+                "validator_version": certification["validator_version"],
+                "report_integrity_failures": certification[
+                    "report_integrity_failures"
+                ],
             },
             sort_keys=True,
         )

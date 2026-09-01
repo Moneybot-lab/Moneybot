@@ -199,6 +199,7 @@ def test_upload_keeps_canonical_evidence_and_failure_summary_on_failure():
         assert variable in upload
     assert "track_b_failure_summary.json" in upload
     assert "builder_performance.json" in upload
+    assert "${{ env.FEATURE_STORE_DIR }}/all.jsonl" in upload
 
 
 def test_builder_has_optimized_timeout_and_performance_telemetry():

@@ -345,6 +345,36 @@ def test_lineage_free_current_style_row_is_not_reconstructable(tmp_path):
     assert report["failure_reasons"] == {"missing_reconstruction_lineage": 1}
 
 
+def test_verifier_failure_console_identifies_the_exact_invariant(tmp_path, capsys):
+    """Hosted fail-closed output must not hide the real row-level failure."""
+    path = tmp_path / "rows.jsonl"
+    path.write_text(json.dumps({"canonical_observation_id": "missing-lineage"}) + "\n")
+    report = verify_artifact(path, root=tmp_path)
+    certification = build_temporal_safety_certification(
+        artifact_path=path,
+        verification_report=report,
+        timing_contract_version="timing.v1",
+    )
+    summary = {
+        "status": report["status"],
+        "certification_status": certification["status"],
+        "rows_total": report["rows_total"],
+        "rows_checked": report["rows_checked"],
+        "failure_count": report["failure_count"],
+        "failure_reasons": report["failure_reasons"],
+    }
+    print(json.dumps(summary, sort_keys=True))
+    hosted_line = json.loads(capsys.readouterr().out)
+    assert hosted_line == {
+        "certification_status": "FAILED",
+        "failure_count": 1,
+        "failure_reasons": {"missing_reconstruction_lineage": 1},
+        "rows_checked": 1,
+        "rows_total": 1,
+        "status": "NOT_RECONSTRUCTABLE",
+    }
+
+
 def test_v31_freeze_and_workflow_remain_non_promoting_and_separate():
     benchmark = json.loads(
         Path("docs/reports/alpha_atlas_v31_frozen_benchmark.json").read_text()
