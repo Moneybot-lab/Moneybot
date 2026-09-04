@@ -2442,7 +2442,12 @@ def main() -> None:
     parser.add_argument("--raw-root", default="data/raw/massive_flatfiles")
     parser.add_argument("--decision-log", default="data/decision_events.jsonl")
     parser.add_argument("--output", default="data/decision_training_snapshot.jsonl")
-    parser.add_argument("--limit", type=int, default=5000)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional local-development cap; canonical Track B omits it.",
+    )
     parser.add_argument("--horizon-days", type=int, default=5)
     parser.add_argument(
         "--split-cache", default="data/track_b/corporate_actions/massive_splits.jsonl"
@@ -2470,7 +2475,9 @@ def main() -> None:
             shutil.rmtree(final_evidence)
     decision_log = Path(args.decision_log)
     started = time.perf_counter()
-    events = read_decision_events(decision_log, limit=max(1, args.limit))
+    events = read_decision_events(
+        decision_log, limit=max(1, args.limit) if args.limit is not None else None
+    )
     telemetry.add("decision_log_loading", time.perf_counter() - started)
     telemetry.count("decision_events_loaded", len(events))
     telemetry.progress("decision_log_loaded", decision_events=len(events))

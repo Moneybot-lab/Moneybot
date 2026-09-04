@@ -118,7 +118,7 @@ jobs:
             -H "X-Daily-Ops-Token: $DAILY_OPS_TOKEN"
           )
 
-          URL="$MONEYBOT_BASE_URL/api/export-decision-log?limit=50000"
+          URL="$MONEYBOT_BASE_URL/api/export-decision-log"
           echo "Fetching decision log from: $URL"
           set +e
           HTTP_STATUS=$(timeout 150 curl "${CURL_OPTS[@]}" "$URL")
@@ -139,6 +139,8 @@ jobs:
           python3 scripts/validate_decision_log_export.py \
             --artifact data/decision_events.jsonl \
             --headers data/_response_headers.txt \
+            --manifest-output data/decision_log_export_manifest.json \
+            --latest-allowed-earliest-timestamp 1775629100 \
             --final-status "$HTTP_STATUS"
           echo "Decision log lines:"
           wc -l data/decision_events.jsonl
@@ -201,7 +203,6 @@ jobs:
             --split-cache data/track_b/corporate_actions/massive_splits.jsonl \
             --phase0-evidence-dir "$PHASE0_DIR/source_evidence" \
             --performance-output "$TRACK_B_RUN_DIR/builder_performance.json" \
-            --limit 50000 \
             --horizon-days 5
           echo "Training-row manifest:"
           test -s "$RAW_V4_ROWS"
@@ -436,6 +437,7 @@ jobs:
             ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v3/alpha_atlas_v3_recovery_rebaseline_report.json
             ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v31/**
             data/decision_events.jsonl
+            data/decision_log_export_manifest.json
             data/_response_headers.txt
             data/track_b/_production_model_headers.txt
             data/raw/**/_INGEST_MANIFEST.json

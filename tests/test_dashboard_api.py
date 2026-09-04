@@ -2044,14 +2044,25 @@ def test_export_decision_log_returns_ndjson_with_token(tmp_path):
         current_app.config['DAILY_OPS_TOKEN'] = 'secret-token'
         current_app.config['DECISION_LOG_PATH'] = str(log_path)
 
-    res = client.get('/api/export-decision-log?limit=1', headers={'X-Daily-Ops-Token': 'secret-token'})
+    res = client.get('/api/export-decision-log', headers={'X-Daily-Ops-Token': 'secret-token'})
     assert res.status_code == 200
     assert 'application/x-ndjson' in (res.headers.get('Content-Type') or '')
-    assert res.headers.get('X-Decision-Log-Lines') == '1'
+    assert res.headers.get('X-Decision-Log-Lines') == '2'
+    assert res.headers.get('X-Decision-Log-Complete') == 'true'
+    assert res.headers.get('X-Decision-Log-Truncated') == 'false'
     lines = [line for line in res.get_data(as_text=True).splitlines() if line.strip()]
-    assert len(lines) == 1
+    assert len(lines) == 2
     payload = json.loads(lines[0])
-    assert payload['symbol'] == 'TSLA'
+    assert payload['symbol'] == 'AAPL'
+    bounded = client.get('/api/export-decision-log?limit=1', headers={'X-Daily-Ops-Token': 'secret-token'})
+    assert bounded.status_code == 400
+    manifest = client.get('/api/export-decision-log-manifest', headers={'X-Daily-Ops-Token': 'secret-token'})
+    assert manifest.status_code == 200
+    metadata = manifest.get_json()
+    assert metadata['source_total_records'] == metadata['exported_records'] == 2
+    assert metadata['pagination_complete'] is True
+    assert metadata['truncated'] is False
+    assert metadata['content_sha256'] == res.headers['X-Decision-Log-SHA256']
 
 
 

@@ -206,6 +206,10 @@ def test_decision_log_fetch_uses_curl_final_status_not_first_retry_header():
     assert "awk 'NR==1{print $2}'" not in fetch
     assert "scripts/validate_decision_log_export.py" in fetch
     assert 'TRACK_B_FAILED_STAGE=fetch_decision_log' in fetch
+    assert "--manifest-output data/decision_log_export_manifest.json" in fetch
+    assert "export-decision-log?limit=" not in fetch
+    build = _workflow_steps()["Build leakage-safe Massive decision training rows"]
+    assert "--limit 50000" not in build
 
 
 def test_upload_keeps_canonical_evidence_and_failure_summary_on_failure():
