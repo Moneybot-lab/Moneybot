@@ -39,8 +39,8 @@ An explicit provider availability timestamp is retained when present. Otherwise,
 a daily aggregate uses `xnys-completed-daily-bar.v1`: the bar becomes eligible at
 the official close of its completed XNYS session. This is semantic availability
 derived independently by `ExchangeCalendar`, not an invented Massive publication
-timestamp. Corporate-action availability is evaluated separately and never
-inferred from session completion.
+timestamp. Corporate-action availability is evaluated separately under the
+executed-action rule below; daily-bar availability alone never proves an action.
 
 ## Identity and transformation rules
 
@@ -61,3 +61,25 @@ full-artifact coverage. The builder fails with
 `PHASE0_EVIDENCE_PRIMARY_MANIFEST_TOO_LARGE` or
 `PHASE0_EVIDENCE_BUNDLE_TOO_LARGE` rather than truncating evidence when configured
 row, primary-manifest, partition, or total compressed-byte limits are exceeded.
+
+## Corporate-action availability
+
+Feature adjustment uses `moneybot-corporate-action-availability.v2`. An action is
+point-in-time eligible only when either an immutable provider timestamp is at or
+before the feature cutoff, or its authoritative execution date is at or before
+the cutoff and the execution session has closed. The latter proof is recorded as
+`EXECUTED_ACTION_SESSION_CLOSE` with the exchange-calendar version and the
+derived close timestamp. An announcement does not make a future execution part
+of the feature basis, and presence in a corporate-action file downloaded later
+is not availability proof. Missing, inconsistent, or post-cutoff evidence fails
+closed.
+
+## Source-family alignment
+
+Calculation engine `massive-v4-feature-replay.v2` uses independent latest
+completed sessions for standalone symbol, SPY, sector, and volatility features.
+Cross-series relative returns inner-join exact session dates and use the same
+common ending session. Beta uses the latest 20 return pairs whose start and end
+session dates match on both sides; unequal arrays are never aligned by position.
+Lineage records every family endpoint, each common endpoint, and the aligned
+source-row IDs under `alpha-atlas-v4-source-alignment.v1`.
