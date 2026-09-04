@@ -1,4 +1,5 @@
 import json
+import copy
 from pathlib import Path
 
 import pandas as pd
@@ -156,7 +157,7 @@ def _lineage_row(tmp_path: Path):
         "sources": sources,
         "feature_contract_version": "alpha-atlas-v4-features.v2",
         "calendar_contract_version": "XNYS-rule-calendar.v1",
-        "replay_engine_version": "massive-v4-feature-replay.v1",
+        "replay_engine_version": "massive-v4-feature-replay.v2",
         "source_indices": {"symbol": 59, "spy": 59, "sector": 59},
         "execution": {
             "entry_at": base["entry_at"],
@@ -199,10 +200,11 @@ def test_exact_reconstruction_and_fail_closed_variants(tmp_path):
     )
     row, source = _lineage_row(tmp_path)
     row["feature_close"] = 99.0
-    assert (
-        "feature_mismatch:feature_close"
-        in verify_observation(row, root=tmp_path)["failures"]
-    )
+    mismatch = verify_observation(row, root=tmp_path)
+    assert "feature_mismatch:feature_close" in mismatch["failures"]
+    assert mismatch["feature_mismatches"][0]["stored_value"] == 99.0
+    assert mismatch["feature_mismatches"][0]["replayed_value"] != 99.0
+    assert mismatch["feature_mismatches"][0]["calculation_engine_version"] is None
     row, source = _lineage_row(tmp_path)
     row["return_5d"] = 0.5
     assert "target_mismatch" in verify_observation(row, root=tmp_path)["failures"]
@@ -252,6 +254,60 @@ def test_split_near_decision_requires_point_in_time_action_availability(tmp_path
         "unproven_feature_action_availability:split-1"
         in verify_observation(row, root=tmp_path)["failures"]
     )
+
+
+@pytest.mark.parametrize("sessions", [12, 29, 49, 50])
+def test_replay_matches_builder_insufficient_history_semantics(sessions):
+    days = pd.bdate_range("2025-09-01", periods=60)
+
+    def bars(symbol, count, base):
+        return [
+            {
+                "symbol": symbol,
+                "date": days[index].date().isoformat(),
+                "open": base + index,
+                "high": base + index + 1,
+                "low": base + index - 1,
+                "close": base + index + 0.5,
+                "volume": 1000 + index,
+            }
+            for index in range(count)
+        ]
+
+    loaded = {
+        "symbol": bars("SNDQ", sessions, 10),
+        "spy": bars("SPY", 60, 100),
+        "sector": bars("XLK", 60, 50),
+    }
+    lineage = {
+        "replay_engine_version": "massive-v4-feature-replay.v2",
+        "source_indices": {"symbol": sessions - 1, "spy": 59, "sector": 59},
+    }
+    replayed = _replay_v4_features(loaded, lineage)
+    assert replayed["feature_return_5d_lagged"] is not None
+    assert (replayed["feature_sma_50"] is not None) is (sessions >= 50)
+    assert (replayed["feature_price_vs_sma_20"] is not None) is (sessions >= 20)
+
+
+def test_warrant_style_reconstruction_cache_is_observation_order_invariant(tmp_path):
+    first, _ = _lineage_row(tmp_path)
+    first["symbol"] = "RNWWW"
+    first["canonical_observation_id"] = canonical_observation_id(first)
+    second = copy.deepcopy(first)
+    second["symbol"] = "HUMAW"
+    second["point_in_time_symbol_id"] = "SEC-2"
+    second["canonical_observation_id"] = canonical_observation_id(second)
+
+    def statuses(rows):
+        cache = {}
+        return {
+            row["canonical_observation_id"]: verify_observation(
+                row, root=tmp_path, cache=cache
+            )
+            for row in rows
+        }
+
+    assert statuses([first, second]) == statuses([second, first])
 
 
 def test_stale_context_ticker_identity_holiday_and_early_close(tmp_path):
@@ -343,6 +399,36 @@ def test_lineage_free_current_style_row_is_not_reconstructable(tmp_path):
     report = verify_artifact(path, root=tmp_path)
     assert report["status"] == "NOT_RECONSTRUCTABLE"
     assert report["failure_reasons"] == {"missing_reconstruction_lineage": 1}
+
+
+def test_verifier_failure_console_identifies_the_exact_invariant(tmp_path, capsys):
+    """Hosted fail-closed output must not hide the real row-level failure."""
+    path = tmp_path / "rows.jsonl"
+    path.write_text(json.dumps({"canonical_observation_id": "missing-lineage"}) + "\n")
+    report = verify_artifact(path, root=tmp_path)
+    certification = build_temporal_safety_certification(
+        artifact_path=path,
+        verification_report=report,
+        timing_contract_version="timing.v1",
+    )
+    summary = {
+        "status": report["status"],
+        "certification_status": certification["status"],
+        "rows_total": report["rows_total"],
+        "rows_checked": report["rows_checked"],
+        "failure_count": report["failure_count"],
+        "failure_reasons": report["failure_reasons"],
+    }
+    print(json.dumps(summary, sort_keys=True))
+    hosted_line = json.loads(capsys.readouterr().out)
+    assert hosted_line == {
+        "certification_status": "FAILED",
+        "failure_count": 1,
+        "failure_reasons": {"missing_reconstruction_lineage": 1},
+        "rows_checked": 1,
+        "rows_total": 1,
+        "status": "NOT_RECONSTRUCTABLE",
+    }
 
 
 def test_v31_freeze_and_workflow_remain_non_promoting_and_separate():
