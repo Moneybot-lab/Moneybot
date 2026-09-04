@@ -140,7 +140,7 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     rejected = _run_failure(
         [
             sys.executable,
-            "scripts/canonicalize_alpha_atlas_v4_rows.py",
+            "scripts/clean_training_snapshot.py",
             "--input",
             str(training_rows),
             "--output-dir",
@@ -177,23 +177,19 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
         ],
         cwd=repo,
     )
-    canonical_rows = canonical_dir / "canonical_observations.jsonl"
     _run(
         [
             sys.executable,
-            "scripts/clean_training_snapshot.py",
+            "scripts/day15_materialize_flat_feature_store.py",
             "--input",
-            str(canonical_rows),
+            str(quality_dir / "cleaned_all.jsonl"),
             "--output-dir",
-            str(quality_dir),
-            "--max-market-lag-days",
-            "3",
+            str(flat_dir),
             "--train-ratio",
             "0.8",
         ],
         cwd=repo,
     )
-    canonical_rows = canonical_dir / "canonical_observations.jsonl"
     _run(
         [
             sys.executable,
@@ -239,7 +235,7 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     )
     assert (
         feature_manifest["feature_registry_version"]
-        == "alpha-atlas-v4-feature-registry.v1"
+        == "alpha-atlas-v4-feature-registry.v2"
     )
     assert len(feature_manifest["feature_columns"]) == 48
     assert len(feature_manifest["model_input_feature_columns"]) == 43
