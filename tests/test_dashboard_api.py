@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import hashlib
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 
@@ -2043,6 +2044,24 @@ def test_export_decision_log_returns_ndjson_with_token(tmp_path):
     with client.application.app_context():
         current_app.config['DAILY_OPS_TOKEN'] = 'secret-token'
         current_app.config['DECISION_LOG_PATH'] = str(log_path)
+        state = tmp_path / 'continuity.json'
+        content = log_path.read_bytes()
+        state.write_text(json.dumps({
+            'schema_version': 'moneybot-decision-export-continuity.v1',
+            'source_identity': hashlib.sha256(str(log_path.resolve()).encode()).hexdigest(),
+            'previous_complete_bytes': len(content),
+            'previous_complete_records': 2,
+            'previous_sha256': hashlib.sha256(content).hexdigest(),
+            'earliest_timestamp': 1,
+            'latest_timestamp': 2,
+            'complete': True,
+            'truncated': False,
+            'integrity_clean': True,
+            'manifest_created_at': 'test',
+            'checkpoint_updated_at': 'test',
+            'ordering_version': 'moneybot-decision-log-append-order.v1',
+        }))
+        current_app.config['DECISION_EXPORT_CONTINUITY_STATE_PATH'] = str(state)
 
     res = client.get('/api/export-decision-log', headers={'X-Daily-Ops-Token': 'secret-token'})
     assert res.status_code == 200
@@ -2057,6 +2076,21 @@ def test_export_decision_log_returns_ndjson_with_token(tmp_path):
     bounded = client.get('/api/export-decision-log?limit=1', headers={'X-Daily-Ops-Token': 'secret-token'})
     assert bounded.status_code == 400
     manifest = client.get('/api/export-decision-log-manifest', headers={'X-Daily-Ops-Token': 'secret-token'})
+    assert manifest.status_code == 200
+    commit_payload = manifest.get_json()
+    commit = client.post(
+        '/api/export-decision-log-commit',
+        headers={'X-Daily-Ops-Token': 'secret-token'},
+        json=commit_payload,
+    )
+    assert commit.status_code == 200
+    assert commit.get_json()['continuity']['checkpoint_current'] is True
+    interrupted = client.post(
+        '/api/export-decision-log-commit',
+        headers={'X-Daily-Ops-Token': 'secret-token'},
+        json={**commit_payload, 'pagination_complete': False},
+    )
+    assert interrupted.status_code == 400
     assert manifest.status_code == 200
     metadata = manifest.get_json()
     assert metadata['source_total_records'] == metadata['exported_records'] == 2

@@ -207,6 +207,9 @@ def test_decision_log_fetch_uses_curl_final_status_not_first_retry_header():
     assert "scripts/validate_decision_log_export.py" in fetch
     assert 'TRACK_B_FAILED_STAGE=fetch_decision_log' in fetch
     assert "--manifest-output data/decision_log_export_manifest.json" in fetch
+    assert "scripts/audit_decision_log_duplicates.py" in fetch
+    assert "export-decision-log-commit" in fetch
+    assert "checkpoint_current" in fetch
     assert "export-decision-log?limit=" not in fetch
     build = _workflow_steps()["Build leakage-safe Massive decision training rows"]
     assert "--limit 50000" not in build
@@ -226,6 +229,8 @@ def test_upload_keeps_canonical_evidence_and_failure_summary_on_failure():
     assert "track_b_failure_summary.json" in upload
     assert "builder_performance.json" in upload
     assert "${{ env.FEATURE_STORE_DIR }}/all.jsonl" in upload
+    assert "decision_log_duplicate_audit.json" in upload
+    assert "decision_log_continuity_commit.json" in upload
 
 
 def test_builder_has_optimized_timeout_and_performance_telemetry():

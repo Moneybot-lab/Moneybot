@@ -29,6 +29,39 @@ This contract does not prove that a hosting volume retained data before the
 current file's first line. A reduction in the manifest's earliest timestamp or
 source count must be reconciled against retained prior Track B manifests or a
 documented storage migration before Phase 1.
-The workflow currently enforces the observed April 8, 2026 06:18:20 UTC
-historical-beginning continuity floor; moving the earliest record later fails
-before ingestion.
+## Durable continuity checkpoint
+
+The checkpoint defaults to `decision_export_continuity.json` beside the configured
+decision log and can be overridden with `DECISION_EXPORT_CONTINUITY_STATE_PATH`.
+Exports fail closed when it is missing or corrupt. For the first deployment only,
+`DECISION_EXPORT_CONTINUITY_BOOTSTRAP=verified_seed_v1` enables migration from the
+verified run 33907221511-1 values. The current source must contain the seed byte
+length and its exact prefix SHA-256 before `BASELINE_CREATED` is reported.
+Bootstrap consumption creates a durable adjacent marker before the checkpoint is
+written. If an established checkpoint is later missing, that marker prevents the
+seed from silently recreating it; operator recovery is required. Disable the
+bootstrap setting immediately after the first successful checkpoint commit.
+
+The download does not advance state. After curl and local integrity validation
+complete, Track B posts the sanitized manifest to the commit endpoint. That
+endpoint rechecks the source and atomically replaces the checkpoint using a
+same-filesystem temporary file, file and directory `fsync`, and an exclusive
+file lock. Subsequent exports must report `PREFIX_VERIFIED`.
+
+## Duplicate audit
+
+`duplicate_records_detected` counts repeated SHA-256 identities of normalized
+JSON objects (sorted keys and compact separators), not repeated symbol/date
+observations. Physical records are never removed. The Track B duplicate audit
+reports exact normalized groups, byte-identical groups, adjacency, safe date,
+endpoint and model buckets, and conflicting decision/event IDs. Exact repeats
+are warnings; one immutable ID associated with different normalized content is
+a fail-closed integrity error.
+
+Raw diagnostic and classification consumers can therefore see repeated physical
+rows. Canonical V4 observations collapse compatible economic duplicates to unit
+weight, while Phase 0 verifies every resulting canonical row. Economic backtests,
+bootstrap samples, symbol/date weighting and challenger ranking operate on the
+canonical/cleaned data. The audit publishes raw and exact-deduplicated row counts
+and the maximum exact-repeat multiplier so possible raw classification overweight
+is quantified without changing training behavior in this continuity commit.

@@ -142,6 +142,22 @@ jobs:
             --manifest-output data/decision_log_export_manifest.json \
             --latest-allowed-earliest-timestamp 1775629100 \
             --final-status "$HTTP_STATUS"
+          python3 scripts/audit_decision_log_duplicates.py \
+            --input data/decision_events.jsonl \
+            --output data/decision_log_duplicate_audit.json
+          curl --fail --show-error --silent --retry 3 --retry-delay 3 --retry-all-errors \
+            -H "Content-Type: application/json" \
+            -H "X-Daily-Ops-Token: $DAILY_OPS_TOKEN" \
+            --data-binary @data/decision_log_export_manifest.json \
+            "$MONEYBOT_BASE_URL/api/export-decision-log-commit" \
+            --output data/decision_log_continuity_commit.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path("data/decision_log_continuity_commit.json").read_text())
+          if result.get("continuity", {}).get("checkpoint_current") is not True:
+              raise SystemExit("Decision export checkpoint is not current")
+          PY
           echo "Decision log lines:"
           wc -l data/decision_events.jsonl
           echo "Response headers (first 100 lines):"
@@ -438,6 +454,8 @@ jobs:
             ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v31/**
             data/decision_events.jsonl
             data/decision_log_export_manifest.json
+            data/decision_log_duplicate_audit.json
+            data/decision_log_continuity_commit.json
             data/_response_headers.txt
             data/track_b/_production_model_headers.txt
             data/raw/**/_INGEST_MANIFEST.json

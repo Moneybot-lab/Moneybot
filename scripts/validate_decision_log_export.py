@@ -105,6 +105,16 @@ def validate_export(
         raise ValueError(
             "decision log completeness failure: " + ",".join(response_failures)
         )
+    continuity_status = final_headers.get("x-decision-continuity-status")
+    if manifest_output is not None and continuity_status not in {
+        "BASELINE_CREATED",
+        "PREFIX_VERIFIED",
+    }:
+        raise ValueError("decision log continuity was not established")
+    previous_sha = final_headers.get("x-decision-previous-sha256")
+    prefix_sha = final_headers.get("x-decision-current-prefix-sha256")
+    if manifest_output is not None and (not previous_sha or previous_sha != prefix_sha):
+        raise ValueError("decision log continuity prefix hash mismatch")
     if manifest is not None:
         metadata = json.loads(manifest.read_text())
         failures = []
@@ -136,8 +146,9 @@ def validate_export(
     }
     if manifest_output is not None:
         payload = {
-            "schema_version": "moneybot-decision-log-export.v1",
+            "schema_version": "moneybot-decision-log-export.v2",
             "source_kind": "append_only_jsonl_file",
+            "source_identity": final_headers["x-decision-source-identity"],
             "source_total_records": count,
             "exported_records": count,
             "page_count": 1,
@@ -149,6 +160,7 @@ def validate_export(
                 "ts",
                 "immutable_record_sha256",
             ],
+            "ordering_version": final_headers["x-decision-ordering-version"],
             "pagination_complete": True,
             "truncated": False,
             "duplicate_records_detected": duplicates,
@@ -158,6 +170,16 @@ def validate_export(
             "created_at": datetime.now(timezone.utc).isoformat(),
             "warnings": [],
             "integrity_failures": [],
+            "continuity": {
+                "status": continuity_status,
+                "previous_records": int(final_headers["x-decision-previous-lines"]),
+                "previous_bytes": int(final_headers["x-decision-previous-bytes"]),
+                "previous_sha256": previous_sha,
+                "current_prefix_sha256": prefix_sha,
+                "current_records": count,
+                "current_bytes": artifact.stat().st_size,
+                "checkpoint_advanced": False,
+            },
         }
         manifest_output.parent.mkdir(parents=True, exist_ok=True)
         manifest_output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
