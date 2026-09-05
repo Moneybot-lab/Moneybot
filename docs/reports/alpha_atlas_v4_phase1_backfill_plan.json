@@ -1,0 +1,59 @@
+{
+  "authorization_conditions": [
+    "delisted/inactive inclusion technically demonstrated",
+    "ticker-event identity chain demonstrated",
+    "common raw-bar and action date range measured",
+    "terminal-price policy approved",
+    "point-in-time sector mapping available"
+  ],
+  "blocking_conditions": [
+    "delisted coverage unverified",
+    "effective-dated ticker/sector identity unverified",
+    "terminal-price fallback intentionally absent",
+    "common technically supported start date unverified"
+  ],
+  "completeness_checks": [
+    "every session/universe member classified present, legitimately absent, or rejected",
+    "no current-state reference joins",
+    "all source and output hashes verified",
+    "terminal/missing exit policy applied fail closed"
+  ],
+  "date_range": {
+    "end": null,
+    "start": null,
+    "status": "BLOCKED_UNTIL_PREFLIGHT_CONFIRMS_COMMON_COVERAGE"
+  },
+  "download_sequence": [
+    "effective-dated security reference and events",
+    "splits and material corporate actions",
+    "raw daily aggregates",
+    "SPY and effective-dated sector ETF context",
+    "completeness validation"
+  ],
+  "estimates": {
+    "compressed_storage_bytes": 1612800000,
+    "daily_rows": 50400000,
+    "formula": "5,040 sessions * 10,000 symbols * 32 compressed bytes/row; 4x working; 12x backup/headroom",
+    "recommended_headroom_bytes": 19353600000,
+    "request_or_object_count": null,
+    "runtime_seconds": null,
+    "status": "PROVISIONAL",
+    "working_storage_bytes": 6451200000
+  },
+  "execution_authorized": false,
+  "full_backfill_started": false,
+  "joins": "permanent identity plus effective timestamp; source availability <= feature cutoff",
+  "manifest": "canonical sorted file paths, byte sizes, SHA-256, request/probe identity",
+  "partial_recovery": "delete or quarantine unverified .part; never certify partial partitions",
+  "partition_layout": "data/raw/massive_history/<dataset>/<YYYY>/<MM>/<YYYY-MM-DD>.<format>",
+  "plan_sha256": "bacd6ea757cf23f38088521e25cb947db6b79f9f0df670dbaaced35a21f1beb9",
+  "reduced_scope_alternative": "fixed, explicitly named contemporaneously tradable cohort with no claim of market-wide results",
+  "resumability": "atomic .part download then hash-bound rename; skip only exact verified manifest entry",
+  "retry": {
+    "attempts": 3,
+    "backoff": "bounded exponential with jitter excluded from artifacts",
+    "rate_limit": "honor Retry-After and stop at configured request/byte budget"
+  },
+  "schema_version": "alpha-atlas-v4-phase1-controlled-backfill-plan.v1",
+  "universe": "effective-dated active and inactive eligible US equities; never current-active projected backward"
+}
