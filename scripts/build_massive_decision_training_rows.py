@@ -30,6 +30,7 @@ from moneybot.services.decision_target import (
     target_metadata,
 )
 from moneybot.services.corporate_actions import (
+    CORPORATE_ACTION_AVAILABILITY_POLICY_VERSION,
     CORPORATE_ACTION_SCHEMA_VERSION,
     adjust_bars_to_asof,
     index_splits,
@@ -649,6 +650,88 @@ def _beta_to_benchmark(
     return round(covariance / benchmark_variance, 6)
 
 
+def _common_session_rows(
+    left: list[dict[str, Any]],
+    right: list[dict[str, Any]],
+    left_idx: int,
+    right_idx: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Inner join two bounded histories by exact exchange-session date."""
+    left_by_date = {str(row["date"]): row for row in left[: left_idx + 1]}
+    right_by_date = {str(row["date"]): row for row in right[: right_idx + 1]}
+    common = sorted(left_by_date.keys() & right_by_date.keys())
+    return [left_by_date[day] for day in common], [right_by_date[day] for day in common]
+
+
+def _aligned_relative_returns(
+    left: list[dict[str, Any]],
+    right: list[dict[str, Any]],
+    left_idx: int,
+    right_idx: int,
+    window: int = 5,
+) -> tuple[float | None, float | None, str | None]:
+    aligned_left, aligned_right = _common_session_rows(left, right, left_idx, right_idx)
+    if len(aligned_left) <= window:
+        return None, None, None
+    end = len(aligned_left) - 1
+    return (
+        _lagged_return(aligned_left, end, window),
+        _lagged_return(aligned_right, end, window),
+        str(aligned_left[end]["date"]),
+    )
+
+
+def _date_aligned_beta(
+    symbol_rows: list[dict[str, Any]],
+    benchmark_rows: list[dict[str, Any]],
+    symbol_idx: int,
+    benchmark_idx: int,
+    window: int = 20,
+) -> float | None:
+    symbol_rows = sorted(
+        symbol_rows[: symbol_idx + 1], key=lambda row: str(row["date"])
+    )
+    benchmark_rows = sorted(
+        benchmark_rows[: benchmark_idx + 1], key=lambda row: str(row["date"])
+    )
+    symbol_idx = len(symbol_rows) - 1
+    benchmark_idx = len(benchmark_rows) - 1
+    symbol_pairs = {
+        (
+            str(symbol_rows[pos - 1]["date"]),
+            str(symbol_rows[pos]["date"]),
+        ): _lagged_return(symbol_rows, pos, 1)
+        for pos in range(1, symbol_idx + 1)
+    }
+    benchmark_pairs = {
+        (
+            str(benchmark_rows[pos - 1]["date"]),
+            str(benchmark_rows[pos]["date"]),
+        ): _lagged_return(benchmark_rows, pos, 1)
+        for pos in range(1, benchmark_idx + 1)
+    }
+    keys = sorted(symbol_pairs.keys() & benchmark_pairs.keys())[-window:]
+    if len(keys) < window:
+        return None
+    symbol_returns = [float(symbol_pairs[key]) for key in keys]
+    benchmark_returns = [float(benchmark_pairs[key]) for key in keys]
+    symbol_mean = sum(symbol_returns) / window
+    benchmark_mean = sum(benchmark_returns) / window
+    variance = (
+        sum((value - benchmark_mean) ** 2 for value in benchmark_returns) / window
+    )
+    if variance == 0.0:
+        return None
+    covariance = (
+        sum(
+            (symbol_value - symbol_mean) * (benchmark_value - benchmark_mean)
+            for symbol_value, benchmark_value in zip(symbol_returns, benchmark_returns)
+        )
+        / window
+    )
+    return round(covariance / variance, 6)
+
+
 def _sector_benchmark_symbol(
     event: dict[str, Any], payload: dict[str, Any], snapshot: dict[str, Any]
 ) -> str:
@@ -1149,7 +1232,11 @@ def build_training_rows_from_raw_market(
             )
         current_action = normalize_action(event)
         current_probability = _event_probability_up(event)
-        cache_key = (symbol, idx, event_day)
+        cache_key = (
+            symbol,
+            idx,
+            tuple(sorted(str(item.get("id") or "") for item in feature_splits)),
+        )
         cached_features = feature_cache.get(cache_key)
         if cached_features is None:
             feature_started = time.perf_counter()
@@ -1515,6 +1602,24 @@ def build_training_rows_from_raw_market(
         # The V3 allowlist is always materialized by the shared train/serve
         # engine so production cannot drift from these training definitions.
         row.update(shared_v3_features)
+        row.update(
+            {
+                "feature_symbol_minus_spy_5d": (
+                    round(aligned_symbol_spy_5d - aligned_spy_5d, 6)
+                    if aligned_symbol_spy_5d is not None and aligned_spy_5d is not None
+                    else None
+                ),
+                "feature_sector_relative_return_5d": (
+                    round(aligned_symbol_sector_5d - aligned_sector_5d, 6)
+                    if aligned_symbol_sector_5d is not None
+                    and aligned_sector_5d is not None
+                    else None
+                ),
+                "feature_symbol_beta_20d": _date_aligned_beta(
+                    history, spy_history, idx, spy_idx, 20
+                ),
+            }
+        )
         rows.append(row)
         summary["rows_joined"] += 1
     if telemetry:
@@ -2241,7 +2346,12 @@ def main() -> None:
     parser.add_argument("--raw-root", default="data/raw/massive_flatfiles")
     parser.add_argument("--decision-log", default="data/decision_events.jsonl")
     parser.add_argument("--output", default="data/decision_training_snapshot.jsonl")
-    parser.add_argument("--limit", type=int, default=5000)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional local-development cap; canonical Track B omits it.",
+    )
     parser.add_argument("--horizon-days", type=int, default=5)
     parser.add_argument(
         "--split-cache", default="data/track_b/corporate_actions/massive_splits.jsonl"

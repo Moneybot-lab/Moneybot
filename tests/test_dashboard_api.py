@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import hashlib
 from io import BytesIO
 from datetime import datetime, timedelta, timezone
 
@@ -2043,15 +2044,106 @@ def test_export_decision_log_returns_ndjson_with_token(tmp_path):
     with client.application.app_context():
         current_app.config['DAILY_OPS_TOKEN'] = 'secret-token'
         current_app.config['DECISION_LOG_PATH'] = str(log_path)
+        state = tmp_path / 'continuity.json'
+        content = log_path.read_bytes()
+        state.write_text(json.dumps({
+            'schema_version': 'moneybot-decision-export-continuity.v1',
+            'source_identity': hashlib.sha256(str(log_path.resolve()).encode()).hexdigest(),
+            'previous_complete_bytes': len(content),
+            'previous_complete_records': 2,
+            'previous_sha256': hashlib.sha256(content).hexdigest(),
+            'earliest_timestamp': 1,
+            'latest_timestamp': 2,
+            'complete': True,
+            'truncated': False,
+            'integrity_clean': True,
+            'manifest_created_at': 'test',
+            'checkpoint_updated_at': 'test',
+            'ordering_version': 'moneybot-decision-log-append-order.v1',
+        }))
+        current_app.config['DECISION_EXPORT_CONTINUITY_STATE_PATH'] = str(state)
 
-    res = client.get('/api/export-decision-log?limit=1', headers={'X-Daily-Ops-Token': 'secret-token'})
+    res = client.get('/api/export-decision-log', headers={'X-Daily-Ops-Token': 'secret-token'})
     assert res.status_code == 200
     assert 'application/x-ndjson' in (res.headers.get('Content-Type') or '')
-    assert res.headers.get('X-Decision-Log-Lines') == '1'
+    assert res.headers.get('X-Decision-Log-Lines') == '2'
+    assert res.headers.get('X-Decision-Log-Complete') == 'true'
+    assert res.headers.get('X-Decision-Log-Truncated') == 'false'
     lines = [line for line in res.get_data(as_text=True).splitlines() if line.strip()]
-    assert len(lines) == 1
+    assert len(lines) == 2
     payload = json.loads(lines[0])
-    assert payload['symbol'] == 'TSLA'
+    assert payload['symbol'] == 'AAPL'
+    bounded = client.get('/api/export-decision-log?limit=1', headers={'X-Daily-Ops-Token': 'secret-token'})
+    assert bounded.status_code == 400
+    manifest = client.get('/api/export-decision-log-manifest', headers={'X-Daily-Ops-Token': 'secret-token'})
+    assert manifest.status_code == 200
+    commit_payload = manifest.get_json()
+    commit = client.post(
+        '/api/export-decision-log-commit',
+        headers={'X-Daily-Ops-Token': 'secret-token'},
+        json=commit_payload,
+    )
+    assert commit.status_code == 200
+    assert commit.get_json()['continuity']['checkpoint_current'] is True
+    interrupted = client.post(
+        '/api/export-decision-log-commit',
+        headers={'X-Daily-Ops-Token': 'secret-token'},
+        json={**commit_payload, 'pagination_complete': False},
+    )
+    assert interrupted.status_code == 400
+    assert manifest.status_code == 200
+    metadata = manifest.get_json()
+    assert metadata['source_total_records'] == metadata['exported_records'] == 2
+    assert metadata['pagination_complete'] is True
+    assert metadata['truncated'] is False
+    assert metadata['content_sha256'] == res.headers['X-Decision-Log-SHA256']
+
+
+def test_export_decision_log_authenticated_header_bootstraps_once(
+    tmp_path, monkeypatch
+):
+    from moneybot.services import decision_log_export
+
+    client = _client()
+    log_path = tmp_path / "decision_events.jsonl"
+    log_path.write_text(
+        '{"ts":1,"event_id":"one"}\n{"ts":2,"event_id":"two"}\n'
+    )
+    scan = decision_log_export._scan(log_path)
+    monkeypatch.setattr(
+        decision_log_export,
+        "VERIFIED_SEED",
+        {
+            "content_bytes": scan["bytes"],
+            "record_count": scan["records"],
+            "sha256": scan["sha256"],
+            "earliest_timestamp": scan["earliest"],
+            "latest_timestamp": scan["latest"],
+            "manifest_created_at": "test-seed",
+        },
+    )
+    state = tmp_path / "continuity.json"
+    with client.application.app_context():
+        current_app.config["DAILY_OPS_TOKEN"] = "secret-token"
+        current_app.config["DECISION_LOG_PATH"] = str(log_path)
+        current_app.config["DECISION_EXPORT_CONTINUITY_STATE_PATH"] = str(state)
+
+    auth = {"X-Daily-Ops-Token": "secret-token"}
+    assert client.get("/api/export-decision-log", headers=auth).status_code == 409
+    bootstrap = {**auth, "X-Decision-Continuity-Bootstrap": "verified_seed_v1"}
+    response = client.get("/api/export-decision-log", headers=bootstrap)
+    assert response.status_code == 200
+    assert response.headers["X-Decision-Continuity-Status"] == "BASELINE_CREATED"
+    manifest = client.get(
+        "/api/export-decision-log-manifest", headers=bootstrap
+    ).get_json()
+    committed = client.post(
+        "/api/export-decision-log-commit", headers=bootstrap, json=manifest
+    )
+    assert committed.status_code == 200
+    assert state.exists()
+    state.unlink()
+    assert client.get("/api/export-decision-log", headers=bootstrap).status_code == 409
 
 
 
