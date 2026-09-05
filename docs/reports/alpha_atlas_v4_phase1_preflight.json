@@ -1,0 +1,87 @@
+{
+  "bytes_received": 0,
+  "caps": {
+    "requests": 16,
+    "response_bytes": 1048576
+  },
+  "credentials_configured": false,
+  "elapsed_seconds": 0.0,
+  "full_backfill_started": false,
+  "mode": "dry_run",
+  "overall_status": "NOT_EVALUATED",
+  "probes": [
+    {
+      "case": "active_security",
+      "date": "2024-06-03",
+      "family": "aggregate",
+      "status": "NOT_EVALUATED",
+      "symbol": "AAPL"
+    },
+    {
+      "case": "delisted_security",
+      "date": "2022-10-27",
+      "family": "aggregate",
+      "status": "NOT_EVALUATED",
+      "symbol": "TWTR"
+    },
+    {
+      "case": "ticker_change",
+      "date": "2022-06-09",
+      "family": "reference",
+      "status": "NOT_EVALUATED",
+      "symbol": "META"
+    },
+    {
+      "case": "split_case",
+      "date": "2020-08-31",
+      "family": "split",
+      "status": "NOT_EVALUATED",
+      "symbol": "AAPL"
+    },
+    {
+      "case": "recent_listing",
+      "date": "2023-09-14",
+      "family": "aggregate",
+      "status": "NOT_EVALUATED",
+      "symbol": "ARM"
+    },
+    {
+      "case": "spy_context",
+      "date": "2006-01-03",
+      "family": "aggregate",
+      "status": "NOT_EVALUATED",
+      "symbol": "SPY"
+    },
+    {
+      "case": "sector_etf",
+      "date": "2010-01-04",
+      "family": "aggregate",
+      "status": "NOT_EVALUATED",
+      "symbol": "XLK"
+    },
+    {
+      "case": "regular_session",
+      "date": "2024-06-03",
+      "family": "aggregate",
+      "status": "NOT_EVALUATED",
+      "symbol": "SPY"
+    },
+    {
+      "case": "early_close",
+      "date": "2024-11-29",
+      "family": "aggregate",
+      "status": "NOT_EVALUATED",
+      "symbol": "SPY"
+    },
+    {
+      "case": "old_period",
+      "date": "2006-01-03",
+      "family": "aggregate",
+      "status": "NOT_EVALUATED",
+      "symbol": "AAPL"
+    }
+  ],
+  "requests_attempted": 0,
+  "schema_version": "alpha-atlas-v4-phase1-historical-preflight.v1",
+  "write_operations": 0
+}

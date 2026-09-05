@@ -1,0 +1,62 @@
+{
+  "backfill_plan_sha256": "bacd6ea757cf23f38088521e25cb947db6b79f9f0df670dbaaced35a21f1beb9",
+  "blockers": [
+    "delisted coverage unverified",
+    "effective-dated ticker/sector identity unverified",
+    "terminal-price fallback intentionally absent",
+    "common technically supported start date unverified"
+  ],
+  "feature_mapping_sha256": "80f0fccccf02d7ebcf0f997df02187da00472498fa5618ea4be5588d820770bb",
+  "full_backfill_started": false,
+  "inventory_sha256": "4cedbccfea09deb52b5b0f3bddc7d842132aa820627dc7285c590da497c3a33d",
+  "live_evidence_summary": {
+    "backfill_verdict": "BLOCKED_FULL_UNIVERSE_BACKFILL",
+    "bytes_received": 0,
+    "common_supported_interval": null,
+    "earliest_demonstrated_date": null,
+    "effective_dated_sector_mapping_demonstrated": false,
+    "elapsed_seconds": 0.0,
+    "inactive_delisted_demonstrated": false,
+    "latest_demonstrated_date": null,
+    "permanent_identity_support_demonstrated": false,
+    "probe_status_by_case": {
+      "active_security": "NOT_EVALUATED",
+      "delisted_security": "NOT_EVALUATED",
+      "early_close": "NOT_EVALUATED",
+      "old_period": "NOT_EVALUATED",
+      "recent_listing": "NOT_EVALUATED",
+      "regular_session": "NOT_EVALUATED",
+      "sector_etf": "NOT_EVALUATED",
+      "split_case": "NOT_EVALUATED",
+      "spy_context": "NOT_EVALUATED",
+      "ticker_change": "NOT_EVALUATED"
+    },
+    "requests_attempted": 0,
+    "sector_etf_price_demonstrated": false,
+    "split_history_demonstrated": false,
+    "spy_history_demonstrated": false,
+    "ticker_change_snapshot_demonstrated": false
+  },
+  "phase0_baseline": {
+    "artifact_sha256": "2877edece1ad0a8fca48ffff8a313359cb37da37785a87311cb47750ff3196b5",
+    "continuity": "PREFIX_VERIFIED",
+    "decision_log_records": 50219,
+    "export_records": 50219,
+    "export_sha256": "7472b9da172130cd7f1e847c9c3ea131662dc995ec7aefe667c445bde1e58d22",
+    "reconstructable_rows": 32619,
+    "results_sha256": "a58d709d65a169df4afee8ac443db6a6579c6847e9355b76dd4afa0a2224d6dc",
+    "rows_total": 32619,
+    "track_b_run": "33960970412-1"
+  },
+  "production_behavior_changed": false,
+  "schema_version": "alpha-atlas-v4-phase1-readiness.v1",
+  "scope": "private_personal_use_research_only",
+  "scope_boundaries": {
+    "future_commercial_project_in_scope": false,
+    "owner_investment_research_and_personal_account_management": true,
+    "subscription_change_or_purchase_requested": false,
+    "vendor_licensing_confirmation_required": false
+  },
+  "technical_access_status": "NOT_EVALUATED",
+  "verdict": "BLOCKED_FULL_UNIVERSE_BACKFILL"
+}

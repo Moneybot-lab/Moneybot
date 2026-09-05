@@ -1,0 +1,826 @@
+{
+  "feature_contract_version": "alpha-atlas-v4-features.v2",
+  "features": [
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "1 iff close(T)>VWAP(T)",
+      "canonical_feature_name": "feature_above_vwap",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 0,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "mean true range over T-13..T",
+      "canonical_feature_name": "feature_atr_14",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 1,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "split-basis close(T)",
+      "canonical_feature_name": "feature_close",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 2,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "close(T)/min(low T-19..T)-1",
+      "canonical_feature_name": "feature_distance_from_20d_low",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 3,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "close(T)*volume(T)",
+      "canonical_feature_name": "feature_dollar_volume",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 4,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "close(T)/max(high T-19..T)-1",
+      "canonical_feature_name": "feature_drawdown_from_20d_high",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 5,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "EMA10(close through T)",
+      "canonical_feature_name": "feature_ema_10",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 6,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "EMA20(close through T)",
+      "canonical_feature_name": "feature_ema_20",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 7,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "open(T)/close(T-1)-1",
+      "canonical_feature_name": "feature_gap_percent",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 8,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "EMA12(close)-EMA26(close)",
+      "canonical_feature_name": "feature_macd",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 9,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "MACD-MACD signal",
+      "canonical_feature_name": "feature_macd_hist",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 10,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "EMA9(MACD)",
+      "canonical_feature_name": "feature_macd_signal",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 11,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "1 iff SPY return5>0 and SPY close>=SMA20",
+      "canonical_feature_name": "feature_market_regime_risk_on",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 12,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "population stddev of SPY backward returns",
+      "canonical_feature_name": "feature_market_volatility_proxy",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 13,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "return5-return20",
+      "canonical_feature_name": "feature_momentum_5d_vs_20d",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 14,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "close(T)/SMA20-1",
+      "canonical_feature_name": "feature_price_vs_sma_20",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 15,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "close(T)/SMA50-1",
+      "canonical_feature_name": "feature_price_vs_sma_50",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 16,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "close(T)/VWAP(T)-1",
+      "canonical_feature_name": "feature_price_vs_vwap",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 17,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "volume(T)/mean(volume T-4..T)",
+      "canonical_feature_name": "feature_relative_volume_5d",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 18,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "close(T)/close(T-10)-1",
+      "canonical_feature_name": "feature_return_10d_lagged",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 19,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "close(T)/close(T-1)-1",
+      "canonical_feature_name": "feature_return_1d_lagged",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 20,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "close(T)/close(T-20)-1",
+      "canonical_feature_name": "feature_return_20d_lagged",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 21,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "close(T)/close(T-5)-1",
+      "canonical_feature_name": "feature_return_5d_lagged",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 22,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "simple-average RSI14 through T",
+      "canonical_feature_name": "feature_rsi_14",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 23,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "symbol return5-sector return5",
+      "canonical_feature_name": "feature_sector_relative_return_5d",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "BLOCKED_EFFECTIVE_DATED_SECTOR",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 24,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "mean(close T-9..T)",
+      "canonical_feature_name": "feature_sma_10",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 25,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "SMA10/SMA20",
+      "canonical_feature_name": "feature_sma_10_over_20",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 26,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "mean(close T-19..T)",
+      "canonical_feature_name": "feature_sma_20",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 27,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "SMA20/SMA50",
+      "canonical_feature_name": "feature_sma_20_over_50",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 28,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "mean(close T-49..T)",
+      "canonical_feature_name": "feature_sma_50",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 29,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "SPY close(T)/SPY close(T-1)-1",
+      "canonical_feature_name": "feature_spy_return_1d",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 30,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "SPY close(T)/SPY close(T-5)-1",
+      "canonical_feature_name": "feature_spy_return_5d",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 31,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "cov(symbol,SPY)/var(SPY) over 20 returns",
+      "canonical_feature_name": "feature_symbol_beta_20d",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 32,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "symbol return5-SPY return5",
+      "canonical_feature_name": "feature_symbol_minus_spy_5d",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 33,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "OLS slope of close over 10 sessions",
+      "canonical_feature_name": "feature_trend_slope_10d",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 34,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "OLS slope of close over 20 sessions",
+      "canonical_feature_name": "feature_trend_slope_20d",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 35,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "population stddev of 20 backward symbol returns",
+      "canonical_feature_name": "feature_volatility_20d",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 36,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "population stddev of 5 backward symbol returns",
+      "canonical_feature_name": "feature_volatility_5d",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 37,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "split-basis volume(T)",
+      "canonical_feature_name": "feature_volume",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 38,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "volume(T)/mean(volume T-19..T)",
+      "canonical_feature_name": "feature_volume_ratio_20d",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 39,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "(volume(T)-mean20)/population_stddev20",
+      "canonical_feature_name": "feature_volume_zscore_20d",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 40,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "sum(close*volume T-19..T)/sum(volume T-19..T)",
+      "canonical_feature_name": "feature_vwap",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 41,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": false,
+      "calculation_source": "OLS slope of VWAP over configured trailing window",
+      "canonical_feature_name": "feature_vwap_slope",
+      "inference_inclusion": true,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": true,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 42,
+      "required_historical_inputs": [
+        "daily_ohlcv"
+      ],
+      "stale_or_missing_policy": "fit_period_median_after_required-family fail_closed checks",
+      "training_inclusion": true
+    },
+    {
+      "additional_five_feature_membership": true,
+      "calculation_source": "lineage field",
+      "canonical_feature_name": "feature_cutoff_at",
+      "inference_inclusion": false,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": false,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 43,
+      "required_historical_inputs": [
+        "lineage"
+      ],
+      "stale_or_missing_policy": "required_for_reconstruction",
+      "training_inclusion": false
+    },
+    {
+      "additional_five_feature_membership": true,
+      "calculation_source": "lineage field",
+      "canonical_feature_name": "feature_family_available_at",
+      "inference_inclusion": false,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": false,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 44,
+      "required_historical_inputs": [
+        "lineage"
+      ],
+      "stale_or_missing_policy": "required_for_reconstruction",
+      "training_inclusion": false
+    },
+    {
+      "additional_five_feature_membership": true,
+      "calculation_source": "lineage field",
+      "canonical_feature_name": "feature_family_source_at",
+      "inference_inclusion": false,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": false,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 45,
+      "required_historical_inputs": [
+        "lineage"
+      ],
+      "stale_or_missing_policy": "required_for_reconstruction",
+      "training_inclusion": false
+    },
+    {
+      "additional_five_feature_membership": true,
+      "calculation_source": "lineage field",
+      "canonical_feature_name": "feature_market_asof_date",
+      "inference_inclusion": false,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": false,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 46,
+      "required_historical_inputs": [
+        "lineage"
+      ],
+      "stale_or_missing_policy": "required_for_reconstruction",
+      "training_inclusion": false
+    },
+    {
+      "additional_five_feature_membership": true,
+      "calculation_source": "lineage field",
+      "canonical_feature_name": "feature_split_ids",
+      "inference_inclusion": false,
+      "leakage_risk": "FAIL_CLOSED_CUTOFF_AND_LINEAGE",
+      "original_43_feature_membership": false,
+      "phase1_readiness": "READY",
+      "point_in_time_status": "REQUIRED",
+      "production_compatibility": "V4_RESEARCH_ONLY",
+      "registry_position": 47,
+      "required_historical_inputs": [
+        "lineage"
+      ],
+      "stale_or_missing_policy": "required_for_reconstruction",
+      "training_inclusion": false
+    }
+  ],
+  "mapping_sha256": "80f0fccccf02d7ebcf0f997df02187da00472498fa5618ea4be5588d820770bb",
+  "model_input_count": 43,
+  "provenance_count": 5,
+  "schema_version": "alpha-atlas-v4-phase1-feature-mapping.v1",
+  "total_count": 48
+}

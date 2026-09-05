@@ -1,0 +1,54 @@
+{
+  "benchmark": {
+    "before_optimization": {
+      "events": 10000,
+      "final_artifacts_present": false,
+      "status": "TIMED_OUT",
+      "timeout_seconds": 120
+    },
+    "canonical_lineages": 40,
+    "decision_events": 10000,
+    "duplicate_lineages_reused": 9960,
+    "elapsed_seconds": 19.633878,
+    "feature_cache_hits": 9960,
+    "feature_cache_misses": 40,
+    "minimum_speedup_vs_timeout_bound": 5.663,
+    "selected_rows": 365,
+    "source_files_parsed": 3,
+    "source_objects_hashed": 3,
+    "stage_seconds": {
+      "decision_log_loading": 0.128847,
+      "evidence_serialization": 0.046677,
+      "feature_construction": 0.175774,
+      "lineage_accumulation_and_deduplication": 0.431717,
+      "manifest_hashing": 1.884518,
+      "massive_daily_file_parsing": 0.010937,
+      "observation_and_feature_construction": 15.793699,
+      "raw_observation_serialization": 1.088606,
+      "source_row_identity_generation": 0.031056,
+      "source_window_selection": 0.053214,
+      "split_adjusted_history_preparation": 0.039991
+    },
+    "status": "LOCAL_SYNTHETIC_SCALE_BENCHMARK",
+    "wall_seconds": 21.191
+  },
+  "hosted_run_168": {
+    "actions_run_id": 33463597909,
+    "decision_events": 49485,
+    "exit_code": 124,
+    "failure_stage": "build_raw",
+    "source_objects": 143,
+    "timeout_seconds": 600
+  },
+  "optimizations": [
+    "cache split-adjusted histories by symbol/as-of/safe-action identity",
+    "cache deterministic selected-row identities",
+    "cache symbol/SPY/sector row-ID windows",
+    "reuse canonical lineage for duplicate request observations",
+    "replace repeated linear date searches with position maps",
+    "compute the feature-registry hash once",
+    "restrict unadjusted before/after audit reconstruction to split-affected symbols",
+    "atomically finalize evidence and raw artifacts"
+  ],
+  "schema_version": "alpha-atlas-v4-builder-performance-report.v1"
+}
