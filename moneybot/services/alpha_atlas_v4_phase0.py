@@ -17,12 +17,9 @@ from moneybot.services.alpha_atlas_v4_canonical_observations import (
     canonical_observation_id,
 )
 from moneybot.services.market_data_providers import ExchangeCalendar
-from moneybot.services.corporate_actions import (
-    CORPORATE_ACTION_AVAILABILITY_POLICY_VERSION,
-)
 
 FEATURE_CONTRACT_VERSION = "alpha-atlas-v4-features.v2"
-FEATURE_REGISTRY_VERSION = "alpha-atlas-v4-feature-registry.v2"
+FEATURE_REGISTRY_VERSION = "alpha-atlas-v4-feature-registry.v1"
 FILL_POLICY_VERSION = "alpha-atlas-v4-feature-fill-policy.v1"
 RECONSTRUCTION_VERSION = "alpha-atlas-v4-reconstructability.v1"
 TEMPORAL_CERTIFICATION_VERSION = "alpha-atlas-v4-temporal-safety-certification.v1"
@@ -284,14 +281,6 @@ def feature_registry() -> dict[str, Any]:
             family, dependency = "spy_context", "SPY"
         elif "sector" in name:
             family, dependency = "sector_context", "point_in_time_sector_benchmark"
-        alignment_policy = "independent_family_latest_completed_session"
-        if name in {
-            "feature_symbol_minus_spy_5d",
-            "feature_sector_relative_return_5d",
-        }:
-            alignment_policy = "exact_session_inner_join_common_return_endpoint"
-        elif name == "feature_symbol_beta_20d":
-            alignment_policy = "exact_matching_start_and_end_session_return_pairs"
         records.append(
             {
                 "name": name,
@@ -311,7 +300,6 @@ def feature_registry() -> dict[str, Any]:
                 "fill_policy": FILL_POLICY_VERSION,
                 "adjustment": "event_time_split_adjusted",
                 "context_dependency": dependency,
-                "source_alignment_policy": alignment_policy,
                 "point_in_time_security_identity_required": True,
                 "reconstructability_status": "REQUIRES_IMMUTABLE_SOURCE_LINEAGE",
                 "serving_equivalent_source": "daily aggregate history; parity not certified",
@@ -331,7 +319,6 @@ def feature_registry() -> dict[str, Any]:
         )
     return {
         "schema_version": FEATURE_REGISTRY_VERSION,
-        "source_alignment_policy_version": "alpha-atlas-v4-source-alignment.v1",
         "feature_contract_version": FEATURE_CONTRACT_VERSION,
         "feature_store_feature_columns": len(records),
         "model_input_count": len(MODEL_FEATURES),
@@ -367,7 +354,7 @@ def _replay_v4_features(
     loaded: Mapping[str, Any], lineage: Mapping[str, Any]
 ) -> dict[str, float | int | None]:
     """Replay the production V4 builder formulas from hash-verified bar histories."""
-    if lineage.get("replay_engine_version") != "massive-v4-feature-replay.v2":
+    if lineage.get("replay_engine_version") != "massive-v4-feature-replay.v1":
         raise ValueError("unsupported feature replay engine")
     from scripts import build_massive_decision_training_rows as builder
 
@@ -378,8 +365,8 @@ def _replay_v4_features(
     idx = int(indices["symbol"])
     spy_idx = int(indices["spy"])
     sector_idx = int(indices["sector"])
-    if idx < 5 or spy_idx < 5 or sector_idx < 5:
-        raise ValueError("insufficient source lookback for builder eligibility")
+    if idx < 50 or spy_idx < 35 or sector_idx < 5:
+        raise ValueError("insufficient source lookback for complete replay")
     asof = symbol[idx]
     close = float(asof["close"])
     sma10 = builder._rolling_close_mean(symbol, idx, 10)
@@ -389,12 +376,6 @@ def _replay_v4_features(
     return20 = builder._lagged_return(symbol, idx, 20)
     spy_return5 = builder._lagged_return(spy, spy_idx, 5)
     sector_return5 = builder._lagged_return(sector, sector_idx, 5)
-    aligned_symbol_spy_5d, aligned_spy_5d, _ = builder._aligned_relative_returns(
-        symbol, spy, idx, spy_idx, 5
-    )
-    aligned_symbol_sector_5d, aligned_sector_5d, _ = builder._aligned_relative_returns(
-        symbol, sector, idx, sector_idx, 5
-    )
     volume = builder._coerce_float(asof.get("volume"))
     volume5 = builder._rolling_numeric_mean(symbol, idx, 5, "volume")
     volume20 = builder._rolling_numeric_mean(symbol, idx, 20, "volume")
@@ -402,7 +383,7 @@ def _replay_v4_features(
     low20 = builder._rolling_extreme(symbol, idx, 20, "low", high=False)
     vwap = builder._rolling_vwap(symbol, idx, 20)
     macd, macd_signal, macd_hist = builder._macd_components_at(symbol, idx)
-    replayed = {
+    return {
         "feature_close": close,
         "feature_sma_10": sma10,
         "feature_sma_20": sma20,
@@ -429,30 +410,18 @@ def _replay_v4_features(
         "feature_atr_14": builder._atr_at(symbol, idx, 14),
         "feature_spy_return_1d": builder._lagged_return(spy, spy_idx, 1),
         "feature_spy_return_5d": spy_return5,
-        "feature_symbol_minus_spy_5d": (
-            round(aligned_symbol_spy_5d - aligned_spy_5d, 6)
-            if aligned_symbol_spy_5d is not None and aligned_spy_5d is not None
-            else None
-        ),
-        "feature_symbol_beta_20d": builder._date_aligned_beta(
+        "feature_symbol_minus_spy_5d": round(return5 - spy_return5, 6),
+        "feature_symbol_beta_20d": builder._beta_to_benchmark(
             symbol, spy, idx, spy_idx, 20
         ),
-        "feature_sector_relative_return_5d": (
-            round(aligned_symbol_sector_5d - aligned_sector_5d, 6)
-            if aligned_symbol_sector_5d is not None and aligned_sector_5d is not None
-            else None
-        ),
+        "feature_sector_relative_return_5d": round(return5 - sector_return5, 6),
         "feature_market_regime_risk_on": builder._market_regime_risk_on(spy, spy_idx),
         "feature_market_volatility_proxy": builder._return_volatility(spy, spy_idx, 20),
         "feature_return_1d_lagged": builder._lagged_return(symbol, idx, 1),
         "feature_return_5d_lagged": return5,
         "feature_return_10d_lagged": builder._lagged_return(symbol, idx, 10),
         "feature_return_20d_lagged": return20,
-        "feature_momentum_5d_vs_20d": (
-            round(return5 - return20, 6)
-            if return5 is not None and return20 is not None
-            else None
-        ),
+        "feature_momentum_5d_vs_20d": round(return5 - return20, 6),
         "feature_volume": volume,
         "feature_volume_ratio_20d": builder._ratio(volume, volume20),
         "feature_relative_volume_5d": builder._ratio(volume, volume5),
@@ -465,38 +434,6 @@ def _replay_v4_features(
             round(close * volume, 6) if volume is not None else None
         ),
     }
-    # The builder deliberately overlays the shared V3 train/serve calculations.
-    # Replay that same final write, including its exact insufficient-history None.
-    from moneybot.services.alpha_atlas_v3_features import build_alpha_atlas_v3_features
-
-    replayed.update(
-        build_alpha_atlas_v3_features(
-            symbol_bars=symbol[: idx + 1],
-            spy_bars=spy[: spy_idx + 1],
-            asof_date=None,
-        )
-    )
-    # The shared overlay owns standalone SPY features; cross-family features use
-    # the V4 exact-session alignment semantics above.
-    replayed.update(
-        {
-            "feature_symbol_minus_spy_5d": (
-                round(aligned_symbol_spy_5d - aligned_spy_5d, 6)
-                if aligned_symbol_spy_5d is not None and aligned_spy_5d is not None
-                else None
-            ),
-            "feature_sector_relative_return_5d": (
-                round(aligned_symbol_sector_5d - aligned_sector_5d, 6)
-                if aligned_symbol_sector_5d is not None
-                and aligned_sector_5d is not None
-                else None
-            ),
-            "feature_symbol_beta_20d": builder._date_aligned_beta(
-                symbol, spy, idx, spy_idx, 20
-            ),
-        }
-    )
-    return replayed
 
 
 def verify_observation(
@@ -509,7 +446,6 @@ def verify_observation(
     """Independently replay a lineage-bearing observation; fail closed otherwise."""
     cache = cache if cache is not None else {}
     failures: list[str] = []
-    mismatches: list[dict[str, Any]] = []
     lineage = row.get("reconstruction_lineage")
     if not isinstance(lineage, dict):
         return {
@@ -591,8 +527,6 @@ def verify_observation(
     for feature in MODEL_FEATURES:
         replay = replayed_features.get(feature)
         observed = row.get(feature)
-        if replay is None and observed is None:
-            continue
         if not isinstance(replay, (int, float)) or not isinstance(
             observed, (int, float)
         ):
@@ -601,28 +535,6 @@ def verify_observation(
             float(replay), float(observed), rtol=tolerance, atol=tolerance
         ):
             failures.append(f"feature_mismatch:{feature}")
-            absolute = abs(float(replay) - float(observed))
-            mismatches.append(
-                {
-                    "feature": feature,
-                    "stored_value": observed,
-                    "replayed_value": replay,
-                    "absolute_difference": absolute,
-                    "relative_difference": (
-                        absolute / abs(float(observed))
-                        if float(observed) != 0.0
-                        else None
-                    ),
-                    "accepted_rtol": tolerance,
-                    "accepted_atol": tolerance,
-                    "symbol_source_row_ids": lineage.get("symbol_row_ids") or [],
-                    "spy_source_row_ids": lineage.get("spy_row_ids") or [],
-                    "sector_source_row_ids": lineage.get("sector_row_ids") or [],
-                    "calculation_engine_version": lineage.get(
-                        "calculation_engine_version"
-                    ),
-                }
-            )
     execution = lineage.get("execution") or {}
     try:
         entry = float(execution["entry_price"])
@@ -665,38 +577,9 @@ def verify_observation(
                 if action is None:
                     failures.append(f"missing_feature_action:{action_id}")
                     continue
-                evidence = action.get("availability_evidence") or {}
-                kind = evidence.get("kind")
-                available = pd.NaT
-                if kind == "EXPLICIT_PROVIDER_AVAILABILITY":
-                    available = pd.to_datetime(
-                        evidence.get("available_at"), utc=True, errors="coerce"
-                    )
-                elif kind == "EXECUTED_ACTION_SESSION_CLOSE":
-                    try:
-                        execution_day = date.fromisoformat(
-                            str(action["execution_date"])
-                        )
-                        computed = pd.Timestamp(calendar.session_close(execution_day))
-                        claimed = pd.to_datetime(
-                            evidence.get("available_at"), utc=True, errors="coerce"
-                        )
-                        if (
-                            evidence.get("execution_date") == execution_day.isoformat()
-                            and evidence.get("policy_version")
-                            == CORPORATE_ACTION_AVAILABILITY_POLICY_VERSION
-                            and evidence.get("calendar_contract_version")
-                            == calendar.identifier
-                            and claimed == computed
-                        ):
-                            available = computed
-                    except (KeyError, TypeError, ValueError):
-                        available = pd.NaT
-                elif action.get("available_at"):
-                    # Backward-compatible immutable bundles with provider timestamps.
-                    available = pd.to_datetime(
-                        action.get("available_at"), utc=True, errors="coerce"
-                    )
+                available = pd.to_datetime(
+                    action.get("available_at"), utc=True, errors="coerce"
+                )
                 if pd.isna(available) or (not pd.isna(cutoff) and available > cutoff):
                     failures.append(f"unproven_feature_action_availability:{action_id}")
             for action_id in row.get("label_split_ids") or []:
@@ -744,7 +627,6 @@ def verify_observation(
         "canonical_observation_id": row.get("canonical_observation_id"),
         "status": status,
         "failures": sorted(set(failures)),
-        "feature_mismatches": mismatches,
     }
 
 
@@ -914,69 +796,18 @@ def _resolve_evidence_bundle(
         failures = []
     manifest, tables, cached_failures = cache[cache_key]
     failures.extend(cached_failures)
-    indexes_key = f"bundle-indexes:{manifest_path}"
-    if indexes_key not in cache:
-        cache[indexes_key] = {
-            "lineage": {
-                item.get("lineage_id"): item
-                for item in tables.get("observation_lineage", [])
-            },
-            "rows": {
-                item.get("source_row_id"): item
-                for item in tables.get("selected_market_rows", [])
-            },
-            "identities": {
-                item.get("security_identity_evidence_id"): item
-                for item in tables.get("security_identity_evidence", [])
-            },
-            "actions": {
-                item.get("corporate_action_evidence_id"): item
-                for item in tables.get("corporate_action_evidence", [])
-            },
-        }
-    indexes = cache[indexes_key]
-    by_lineage = indexes["lineage"]
+    by_lineage = {
+        item.get("lineage_id"): item for item in tables.get("observation_lineage", [])
+    }
     record = by_lineage.get(lineage.get("lineage_id"))
     if not isinstance(record, dict):
         return {}, dict(lineage), failures + ["missing_observation_lineage_record"]
     if record.get("canonical_observation_id") != row.get("canonical_observation_id"):
         failures.append("lineage_canonical_observation_id_mismatch")
-    rows_by_id = indexes["rows"]
-
-    family_ids = {
-        "symbol": list(record.get("symbol_row_ids") or []),
-        "spy": list(record.get("spy_row_ids") or []),
-        "sector": list(record.get("sector_row_ids") or []),
+    rows_by_id = {
+        item.get("source_row_id"): item
+        for item in tables.get("selected_market_rows", [])
     }
-    effective = record.get("source_family_effective_asof") or {}
-    for family, ids in family_ids.items():
-        endpoint = (rows_by_id.get(ids[-1]) or {}).get("date") if ids else None
-        if effective.get(family) != endpoint:
-            failures.append(f"source_family_effective_asof_mismatch:{family}")
-
-    for label, left_family, right_family, endpoint_key in (
-        ("symbol_spy", "symbol", "spy", "symbol_spy_common"),
-        ("symbol_sector", "symbol", "sector", "symbol_sector_common"),
-    ):
-        left_by_day = {
-            str((rows_by_id.get(source_id) or {}).get("date")): source_id
-            for source_id in family_ids[left_family]
-        }
-        right_by_day = {
-            str((rows_by_id.get(source_id) or {}).get("date")): source_id
-            for source_id in family_ids[right_family]
-        }
-        common = sorted(left_by_day.keys() & right_by_day.keys())
-        expected_alignment = {
-            "symbol": [left_by_day[day] for day in common],
-            "comparison": [right_by_day[day] for day in common],
-        }
-        if (record.get("aligned_source_row_ids") or {}).get(
-            label
-        ) != expected_alignment:
-            failures.append(f"aligned_source_row_ids_mismatch:{label}")
-        if effective.get(endpoint_key) != (common[-1] if common else None):
-            failures.append(f"common_source_endpoint_mismatch:{label}")
 
     calendar = ExchangeCalendar()
 
@@ -1033,7 +864,10 @@ def _resolve_evidence_bundle(
         "sector": resolve_rows(record.get("sector_row_ids") or [], "sector"),
         "reference": {},
     }
-    identity_by_id = indexes["identities"]
+    identity_by_id = {
+        item.get("security_identity_evidence_id"): item
+        for item in tables.get("security_identity_evidence", [])
+    }
     identity = identity_by_id.get(record.get("security_identity_evidence_id"))
     if not isinstance(identity, dict):
         failures.append("missing_security_identity_evidence")
@@ -1041,7 +875,10 @@ def _resolve_evidence_bundle(
         "point_in_time_symbol_id"
     ) != row.get("point_in_time_symbol_id"):
         failures.append("security_identity_mismatch")
-    action_by_id = indexes["actions"]
+    action_by_id = {
+        item.get("corporate_action_evidence_id"): item
+        for item in tables.get("corporate_action_evidence", [])
+    }
     loaded["corporate_actions"] = action_by_id.get(
         record.get("corporate_action_evidence_id")
     )

@@ -50,3 +50,14 @@ failed the former whole-directory byte guard at 84,723 selected rows. Evidence v
 now keeps a compact primary manifest and stores every high-cardinality ledger in
 deterministic gzip partitions with hash/count/offset indexes. Diagnostics record
 the configured limits and per-section sizes before any fail-closed limit error.
+
+## Phase 1 technical readiness
+
+Phase 0 is now closed by scheduled Track B `33960970412-1` (32,619/32,619 rows
+reconstructable). Phase 1 uses `alpha_atlas_v4_phase1.py` and
+`audit_alpha_atlas_v4_phase1_readiness.py` for a credential-sanitized, bounded,
+read-only historical source preflight, effective-dated reference enforcement,
+authoritative 43+5 mapping, duplicate comparison, and non-executing controlled
+backfill plan. The full-universe backfill remains blocked until inactive/delisted
+coverage, identity events, sector history, terminal outcomes, and a common source
+date range are technically demonstrated.

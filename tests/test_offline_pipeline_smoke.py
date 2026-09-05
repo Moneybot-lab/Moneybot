@@ -235,7 +235,7 @@ def test_massive_offline_training_pipeline_smoke(tmp_path):
     )
     assert (
         feature_manifest["feature_registry_version"]
-        == "alpha-atlas-v4-feature-registry.v2"
+        == "alpha-atlas-v4-feature-registry.v1"
     )
     assert len(feature_manifest["feature_columns"]) == 48
     assert len(feature_manifest["model_input_feature_columns"]) == 43

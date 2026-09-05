@@ -1,10 +1,10 @@
 # Alpha Atlas V4 Phase 0 closeout
 
 **Schema:** `alpha-atlas-v4-phase0-closeout.v1`
-**Executive result:** `PHASE_0_BLOCKED_EVIDENCE_BUNDLE_HOSTED_RERUN_REQUIRED`
+**Executive result:** `PHASE_0_PASS`
 **Starting checkout commit:** `ec9485d88c3df91b297acd4e7ab5dc703b7add26`
 
-Track B #168 (`33463597909`) timed out after 600 seconds in `build_raw`. A later hosted build completed optimized observation and lineage construction (50,000 processed, 41,268 emitted, 84,723 selected evidence rows) but failed the former whole-directory 1 GiB evidence guard. The evidence is now deterministically gzip-partitioned behind a compact hash index; Phase 0 remains blocked until a hosted run reaches full-artifact reconstruction.
+Scheduled Track B `33960970412-1` completed with 50,219/50,219 exported decision records, `PREFIX_VERIFIED` continuity, no truncation or integrity failure, and 32,619/32,619 reconstructable Phase 0 rows. The certified artifact SHA-256 is `2877edece1ad0a8fca48ffff8a313359cb37da37785a87311cb47750ff3196b5`; the results SHA-256 is `a58d709d65a169df4afee8ac443db6a6579c6847e9355b76dd4afa0a2224d6dc`.
 
 ## Current evidence
 
@@ -21,4 +21,4 @@ No historical backfill, model tuning, retraining, promotion, routing, production
 
 ## Next action
 
-After merge, rerun **Recover V3.1 Benchmark Evidence** once, then dispatch exactly one **Track B Offline Challenger**. The Track B run must at minimum reach `Evaluate V4 Phase 0 reconstructability gate`; completion alone is not Phase 0 proof.
+Phase 1 technical historical-coverage auditing may begin. A full historical backfill remains separately unauthorized until its technical blockers and controlled-approval checklist are satisfied.

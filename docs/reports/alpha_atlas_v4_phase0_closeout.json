@@ -13,11 +13,11 @@
     "0.3_fit_only_filling": "PASS_IMPLEMENTATION_AND_SYNTHETIC_TEST_EVIDENCE",
     "0.4_adversarial_leakage_tests": "PASS_REPOSITORY_TEST_EVIDENCE",
     "0.5_canonical_observations": "PASS_REPOSITORY_TEST_EVIDENCE",
-    "exit_1_all_training_rows_timestamp_invariant": "BLOCKED_POST_LINEAGE_HOSTED_RUN_REQUIRED",
-    "exit_2_same_day_close_tests": "PASS",
-    "exit_3_duplicates_canonicalized": "PASS",
-    "exit_4_every_feature_label_reconstructable": "PASS_LOCAL_PRODUCTION_PATH_FIXTURE;BLOCKED_HOSTED_EVIDENCE",
-    "exit_5_no_unsupported_manifest_claim": "PASS_FOR_NEW_V4_MANIFESTS"
+    "exit_1_all_training_rows_timestamp_invariant": "PASS_HOSTED_EVIDENCE",
+    "exit_2_same_day_close_tests": "PASS_HOSTED_EVIDENCE",
+    "exit_3_duplicates_canonicalized": "PASS_HOSTED_EVIDENCE",
+    "exit_4_every_feature_label_reconstructable": "PASS_HOSTED_EVIDENCE",
+    "exit_5_no_unsupported_manifest_claim": "PASS_HOSTED_EVIDENCE"
   },
   "evidence_partition_repair": {
     "evidence_truncated": false,
@@ -32,7 +32,7 @@
     "status": "IMPLEMENTED_LOCAL_HOSTED_RERUN_REQUIRED",
     "total_compressed_evidence_limit_bytes": 4294967296
   },
-  "executive_result": "PHASE_0_BLOCKED_EVIDENCE_BUNDLE_HOSTED_RERUN_REQUIRED",
+  "executive_result": "PHASE_0_PASS",
   "feature_reconciliation": {
     "feature_store_columns": 48,
     "model_inputs": 43,
@@ -53,10 +53,20 @@
   },
   "generated_at_utc": "2026-08-31T00:00:00+00:00",
   "hosted_certification": {
-    "artifact_sha256": null,
-    "last_run_id": 33463597909,
-    "rows_checked": 0,
-    "status": "BLOCKED_EVIDENCE_BUNDLE_BYTE_LIMIT;PARTITIONED_RERUN_REQUIRED"
+    "artifact_sha256": "2877edece1ad0a8fca48ffff8a313359cb37da37785a87311cb47750ff3196b5",
+    "automatic_promotion": false,
+    "continuity": "PREFIX_VERIFIED",
+    "decision_log_records": 50219,
+    "export_integrity_failures": 0,
+    "export_sha256": "7472b9da172130cd7f1e847c9c3ea131662dc995ec7aefe667c445bde1e58d22",
+    "export_truncated": false,
+    "exported_records": 50219,
+    "live_routing": false,
+    "reconstructability_failures": 0,
+    "results_sha256": "a58d709d65a169df4afee8ac443db6a6579c6847e9355b76dd4afa0a2224d6dc",
+    "rows_checked": 32619,
+    "rows_total": 32619,
+    "track_b_run": "33960970412-1"
   },
   "implementation_readiness": {
     "builder_emits_certifiable_lineage": true,
@@ -75,7 +85,7 @@
     "selected_source_rows": 229,
     "source_objects": 3
   },
-  "next_permitted_step": "Dispatch one Track B Offline Challenger and require partitioned evidence generation plus full-artifact Phase 0 reconstruction. Phase 1 remains prohibited.",
+  "next_permitted_step": "Phase 1 technical historical-coverage audit; full backfill remains unauthorized.",
   "reconstructability": {
     "adversarial_failure_classes_tested": [
       "corporate_action_mismatch",

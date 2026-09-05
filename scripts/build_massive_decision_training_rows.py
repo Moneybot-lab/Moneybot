@@ -46,7 +46,7 @@ DEFAULT_MAX_STALENESS_SESSIONS = 3
 V4_FEATURE_CONTRACT_VERSION = "alpha-atlas-v4-features.v2"
 RECONSTRUCTION_LINEAGE_VERSION = "alpha-atlas-v4-reconstruction-lineage.v1"
 MARKET_AVAILABILITY_POLICY_VERSION = "xnys-completed-daily-bar.v1"
-CALCULATION_ENGINE_VERSION = "massive-v4-feature-replay.v2"
+CALCULATION_ENGINE_VERSION = "massive-v4-feature-replay.v1"
 SECTOR_BENCHMARK_SYMBOLS = {
     "communication services": "XLC",
     "consumer discretionary": "XLY",
@@ -975,10 +975,9 @@ def _feature_safe_splits(
     for event in events:
         execution_day = date.fromisoformat(str(event["execution_date"]))
         available_at = _parse_utc_datetime(event.get("available_at"))
-        execution_available_at = EXCHANGE_CALENDAR.session_close(execution_day)
         if available_at is not None and available_at <= decision_at:
             safe.append(event)
-        elif execution_available_at <= decision_at:
+        elif execution_day < market_session:
             safe.append(event)
     return safe
 
@@ -1031,7 +1030,7 @@ def build_training_rows_from_raw_market(
     date_index = _market_date_index(market)
     if telemetry:
         telemetry.add("market_history_indexing", time.perf_counter() - indexing_started)
-    feature_cache: dict[tuple[str, int, tuple[str, ...]], dict[str, Any]] = {}
+    feature_cache: dict[tuple[str, int], dict[str, Any]] = {}
     adjusted_history_cache: dict[
         tuple[str, str, tuple[str, ...]], list[dict[str, Any]]
     ] = {}
@@ -1356,12 +1355,6 @@ def build_training_rows_from_raw_market(
             else None
         )
         sector_return_5d = _lagged_return(sector_history, sector_idx, 5)
-        aligned_symbol_spy_5d, aligned_spy_5d, symbol_spy_common_asof = (
-            _aligned_relative_returns(history, spy_history, idx, spy_idx, 5)
-        )
-        aligned_symbol_sector_5d, aligned_sector_5d, symbol_sector_common_asof = (
-            _aligned_relative_returns(history, sector_history, idx, sector_idx, 5)
-        )
         event_fingerprint = hashlib.sha256(
             json.dumps(
                 event, sort_keys=True, default=str, separators=(",", ":")
@@ -1441,13 +1434,6 @@ def build_training_rows_from_raw_market(
             "event_date": event_day,
             "market_asof_date": asof["date"],
             "feature_market_asof_date": asof["date"],
-            "source_family_effective_asof": {
-                "symbol": asof["date"],
-                "spy": spy_history[spy_idx]["date"],
-                "sector": sector_history[sector_idx]["date"],
-                "symbol_spy_common": symbol_spy_common_asof,
-                "symbol_sector_common": symbol_sector_common_asof,
-            },
             "label_asof_date": future["date"],
             "timing_contract_version": ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
             "model_feature_contract_version": timing.model_feature_contract_version,
@@ -1476,7 +1462,7 @@ def build_training_rows_from_raw_market(
             "staleness_tolerance_sessions": max_staleness_sessions,
             "rejection_reason": None,
             "point_in_time_symbol_id": timing.point_in_time_symbol_id,
-            "corporate_action_availability_policy": CORPORATE_ACTION_AVAILABILITY_POLICY_VERSION,
+            "corporate_action_availability_policy": "feature_actions_known_by_cutoff;label_actions_realized_in_horizon",
             "code_commit": timing.code_commit,
             "dataset_manifest_hash": timing.dataset_manifest_hash,
             "corporate_action_schema_version": CORPORATE_ACTION_SCHEMA_VERSION,
@@ -1902,33 +1888,26 @@ def emit_phase0_evidence_bundle(
             ),
             feature_day,
         )
-        family_asof = row.get("source_family_effective_asof") or {}
-        spy_day = str(family_asof.get("spy") or "")
-        sector_day = str(family_asof.get("sector") or "")
         spy_raw = market["SPY"]
-        spy_idx = positions["SPY"].get(spy_day, -1)
-        if spy_idx < 0:
-            raise ValueError("PHASE0_LINEAGE_INVALID:missing_spy_effective_asof")
+        spy_idx = bisect.bisect_right(date_indices["SPY"], feature_day) - 1
         spy_history, spy_split_ids = adjusted(
             "SPY",
             spy_raw,
             _feature_safe_splits(
                 splits_by_symbol.get("SPY", []), cutoff, market_session
             ),
-            spy_day,
+            str(spy_raw[spy_idx]["date"]),
         )
         sector_symbol = str(row.get("sector_benchmark_symbol") or "SPY")
         sector_raw = market[sector_symbol]
-        sector_idx = positions[sector_symbol].get(sector_day, -1)
-        if sector_idx < 0:
-            raise ValueError("PHASE0_LINEAGE_INVALID:missing_sector_effective_asof")
+        sector_idx = bisect.bisect_right(date_indices[sector_symbol], feature_day) - 1
         sector_history, sector_split_ids = adjusted(
             sector_symbol,
             sector_raw,
             _feature_safe_splits(
                 splits_by_symbol.get(sector_symbol, []), cutoff, market_session
             ),
-            sector_day,
+            str(sector_raw[sector_idx]["date"]),
         )
         entry_idx = positions[symbol][str(row["entry_session_date"])]
         exit_idx = positions[symbol][str(row["exit_session_date"])]
@@ -1958,42 +1937,6 @@ def emit_phase0_evidence_bundle(
         spy_ids = window_ids(("SPY", spy_idx, spy_split_ids), spy_history, spy_idx)
         sector_ids = window_ids(
             (sector_symbol, sector_idx, sector_split_ids), sector_history, sector_idx
-        )
-
-        def aligned_ids(
-            left_rows: list[dict[str, Any]],
-            left_ids: list[str],
-            right_rows: list[dict[str, Any]],
-            right_ids: list[str],
-        ) -> tuple[list[str], list[str], str | None]:
-            left_by_day = {
-                str(item["date"]): source_id
-                for item, source_id in zip(left_rows, left_ids)
-            }
-            right_by_day = {
-                str(item["date"]): source_id
-                for item, source_id in zip(right_rows, right_ids)
-            }
-            common = sorted(left_by_day.keys() & right_by_day.keys())
-            return (
-                [left_by_day[day] for day in common],
-                [right_by_day[day] for day in common],
-                common[-1] if common else None,
-            )
-
-        symbol_spy_left_ids, symbol_spy_right_ids, symbol_spy_common_asof = aligned_ids(
-            symbol_history[: symbol_idx + 1],
-            symbol_ids,
-            spy_history[: spy_idx + 1],
-            spy_ids,
-        )
-        symbol_sector_left_ids, symbol_sector_right_ids, symbol_sector_common_asof = (
-            aligned_ids(
-                symbol_history[: symbol_idx + 1],
-                symbol_ids,
-                sector_history[: sector_idx + 1],
-                sector_ids,
-            )
         )
         entry_id = add_window([symbol_raw[entry_idx]])[0]
         exit_id = add_window([symbol_raw[exit_idx]])[0]
@@ -2037,29 +1980,10 @@ def emit_phase0_evidence_bundle(
             )
         )
         relevant = [
-            dict(item)
+            item
             for item in splits_by_symbol.get(symbol, [])
             if str(item.get("id")) in relevant_ids
         ]
-        for item in relevant:
-            explicit = _parse_utc_datetime(item.get("available_at"))
-            execution_day = date.fromisoformat(str(item["execution_date"]))
-            item["availability_evidence"] = (
-                {
-                    "kind": "EXPLICIT_PROVIDER_AVAILABILITY",
-                    "available_at": explicit.isoformat(),
-                }
-                if explicit is not None
-                else {
-                    "kind": "EXECUTED_ACTION_SESSION_CLOSE",
-                    "policy_version": CORPORATE_ACTION_AVAILABILITY_POLICY_VERSION,
-                    "available_at": EXCHANGE_CALENDAR.session_close(
-                        execution_day
-                    ).isoformat(),
-                    "execution_date": execution_day.isoformat(),
-                    "calendar_contract_version": EXCHANGE_CALENDAR.identifier,
-                }
-            )
         action_started = time.perf_counter()
         action_id = "corporate_actions_" + _json_sha256(
             {
@@ -2091,9 +2015,6 @@ def emit_phase0_evidence_bundle(
             {
                 "canonical_observation_id": canonical_id,
                 "symbol_row_ids": symbol_ids,
-                "spy_row_ids": spy_ids,
-                "sector_symbol": sector_symbol,
-                "sector_row_ids": sector_ids,
                 "entry_row_id": entry_id,
                 "exit_row_id": exit_id,
             }
@@ -2110,23 +2031,6 @@ def emit_phase0_evidence_bundle(
             "sector_symbol": sector_symbol,
             "sector_row_ids": sector_ids,
             "sector_source_index": len(sector_ids) - 1,
-            "source_family_effective_asof": {
-                "symbol": str(symbol_history[symbol_idx]["date"]),
-                "spy": str(spy_history[spy_idx]["date"]),
-                "sector": str(sector_history[sector_idx]["date"]),
-                "symbol_spy_common": symbol_spy_common_asof,
-                "symbol_sector_common": symbol_sector_common_asof,
-            },
-            "aligned_source_row_ids": {
-                "symbol_spy": {
-                    "symbol": symbol_spy_left_ids,
-                    "comparison": symbol_spy_right_ids,
-                },
-                "symbol_sector": {
-                    "symbol": symbol_sector_left_ids,
-                    "comparison": symbol_sector_right_ids,
-                },
-            },
             "entry_row_id": entry_id,
             "exit_5_row_id": (
                 exit_id if int(row["label_horizon_sessions"]) == 5 else None
@@ -2475,9 +2379,7 @@ def main() -> None:
             shutil.rmtree(final_evidence)
     decision_log = Path(args.decision_log)
     started = time.perf_counter()
-    events = read_decision_events(
-        decision_log, limit=max(1, args.limit) if args.limit is not None else None
-    )
+    events = read_decision_events(decision_log, limit=max(1, args.limit))
     telemetry.add("decision_log_loading", time.perf_counter() - started)
     telemetry.count("decision_events_loaded", len(events))
     telemetry.progress("decision_log_loaded", decision_events=len(events))

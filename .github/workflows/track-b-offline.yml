@@ -221,6 +221,7 @@ jobs:
             --split-cache data/track_b/corporate_actions/massive_splits.jsonl \
             --phase0-evidence-dir "$PHASE0_DIR/source_evidence" \
             --performance-output "$TRACK_B_RUN_DIR/builder_performance.json" \
+            --limit 50000 \
             --horizon-days 5
           echo "Training-row manifest:"
           test -s "$RAW_V4_ROWS"
@@ -440,7 +441,6 @@ jobs:
             ${{ env.CANONICAL_MANIFEST }}
             ${{ env.CLEANING_QUALITY_REPORT }}
             ${{ env.PHASE0_DIR }}/**
-            ${{ env.FEATURE_STORE_DIR }}/all.jsonl
             ${{ env.TRACK_B_ARTIFACT_DIR }}/challenger_suite/feature_fill_policy.json
             ${{ env.TRACK_B_RUN_DIR }}/track_b_failure_summary.json
             ${{ env.TRACK_B_RUN_DIR }}/builder_performance.json
