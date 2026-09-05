@@ -97,6 +97,7 @@ jobs:
           DAILY_OPS_TOKEN: ${{ secrets.DAILY_OPS_TOKEN }}
         run: |
           set -euo pipefail
+          echo "TRACK_B_FAILED_STAGE=fetch_decision_log" >> "$GITHUB_ENV"
           test -n "$MONEYBOT_BASE_URL" || (echo "Missing secret: MONEYBOT_BASE_URL" && exit 1)
           test -n "$DAILY_OPS_TOKEN" || (echo "Missing secret: DAILY_OPS_TOKEN" && exit 1)
           mkdir -p data "$TRACK_B_RUN_DIR"
@@ -113,13 +114,18 @@ jobs:
             --location
             --output data/decision_events.jsonl
             --dump-header data/_response_headers.txt
+            --write-out '%{http_code}'
             -H "X-Daily-Ops-Token: $DAILY_OPS_TOKEN"
+            -H "X-Decision-Continuity-Bootstrap: verified_seed_v1"
           )
 
-          URL="$MONEYBOT_BASE_URL/api/export-decision-log?limit=50000"
+          URL="$MONEYBOT_BASE_URL/api/export-decision-log"
           echo "Fetching decision log from: $URL"
-          timeout 150 curl "${CURL_OPTS[@]}" "$URL" || {
-            CURL_EXIT=$?
+          set +e
+          HTTP_STATUS=$(timeout 150 curl "${CURL_OPTS[@]}" "$URL")
+          CURL_EXIT=$?
+          set -e
+          if [ "$CURL_EXIT" -ne 0 ]; then
             echo "curl failed with exit code: $CURL_EXIT"
             echo "Response headers:"
             sed -n '1,200p' data/_response_headers.txt || true
@@ -129,18 +135,31 @@ jobs:
             fi
             echo "Decision log fetch failed. Exiting."
             exit 1
-          }
-
-          HTTP_STATUS=$(awk 'NR==1{print $2}' data/_response_headers.txt || echo "")
-          if [[ "$HTTP_STATUS" =~ ^[0-9]+$ ]] && [ "$HTTP_STATUS" -ne 200 ]; then
-            echo "Non-200 HTTP status: $HTTP_STATUS"
-            sed -n '1,200p' data/_response_headers.txt || true
-            echo "Fetched file size:"
-            ls -lh data/decision_events.jsonl || true
-            exit 1
           fi
 
-          test -s data/decision_events.jsonl || (echo "Exported decision log is empty" && exit 1)
+          python3 scripts/validate_decision_log_export.py \
+            --artifact data/decision_events.jsonl \
+            --headers data/_response_headers.txt \
+            --manifest-output data/decision_log_export_manifest.json \
+            --latest-allowed-earliest-timestamp 1775629100 \
+            --final-status "$HTTP_STATUS"
+          python3 scripts/audit_decision_log_duplicates.py \
+            --input data/decision_events.jsonl \
+            --output data/decision_log_duplicate_audit.json
+          curl --fail --show-error --silent --retry 3 --retry-delay 3 --retry-all-errors \
+            -H "Content-Type: application/json" \
+            -H "X-Daily-Ops-Token: $DAILY_OPS_TOKEN" \
+            -H "X-Decision-Continuity-Bootstrap: verified_seed_v1" \
+            --data-binary @data/decision_log_export_manifest.json \
+            "$MONEYBOT_BASE_URL/api/export-decision-log-commit" \
+            --output data/decision_log_continuity_commit.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path("data/decision_log_continuity_commit.json").read_text())
+          if result.get("continuity", {}).get("checkpoint_current") is not True:
+              raise SystemExit("Decision export checkpoint is not current")
+          PY
           echo "Decision log lines:"
           wc -l data/decision_events.jsonl
           echo "Response headers (first 100 lines):"
@@ -436,6 +455,9 @@ jobs:
             ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v3/alpha_atlas_v3_recovery_rebaseline_report.json
             ${{ env.TRACK_B_ARTIFACT_DIR }}/alpha_atlas_v31/**
             data/decision_events.jsonl
+            data/decision_log_export_manifest.json
+            data/decision_log_duplicate_audit.json
+            data/decision_log_continuity_commit.json
             data/_response_headers.txt
             data/track_b/_production_model_headers.txt
             data/raw/**/_INGEST_MANIFEST.json
