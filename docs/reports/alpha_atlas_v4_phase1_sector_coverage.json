@@ -1,0 +1,17 @@
+{
+  "classification_fields": [
+    "sector",
+    "industry",
+    "sic_code",
+    "sic_description"
+  ],
+  "coverage_percentage": null,
+  "earliest_supported_date": null,
+  "effective_date_support": false,
+  "evidence_class": "STATIC_ONLY",
+  "fallback_recommendation": "disable sector-relative features for unsupported observations under a future versioned policy; do not use current sector metadata historically",
+  "latest_supported_date": null,
+  "records_with_classification": 0,
+  "schema_version": "alpha-atlas-v4-phase1-sector-coverage.v1",
+  "status": "INDETERMINATE"
+}

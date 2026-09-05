@@ -27,6 +27,7 @@ from moneybot.services.deterministic_model import (
 )
 from moneybot.services.model_metadata import append_artifact_history, build_artifact_metadata, save_artifact_metadata
 from moneybot.services.temporal_validation import purge_embargo_periods
+from moneybot.services.alpha_atlas_v4_phase0 import apply_feature_fill_policy, fit_feature_fill_policy
 from moneybot.services.decision_target import (
     HORIZON_DAYS,
     POSITIVE_RETURN_BUCKETS,
@@ -743,10 +744,13 @@ def main() -> None:
 
     periods, purge_embargo_boundaries = _chronological_training_periods_with_diagnostics(filtered_target, args.train_ratio)
     fit_raw, calibration_raw, threshold_raw, test_raw = periods
-    fit_df, feature_fill_values = _fill_feature_gaps(fit_raw, feature_columns)
-    calibration_df = _apply_feature_fill_values(calibration_raw, feature_columns, feature_fill_values)
-    threshold_df = _apply_feature_fill_values(threshold_raw, feature_columns, feature_fill_values)
-    test_df = _apply_feature_fill_values(test_raw, feature_columns, feature_fill_values)
+    fill_contract = str(fit_raw["model_feature_contract_version"].iloc[0]) if "model_feature_contract_version" in fit_raw else "moneybot-serving-features.v1"
+    feature_fill_policy = fit_feature_fill_policy(fit_raw, feature_columns, feature_contract_version=fill_contract)
+    feature_fill_values = {name: float(spec["fitted_value"]) for name, spec in feature_fill_policy["features"].items()}
+    fit_df = apply_feature_fill_policy(fit_raw, feature_fill_policy)
+    calibration_df = apply_feature_fill_policy(calibration_raw, feature_fill_policy)
+    threshold_df = apply_feature_fill_policy(threshold_raw, feature_fill_policy)
+    test_df = apply_feature_fill_policy(test_raw, feature_fill_policy)
     clean = pd.concat([fit_df, calibration_df, threshold_df, test_df]).sort_index()
     rows_after_feature_filter = len(clean)
 
@@ -833,6 +837,8 @@ def main() -> None:
     )
 
     save_artifact(artifact, args.output_model)
+    fill_policy_path = Path(str(args.output_model) + ".fill_policy.json")
+    fill_policy_path.write_text(json.dumps(feature_fill_policy, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     artifact_payload = json.loads(Path(args.output_model).read_text(encoding="utf-8"))
     artifact_payload.update(target_metadata())
     Path(args.output_model).write_text(
@@ -861,6 +867,8 @@ def main() -> None:
                 "rows_after_feature_filter": rows_after_feature_filter,
                 "selected_feature_columns": feature_columns,
                 "feature_fill_values": feature_fill_values,
+                "feature_fill_policy_path": str(fill_policy_path),
+                "feature_fill_policy_sha256": feature_fill_policy["policy_sha256"],
                 "target_column": target_column,
                 "return_bin_counts": _bucket_counts(clean),
                 "return_bin_sample_weights": RETURN_BIN_SAMPLE_WEIGHTS,

@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import numpy as np
 import pytest
@@ -26,18 +26,16 @@ from scripts.day14_promote_candidate import _next_alpha_atlas_version
 
 
 def _bars(symbol, *, base=20.0, slope=0.2, volume_base=1_000_000.0, count=70):
+    days = []
+    candidate = date(2026, 1, 2)
+    while len(days) < count:
+        if candidate.weekday() < 5:
+            days.append(candidate.isoformat())
+        candidate += timedelta(days=1)
     return [
         {
             "symbol": symbol,
-            "date": (
-                f"2026-01-{index + 1:02d}"
-                if index < 31
-                else (
-                    f"2026-02-{index - 30:02d}"
-                    if index < 59
-                    else f"2026-03-{index - 58:02d}"
-                )
-            ),
+            "date": days[index],
             "open": base + index * slope - 0.1,
             "high": base + index * slope + 0.4,
             "low": base + index * slope - 0.4,
@@ -50,7 +48,11 @@ def _bars(symbol, *, base=20.0, slope=0.2, volume_base=1_000_000.0, count=70):
 
 def _event(day="2026-02-20", symbol="AAPL"):
     return {
-        "ts": int(datetime.fromisoformat(day).replace(tzinfo=timezone.utc).timestamp()),
+        "ts": int(
+            datetime.fromisoformat(day)
+            .replace(hour=12, tzinfo=timezone.utc)
+            .timestamp()
+        ),
         "symbol": symbol,
         "endpoint": "quick_ask",
         "decision_source": "rule_based",
@@ -89,7 +91,7 @@ def test_exact_backward_market_calculations_and_order():
 
 def test_training_builder_uses_same_shared_values_and_future_return_only_as_label():
     market = {"AAPL": _bars("AAPL"), "SPY": _bars("SPY", base=100, slope=0.1)}
-    event = _event("2026-02-20")
+    event = _event(market["AAPL"][50]["date"])
     rows, summary = build_training_rows_from_raw_market(
         [event], market, horizon_days=5, split_events=[]
     )
@@ -103,7 +105,7 @@ def test_training_builder_uses_same_shared_values_and_future_return_only_as_labe
     assert {name: row[name] for name in ALPHA_ATLAS_V3_FEATURES} == shared
     assert row["label_asof_date"] > row["market_asof_date"]
     assert row["return_5d"] == round(
-        float(market["AAPL"][55]["close"]) / float(market["AAPL"][50]["close"]) - 1.0, 6
+        float(row["raw_exit_price"]) / float(row["raw_entry_price"]) - 1.0, 6
     )
     assert "return_5d" not in ALPHA_ATLAS_V3_FEATURES
     assert "probability_up" not in ALPHA_ATLAS_V3_FEATURES

@@ -125,20 +125,26 @@ def test_split_on_prediction_date_is_effective_for_feature_history():
 def test_ctnt_boundary_recomputes_canonical_features_before_emission():
     start = datetime(2026, 4, 9, tzinfo=timezone.utc)
     bars = []
-    for index in range(26):
-        day = (start + timedelta(days=index)).date().isoformat()
+    candidate = start
+    while len(bars) < 26:
+        if candidate.weekday() >= 5:
+            candidate += timedelta(days=1)
+            continue
+        index = len(bars)
+        day = candidate.date().isoformat()
         close = (
             (0.022 + index * 0.000075) if index < 20 else (3.37 + (index - 20) * 0.03)
         )
         bars.append(
             {"symbol": "CTNT", **bar(day, close, 200_000 if index < 20 else 1_000)}
         )
+        candidate += timedelta(days=1)
     event_day = bars[20]["date"]
     events = [
         {
             "ts": int(
                 datetime.fromisoformat(event_day)
-                .replace(tzinfo=timezone.utc)
+                .replace(hour=12, tzinfo=timezone.utc)
                 .timestamp()
             ),
             "symbol": "CTNT",
@@ -148,15 +154,19 @@ def test_ctnt_boundary_recomputes_canonical_features_before_emission():
     ]
     splits = canonical_splits([split("CTNT", event_day, 200, 1, "ctnt")])
     rows, _ = build_training_rows_from_raw_market(
-        events, {"CTNT": bars}, split_events=splits
+        events,
+        {"CTNT": bars, "SPY": [{**item, "symbol": "SPY"} for item in bars]},
+        split_events=splits,
     )
     row = rows[0]
+    assert row["market_asof_date"] == bars[19]["date"]
     assert row["feature_return_1d_lagged"] == pytest.approx(
-        3.37 / (bars[19]["close"] * 200) - 1, abs=1e-6
+        bars[19]["close"] / bars[18]["close"] - 1, abs=1e-6
     )
     assert abs(row["feature_return_5d_lagged"]) < 1
-    assert abs(row["feature_return_20d_lagged"]) < 1
-    assert row["feature_split_ids"] == ["ctnt"]
+    assert row["feature_return_20d_lagged"] is None
+    assert row["feature_split_ids"] == []
+    assert row["label_split_ids"] == []
 
 
 def test_split_cache_sort_and_hash_are_deterministic():
