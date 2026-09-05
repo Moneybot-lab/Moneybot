@@ -52,8 +52,6 @@ jobs:
           audit_exit=$?
           set -e
           echo "audit_exit=$audit_exit" >> "$GITHUB_OUTPUT"
-          cp docs/reports/alpha_atlas_v4_phase1_source_inventory.md "$REPORT_DIR/"
-          cp docs/reports/alpha_atlas_v4_phase1_readiness.md "$REPORT_DIR/"
           cp docs/reports/alpha_atlas_v4_phase1_adjustment_parity.md "$REPORT_DIR/"
 
       - name: Publish sanitized workflow summary

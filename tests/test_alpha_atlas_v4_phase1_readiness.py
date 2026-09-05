@@ -1,4 +1,6 @@
 import json
+import subprocess
+import sys
 import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,10 +14,13 @@ from moneybot.services.alpha_atlas_v4_phase1 import (
     collapse_exact_records,
     comparison_metrics,
     controlled_backfill_plan,
+    normalized_phase1_result,
     run_preflight,
     sanitize,
     source_inventory,
+    validate_phase1_consistency,
     validate_historical_reference,
+    validate_generated_phase1_artifacts,
 )
 from moneybot.services.market_data_providers import ExchangeCalendar
 
@@ -260,7 +265,10 @@ def test_backfill_plan_is_deterministic_blocked_and_does_not_execute():
     assert plan["execution_authorized"] is False
     assert plan["full_backfill_started"] is False
     assert plan["date_range"]["start"] is None
-    assert "delisted coverage unverified" in plan["blocking_conditions"]
+    assert any(
+        "inactive/delisted universe completeness" in item
+        for item in plan["blocking_conditions"]
+    )
     assert plan["estimates"]["status"] == "PROVISIONAL"
     blocker_text = " ".join(plan["blocking_conditions"]).lower()
     assert all(
@@ -289,3 +297,94 @@ def test_manual_preflight_workflow_contract():
     assert not any(
         token in lowered for token in ("train_challenger", "deploy", "api_key=")
     )
+
+
+def test_live_evidence_propagates_to_every_generated_report(tmp_path):
+    phase1 = __import__(
+        "moneybot.services.alpha_atlas_v4_phase1", fromlist=["probe_plan"]
+    )
+    probes = []
+    for probe in phase1.probe_plan():
+        item = {**probe, "status": "ACCESSIBLE", "reason": "validated"}
+        if probe["family"] in {"aggregate", "split"}:
+            item["observed_dates"] = [probe["date"]]
+        probes.append(item)
+    preflight = {
+        "schema_version": "alpha-atlas-v4-phase1-historical-preflight.v1",
+        "mode": "live_read_only",
+        "overall_status": "COMPLETE",
+        "credentials_configured": True,
+        "requests_attempted": 10,
+        "bytes_received": 2946,
+        "elapsed_seconds": 2.5,
+        "write_operations": 0,
+        "full_backfill_started": False,
+        "probes": probes,
+    }
+    source = tmp_path / "live.json"
+    source.write_text(json.dumps(preflight))
+    subprocess.run(
+        [
+            sys.executable,
+            "scripts/audit_alpha_atlas_v4_phase1_readiness.py",
+            "--preflight-input",
+            str(source),
+            "--output-dir",
+            str(tmp_path / "reports"),
+            "--workflow-run-identifier",
+            "live-test-1",
+            "--generated-at",
+            "2026-09-05T00:00:00+00:00",
+        ],
+        check=True,
+    )
+    root = tmp_path / "reports"
+    readiness = json.loads((root / "alpha_atlas_v4_phase1_readiness.json").read_text())
+    inventory = json.loads(
+        (root / "alpha_atlas_v4_phase1_source_inventory.json").read_text()
+    )
+    plan = json.loads((root / "alpha_atlas_v4_phase1_backfill_plan.json").read_text())
+    for markdown in (
+        "alpha_atlas_v4_phase1_readiness.md",
+        "alpha_atlas_v4_phase1_source_inventory.md",
+        "alpha_atlas_v4_phase1_workflow_summary.md",
+    ):
+        text = (root / markdown).read_text()
+        assert "`live_read_only`" in text
+        assert "`LIVE_BOUNDED`" in text
+        assert "not executed" not in text.lower()
+    assert readiness["live_evidence_summary"]["inactive_delisted_demonstrated"] is True
+    inactive = next(
+        item
+        for item in inventory["sources"]
+        if item["source_id"] == "active_and_inactive_security_reference"
+    )
+    assert (
+        inactive["observed_technical_accessibility"]
+        == "REPRESENTATIVE_ACCESS_DEMONSTRATED"
+    )
+    assert (
+        "full inactive/delisted universe completeness"
+        in " ".join(plan["blocking_conditions"]).lower()
+    )
+    assert plan["execution_authorized"] is False
+
+
+def test_cross_artifact_contradiction_fails_closed():
+    result = normalized_phase1_result(run_preflight(execute=False, env={}))
+    result["provenance"]["execution_mode"] = "live_read_only"
+    with pytest.raises(ValueError, match="CONTRADICTORY_EXECUTION_MODE"):
+        validate_phase1_consistency(result)
+    valid = normalized_phase1_result(run_preflight(execute=False, env={}))
+    readiness = {
+        "normalized_evidence": valid,
+        "technical_access_status": valid["preflight"]["overall_status"],
+    }
+    forged_inventory = {**valid["source_inventory"], "sources": []}
+    with pytest.raises(ValueError, match="ARTIFACT_INVENTORY_MISMATCH"):
+        validate_generated_phase1_artifacts(
+            preflight={**valid["preflight"], "provenance": valid["provenance"]},
+            readiness=readiness,
+            inventory=forged_inventory,
+            plan=valid["backfill_plan"],
+        )

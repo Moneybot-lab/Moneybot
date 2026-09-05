@@ -24,7 +24,10 @@
 - [x] Historical source inventory schema and deterministic report.
 - [x] Read-only, bounded technical-data preflight implementation.
 - [x] Manual-only GitHub preflight workflow with sanitized always-uploaded evidence.
-- [ ] Bounded live preflight executed with repository `MASSIVE_API_KEY`.
+- [x] Bounded representative live preflight executed through the configured credential path (10/10 probes, 2,946 bytes, zero writes).
+- [x] Representative active, TWTR inactive, split, SPY, sector ETF, regular-session, and early-close access demonstrated.
+- [x] Live evidence propagation repaired and cross-artifact consistency validated.
+- [x] Manual bounded coverage-discovery tooling and workflow added.
 - [ ] Delisted-security coverage demonstrated.
 - [ ] Effective-dated ticker-change and permanent identity chain demonstrated.
 - [x] Survivorship protection fails closed and forbids projecting current tickers backward.
@@ -36,6 +39,8 @@
 - [ ] Terminal/missing-exit policy approved for inactive securities.
 - [ ] Backfill feasibility confirmed using observed object/request/runtime samples.
 - [ ] Controlled backfill explicitly approved in a later prompt.
+- [ ] Historical backfill executed.
+- [ ] Challenger training authorized.
 - [ ] Phase 1 exit gate complete.
 
 No full historical backfill is authorized by this checklist update.

@@ -7,7 +7,7 @@
     "point-in-time sector mapping available"
   ],
   "blocking_conditions": [
-    "delisted coverage unverified",
+    "Full inactive/delisted universe completeness remains unverified; representative TWTR access was demonstrated.",
     "effective-dated ticker/sector identity unverified",
     "terminal-price fallback intentionally absent",
     "common technically supported start date unverified"
@@ -18,6 +18,13 @@
     "all source and output hashes verified",
     "terminal/missing exit policy applied fail closed"
   ],
+  "coverage_discovery_evidence": {
+    "evidence_class": "STATIC_ONLY",
+    "full_backfill_authorized": false,
+    "records_enumerated": 0,
+    "stopped_by_limit": null,
+    "verdict": "INCOMPLETE_COVERAGE"
+  },
   "date_range": {
     "end": null,
     "start": null,
@@ -40,13 +47,24 @@
     "status": "PROVISIONAL",
     "working_storage_bytes": 6451200000
   },
+  "evidence_class": "LIVE_BOUNDED",
   "execution_authorized": false,
   "full_backfill_started": false,
   "joins": "permanent identity plus effective timestamp; source availability <= feature cutoff",
   "manifest": "canonical sorted file paths, byte sizes, SHA-256, request/probe identity",
   "partial_recovery": "delete or quarantine unverified .part; never certify partial partitions",
   "partition_layout": "data/raw/massive_history/<dataset>/<YYYY>/<MM>/<YYYY-MM-DD>.<format>",
-  "plan_sha256": "bacd6ea757cf23f38088521e25cb947db6b79f9f0df670dbaaced35a21f1beb9",
+  "plan_sha256": "ed110b92b48fda1ccf958387a09178811bdfc8177600c00524b4e8d5285bd3ab",
+  "provenance": {
+    "bytes_received": 2946,
+    "evidence_source": "LIVE_BOUNDED",
+    "execution_mode": "live_read_only",
+    "full_backfill_started": false,
+    "generated_at": "UNAVAILABLE_IN_CONFIRMED_EVIDENCE",
+    "request_count": 10,
+    "workflow_run_identifier": "confirmed-live-preflight-artifact",
+    "write_operation_count": 0
+  },
   "reduced_scope_alternative": "fixed, explicitly named contemporaneously tradable cohort with no claim of market-wide results",
   "resumability": "atomic .part download then hash-bound rename; skip only exact verified manifest entry",
   "retry": {

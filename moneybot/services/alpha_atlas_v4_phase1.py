@@ -26,6 +26,7 @@ BACKFILL_PLAN_VERSION = "alpha-atlas-v4-phase1-controlled-backfill-plan.v1"
 DUPLICATE_REPORT_VERSION = "alpha-atlas-v4-phase1-duplicate-comparison.v1"
 REFERENCE_POLICY_VERSION = "alpha-atlas-v4-phase1-reference-policy.v1"
 PHASE1_REPORT_VERSION = "alpha-atlas-v4-phase1-readiness.v1"
+NORMALIZED_RESULT_VERSION = "alpha-atlas-v4-phase1-normalized-result.v1"
 MAX_PROBES = 16
 MAX_RESPONSE_BYTES = 1_048_576
 
@@ -56,7 +57,7 @@ def sanitize(value: Any) -> Any:
     return value
 
 
-def source_inventory() -> dict[str, Any]:
+def source_inventory(evidence: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Return the fail-closed inventory; dates are not inferred from marketing claims."""
     common = {
         "provider": "Massive",
@@ -64,7 +65,7 @@ def source_inventory() -> dict[str, Any]:
         "earliest_available_date": None,
         "latest_available_date": None,
         "expected_historical_depth": "20 years requested; technically unverified",
-        "observed_technical_accessibility": "REQUIRES_OPTIONAL_PREFLIGHT",
+        "observed_technical_accessibility": "NOT_TESTED",
         "point_in_time_capability": "UNVERIFIED",
         "known_gaps": [],
         "backfill_readiness": "BLOCKED_PENDING_TECHNICAL_PROBE",
@@ -150,7 +151,7 @@ def source_inventory() -> dict[str, Any]:
                 "earliest_available_date": "2000-01-01",
                 "latest_available_date": "2099-12-31",
                 "expected_historical_depth": "contract range",
-                "observed_technical_accessibility": "ACCESSIBLE_REPOSITORY",
+                "observed_technical_accessibility": "FULL_COVERAGE_VERIFIED",
                 "raw_or_adjusted": "rules",
                 "timestamp_resolution_timezone": "session open/close converted to UTC",
                 "point_in_time_capability": "NATIVE_EFFECTIVE_DATED_RULES",
@@ -168,7 +169,7 @@ def source_inventory() -> dict[str, Any]:
                 "earliest_available_date": None,
                 "latest_available_date": None,
                 "expected_historical_depth": "same as universe",
-                "observed_technical_accessibility": "NOT_DEMONSTRATED",
+                "observed_technical_accessibility": "INDETERMINATE",
                 "raw_or_adjusted": "economic outcome policy",
                 "timestamp_resolution_timezone": "session",
                 "point_in_time_capability": "REQUIRES_EFFECTIVE_DATED_EVENTS",
@@ -180,9 +181,52 @@ def source_inventory() -> dict[str, Any]:
             },
         ]
     )
+    if evidence:
+        by_case = evidence.get("probe_status_by_case", {})
+        demonstrated = {
+            "daily_bars": "active_security",
+            "active_and_inactive_security_reference": "delisted_security",
+            "ticker_events": "ticker_change",
+            "splits": "split_case",
+            "spy_context": "spy_context",
+            "sector_etf_context": "sector_etf",
+        }
+        observed_by_case = evidence.get("probe_observed_dates", {})
+        for item in sources:
+            probe = demonstrated.get(item["source_id"])
+            status = by_case.get(probe) if probe else None
+            if status == "ACCESSIBLE":
+                item["observed_technical_accessibility"] = (
+                    "REPRESENTATIVE_ACCESS_DEMONSTRATED"
+                )
+                item["backfill_readiness"] = "REPRESENTATIVE_ACCESS_DEMONSTRATED"
+                item["technical_blocker"] = (
+                    "Representative access passed; full historical coverage remains unverified"
+                )
+                observed = observed_by_case.get(probe, [])
+                item["earliest_available_date"] = observed[0] if observed else None
+                item["latest_available_date"] = observed[-1] if observed else None
+        if by_case.get("delisted_security") == "ACCESSIBLE":
+            inactive = next(
+                x
+                for x in sources
+                if x["source_id"] == "active_and_inactive_security_reference"
+            )
+            inactive["delisted_security_inclusion"] = (
+                "REPRESENTATIVE_TWTR_ACCESS_DEMONSTRATED"
+            )
+            inactive["technical_blocker"] = (
+                "Full inactive/delisted universe completeness remains unverified; "
+                "representative TWTR access was demonstrated."
+            )
     core = {
         "schema_version": SOURCE_INVENTORY_VERSION,
         "scope": "private_personal_use_research_only",
+        "evidence_class": (
+            "LIVE_BOUNDED"
+            if evidence and evidence.get("requests_attempted")
+            else "STATIC_ONLY"
+        ),
         "sources": sorted(sources, key=lambda x: x["source_id"]),
     }
     return {**core, "inventory_sha256": _hash(core)}
@@ -379,10 +423,16 @@ def summarize_preflight(report: Mapping[str, Any]) -> dict[str, Any]:
     by_case = {
         str(p.get("case")): str(p.get("status")) for p in report.get("probes", [])
     }
+    observed_by_case = {
+        str(p.get("case")): sorted(p.get("observed_dates", []))
+        for p in report.get("probes", [])
+        if p.get("status") == "ACCESSIBLE"
+    }
     return {
         "earliest_demonstrated_date": dates[0] if dates else None,
         "latest_demonstrated_date": dates[-1] if dates else None,
         "probe_status_by_case": dict(sorted(by_case.items())),
+        "probe_observed_dates": dict(sorted(observed_by_case.items())),
         "inactive_delisted_demonstrated": by_case.get("delisted_security")
         == "ACCESSIBLE",
         "ticker_change_snapshot_demonstrated": by_case.get("ticker_change")
@@ -544,9 +594,16 @@ def comparison_metrics(
     }
 
 
-def controlled_backfill_plan() -> dict[str, Any]:
+def controlled_backfill_plan(
+    evidence: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     core = {
         "schema_version": BACKFILL_PLAN_VERSION,
+        "evidence_class": (
+            "LIVE_BOUNDED"
+            if evidence and evidence.get("requests_attempted")
+            else "STATIC_ONLY"
+        ),
         "execution_authorized": False,
         "full_backfill_started": False,
         "date_range": {
@@ -597,10 +654,151 @@ def controlled_backfill_plan() -> dict[str, Any]:
             "point-in-time sector mapping available",
         ],
         "blocking_conditions": [
-            "delisted coverage unverified",
+            (
+                "Full inactive/delisted universe completeness remains unverified; "
+                "representative TWTR access was demonstrated."
+                if evidence and evidence.get("inactive_delisted_demonstrated")
+                else "Full inactive/delisted universe completeness remains unverified; representative access was not tested."
+            ),
             "effective-dated ticker/sector identity unverified",
             "terminal-price fallback intentionally absent",
             "common technically supported start date unverified",
         ],
     }
     return {**core, "plan_sha256": _hash(core)}
+
+
+def normalized_phase1_result(
+    preflight: Mapping[str, Any],
+    *,
+    workflow_run_identifier: str | None = None,
+    generated_at: str = "UNRECORDED_STATIC_GENERATION_TIME",
+) -> dict[str, Any]:
+    """Build the single evidence object consumed by every Phase 1 renderer."""
+    clean = sanitize(dict(preflight))
+    summary = summarize_preflight(clean)
+    mode = str(clean.get("mode") or "dry_run")
+    evidence_source = "LIVE_BOUNDED" if mode == "live_read_only" else "STATIC_ONLY"
+    result = {
+        "schema_version": NORMALIZED_RESULT_VERSION,
+        "provenance": {
+            "workflow_run_identifier": workflow_run_identifier,
+            "generated_at": generated_at,
+            "execution_mode": mode,
+            "evidence_source": evidence_source,
+            "request_count": int(clean.get("requests_attempted", 0)),
+            "bytes_received": int(clean.get("bytes_received", 0)),
+            "write_operation_count": int(clean.get("write_operations", 0)),
+            "full_backfill_started": bool(clean.get("full_backfill_started", False)),
+        },
+        "preflight": clean,
+        "summary": summary,
+        "readiness_verdict": "BLOCKED_FULL_UNIVERSE_BACKFILL",
+    }
+    result["source_inventory"] = source_inventory(summary)
+    result["backfill_plan"] = controlled_backfill_plan(summary)
+    result["source_inventory"]["provenance"] = dict(result["provenance"])
+    result["backfill_plan"]["provenance"] = dict(result["provenance"])
+    validate_phase1_consistency(result)
+    return result
+
+
+def validate_phase1_consistency(result: Mapping[str, Any]) -> None:
+    """Fail artifact generation when execution and material claims disagree."""
+    provenance = result.get("provenance", {})
+    preflight = result.get("preflight", {})
+    summary = result.get("summary", {})
+    if provenance.get("execution_mode") != preflight.get("mode"):
+        raise ValueError("PHASE1_CONTRADICTORY_EXECUTION_MODE")
+    completed = preflight.get("overall_status") == "COMPLETE"
+    statuses = list(summary.get("probe_status_by_case", {}).values())
+    if completed != bool(
+        statuses and all(status == "ACCESSIBLE" for status in statuses)
+    ):
+        raise ValueError("PHASE1_CONTRADICTORY_PROBE_COMPLETION")
+    if summary.get("inactive_delisted_demonstrated"):
+        inventory = result.get("source_inventory", {}).get("sources", [])
+        record = next(
+            (
+                x
+                for x in inventory
+                if x.get("source_id") == "active_and_inactive_security_reference"
+            ),
+            {},
+        )
+        if (
+            record.get("observed_technical_accessibility")
+            != "REPRESENTATIVE_ACCESS_DEMONSTRATED"
+        ):
+            raise ValueError("PHASE1_CONTRADICTORY_DELISTED_CLAIM")
+    if result.get("readiness_verdict") != "BLOCKED_FULL_UNIVERSE_BACKFILL":
+        raise ValueError("PHASE1_BACKFILL_AUTHORIZATION_UNSUPPORTED")
+    serialized = json.dumps(sanitize(result), sort_keys=True).lower()
+    if any(
+        secret in serialized
+        for secret in ("bearer ", "x-amz-signature", "apikey=", "api_key=")
+    ):
+        raise ValueError("PHASE1_SECRET_MATERIAL_DETECTED")
+
+
+def render_phase1_markdown(result: Mapping[str, Any], *, kind: str) -> str:
+    """Render Markdown strictly from the normalized structured evidence object."""
+    provenance = result["provenance"]
+    summary = result["summary"]
+    lines = [
+        f"# Alpha Atlas V4 Phase 1 {kind.replace('_', ' ')}",
+        "",
+        "Private personal-use research for the owner's investment research and personal brokerage account.",
+        "",
+        f"- Evidence: `{provenance['evidence_source']}`",
+        f"- Execution mode: `{provenance['execution_mode']}`",
+        f"- Workflow/run: `{provenance['workflow_run_identifier'] or 'NOT_RECORDED'}`",
+        f"- Generated at: `{provenance['generated_at']}`",
+        f"- Requests: `{provenance['request_count']}`",
+        f"- Bytes: `{provenance['bytes_received']}`",
+        f"- Write operations: `{provenance['write_operation_count']}`",
+        f"- Full backfill started: `{str(provenance['full_backfill_started']).lower()}`",
+        f"- Verdict: `{result['readiness_verdict']}`",
+        "",
+    ]
+    if kind == "source_inventory":
+        lines += [
+            "| Source | Access classification | Technical blocker |",
+            "| --- | --- | --- |",
+        ]
+        for source in result["source_inventory"]["sources"]:
+            lines.append(
+                f"| {source['source_id']} | `{source['observed_technical_accessibility']}` | {source.get('technical_blocker') or ''} |"
+            )
+    else:
+        lines += ["| Probe | Result |", "| --- | --- |"]
+        for case, status in summary["probe_status_by_case"].items():
+            lines.append(f"| {case} | `{status}` |")
+        lines += [
+            "",
+            f"Earliest representative observation: `{summary['earliest_demonstrated_date']}`.",
+            f"Latest representative observation: `{summary['latest_demonstrated_date']}`.",
+            "Representative access does not establish full historical-universe coverage.",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def validate_generated_phase1_artifacts(
+    *,
+    preflight: Mapping[str, Any],
+    readiness: Mapping[str, Any],
+    inventory: Mapping[str, Any],
+    plan: Mapping[str, Any],
+) -> None:
+    """Cross-check separately materialized artifacts before any file is written."""
+    normalized = readiness.get("normalized_evidence", {})
+    validate_phase1_consistency(normalized)
+    provenance = normalized.get("provenance")
+    if preflight.get("mode") != provenance.get("execution_mode"):
+        raise ValueError("PHASE1_ARTIFACT_PREFLIGHT_MODE_MISMATCH")
+    if inventory != normalized.get("source_inventory"):
+        raise ValueError("PHASE1_ARTIFACT_INVENTORY_MISMATCH")
+    if plan != normalized.get("backfill_plan"):
+        raise ValueError("PHASE1_ARTIFACT_BACKFILL_PLAN_MISMATCH")
+    if readiness.get("technical_access_status") != preflight.get("overall_status"):
+        raise ValueError("PHASE1_ARTIFACT_READINESS_STATUS_MISMATCH")

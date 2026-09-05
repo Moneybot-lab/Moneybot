@@ -67,3 +67,9 @@ existing `MASSIVE_API_KEY`, preserves the service-level 16-request and 1-MiB res
 caps, writes a sanitized probe table, and uploads only compact Phase 1 reports even
 when the technical verdict remains blocked. It contains no backfill, training,
 promotion, deployment, or routing command.
+
+Live preflight evidence is normalized once by `normalized_phase1_result`; JSON and
+Markdown renderers consume that same object and `validate_phase1_consistency` rejects
+contradictory execution, probe, delisted, authorization, or secret claims. The
+separate dispatch-only `alpha-atlas-v4-phase1-coverage-discovery.yml` defaults to
+static mode and bounds metadata enumeration without downloading historical bars.
