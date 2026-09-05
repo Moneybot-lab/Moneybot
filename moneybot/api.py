@@ -3350,7 +3350,12 @@ def export_decision_log():
         return jsonify({"error": "bounded export is forbidden", "request_id": g.request_id}), 400
     try:
         state_path = Path(current_app.config.get("DECISION_EXPORT_CONTINUITY_STATE_PATH") or default_continuity_state_path(path))
-        bootstrap = str(current_app.config.get("DECISION_EXPORT_CONTINUITY_BOOTSTRAP") or "").lower() == "verified_seed_v1"
+        bootstrap = (
+            str(current_app.config.get("DECISION_EXPORT_CONTINUITY_BOOTSTRAP") or "").lower()
+            == "verified_seed_v1"
+            or str(request.headers.get("X-Decision-Continuity-Bootstrap") or "").lower()
+            == "verified_seed_v1"
+        )
         manifest = analyze_decision_log(path, state_path=state_path, bootstrap=bootstrap)
     except ContinuityError as exc:
         return jsonify({"error": exc.status, "request_id": g.request_id}), 409
@@ -3388,7 +3393,12 @@ def export_decision_log_manifest():
     path = Path(current_app.config.get("DECISION_LOG_PATH") or str(decision_events_log_path()))
     try:
         state_path = Path(current_app.config.get("DECISION_EXPORT_CONTINUITY_STATE_PATH") or default_continuity_state_path(path))
-        bootstrap = str(current_app.config.get("DECISION_EXPORT_CONTINUITY_BOOTSTRAP") or "").lower() == "verified_seed_v1"
+        bootstrap = (
+            str(current_app.config.get("DECISION_EXPORT_CONTINUITY_BOOTSTRAP") or "").lower()
+            == "verified_seed_v1"
+            or str(request.headers.get("X-Decision-Continuity-Bootstrap") or "").lower()
+            == "verified_seed_v1"
+        )
         return jsonify(analyze_decision_log(path, state_path=state_path, bootstrap=bootstrap))
     except ContinuityError as exc:
         return jsonify({"error": exc.status, "request_id": g.request_id}), 409
@@ -3408,7 +3418,12 @@ def commit_decision_log_export():
         return jsonify({"error": "incomplete export cannot advance checkpoint", "request_id": g.request_id}), 400
     path = Path(current_app.config.get("DECISION_LOG_PATH") or str(decision_events_log_path()))
     state_path = Path(current_app.config.get("DECISION_EXPORT_CONTINUITY_STATE_PATH") or default_continuity_state_path(path))
-    bootstrap = str(current_app.config.get("DECISION_EXPORT_CONTINUITY_BOOTSTRAP") or "").lower() == "verified_seed_v1"
+    bootstrap = (
+        str(current_app.config.get("DECISION_EXPORT_CONTINUITY_BOOTSTRAP") or "").lower()
+        == "verified_seed_v1"
+        or str(request.headers.get("X-Decision-Continuity-Bootstrap") or "").lower()
+        == "verified_seed_v1"
+    )
     try:
         continuity = advance_checkpoint(path, manifest, state_path=state_path, bootstrap=bootstrap)
         return jsonify({"continuity": continuity})

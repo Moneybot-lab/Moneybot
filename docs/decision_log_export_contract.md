@@ -34,13 +34,16 @@ documented storage migration before Phase 1.
 The checkpoint defaults to `decision_export_continuity.json` beside the configured
 decision log and can be overridden with `DECISION_EXPORT_CONTINUITY_STATE_PATH`.
 Exports fail closed when it is missing or corrupt. For the first deployment only,
-`DECISION_EXPORT_CONTINUITY_BOOTSTRAP=verified_seed_v1` enables migration from the
-verified run 33907221511-1 values. The current source must contain the seed byte
+`DECISION_EXPORT_CONTINUITY_BOOTSTRAP=verified_seed_v1`, or the authenticated
+Track B request header `X-Decision-Continuity-Bootstrap: verified_seed_v1`, enables
+migration from the verified run 33907221511-1 values. The current source must contain the seed byte
 length and its exact prefix SHA-256 before `BASELINE_CREATED` is reported.
 Bootstrap consumption creates a durable adjacent marker before the checkpoint is
 written. If an established checkpoint is later missing, that marker prevents the
 seed from silently recreating it; operator recovery is required. Disable the
-bootstrap setting immediately after the first successful checkpoint commit.
+bootstrap setting immediately after the first successful checkpoint commit. The
+workflow header can remain present: it cannot recreate a consumed baseline, and
+is ignored while a valid checkpoint exists.
 
 The download does not advance state. After curl and local integrity validation
 complete, Track B posts the sanitized manifest to the commit endpoint. That

@@ -210,6 +210,7 @@ def test_decision_log_fetch_uses_curl_final_status_not_first_retry_header():
     assert "scripts/audit_decision_log_duplicates.py" in fetch
     assert "export-decision-log-commit" in fetch
     assert "checkpoint_current" in fetch
+    assert fetch.count("X-Decision-Continuity-Bootstrap: verified_seed_v1") == 2
     assert "export-decision-log?limit=" not in fetch
     build = _workflow_steps()["Build leakage-safe Massive decision training rows"]
     assert "--limit 50000" not in build
