@@ -42,6 +42,13 @@ from .models import (
     WatchlistItem,
 )
 from .services.decision_log import read_decision_events, summarize_decision_events
+from .services.decision_log_export import (
+    ContinuityError,
+    advance_checkpoint,
+    analyze_decision_log,
+    default_continuity_state_path,
+    stream_exact_prefix,
+)
 from .services.investor_profile import (
     InvestorProfileValidationError,
     profile_payload,
@@ -3337,24 +3344,91 @@ def export_decision_log():
     if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
         return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
 
-    limit_raw = request.args.get("limit")
-    try:
-        limit = int(limit_raw) if limit_raw is not None else 50000
-    except (TypeError, ValueError):
-        return jsonify({"error": "invalid limit", "request_id": g.request_id}), 400
-
-    limit = max(1, min(limit, 200000))
     input_path = current_app.config.get("DECISION_LOG_PATH") or str(decision_events_log_path())
-    events = read_decision_events(str(input_path), limit=limit)
-
-    body = "".join(json.dumps(event, default=str) + "\n" for event in events if isinstance(event, dict))
+    path = Path(input_path)
+    if request.args.get("limit") is not None:
+        return jsonify({"error": "bounded export is forbidden", "request_id": g.request_id}), 400
+    try:
+        state_path = Path(current_app.config.get("DECISION_EXPORT_CONTINUITY_STATE_PATH") or default_continuity_state_path(path))
+        bootstrap = (
+            str(current_app.config.get("DECISION_EXPORT_CONTINUITY_BOOTSTRAP") or "").lower()
+            == "verified_seed_v1"
+            or str(request.headers.get("X-Decision-Continuity-Bootstrap") or "").lower()
+            == "verified_seed_v1"
+        )
+        manifest = analyze_decision_log(path, state_path=state_path, bootstrap=bootstrap)
+    except ContinuityError as exc:
+        return jsonify({"error": exc.status, "request_id": g.request_id}), 409
+    except (OSError, ValueError):
+        logging.exception("Decision-log completeness analysis failed")
+        return jsonify({"error": "decision log integrity failure", "request_id": g.request_id}), 500
     headers = {
         "Content-Type": "application/x-ndjson; charset=utf-8",
         "Cache-Control": "no-store",
         "X-Decision-Log-Path": str(input_path),
-        "X-Decision-Log-Lines": str(len(events)),
+        "Content-Length": str(manifest["content_bytes"]),
+        "X-Decision-Log-Lines": str(manifest["exported_records"]),
+        "X-Decision-Log-Total": str(manifest["source_total_records"]),
+        "X-Decision-Log-SHA256": manifest["content_sha256"],
+        "X-Decision-Log-Complete": "true",
+        "X-Decision-Log-Truncated": "false",
+        "X-Decision-Source-Identity": manifest["source_identity"],
+        "X-Decision-Ordering-Version": manifest["ordering_version"],
+        "X-Decision-Continuity-Status": manifest["continuity"]["status"],
+        "X-Decision-Previous-Lines": str(manifest["continuity"]["previous_records"]),
+        "X-Decision-Previous-Bytes": str(manifest["continuity"]["previous_bytes"]),
+        "X-Decision-Previous-SHA256": manifest["continuity"]["previous_sha256"],
+        "X-Decision-Current-Prefix-SHA256": manifest["continuity"]["current_prefix_sha256"],
+        "X-Decision-Checkpoint-Advanced": "false",
     }
-    return Response(body, status=200, headers=headers)
+    return Response(stream_exact_prefix(path, manifest["content_bytes"]), status=200, headers=headers)
+
+
+@api_bp.get("/export-decision-log-manifest")
+def export_decision_log_manifest():
+    expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
+    provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
+    if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
+    path = Path(current_app.config.get("DECISION_LOG_PATH") or str(decision_events_log_path()))
+    try:
+        state_path = Path(current_app.config.get("DECISION_EXPORT_CONTINUITY_STATE_PATH") or default_continuity_state_path(path))
+        bootstrap = (
+            str(current_app.config.get("DECISION_EXPORT_CONTINUITY_BOOTSTRAP") or "").lower()
+            == "verified_seed_v1"
+            or str(request.headers.get("X-Decision-Continuity-Bootstrap") or "").lower()
+            == "verified_seed_v1"
+        )
+        return jsonify(analyze_decision_log(path, state_path=state_path, bootstrap=bootstrap))
+    except ContinuityError as exc:
+        return jsonify({"error": exc.status, "request_id": g.request_id}), 409
+    except (OSError, ValueError):
+        logging.exception("Decision-log manifest analysis failed")
+        return jsonify({"error": "decision log integrity failure", "request_id": g.request_id}), 500
+
+
+@api_bp.post("/export-decision-log-commit")
+def commit_decision_log_export():
+    expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
+    provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
+    if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
+        return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
+    manifest = request.get_json(silent=True)
+    if not isinstance(manifest, dict) or manifest.get("pagination_complete") is not True or manifest.get("truncated") is not False or manifest.get("integrity_failures"):
+        return jsonify({"error": "incomplete export cannot advance checkpoint", "request_id": g.request_id}), 400
+    path = Path(current_app.config.get("DECISION_LOG_PATH") or str(decision_events_log_path()))
+    state_path = Path(current_app.config.get("DECISION_EXPORT_CONTINUITY_STATE_PATH") or default_continuity_state_path(path))
+    bootstrap = (
+        str(current_app.config.get("DECISION_EXPORT_CONTINUITY_BOOTSTRAP") or "").lower()
+        == "verified_seed_v1"
+        or str(request.headers.get("X-Decision-Continuity-Bootstrap") or "").lower()
+        == "verified_seed_v1"
+    )
+    try:
+        continuity = advance_checkpoint(path, manifest, state_path=state_path, bootstrap=bootstrap)
+        return jsonify({"continuity": continuity})
+    except ContinuityError as exc:
+        return jsonify({"error": exc.status, "request_id": g.request_id}), 409
 
 @api_bp.get("/export-production-model")
 def export_production_model():
