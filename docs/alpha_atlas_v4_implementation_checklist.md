@@ -23,6 +23,8 @@
 
 - [x] Historical source inventory schema and deterministic report.
 - [x] Read-only, bounded technical-data preflight implementation.
+- [x] Manual-only GitHub preflight workflow with sanitized always-uploaded evidence.
+- [ ] Bounded live preflight executed with repository `MASSIVE_API_KEY`.
 - [ ] Delisted-security coverage demonstrated.
 - [ ] Effective-dated ticker-change and permanent identity chain demonstrated.
 - [x] Survivorship protection fails closed and forbids projecting current tickers backward.

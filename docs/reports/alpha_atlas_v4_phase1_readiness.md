@@ -19,6 +19,11 @@ identity chain, effective-dated sector history, or terminal-price coverage is
 claimed. The full-universe backfill remains blocked. The controlled plan deliberately
 has no start date until those sources have a measured common range.
 
+The dispatch-only `Alpha Atlas V4 Phase 1 Historical Preflight` workflow now maps
+the existing `MASSIVE_API_KEY` secret, runs the fixed 16-request/1-MiB preflight,
+and always uploads sanitized reports. This checkout has no GitHub authentication or
+secret access, so the workflow was created and tested but not dispatched.
+
 ## Authoritative feature mapping
 
 The mapping contains **48 feature-store fields = 43 ordered model inputs + 5

@@ -8,6 +8,8 @@ import os
 import re
 import urllib.error
 import urllib.request
+import time
+from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping
 
 from moneybot.services.alpha_atlas_v4_phase0 import (
@@ -210,6 +212,97 @@ def _probe_url(p: Mapping[str, str]) -> str:
     return f"https://api.massive.com/v2/aggs/ticker/{p['symbol']}/range/1/day/{p['date']}/{p['date']}?adjusted=false&limit=10"
 
 
+def _result_date(value: Mapping[str, Any]) -> str | None:
+    raw = value.get("execution_date") or value.get("date")
+    if raw:
+        return str(raw)[:10]
+    timestamp = value.get("t") or value.get("timestamp")
+    if isinstance(timestamp, (int, float)):
+        seconds = float(timestamp) / (
+            1_000_000_000 if timestamp > 10**16 else 1000 if timestamp > 10**11 else 1
+        )
+        return datetime.fromtimestamp(seconds, tz=timezone.utc).date().isoformat()
+    return None
+
+
+def classify_probe_payload(probe: Mapping[str, str], payload: Any) -> dict[str, Any]:
+    """Validate schema, identity, requested date, and pagination before claiming access."""
+    if not isinstance(payload, dict) or payload.get("status") in {
+        "ERROR",
+        "NOT_AUTHORIZED",
+    }:
+        return {"status": "AMBIGUOUS", "reason": "invalid_response_schema"}
+    if payload.get("next_url") or payload.get("next_page_token"):
+        return {
+            "status": "INCOMPLETE_RESPONSE",
+            "reason": "pagination_indicates_more_results",
+        }
+    values = payload.get("results")
+    if values in (None, [], {}):
+        return {"status": "MISSING", "reason": "empty_results", "rows": 0}
+    records = (
+        values
+        if isinstance(values, list)
+        else [values] if isinstance(values, dict) else None
+    )
+    if records is None or not all(isinstance(item, dict) for item in records):
+        return {"status": "AMBIGUOUS", "reason": "results_schema_mismatch"}
+    declared_count = payload.get("resultsCount")
+    if declared_count is not None and int(declared_count) != len(records):
+        return {
+            "status": "INCOMPLETE_RESPONSE",
+            "reason": "declared_result_count_mismatch",
+            "rows": len(records),
+        }
+    expected_symbol = probe["symbol"].upper()
+    payload_symbol = str(payload.get("ticker") or "").upper()
+    record_symbols = {
+        str(item.get("ticker") or item.get("T") or "").upper() for item in records
+    }
+    observed_symbols = {value for value in record_symbols | {payload_symbol} if value}
+    if observed_symbols and observed_symbols != {expected_symbol}:
+        return {
+            "status": "AMBIGUOUS",
+            "reason": "ticker_mismatch",
+            "rows": len(records),
+        }
+    observed_dates = sorted({day for item in records if (day := _result_date(item))})
+    requested = probe["date"]
+    if probe["family"] in {"aggregate", "split"}:
+        if not observed_dates:
+            return {
+                "status": "AMBIGUOUS",
+                "reason": "missing_result_date",
+                "rows": len(records),
+            }
+        if requested not in observed_dates:
+            return {
+                "status": "AMBIGUOUS",
+                "reason": "requested_date_mismatch",
+                "rows": len(records),
+                "observed_dates": observed_dates,
+            }
+        date_validation = "RESULT_MATCHED_REQUEST"
+    else:
+        date_validation = "REQUEST_BOUND_REFERENCE_SNAPSHOT"
+    required_fields = {"o", "h", "l", "c", "v"}
+    if probe["family"] == "aggregate" and any(
+        not required_fields.issubset(item) for item in records
+    ):
+        return {
+            "status": "AMBIGUOUS",
+            "reason": "aggregate_fields_incomplete",
+            "rows": len(records),
+        }
+    return {
+        "status": "ACCESSIBLE",
+        "reason": "schema_identity_and_date_validated",
+        "rows": len(records),
+        "observed_dates": observed_dates,
+        "date_validation": date_validation,
+    }
+
+
 def run_preflight(
     *,
     execute: bool,
@@ -228,42 +321,83 @@ def run_preflight(
         "caps": {"requests": MAX_PROBES, "response_bytes": MAX_RESPONSE_BYTES},
         "credentials_configured": bool(key),
         "probes": [],
+        "requests_attempted": 0,
+        "bytes_received": 0,
+        "elapsed_seconds": 0.0,
     }
     if not execute:
-        report["probes"] = [{**p, "status": "NOT_EXECUTED"} for p in probe_plan()]
+        report["probes"] = [{**p, "status": "NOT_EVALUATED"} for p in probe_plan()]
         report["overall_status"] = "NOT_EVALUATED"
         return report
     if not key:
         report["overall_status"] = "MISSING_CREDENTIALS"
         return report
+    started = time.perf_counter()
     for probe in probe_plan()[:MAX_PROBES]:
         request = urllib.request.Request(
             _probe_url(probe), headers={"Authorization": f"Bearer {key}"}
         )
         result = dict(probe)
+        report["requests_attempted"] += 1
         try:
             response = opener(request, timeout=10)
             raw = response.read(MAX_RESPONSE_BYTES + 1)
             if len(raw) > MAX_RESPONSE_BYTES:
                 result["status"] = "INCOMPLETE_RESPONSE"
+                result["reason"] = "response_byte_limit_exceeded"
             else:
+                report["bytes_received"] += len(raw)
                 payload = json.loads(raw or b"{}")
-                values = payload.get("results") if isinstance(payload, dict) else None
-                result["status"] = "ACCESSIBLE" if values else "MISSING"
-                result["rows"] = (
-                    len(values) if isinstance(values, list) else int(bool(values))
-                )
+                result.update(classify_probe_payload(probe, payload))
         except urllib.error.HTTPError as exc:
             result.update(status="INACCESSIBLE", error=f"HTTP {exc.code}")
         except Exception as exc:  # sanitized boundary for provider errors
             result.update(status="AMBIGUOUS", error=str(sanitize(str(exc))))
         report["probes"].append(result)
+    report["elapsed_seconds"] = round(time.perf_counter() - started, 6)
     report["overall_status"] = (
         "COMPLETE"
         if all(p["status"] == "ACCESSIBLE" for p in report["probes"])
         else "BLOCKED"
     )
     return sanitize(report)
+
+
+def summarize_preflight(report: Mapping[str, Any]) -> dict[str, Any]:
+    """Derive only claims directly supported by validated live probe records."""
+    accessible = [
+        p for p in report.get("probes", []) if p.get("status") == "ACCESSIBLE"
+    ]
+    dates = sorted(
+        {
+            day
+            for probe in accessible
+            if probe.get("family") == "aggregate"
+            for day in probe.get("observed_dates", [])
+        }
+    )
+    by_case = {
+        str(p.get("case")): str(p.get("status")) for p in report.get("probes", [])
+    }
+    return {
+        "earliest_demonstrated_date": dates[0] if dates else None,
+        "latest_demonstrated_date": dates[-1] if dates else None,
+        "probe_status_by_case": dict(sorted(by_case.items())),
+        "inactive_delisted_demonstrated": by_case.get("delisted_security")
+        == "ACCESSIBLE",
+        "ticker_change_snapshot_demonstrated": by_case.get("ticker_change")
+        == "ACCESSIBLE",
+        "permanent_identity_support_demonstrated": False,
+        "split_history_demonstrated": by_case.get("split_case") == "ACCESSIBLE",
+        "spy_history_demonstrated": by_case.get("spy_context") == "ACCESSIBLE",
+        "sector_etf_price_demonstrated": by_case.get("sector_etf") == "ACCESSIBLE",
+        "effective_dated_sector_mapping_demonstrated": False,
+        "common_supported_interval": None,
+        "requests_attempted": int(report.get("requests_attempted", 0)),
+        "bytes_received": int(report.get("bytes_received", 0)),
+        "elapsed_seconds": float(report.get("elapsed_seconds", 0)),
+        "backfill_verdict": "BLOCKED_FULL_UNIVERSE_BACKFILL",
+    }
 
 
 def validate_historical_reference(

@@ -18,6 +18,7 @@ from moneybot.services.alpha_atlas_v4_phase1 import (  # noqa: E402
     controlled_backfill_plan,
     run_preflight,
     source_inventory,
+    summarize_preflight,
 )
 
 
@@ -36,6 +37,7 @@ def main() -> int:
     output = Path(args.output_dir)
     inventory = source_inventory()
     preflight = run_preflight(execute=args.execute_probes)
+    live_summary = summarize_preflight(preflight)
     mapping = authoritative_feature_mapping()
     plan = controlled_backfill_plan()
     overall = {
@@ -63,6 +65,7 @@ def main() -> int:
         "feature_mapping_sha256": mapping["mapping_sha256"],
         "backfill_plan_sha256": plan["plan_sha256"],
         "technical_access_status": preflight["overall_status"],
+        "live_evidence_summary": live_summary,
         "blockers": plan["blocking_conditions"],
         "production_behavior_changed": False,
         "full_backfill_started": False,
@@ -72,6 +75,25 @@ def main() -> int:
     _write(output / "alpha_atlas_v4_phase1_feature_mapping.json", mapping)
     _write(output / "alpha_atlas_v4_phase1_backfill_plan.json", plan)
     _write(output / "alpha_atlas_v4_phase1_readiness.json", overall)
+    summary_lines = [
+        "# Alpha Atlas V4 Phase 1 historical preflight",
+        "",
+        f"- Verdict: `{live_summary['backfill_verdict']}`",
+        f"- Requests: `{live_summary['requests_attempted']}`",
+        f"- Bytes: `{live_summary['bytes_received']}`",
+        f"- Runtime seconds: `{live_summary['elapsed_seconds']}`",
+        "",
+        "| Case | Symbol | Date | Result | Reason |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for probe in preflight.get("probes", []):
+        summary_lines.append(
+            f"| {probe.get('case')} | {probe.get('symbol')} | {probe.get('date')} | "
+            f"`{probe.get('status')}` | {probe.get('reason', '')} |"
+        )
+    (output / "alpha_atlas_v4_phase1_workflow_summary.md").write_text(
+        "\n".join(summary_lines) + "\n", encoding="utf-8"
+    )
     print(json.dumps(overall, sort_keys=True))
     return (
         0 if not args.execute_probes or preflight["overall_status"] == "COMPLETE" else 2

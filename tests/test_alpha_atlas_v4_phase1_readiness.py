@@ -1,11 +1,14 @@
 import json
 import urllib.error
+from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from moneybot.services.alpha_atlas_v4_phase1 import (
     MAX_PROBES,
     authoritative_feature_mapping,
+    classify_probe_payload,
     collapse_exact_records,
     comparison_metrics,
     controlled_backfill_plan,
@@ -67,7 +70,24 @@ def test_preflight_covers_representative_cases_and_classifies_incomplete():
 
     def opener(request, **_kwargs):
         seen.append(request.full_url)
-        return Response({"results": [{"ok": True}]})
+        if "/reference/tickers/" in request.full_url:
+            symbol = request.full_url.split("/reference/tickers/")[1].split("?")[0]
+            return Response({"results": {"ticker": symbol}})
+        if "/splits?" in request.full_url:
+            return Response(
+                {"results": [{"ticker": "AAPL", "execution_date": "2020-08-31"}]}
+            )
+        symbol = request.full_url.split("/ticker/")[1].split("/")[0]
+        day = request.full_url.split("/day/")[1].split("/")[0]
+        timestamp = int(
+            datetime.fromisoformat(day).replace(tzinfo=timezone.utc).timestamp() * 1000
+        )
+        return Response(
+            {
+                "ticker": symbol,
+                "results": [{"t": timestamp, "o": 1, "h": 2, "l": 1, "c": 2, "v": 10}],
+            }
+        )
 
     report = run_preflight(
         execute=True, env={"MASSIVE_API_KEY": "secret"}, opener=opener
@@ -100,6 +120,29 @@ def test_preflight_covers_representative_cases_and_classifies_incomplete():
     )
     assert incomplete["overall_status"] == "BLOCKED"
     assert {p["status"] for p in incomplete["probes"]} == {"INCOMPLETE_RESPONSE"}
+
+
+def test_probe_schema_classifies_missing_incomplete_and_ambiguous():
+    probe = {"symbol": "AAPL", "date": "2024-06-03", "family": "aggregate"}
+    assert classify_probe_payload(probe, {"results": []})["status"] == "MISSING"
+    assert (
+        classify_probe_payload(
+            probe, {"results": [{"ticker": "AAPL"}], "next_url": "opaque"}
+        )["status"]
+        == "INCOMPLETE_RESPONSE"
+    )
+    assert (
+        classify_probe_payload(
+            probe, {"results": [{"ticker": "AAPL"}], "resultsCount": 2}
+        )["status"]
+        == "INCOMPLETE_RESPONSE"
+    )
+    assert (
+        classify_probe_payload(probe, {"ticker": "MSFT", "results": [{"t": 1}]})[
+            "status"
+        ]
+        == "AMBIGUOUS"
+    )
 
 
 def test_inaccessible_source_and_sanitization():
@@ -223,4 +266,26 @@ def test_backfill_plan_is_deterministic_blocked_and_does_not_execute():
     assert all(
         forbidden not in blocker_text
         for forbidden in ("commercial", "license", "subscription", "business plan")
+    )
+
+
+def test_manual_preflight_workflow_contract():
+    text = Path(".github/workflows/alpha-atlas-v4-phase1-preflight.yml").read_text()
+    assert "workflow_dispatch:" in text
+    assert "schedule:" not in text
+    assert "MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}" in text
+    assert "--execute-probes" in text
+    assert "timeout-minutes: 15" in text
+    assert "concurrency:" in text and "cancel-in-progress: false" in text
+    assert "if: always()" in text
+    assert "actions/upload-artifact@v4" in text
+    assert "Missing required repository secret: MASSIVE_API_KEY" in text
+    lowered = text.lower()
+    assert "backfill" not in " ".join(
+        line
+        for line in lowered.splitlines()
+        if line.lstrip().startswith(("python ", "python3 "))
+    )
+    assert not any(
+        token in lowered for token in ("train_challenger", "deploy", "api_key=")
     )

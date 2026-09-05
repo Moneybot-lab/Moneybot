@@ -1,0 +1,88 @@
+name: Alpha Atlas V4 Phase 1 Historical Preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alpha-atlas-v4-phase1-historical-preflight
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  PYTHONPATH: ${{ github.workspace }}
+  REPORT_DIR: artifacts/alpha-atlas-v4-phase1-preflight
+
+jobs:
+  bounded-read-only-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run bounded read-only historical preflight
+        id: audit
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$REPORT_DIR"
+          if [ -n "${MASSIVE_API_KEY:-}" ]; then
+            echo "credentials_configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "credentials_configured=false" >> "$GITHUB_OUTPUT"
+          fi
+          set +e
+          python scripts/audit_alpha_atlas_v4_phase1_readiness.py \
+            --execute-probes \
+            --output-dir "$REPORT_DIR"
+          audit_exit=$?
+          set -e
+          echo "audit_exit=$audit_exit" >> "$GITHUB_OUTPUT"
+          cp docs/reports/alpha_atlas_v4_phase1_source_inventory.md "$REPORT_DIR/"
+          cp docs/reports/alpha_atlas_v4_phase1_readiness.md "$REPORT_DIR/"
+          cp docs/reports/alpha_atlas_v4_phase1_adjustment_parity.md "$REPORT_DIR/"
+
+      - name: Publish sanitized workflow summary
+        if: always()
+        run: |
+          set -euo pipefail
+          summary="$REPORT_DIR/alpha_atlas_v4_phase1_workflow_summary.md"
+          if [ -s "$summary" ]; then
+            cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '# Alpha Atlas V4 Phase 1 historical preflight\n\nReport generation did not complete.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload sanitized Phase 1 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha-atlas-v4-phase1-historical-preflight-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/alpha-atlas-v4-phase1-preflight
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce configured credential
+        if: always()
+        env:
+          CREDENTIALS_CONFIGURED: ${{ steps.audit.outputs.credentials_configured }}
+        run: |
+          if [ "$CREDENTIALS_CONFIGURED" != "true" ]; then
+            echo "Missing required repository secret: MASSIVE_API_KEY"
+            exit 1
+          fi
+          echo "Bounded preflight executed; a blocked technical verdict is valid evidence."

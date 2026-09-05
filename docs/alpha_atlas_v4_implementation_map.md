@@ -61,3 +61,9 @@ authoritative 43+5 mapping, duplicate comparison, and non-executing controlled
 backfill plan. The full-universe backfill remains blocked until inactive/delisted
 coverage, identity events, sector history, terminal outcomes, and a common source
 date range are technically demonstrated.
+
+The dispatch-only `.github/workflows/alpha-atlas-v4-phase1-preflight.yml` maps the
+existing `MASSIVE_API_KEY`, preserves the service-level 16-request and 1-MiB response
+caps, writes a sanitized probe table, and uploads only compact Phase 1 reports even
+when the technical verdict remains blocked. It contains no backfill, training,
+promotion, deployment, or routing command.
