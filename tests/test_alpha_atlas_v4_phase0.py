@@ -141,6 +141,94 @@ def test_replay_matches_shared_train_serve_price_vs_sma_calculation():
     assert replayed["feature_price_vs_sma_20"] == shared["feature_price_vs_sma_20"]
 
 
+@pytest.mark.parametrize(
+    ("symbol", "failed_observation_id"),
+    (
+        (
+            "RNWWW",
+            "aav4obs_032c50405b63a37575d387c011492402da914b59807cfb9a27085c6eaaf5afab",
+        ),
+        (
+            "HUMAW",
+            "aav4obs_ae8afe5b730f6faeef4b4c657744cfde4d9f7a84fb3d1494640a346ddf90a833",
+        ),
+    ),
+    ids=("RNWWW-artifact-row", "HUMAW-artifact-row"),
+)
+def test_spy_returns_use_spy_timeline_while_beta_remains_date_aligned(
+    tmp_path, symbol, failed_observation_id
+):
+    row, _ = _lineage_row(tmp_path)
+    row["symbol"] = symbol
+    lineage = row["reconstruction_lineage"]
+    symbol_source = tmp_path / "symbol.json"
+    spy_source = tmp_path / "spy.json"
+    sector_source = tmp_path / "sector.json"
+    symbol = json.loads(symbol_source.read_text())["rows"]
+    spy = json.loads(spy_source.read_text())["rows"]
+    sector = json.loads(sector_source.read_text())["rows"]
+
+    symbol_dates = pd.bdate_range(end="2026-07-22", periods=60)
+    spy_dates = pd.bdate_range(end="2026-07-23", periods=60)
+    sector_dates = pd.bdate_range(end="2026-07-22", periods=60)
+    for bars, dates in (
+        (symbol, symbol_dates),
+        (spy, spy_dates),
+        (sector, sector_dates),
+    ):
+        for bar, day in zip(bars, dates):
+            bar["date"] = day.date().isoformat()
+
+    # SPY's five-session endpoints reproduce the attached artifact exactly.
+    spy[-6]["close"] = 750.72
+    spy[-2]["close"] = 747.41
+    spy[-1]["close"] = 738.18
+    spy[-7]["close"] = 754.81
+    for path, bars, family in (
+        (symbol_source, symbol, "symbol"),
+        (spy_source, spy, "spy"),
+        (sector_source, sector, "sector"),
+    ):
+        path.write_text(json.dumps({"rows": bars}, sort_keys=True))
+        next(source for source in lineage["sources"] if source["family"] == family)[
+            "sha256"
+        ] = sha256_file(path)
+
+    loaded = {
+        "symbol": {"rows": symbol},
+        "spy": {"rows": spy},
+        "sector": {"rows": sector},
+        "reference": json.loads((tmp_path / "reference.json").read_text()),
+    }
+    replayed = _replay_v4_features(loaded, lineage)
+    symbol_return5 = builder._lagged_return(symbol, 59, 5)
+    sector_return5 = builder._lagged_return(sector, 59, 5)
+
+    assert replayed["feature_spy_return_1d"] == round(738.18 / 747.41 - 1, 6)
+    persisted_spy_return_5d = -0.016704
+    assert (
+        replayed["feature_spy_return_5d"] == persisted_spy_return_5d
+    ), failed_observation_id
+    assert replayed["feature_spy_return_5d"] != round(747.41 / 754.81 - 1, 6)
+    assert replayed["feature_symbol_minus_spy_5d"] == round(
+        symbol_return5 - replayed["feature_spy_return_5d"], 6
+    )
+    assert replayed["feature_sector_relative_return_5d"] == round(
+        symbol_return5 - sector_return5, 6
+    )
+    assert replayed["feature_symbol_beta_20d"] == builder._date_aligned_beta(
+        symbol, spy, 59, 59, 20
+    )
+    assert replayed["feature_symbol_beta_20d"] != builder._beta_to_benchmark(
+        symbol, spy, 59, 59, 20
+    )
+
+    row.update(replayed)
+    row["feature_cutoff_at"] = "2026-07-24T09:45:15+00:00"
+    row["canonical_observation_id"] = canonical_observation_id(row)
+    assert verify_observation(row, root=tmp_path)["status"] == "RECONSTRUCTABLE"
+
+
 def test_each_walk_forward_fit_is_independent_of_later_fold():
     fold_one = pd.DataFrame({"feature_a": [1.0, None, 5.0]})
     first = fit_feature_fill_policy(fold_one, ["feature_a"])

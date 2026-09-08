@@ -456,7 +456,7 @@ def _replay_v4_features(
     # The production builder deliberately overwrites its overlapping V4
     # calculations with the shared V3 train/serve engine. Replay that final
     # materialization order (including its unrounded SMA denominator), then
-    # restore the three context features that the V4 builder overrides last.
+    # restore the context features that the V4 builder overrides last.
     shared = builder.build_alpha_atlas_v3_features(
         symbol_bars=symbol[: idx + 1],
         spy_bars=spy[: spy_idx + 1],
@@ -465,6 +465,12 @@ def _replay_v4_features(
     replayed.update(shared)
     replayed.update(
         {
+            # Standalone SPY returns follow SPY's own latest available session.
+            # The shared V3 engine receives the symbol as-of date for its
+            # train/serve calculations, so restore these context features from
+            # the independently indexed SPY lineage.
+            "feature_spy_return_1d": builder._lagged_return(spy, spy_idx, 1),
+            "feature_spy_return_5d": spy_return5,
             "feature_symbol_minus_spy_5d": (
                 round(return5 - spy_return5, 6)
                 if return5 is not None and spy_return5 is not None
