@@ -1,0 +1,156 @@
+{
+  "bytes_received": 2946,
+  "caps": {
+    "requests": 16,
+    "response_bytes": 1048576
+  },
+  "credentials_configured": true,
+  "elapsed_seconds": 2.5,
+  "evidence_class": "LIVE_BOUNDED",
+  "full_backfill_started": false,
+  "mode": "live_read_only",
+  "overall_status": "COMPLETE",
+  "probes": [
+    {
+      "case": "active_security",
+      "date": "2024-06-03",
+      "date_validation": "RESULT_MATCHED_REQUEST",
+      "family": "aggregate",
+      "observed_dates": [
+        "2024-06-03"
+      ],
+      "reason": "schema_identity_and_date_validated",
+      "rows": 1,
+      "status": "ACCESSIBLE",
+      "symbol": "AAPL"
+    },
+    {
+      "case": "delisted_security",
+      "date": "2022-10-27",
+      "date_validation": "RESULT_MATCHED_REQUEST",
+      "family": "aggregate",
+      "observed_dates": [
+        "2022-10-27"
+      ],
+      "reason": "schema_identity_and_date_validated",
+      "rows": 1,
+      "status": "ACCESSIBLE",
+      "symbol": "TWTR"
+    },
+    {
+      "case": "ticker_change",
+      "date": "2022-06-09",
+      "date_validation": "REQUEST_BOUND_REFERENCE_SNAPSHOT",
+      "family": "reference",
+      "observed_dates": [],
+      "reason": "schema_identity_and_date_validated",
+      "rows": 1,
+      "status": "ACCESSIBLE",
+      "symbol": "META"
+    },
+    {
+      "case": "split_case",
+      "date": "2020-08-31",
+      "date_validation": "RESULT_MATCHED_REQUEST",
+      "family": "split",
+      "observed_dates": [
+        "2020-08-31"
+      ],
+      "reason": "schema_identity_and_date_validated",
+      "rows": 1,
+      "status": "ACCESSIBLE",
+      "symbol": "AAPL"
+    },
+    {
+      "case": "recent_listing",
+      "date": "2023-09-14",
+      "date_validation": "RESULT_MATCHED_REQUEST",
+      "family": "aggregate",
+      "observed_dates": [
+        "2023-09-14"
+      ],
+      "reason": "schema_identity_and_date_validated",
+      "rows": 1,
+      "status": "ACCESSIBLE",
+      "symbol": "ARM"
+    },
+    {
+      "case": "spy_context",
+      "date": "2006-01-03",
+      "date_validation": "RESULT_MATCHED_REQUEST",
+      "family": "aggregate",
+      "observed_dates": [
+        "2006-01-03"
+      ],
+      "reason": "schema_identity_and_date_validated",
+      "rows": 1,
+      "status": "ACCESSIBLE",
+      "symbol": "SPY"
+    },
+    {
+      "case": "sector_etf",
+      "date": "2010-01-04",
+      "date_validation": "RESULT_MATCHED_REQUEST",
+      "family": "aggregate",
+      "observed_dates": [
+        "2010-01-04"
+      ],
+      "reason": "schema_identity_and_date_validated",
+      "rows": 1,
+      "status": "ACCESSIBLE",
+      "symbol": "XLK"
+    },
+    {
+      "case": "regular_session",
+      "date": "2024-06-03",
+      "date_validation": "RESULT_MATCHED_REQUEST",
+      "family": "aggregate",
+      "observed_dates": [
+        "2024-06-03"
+      ],
+      "reason": "schema_identity_and_date_validated",
+      "rows": 1,
+      "status": "ACCESSIBLE",
+      "symbol": "SPY"
+    },
+    {
+      "case": "early_close",
+      "date": "2024-11-29",
+      "date_validation": "RESULT_MATCHED_REQUEST",
+      "family": "aggregate",
+      "observed_dates": [
+        "2024-11-29"
+      ],
+      "reason": "schema_identity_and_date_validated",
+      "rows": 1,
+      "status": "ACCESSIBLE",
+      "symbol": "SPY"
+    },
+    {
+      "case": "old_period",
+      "date": "2006-01-03",
+      "date_validation": "RESULT_MATCHED_REQUEST",
+      "family": "aggregate",
+      "observed_dates": [
+        "2006-01-03"
+      ],
+      "reason": "schema_identity_and_date_validated",
+      "rows": 1,
+      "status": "ACCESSIBLE",
+      "symbol": "AAPL"
+    }
+  ],
+  "provenance": {
+    "bytes_received": 2946,
+    "evidence_source": "LIVE_BOUNDED",
+    "execution_mode": "live_read_only",
+    "full_backfill_started": false,
+    "generated_at": "UNAVAILABLE_IN_CONFIRMED_EVIDENCE",
+    "request_count": 10,
+    "workflow_run_identifier": "confirmed-live-preflight-artifact",
+    "write_operation_count": 0
+  },
+  "requests_attempted": 10,
+  "schema_version": "alpha-atlas-v4-phase1-historical-preflight.v1",
+  "write_operations": 0
+}

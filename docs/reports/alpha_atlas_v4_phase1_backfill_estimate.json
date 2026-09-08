@@ -1,0 +1,18 @@
+{
+  "candidate_securities_observed": 0,
+  "compressed_storage_bytes": null,
+  "evidence_class": "STATIC_ONLY",
+  "listing_requests_observed": 0,
+  "object_count": null,
+  "runtime_range_seconds": null,
+  "schema_version": "alpha-atlas-v4-phase1-backfill-estimate.v1",
+  "security_days": null,
+  "temporary_headroom_bytes": null,
+  "uncertainties": [
+    "enumeration completeness",
+    "common interval",
+    "rows per security",
+    "delivery object layout"
+  ],
+  "uncompressed_working_bytes": null
+}
