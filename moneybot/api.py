@@ -542,12 +542,19 @@ def _is_regular_market_hours(now_utc: datetime | None = None) -> bool:
 
 
 def _watchlist_item_payload(item: WatchlistItem) -> Dict[str, Any]:
+    remaining = item.shares or Decimal("0")
+    original = item.original_shares if item.original_shares is not None else remaining
+    sold = original - remaining
     return {
         "id": item.id,
         "symbol": item.symbol,
         "company": item.company,
         "entry_price": float(item.buy_price) if item.buy_price is not None else None,
-        "shares": float(item.shares) if item.shares is not None else None,
+        "shares": float(remaining),
+        "original_shares": float(original),
+        "shares_sold": float(sold),
+        "status": "CLOSED" if remaining == 0 else ("PARTIAL" if sold > 0 else "OPEN"),
+        "remaining_cost_basis": float((item.buy_price or Decimal("0")) * remaining),
         "created_at": item.created_at.isoformat(),
     }
 
@@ -558,10 +565,14 @@ def _sold_trade_payload(item: SoldTrade) -> Dict[str, Any]:
     return {
         "id": item.id,
         "symbol": item.symbol,
+        "source_lot_id": item.source_lot_id,
         "shares_sold": float(item.shares_sold),
         "sold_price": float(item.sold_price),
         "entry_price": float(item.entry_price),
         "realized_amount": float(item.realized_amount),
+        "gross_proceeds": float(item.gross_proceeds if item.gross_proceeds is not None else item.sold_price * item.shares_sold),
+        "assigned_cost_basis": float(item.assigned_cost_basis if item.assigned_cost_basis is not None else item.entry_price * item.shares_sold),
+        "acquired_at": item.acquired_at.isoformat() if item.acquired_at else None,
         "sold_at": item.sold_at.isoformat(),
     }
 
@@ -1450,7 +1461,7 @@ def send_test_push_notification():
 @login_required
 def user_watchlist():
     items = (
-        WatchlistItem.query.filter_by(user_id=session["user_id"])
+        WatchlistItem.query.filter(WatchlistItem.user_id == session["user_id"], WatchlistItem.shares > 0)
         .order_by(WatchlistItem.created_at.desc())
         .all()
     )
@@ -1791,16 +1802,15 @@ def add_watchlist_item():
     if shares is not None and shares <= 0:
         return jsonify({"error": "shares must be > 0", "request_id": g.request_id}), 400
 
-    existing = WatchlistItem.query.filter_by(user_id=session["user_id"], symbol=symbol).first()
-    if existing:
-        return jsonify({
-            "error": "Symbol already exists in portfolio. Click Buy in the Action column to add more shares.",
-            "request_id": g.request_id,
-        }), 409
-
     item = WatchlistItem(
-        user_id=session["user_id"], symbol=symbol, company=company, buy_price=buy_price, shares=shares
+        user_id=session["user_id"], symbol=symbol, company=company, buy_price=buy_price,
+        shares=shares, original_shares=shares,
     )
+    if data.get("acquired_date"):
+        try:
+            item.created_at = datetime.strptime(str(data["acquired_date"]), "%Y-%m-%d")
+        except ValueError:
+            return jsonify({"error": "acquired_date must be YYYY-MM-DD", "request_id": g.request_id}), 400
     db.session.add(item)
     db.session.commit()
     return jsonify({"item": _watchlist_item_payload(item), "request_id": g.request_id}), 201
@@ -1810,7 +1820,8 @@ def add_watchlist_item():
 @login_required
 def update_watchlist_item(item_id: int):
     data = request.get_json(silent=True) or {}
-    item = WatchlistItem.query.filter_by(id=item_id, user_id=session["user_id"]).first()
+    item = (WatchlistItem.query.filter_by(id=item_id, user_id=session["user_id"])
+            .with_for_update().first())
     if not item:
         return jsonify({"error": "item not found", "request_id": g.request_id}), 404
 
@@ -1825,6 +1836,8 @@ def update_watchlist_item(item_id: int):
         if shares is not None and shares <= 0:
             return jsonify({"error": "shares must be > 0", "request_id": g.request_id}), 400
         item.shares = shares
+        sold_quantity = sum((sale.shares_sold for sale in item.sales), Decimal("0"))
+        item.original_shares = (shares or Decimal("0")) + sold_quantity
 
     if "company" in data:
         item.company = (data.get("company") or "").strip() or None
@@ -1848,6 +1861,8 @@ def delete_watchlist_item(item_id: int):
     item = WatchlistItem.query.filter_by(id=item_id, user_id=session["user_id"]).first()
     if not item:
         return jsonify({"error": "item not found", "request_id": g.request_id}), 404
+    if item.sales:
+        return jsonify({"error": "lots with sale history cannot be deleted", "request_id": g.request_id}), 409
     db.session.delete(item)
     db.session.commit()
     return jsonify({"ok": True, "request_id": g.request_id})
@@ -1857,7 +1872,8 @@ def delete_watchlist_item(item_id: int):
 @login_required
 def sell_watchlist_item(item_id: int):
     data = request.get_json(silent=True) or {}
-    item = WatchlistItem.query.filter_by(id=item_id, user_id=session["user_id"]).first()
+    item = (WatchlistItem.query.filter_by(id=item_id, user_id=session["user_id"])
+            .with_for_update().first())
     if not item:
         return jsonify({"error": "item not found", "request_id": g.request_id}), 404
 
@@ -1875,24 +1891,37 @@ def sell_watchlist_item(item_id: int):
     if shares_sold > item.shares:
         return jsonify({"error": "shares_sold cannot exceed current shares", "request_id": g.request_id}), 400
 
-    realized_amount = (sold_price - item.buy_price) * shares_sold
+    sold_at = datetime.utcnow()
+    raw_sold_at = data.get("sold_at") or data.get("sale_date")
+    if raw_sold_at:
+        try:
+            sold_at = datetime.fromisoformat(str(raw_sold_at).replace("Z", "+00:00")).replace(tzinfo=None)
+        except ValueError:
+            return jsonify({"error": "sold_at must be an ISO-8601 date/time", "request_id": g.request_id}), 400
+    if sold_at.date() < item.created_at.date():
+        return jsonify({"error": "sold_at cannot precede the lot acquisition date", "request_id": g.request_id}), 400
+
+    cost_basis = item.buy_price * shares_sold
+    proceeds = sold_price * shares_sold
+    realized_amount = proceeds - cost_basis
     sold_trade = SoldTrade(
         user_id=session["user_id"],
+        source_lot_id=item.id,
         symbol=item.symbol,
         shares_sold=shares_sold,
         sold_price=sold_price,
         entry_price=item.buy_price,
         realized_amount=realized_amount,
+        gross_proceeds=proceeds,
+        assigned_cost_basis=cost_basis,
+        acquired_at=item.created_at,
+        sold_at=sold_at,
     )
     db.session.add(sold_trade)
 
     remaining_shares = item.shares - shares_sold
-    if remaining_shares == 0:
-        db.session.delete(item)
-        remaining_item = None
-    else:
-        item.shares = remaining_shares
-        remaining_item = _watchlist_item_payload(item)
+    item.shares = remaining_shares
+    remaining_item = _watchlist_item_payload(item) if remaining_shares > 0 else None
 
     db.session.commit()
     return jsonify(
@@ -1921,29 +1950,20 @@ def buy_watchlist_item(item_id: int):
     if shares_bought is None or shares_bought <= 0:
         return jsonify({"error": "shares_bought must be > 0", "request_id": g.request_id}), 400
 
-    existing_shares = item.shares if item.shares is not None and item.shares > 0 else Decimal("0")
-    new_total_shares = existing_shares + shares_bought
-    if new_total_shares <= 0:
-        return jsonify({"error": "resulting shares must be > 0", "request_id": g.request_id}), 400
-
-    if item.buy_price is None or existing_shares == 0:
-        new_entry_price = bought_price
-    else:
-        prior_cost = item.buy_price * existing_shares
-        bought_cost = bought_price * shares_bought
-        new_entry_price = (prior_cost + bought_cost) / new_total_shares
-
-    item.shares = new_total_shares
-    item.buy_price = new_entry_price
+    # A purchase is a new acquisition lot; averaging would destroy the user's
+    # ability to select the shares and basis used by a later sale.
+    new_lot = WatchlistItem(user_id=session["user_id"], symbol=item.symbol, company=item.company,
+                            buy_price=bought_price, shares=shares_bought, original_shares=shares_bought)
+    db.session.add(new_lot)
     db.session.commit()
 
     return jsonify(
         {
-            "item": _watchlist_item_payload(item),
+            "item": _watchlist_item_payload(new_lot),
             "added": {
                 "shares_bought": float(shares_bought),
                 "bought_price": float(bought_price),
-                "new_entry_price": float(new_entry_price),
+                "new_entry_price": float(bought_price),
             },
             "request_id": g.request_id,
         }
@@ -1959,8 +1979,22 @@ def sold_trades():
         .all()
     )
     payload = [_sold_trade_payload(i) for i in items]
-    total_realized = round(sum(i["realized_amount"] for i in payload), 2)
-    return jsonify({"items": payload, "total_realized": total_realized, "request_id": g.request_id})
+    total_realized = sum((i.realized_amount for i in items), Decimal("0"))
+    by_ticker: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    for item in items:
+        by_ticker[item.symbol] += item.realized_amount
+    return jsonify({"items": payload, "total_realized": float(total_realized),
+                    "realized_by_ticker": {symbol: float(value) for symbol, value in by_ticker.items()},
+                    "request_id": g.request_id})
+
+
+@api_bp.get("/portfolio-lots")
+@login_required
+def portfolio_lots():
+    """Return every acquisition lot, including lots with no shares remaining."""
+    items = (WatchlistItem.query.filter_by(user_id=session["user_id"])
+             .order_by(WatchlistItem.created_at.desc()).all())
+    return jsonify({"items": [_watchlist_item_payload(item) for item in items], "request_id": g.request_id})
 
 
 @api_bp.patch("/sold-trades/<int:trade_id>")
@@ -1981,9 +2015,8 @@ def update_sold_trade(trade_id: int):
 
     shares_delta = sold_trade.shares_sold - shares_sold
     portfolio_item = WatchlistItem.query.filter_by(
-        user_id=session["user_id"],
-        symbol=sold_trade.symbol,
-    ).first()
+        id=sold_trade.source_lot_id, user_id=session["user_id"],
+    ).first() if sold_trade.source_lot_id else None
     portfolio_adjustment_skipped = False
     portfolio_adjustment_note = None
 
@@ -1994,26 +2027,21 @@ def update_sold_trade(trade_id: int):
             if corrected_shares < 0:
                 portfolio_adjustment_skipped = True
                 portfolio_adjustment_note = "Portfolio shares were left unchanged because they appear to have already been corrected."
-            elif corrected_shares == 0:
-                db.session.delete(portfolio_item)
-                portfolio_item = None
             else:
+                original = portfolio_item.original_shares or portfolio_item.shares or Decimal("0")
+                other_sold = sum((trade.shares_sold for trade in portfolio_item.sales if trade.id != sold_trade.id), Decimal("0"))
+                if shares_sold + other_sold > original:
+                    return jsonify({"error": "shares_sold cannot exceed lot quantity", "request_id": g.request_id}), 400
                 portfolio_item.shares = corrected_shares
-        elif shares_delta > 0:
-            portfolio_item = WatchlistItem(
-                user_id=session["user_id"],
-                symbol=sold_trade.symbol,
-                buy_price=sold_trade.entry_price,
-                shares=shares_delta,
-            )
-            db.session.add(portfolio_item)
         else:
             portfolio_adjustment_skipped = True
             portfolio_adjustment_note = "Sold trade was updated without changing portfolio shares because there is no open position to reduce."
 
     sold_trade.sold_price = sold_price
     sold_trade.shares_sold = shares_sold
-    sold_trade.realized_amount = (sold_price - sold_trade.entry_price) * shares_sold
+    sold_trade.gross_proceeds = sold_price * shares_sold
+    sold_trade.assigned_cost_basis = sold_trade.entry_price * shares_sold
+    sold_trade.realized_amount = sold_trade.gross_proceeds - sold_trade.assigned_cost_basis
     db.session.commit()
 
     payload = [_sold_trade_payload(i) for i in SoldTrade.query.filter_by(user_id=session["user_id"]).all()]
@@ -2034,7 +2062,7 @@ def update_sold_trade(trade_id: int):
 @login_required
 def portfolio_summary():
     items = (
-        WatchlistItem.query.filter_by(user_id=session["user_id"])
+        WatchlistItem.query.filter(WatchlistItem.user_id == session["user_id"], WatchlistItem.shares > 0)
         .order_by(WatchlistItem.created_at.desc())
         .all()
     )
@@ -2045,6 +2073,12 @@ def portfolio_summary():
     score_values: list[float] = []
     sector_totals: Dict[str, float] = defaultdict(float)
     quote_sources: set[str] = set()
+    remaining_cost_basis = Decimal("0")
+    unrealized = Decimal("0")
+    ticker_totals: dict[str, dict[str, Decimal]] = defaultdict(lambda: {
+        "shares": Decimal("0"), "market_value": Decimal("0"),
+        "remaining_cost_basis": Decimal("0"), "unrealized_gain_loss": Decimal("0"),
+    })
 
     for item in items:
         symbol = item.symbol
@@ -2080,6 +2114,15 @@ def portfolio_summary():
 
         position_value = float(quote_price) * shares
         total_value += position_value
+        lot_basis = (item.buy_price or Decimal("0")) * (item.shares or Decimal("0"))
+        lot_value = Decimal(str(quote_price)) * (item.shares or Decimal("0"))
+        remaining_cost_basis += lot_basis
+        unrealized += lot_value - lot_basis
+        ticker = ticker_totals[symbol]
+        ticker["shares"] += item.shares or Decimal("0")
+        ticker["market_value"] += lot_value
+        ticker["remaining_cost_basis"] += lot_basis
+        ticker["unrealized_gain_loss"] += lot_value - lot_basis
         sector_totals[sector or "Unknown"] += position_value
 
         if isinstance(signal_score, (int, float)):
@@ -2090,13 +2133,39 @@ def portfolio_summary():
         {"sector": sector, "value": round(value, 2)}
         for sector, value in sorted(sector_totals.items(), key=lambda kv: kv[1], reverse=True)
     ]
+    sales = SoldTrade.query.filter_by(user_id=session["user_id"]).all()
+    realized = sum((sale.realized_amount for sale in sales), Decimal("0"))
+    realized_by_ticker: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    for sale in sales:
+        realized_by_ticker[sale.symbol] += sale.realized_amount
+    symbols = set(ticker_totals) | set(realized_by_ticker)
+    position_totals = []
+    for symbol in sorted(symbols):
+        current = ticker_totals[symbol]
+        ticker_realized = realized_by_ticker[symbol]
+        position_totals.append({
+            "symbol": symbol,
+            "open_shares": float(current["shares"]),
+            "current_market_value": float(current["market_value"]),
+            "remaining_cost_basis": float(current["remaining_cost_basis"]),
+            "unrealized_gain_loss": float(current["unrealized_gain_loss"]),
+            "realized_gain_loss": float(ticker_realized),
+            "lifetime_gain_loss": float(ticker_realized + current["unrealized_gain_loss"]),
+            "active": current["shares"] > 0,
+        })
 
     return jsonify(
         {
             "total_value": round(total_value, 2),
+            "current_market_value": round(total_value, 2),
+            "remaining_cost_basis": float(remaining_cost_basis),
+            "unrealized_gain_loss": float(unrealized),
+            "realized_gain_loss": float(realized),
+            "lifetime_gain_loss": float(realized + unrealized),
+            "position_totals": position_totals,
             "avg_score": avg_score,
             "sector_breakdown": sector_breakdown,
-            "positions": len(items),
+            "positions": len(ticker_totals),
             "quote_sources": sorted(quote_sources),
             "request_id": g.request_id,
         }
