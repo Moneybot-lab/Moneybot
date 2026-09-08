@@ -289,6 +289,38 @@ def test_build_training_rows_adds_phase_1_technical_features(tmp_path):
     assert row["feature_dollar_volume"] == 156.0 * 1056.0
 
 
+def test_relative_context_features_are_initialized_before_row_serialization():
+    """Regression for the hosted Track B aligned_symbol_spy_5d NameError."""
+    market = {
+        symbol: [
+            {
+                "symbol": symbol,
+                "date": (date(2026, 1, 1) + timedelta(days=idx - 1)).isoformat(),
+                "open": base + idx,
+                "high": base + idx + 1,
+                "low": base + idx - 1,
+                "close": base + idx,
+                "volume": 1_000 + idx,
+            }
+            for idx in range(1, 61)
+        ]
+        for symbol, base in (("AAPL", 100.0), ("SPY", 400.0), ("XLK", 200.0))
+    }
+    event = {
+        "ts": _ts("2026-02-25"),
+        "symbol": "AAPL",
+        "payload": {"recommendation": "BUY", "sector_etf": "XLK"},
+    }
+
+    rows, summary = build_training_rows_from_raw_market(
+        [event], market, horizon_days=3, split_events=[]
+    )
+
+    assert summary["rows_joined"] == 1
+    assert rows[0]["feature_symbol_minus_spy_5d"] is not None
+    assert rows[0]["feature_sector_relative_return_5d"] is not None
+
+
 def test_build_training_rows_adds_symbol_signal_history_counts():
     trading_days = _trading_days(date(2026, 1, 2), 61)
     market = {
