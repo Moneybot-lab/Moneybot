@@ -365,8 +365,15 @@ def _replay_v4_features(
     idx = int(indices["symbol"])
     spy_idx = int(indices["spy"])
     sector_idx = int(indices["sector"])
-    if idx < 50 or spy_idx < 35 or sector_idx < 5:
-        raise ValueError("insufficient source lookback for complete replay")
+    if (
+        idx < 5
+        or idx >= len(symbol)
+        or spy_idx < 0
+        or spy_idx >= len(spy)
+        or sector_idx < 0
+        or sector_idx >= len(sector)
+    ):
+        raise ValueError("invalid source index for replay")
     asof = symbol[idx]
     close = float(asof["close"])
     sma10 = builder._rolling_close_mean(symbol, idx, 10)
@@ -383,7 +390,7 @@ def _replay_v4_features(
     low20 = builder._rolling_extreme(symbol, idx, 20, "low", high=False)
     vwap = builder._rolling_vwap(symbol, idx, 20)
     macd, macd_signal, macd_hist = builder._macd_components_at(symbol, idx)
-    return {
+    replayed = {
         "feature_close": close,
         "feature_sma_10": sma10,
         "feature_sma_20": sma20,
@@ -410,18 +417,30 @@ def _replay_v4_features(
         "feature_atr_14": builder._atr_at(symbol, idx, 14),
         "feature_spy_return_1d": builder._lagged_return(spy, spy_idx, 1),
         "feature_spy_return_5d": spy_return5,
-        "feature_symbol_minus_spy_5d": round(return5 - spy_return5, 6),
+        "feature_symbol_minus_spy_5d": (
+            round(return5 - spy_return5, 6)
+            if return5 is not None and spy_return5 is not None
+            else None
+        ),
         "feature_symbol_beta_20d": builder._date_aligned_beta(
             symbol, spy, idx, spy_idx, 20
         ),
-        "feature_sector_relative_return_5d": round(return5 - sector_return5, 6),
+        "feature_sector_relative_return_5d": (
+            round(return5 - sector_return5, 6)
+            if return5 is not None and sector_return5 is not None
+            else None
+        ),
         "feature_market_regime_risk_on": builder._market_regime_risk_on(spy, spy_idx),
         "feature_market_volatility_proxy": builder._return_volatility(spy, spy_idx, 20),
         "feature_return_1d_lagged": builder._lagged_return(symbol, idx, 1),
         "feature_return_5d_lagged": return5,
         "feature_return_10d_lagged": builder._lagged_return(symbol, idx, 10),
         "feature_return_20d_lagged": return20,
-        "feature_momentum_5d_vs_20d": round(return5 - return20, 6),
+        "feature_momentum_5d_vs_20d": (
+            round(return5 - return20, 6)
+            if return5 is not None and return20 is not None
+            else None
+        ),
         "feature_volume": volume,
         "feature_volume_ratio_20d": builder._ratio(volume, volume20),
         "feature_relative_volume_5d": builder._ratio(volume, volume5),
@@ -434,6 +453,40 @@ def _replay_v4_features(
             round(close * volume, 6) if volume is not None else None
         ),
     }
+    # The production builder deliberately overwrites its overlapping V4
+    # calculations with the shared V3 train/serve engine. Replay that final
+    # materialization order (including its unrounded SMA denominator), then
+    # restore the context features that the V4 builder overrides last.
+    shared = builder.build_alpha_atlas_v3_features(
+        symbol_bars=symbol[: idx + 1],
+        spy_bars=spy[: spy_idx + 1],
+        asof_date=asof.get("date"),
+    )
+    replayed.update(shared)
+    replayed.update(
+        {
+            # Standalone SPY returns follow SPY's own latest available session.
+            # The shared V3 engine receives the symbol as-of date for its
+            # train/serve calculations, so restore these context features from
+            # the independently indexed SPY lineage.
+            "feature_spy_return_1d": builder._lagged_return(spy, spy_idx, 1),
+            "feature_spy_return_5d": spy_return5,
+            "feature_symbol_minus_spy_5d": (
+                round(return5 - spy_return5, 6)
+                if return5 is not None and spy_return5 is not None
+                else None
+            ),
+            "feature_sector_relative_return_5d": (
+                round(return5 - sector_return5, 6)
+                if return5 is not None and sector_return5 is not None
+                else None
+            ),
+            "feature_symbol_beta_20d": builder._date_aligned_beta(
+                symbol, spy, idx, spy_idx, 20
+            ),
+        }
+    )
+    return replayed
 
 
 def verify_observation(
@@ -527,6 +580,8 @@ def verify_observation(
     for feature in MODEL_FEATURES:
         replay = replayed_features.get(feature)
         observed = row.get(feature)
+        if replay is None and observed is None:
+            continue
         if not isinstance(replay, (int, float)) or not isinstance(
             observed, (int, float)
         ):
@@ -580,7 +635,22 @@ def verify_observation(
                 available = pd.to_datetime(
                     action.get("available_at"), utc=True, errors="coerce"
                 )
-                if pd.isna(available) or (not pd.isna(cutoff) and available > cutoff):
+                execution_day = pd.to_datetime(
+                    action.get("execution_date"), errors="coerce"
+                )
+                market_day = pd.to_datetime(
+                    row.get("market_session_date")
+                    or row.get("feature_market_asof_date"),
+                    errors="coerce",
+                )
+                historically_effective = (
+                    not pd.isna(execution_day)
+                    and not pd.isna(market_day)
+                    and execution_day < market_day
+                )
+                if not historically_effective and (
+                    pd.isna(available) or (not pd.isna(cutoff) and available > cutoff)
+                ):
                     failures.append(f"unproven_feature_action_availability:{action_id}")
             for action_id in row.get("label_split_ids") or []:
                 if str(action_id) not in by_id:
@@ -611,7 +681,22 @@ def verify_observation(
                 available = pd.to_datetime(
                     action.get("available_at"), utc=True, errors="coerce"
                 )
-                if pd.isna(available) or (not pd.isna(cutoff) and available > cutoff):
+                execution_day = pd.to_datetime(
+                    action.get("execution_date"), errors="coerce"
+                )
+                market_day = pd.to_datetime(
+                    row.get("market_session_date")
+                    or row.get("feature_market_asof_date"),
+                    errors="coerce",
+                )
+                historically_effective = (
+                    not pd.isna(execution_day)
+                    and not pd.isna(market_day)
+                    and execution_day < market_day
+                )
+                if not historically_effective and (
+                    pd.isna(available) or (not pd.isna(cutoff) and available > cutoff)
+                ):
                     failures.append(f"unproven_feature_action_availability:{action_id}")
             for action_id in row.get("label_split_ids") or []:
                 if str(action_id) not in by_id:
