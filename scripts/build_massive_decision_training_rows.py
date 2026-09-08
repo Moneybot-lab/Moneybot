@@ -1871,6 +1871,12 @@ def emit_phase0_evidence_bundle(
         cutoff = datetime.fromisoformat(str(row["feature_cutoff_at"]))
         market_session = date.fromisoformat(str(row["market_session_date"]))
         feature_day = str(row["feature_market_asof_date"])
+        family_source_at = row.get("feature_family_source_at") or {}
+
+        def family_source_day(family: str, fallback: str) -> str:
+            source_at = _parse_utc_datetime(family_source_at.get(family))
+            return source_at.date().isoformat() if source_at else fallback
+
         symbol_raw = market[symbol]
         symbol_idx = positions[symbol][feature_day]
         symbol_history, symbol_split_ids = adjusted(
@@ -1882,7 +1888,10 @@ def emit_phase0_evidence_bundle(
             feature_day,
         )
         spy_raw = market["SPY"]
-        spy_idx = bisect.bisect_right(date_indices["SPY"], feature_day) - 1
+        spy_day = family_source_day("spy_daily", feature_day)
+        spy_idx = positions["SPY"].get(spy_day, -1)
+        if spy_idx < 0:
+            raise ValueError(f"Phase 0 evidence missing SPY source day: {spy_day}")
         spy_history, spy_split_ids = adjusted(
             "SPY",
             spy_raw,
@@ -1893,7 +1902,12 @@ def emit_phase0_evidence_bundle(
         )
         sector_symbol = str(row.get("sector_benchmark_symbol") or "SPY")
         sector_raw = market[sector_symbol]
-        sector_idx = bisect.bisect_right(date_indices[sector_symbol], feature_day) - 1
+        sector_day = family_source_day("sector_daily", spy_day)
+        sector_idx = positions[sector_symbol].get(sector_day, -1)
+        if sector_idx < 0:
+            raise ValueError(
+                f"Phase 0 evidence missing {sector_symbol} source day: {sector_day}"
+            )
         sector_history, sector_split_ids = adjusted(
             sector_symbol,
             sector_raw,

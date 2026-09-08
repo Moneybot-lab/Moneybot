@@ -88,6 +88,32 @@ def test_replay_uses_production_date_aligned_beta_with_missing_sessions():
     )
 
 
+def test_replay_accepts_first_complete_formula_boundaries():
+    dates = pd.bdate_range("2025-10-01", periods=50)
+    bars = [
+        {
+            "symbol": "TEST",
+            "date": day.date().isoformat(),
+            "open": 100.0 + index,
+            "high": 102.0 + index,
+            "low": 99.0 + index,
+            "close": 101.0 + index,
+            "volume": 1_000_000.0 + index,
+        }
+        for index, day in enumerate(dates)
+    ]
+    replayed = _replay_v4_features(
+        {"symbol": bars, "spy": bars[-21:], "sector": bars[-6:]},
+        {
+            "replay_engine_version": "massive-v4-feature-replay.v1",
+            "source_indices": {"symbol": 49, "spy": 20, "sector": 5},
+        },
+    )
+    assert replayed["feature_sma_50"] is not None
+    assert replayed["feature_market_volatility_proxy"] is not None
+    assert replayed["feature_sector_relative_return_5d"] is not None
+
+
 def test_each_walk_forward_fit_is_independent_of_later_fold():
     fold_one = pd.DataFrame({"feature_a": [1.0, None, 5.0]})
     first = fit_feature_fill_policy(fold_one, ["feature_a"])
@@ -294,6 +320,30 @@ def test_split_near_decision_requires_point_in_time_action_availability(tmp_path
         "unproven_feature_action_availability:split-1"
         in verify_observation(row, root=tmp_path)["failures"]
     )
+
+
+def test_historical_split_execution_proves_availability_without_provider_timestamp(
+    tmp_path,
+):
+    row, _ = _lineage_row(tmp_path)
+    row["market_session_date"] = "2026-01-05"
+    action_path = (
+        tmp_path / row["reconstruction_lineage"]["corporate_action_source"]["path"]
+    )
+    action_path.write_text(
+        json.dumps(
+            {"actions": [{"id": "split-1", "execution_date": "2025-12-31"}]},
+            sort_keys=True,
+        )
+    )
+    action_hash = sha256_file(action_path)
+    row["feature_split_ids"] = ["split-1"]
+    row["corporate_action_manifest_sha256"] = action_hash
+    lineage = row["reconstruction_lineage"]
+    lineage["corporate_action_manifest_sha256"] = action_hash
+    lineage["corporate_action_source"]["sha256"] = action_hash
+    row["canonical_observation_id"] = canonical_observation_id(row)
+    assert verify_observation(row, root=tmp_path)["status"] == "RECONSTRUCTABLE"
 
 
 def test_stale_context_ticker_identity_holiday_and_early_close(tmp_path):
