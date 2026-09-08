@@ -30,6 +30,7 @@ from moneybot.services.decision_target import (
     target_metadata,
 )
 from moneybot.services.corporate_actions import (
+    CORPORATE_ACTION_AVAILABILITY_POLICY_VERSION,
     CORPORATE_ACTION_SCHEMA_VERSION,
     adjust_bars_to_asof,
     index_splits,
