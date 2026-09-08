@@ -2,14 +2,16 @@
 """Verify persisted V4 source lineage and issue artifact-bound Phase 0 evidence."""
 
 from __future__ import annotations
-import argparse, json, sys
+import argparse
+import json
+import sys
 from collections import Counter
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-from moneybot.services.alpha_atlas_v4_phase0 import (
+from moneybot.services.alpha_atlas_v4_phase0 import (  # noqa: E402
     RECONSTRUCTION_VERSION,
     build_temporal_safety_certification,
     sha256_file,
@@ -99,6 +101,15 @@ def main() -> int:
             {
                 "status": report["status"],
                 "certification_status": certification["status"],
+                "rows_total": report["rows_total"],
+                "rows_checked": report["rows_checked"],
+                "failure_count": report["failure_count"],
+                "failure_reasons": report["failure_reasons"],
+                "representative_failed_observation_ids": [
+                    result.get("canonical_observation_id")
+                    for result in report["results"]
+                    if result.get("status") != "RECONSTRUCTABLE"
+                ][:10],
             },
             sort_keys=True,
         )

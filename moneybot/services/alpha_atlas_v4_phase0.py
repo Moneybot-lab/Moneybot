@@ -411,7 +411,7 @@ def _replay_v4_features(
         "feature_spy_return_1d": builder._lagged_return(spy, spy_idx, 1),
         "feature_spy_return_5d": spy_return5,
         "feature_symbol_minus_spy_5d": round(return5 - spy_return5, 6),
-        "feature_symbol_beta_20d": builder._beta_to_benchmark(
+        "feature_symbol_beta_20d": builder._date_aligned_beta(
             symbol, spy, idx, spy_idx, 20
         ),
         "feature_sector_relative_return_5d": round(return5 - sector_return5, 6),

@@ -21,6 +21,7 @@ from moneybot.services.alpha_atlas_v4_phase0 import (
     verify_observation,
 )
 from scripts.verify_alpha_atlas_v4_reconstructability import verify_artifact
+from scripts import build_massive_decision_training_rows as builder
 
 
 def test_fill_policy_uses_fit_only_and_is_deterministic():
@@ -44,6 +45,47 @@ def test_fill_policy_uses_fit_only_and_is_deterministic():
     )
     assert changed["features"]["feature_a"]["fitted_value"] == 20.0
     assert changed["policy_sha256"] != policy_a["policy_sha256"]
+
+
+def test_replay_uses_production_date_aligned_beta_with_missing_sessions():
+    dates = pd.bdate_range("2026-01-02", periods=60)
+
+    def bars(symbol: str, scale: float) -> list[dict]:
+        return [
+            {
+                "symbol": symbol,
+                "date": day.date().isoformat(),
+                "open": scale + index,
+                "high": scale + index + 1,
+                "low": scale + index - 1,
+                "close": scale + index + ((index % 4) * 0.1),
+                "volume": 10_000 + index,
+            }
+            for index, day in enumerate(dates)
+        ]
+
+    symbol = bars("AAPL", 100.0)
+    spy = [row for index, row in enumerate(bars("SPY", 400.0)) if index != 50]
+    sector = bars("XLK", 200.0)
+    lineage = {
+        "replay_engine_version": "massive-v4-feature-replay.v1",
+        "source_indices": {
+            "symbol": len(symbol) - 1,
+            "spy": len(spy) - 1,
+            "sector": len(sector) - 1,
+        },
+    }
+
+    replayed = _replay_v4_features(
+        {"symbol": symbol, "spy": spy, "sector": sector}, lineage
+    )
+
+    assert replayed["feature_symbol_beta_20d"] == builder._date_aligned_beta(
+        symbol, spy, len(symbol) - 1, len(spy) - 1, 20
+    )
+    assert replayed["feature_symbol_beta_20d"] != builder._beta_to_benchmark(
+        symbol, spy, len(symbol) - 1, len(spy) - 1, 20
+    )
 
 
 def test_each_walk_forward_fit_is_independent_of_later_fold():
