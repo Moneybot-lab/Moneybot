@@ -897,13 +897,6 @@ def _pct(newer: float, older: float | None) -> float | None:
     return round((newer / float(older)) - 1.0, 6)
 
 
-def _optional_difference(left: float | None, right: float | None) -> float | None:
-    """Return a stable difference without relying on branch-local operands."""
-    if left is None or right is None:
-        return None
-    return round(left - right, 6)
-
-
 def _session_distance(older: date, newer: date) -> int:
     count = 0
     candidate = older
@@ -989,53 +982,6 @@ def _feature_safe_splits(
     return safe
 
 
-def _build_observation_timing(
-    *,
-    event: dict[str, Any],
-    fallback_decision_id: str,
-    symbol: str,
-    event_day: str,
-    decision_at: datetime,
-    entry_at: datetime,
-    exit_at: datetime,
-    feature_source_at: dict[str, datetime],
-    feature_split_ids: list[str],
-    label_split_ids: list[str],
-) -> AlphaAtlasV4TimingRecord:
-    """Build and validate the timing envelope before row serialization."""
-    return AlphaAtlasV4TimingRecord(
-        decision_id=str(event.get("decision_id") or fallback_decision_id),
-        symbol=symbol,
-        point_in_time_symbol_id=str(
-            event.get("point_in_time_symbol_id") or f"{symbol}:{event_day}"
-        ),
-        exchange=str(event.get("exchange") or "XNAS"),
-        trading_calendar=EXCHANGE_CALENDAR.identifier,
-        model_feature_contract_version=V4_FEATURE_CONTRACT_VERSION,
-        decision_at=decision_at,
-        feature_cutoff_at=decision_at,
-        latest_source_bar_at=feature_source_at,
-        entry_at=entry_at,
-        label_start_at=entry_at,
-        exit_at=exit_at,
-        entry_price_source="official_regular_session_open",
-        exit_price_source="official_regular_session_close",
-        data_provider_id=str(event.get("data_provider_id") or "massive-flatfile"),
-        corporate_action_adjustment_ids=tuple(
-            sorted(set(feature_split_ids + label_split_ids))
-        ),
-        staleness_status="fresh",
-        rejection_reason=None,
-        code_commit=str(event.get("code_commit") or "unrecorded-research-commit"),
-        dataset_manifest_hash=str(
-            event.get("dataset_manifest_hash") or "pending-write-manifest"
-        ),
-        transaction_cost_bps=None,
-        entry_slippage_bps=None,
-        exit_slippage_bps=None,
-    )
-
-
 def build_training_rows_from_raw_market(
     events: list[dict[str, Any]],
     market: dict[str, list[dict[str, Any]]],
@@ -1065,7 +1011,6 @@ def build_training_rows_from_raw_market(
         "rejected_stale_feature_family": 0,
         "rejected_missing_context": 0,
         "rejected_missing_entry_price": 0,
-        "rejected_invalid_timing": 0,
         "split_events_loaded": len(split_events),
         "training_rows_affected": 0,
         "feature_windows_crossing_splits": 0,
@@ -1410,16 +1355,15 @@ def build_training_rows_from_raw_market(
             else None
         )
         sector_return_5d = _lagged_return(sector_history, sector_idx, 5)
-        # Keep relative-return operands local to this observation.  A previous
-        # hosted revision referenced an alignment temporary that was only
-        # assigned on one branch, so an otherwise valid observation could
-        # terminate the entire Track B build with NameError.  These values are
-        # total over the optional-input domain and preserve the established
-        # feature semantics: unavailable context yields None, never a fallback
-        # or a forward-looking value.
-        symbol_minus_spy_5d = _optional_difference(return_5d_lagged, spy_return_5d)
-        sector_relative_return_5d = _optional_difference(
-            return_5d_lagged, sector_return_5d
+        symbol_minus_spy_5d = (
+            round(return_5d_lagged - spy_return_5d, 6)
+            if return_5d_lagged is not None and spy_return_5d is not None
+            else None
+        )
+        sector_relative_return_5d = (
+            round(return_5d_lagged - sector_return_5d, 6)
+            if return_5d_lagged is not None and sector_return_5d is not None
+            else None
         )
         event_fingerprint = hashlib.sha256(
             json.dumps(
@@ -1463,22 +1407,37 @@ def build_training_rows_from_raw_market(
             feature_availability_at["sector_daily"] = (
                 sector_available_at.isoformat() if sector_available_at else None
             )
-        try:
-            timing = _build_observation_timing(
-                event=event,
-                fallback_decision_id=fallback_decision_id,
-                symbol=symbol,
-                event_day=event_day,
-                decision_at=decision_at,
-                entry_at=entry_at,
-                exit_at=exit_at,
-                feature_source_at=feature_source_at,
-                feature_split_ids=feature_split_ids,
-                label_split_ids=label_split_ids,
-            )
-        except ValueError:
-            summary["rejected_invalid_timing"] += 1
-            continue
+        timing = AlphaAtlasV4TimingRecord(
+            decision_id=str(event.get("decision_id") or fallback_decision_id),
+            symbol=symbol,
+            point_in_time_symbol_id=str(
+                event.get("point_in_time_symbol_id") or f"{symbol}:{event_day}"
+            ),
+            exchange=str(event.get("exchange") or "XNAS"),
+            trading_calendar=EXCHANGE_CALENDAR.identifier,
+            model_feature_contract_version=V4_FEATURE_CONTRACT_VERSION,
+            decision_at=decision_at,
+            feature_cutoff_at=decision_at,
+            latest_source_bar_at=feature_source_at,
+            entry_at=entry_at,
+            label_start_at=entry_at,
+            exit_at=exit_at,
+            entry_price_source="official_regular_session_open",
+            exit_price_source="official_regular_session_close",
+            data_provider_id=str(event.get("data_provider_id") or "massive-flatfile"),
+            corporate_action_adjustment_ids=tuple(
+                sorted(set(feature_split_ids + label_split_ids))
+            ),
+            staleness_status="fresh",
+            rejection_reason=None,
+            code_commit=str(event.get("code_commit") or "unrecorded-research-commit"),
+            dataset_manifest_hash=str(
+                event.get("dataset_manifest_hash") or "pending-write-manifest"
+            ),
+            transaction_cost_bps=None,
+            entry_slippage_bps=None,
+            exit_slippage_bps=None,
+        )
         row = {
             "ts": ts,
             "decision_id": timing.decision_id,
@@ -1647,17 +1606,8 @@ def build_training_rows_from_raw_market(
         row.update(shared_v3_features)
         row.update(
             {
-                "feature_symbol_minus_spy_5d": (
-                    round(aligned_symbol_spy_5d - aligned_spy_5d, 6)
-                    if aligned_symbol_spy_5d is not None and aligned_spy_5d is not None
-                    else None
-                ),
-                "feature_sector_relative_return_5d": (
-                    round(aligned_symbol_sector_5d - aligned_sector_5d, 6)
-                    if aligned_symbol_sector_5d is not None
-                    and aligned_sector_5d is not None
-                    else None
-                ),
+                "feature_symbol_minus_spy_5d": symbol_minus_spy_5d,
+                "feature_sector_relative_return_5d": sector_relative_return_5d,
                 "feature_symbol_beta_20d": _date_aligned_beta(
                     history, spy_history, idx, spy_idx, 20
                 ),
@@ -2422,7 +2372,8 @@ def main() -> None:
             shutil.rmtree(final_evidence)
     decision_log = Path(args.decision_log)
     started = time.perf_counter()
-    events = read_decision_events(decision_log, limit=max(1, args.limit))
+    event_limit = max(1, args.limit) if args.limit is not None else None
+    events = read_decision_events(decision_log, limit=event_limit)
     telemetry.add("decision_log_loading", time.perf_counter() - started)
     telemetry.count("decision_events_loaded", len(events))
     telemetry.progress("decision_log_loaded", decision_events=len(events))

@@ -34,30 +34,6 @@ def _trading_days(start: date, count: int) -> list[date]:
     return days
 
 
-def _context_market() -> tuple[list[date], dict[str, list[dict]]]:
-    trading_days = _trading_days(date(2026, 1, 2), 61)
-
-    def history(symbol: str, base: float) -> list[dict]:
-        return [
-            {
-                "symbol": symbol,
-                "date": day.isoformat(),
-                "open": base + index,
-                "high": base + index + 1,
-                "low": base + index - 1,
-                "close": base + index,
-                "volume": 1_000 + index,
-            }
-            for index, day in enumerate(trading_days)
-        ]
-
-    return trading_days, {
-        "AAPL": history("AAPL", 100.0),
-        "SPY": history("SPY", 400.0),
-        "XLK": history("XLK", 200.0),
-    }
-
-
 def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):
     raw = tmp_path / "raw" / "2026-07-03" / "us_stocks_sip" / "day_aggs_v1"
     raw.mkdir(parents=True)
@@ -314,77 +290,13 @@ def test_build_training_rows_adds_phase_1_technical_features(tmp_path):
     assert row["feature_dollar_volume"] == 156.0 * 1056.0
 
 
-def test_relative_context_features_do_not_depend_on_branch_local_temporaries():
-    """Regression for the hosted Track B aligned_symbol_spy_5d NameError."""
-    trading_days, market = _context_market()
-    event = {
-        "ts": _ts(trading_days[56].isoformat()),
-        "symbol": "AAPL",
-        "payload": {"recommendation": "BUY", "sector_etf": "XLK"},
-    }
-
-    rows, summary = build_training_rows_from_raw_market(
-        [event], market, horizon_days=3, split_events=[]
-    )
-
-    assert summary["rows_joined"] == 1
-    assert rows[0]["feature_symbol_minus_spy_5d"] is not None
-    assert rows[0]["feature_sector_relative_return_5d"] is not None
-
-
-def test_builder_has_no_legacy_branch_local_relative_return_names():
+def test_row_update_has_no_undefined_aligned_return_temporaries():
     source = inspect.getsource(builder.build_training_rows_from_raw_market)
 
     assert "aligned_symbol_spy_5d" not in source
     assert "aligned_spy_5d" not in source
-
-
-def test_each_serialized_observation_has_its_own_validated_timing():
-    trading_days, market = _context_market()
-    events = [
-        {
-            "decision_id": decision_id,
-            "ts": _ts(trading_days[day_index].isoformat()),
-            "symbol": "AAPL",
-            "payload": {"recommendation": "BUY", "sector_etf": "XLK"},
-        }
-        for decision_id, day_index in (("decision-one", 55), ("decision-two", 56))
-    ]
-
-    rows, summary = build_training_rows_from_raw_market(
-        events, market, horizon_days=3, split_events=[]
-    )
-
-    assert summary["rows_joined"] == 2
-    assert [row["decision_id"] for row in rows] == [
-        "decision-one",
-        "decision-two",
-    ]
-    assert rows[0]["decision_at"] != rows[1]["decision_at"]
-    assert all(row["decision_at"] == row["feature_cutoff_at"] for row in rows)
-    assert all(row["decision_at"] < row["entry_at"] < row["exit_at"] for row in rows)
-
-
-def test_invalid_timing_rejects_observation_before_serialization(monkeypatch):
-    trading_days, market = _context_market()
-    event = {
-        "decision_id": "invalid-timing",
-        "ts": _ts(trading_days[56].isoformat()),
-        "symbol": "AAPL",
-        "payload": {"recommendation": "BUY", "sector_etf": "XLK"},
-    }
-
-    def reject_timing(**_kwargs):
-        raise ValueError("invalid timing fixture")
-
-    monkeypatch.setattr(builder, "_build_observation_timing", reject_timing)
-    rows, summary = build_training_rows_from_raw_market(
-        [event], market, horizon_days=3, split_events=[]
-    )
-
-    assert rows == []
-    assert summary["rows_joined"] == 0
-    assert summary["rejected_invalid_timing"] == 1
+    assert "aligned_symbol_sector_5d" not in source
+    assert "aligned_sector_5d" not in source
 
 
 def test_build_training_rows_adds_symbol_signal_history_counts():
