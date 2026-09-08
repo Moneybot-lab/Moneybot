@@ -365,7 +365,11 @@ def _replay_v4_features(
     idx = int(indices["symbol"])
     spy_idx = int(indices["spy"])
     sector_idx = int(indices["sector"])
-    if idx < 50 or spy_idx < 35 or sector_idx < 5:
+    # The longest symbol calculation is SMA50, which is defined at index 49.
+    # SPY needs 20 returns (index 20), while sector-relative return needs five.
+    # Keep this guard aligned with the builder's actual formula boundaries rather
+    # than rejecting otherwise complete first-eligible observations.
+    if idx < 49 or spy_idx < 20 or sector_idx < 5:
         raise ValueError("insufficient source lookback for complete replay")
     asof = symbol[idx]
     close = float(asof["close"])
@@ -580,7 +584,23 @@ def verify_observation(
                 available = pd.to_datetime(
                     action.get("available_at"), utc=True, errors="coerce"
                 )
-                if pd.isna(available) or (not pd.isna(cutoff) and available > cutoff):
+                execution_day = pd.to_datetime(
+                    action.get("execution_date"), errors="coerce"
+                )
+                market_day = pd.to_datetime(
+                    row.get("market_session_date")
+                    or row.get("feature_market_asof_date"),
+                    errors="coerce",
+                )
+                historically_effective = (
+                    not pd.isna(execution_day)
+                    and not pd.isna(market_day)
+                    and execution_day < market_day
+                )
+                if not historically_effective and (
+                    pd.isna(available)
+                    or (not pd.isna(cutoff) and available > cutoff)
+                ):
                     failures.append(f"unproven_feature_action_availability:{action_id}")
             for action_id in row.get("label_split_ids") or []:
                 if str(action_id) not in by_id:
@@ -611,7 +631,23 @@ def verify_observation(
                 available = pd.to_datetime(
                     action.get("available_at"), utc=True, errors="coerce"
                 )
-                if pd.isna(available) or (not pd.isna(cutoff) and available > cutoff):
+                execution_day = pd.to_datetime(
+                    action.get("execution_date"), errors="coerce"
+                )
+                market_day = pd.to_datetime(
+                    row.get("market_session_date")
+                    or row.get("feature_market_asof_date"),
+                    errors="coerce",
+                )
+                historically_effective = (
+                    not pd.isna(execution_day)
+                    and not pd.isna(market_day)
+                    and execution_day < market_day
+                )
+                if not historically_effective and (
+                    pd.isna(available)
+                    or (not pd.isna(cutoff) and available > cutoff)
+                ):
                     failures.append(f"unproven_feature_action_availability:{action_id}")
             for action_id in row.get("label_split_ids") or []:
                 if str(action_id) not in by_id:
