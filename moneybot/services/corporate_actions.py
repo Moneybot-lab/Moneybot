@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 CORPORATE_ACTION_SCHEMA_VERSION = "moneybot-corporate-actions.v1"
+CORPORATE_ACTION_AVAILABILITY_POLICY_VERSION = (
+    "moneybot-corporate-action-availability.v2"
+)
 # Massive represents stock dividends in the splits feed with the same explicit
 # split_from/split_to share-basis ratio. They are safe to normalize when (and
 # only when) both positive ratio fields are present, exactly like other splits.
@@ -26,7 +29,7 @@ def normalize_split(raw: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if adjustment_type not in SUPPORTED_ADJUSTMENT_TYPES:
         return None
-    return {
+    normalized = {
         "ticker": ticker,
         "execution_date": execution_date,
         "adjustment_type": adjustment_type,
@@ -36,6 +39,10 @@ def normalize_split(raw: dict[str, Any]) -> dict[str, Any] | None:
         "historical_adjustment_factor": raw.get("historical_adjustment_factor"),
         "id": str(raw.get("id") or ""),
     }
+    available_at = raw.get("available_at") or raw.get("published_at")
+    if available_at not in (None, ""):
+        normalized["available_at"] = available_at
+    return normalized
 
 
 def canonical_splits(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
