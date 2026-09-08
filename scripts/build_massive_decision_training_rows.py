@@ -897,6 +897,13 @@ def _pct(newer: float, older: float | None) -> float | None:
     return round((newer / float(older)) - 1.0, 6)
 
 
+def _optional_difference(left: float | None, right: float | None) -> float | None:
+    """Return a stable difference without relying on branch-local operands."""
+    if left is None or right is None:
+        return None
+    return round(left - right, 6)
+
+
 def _session_distance(older: date, newer: date) -> int:
     count = 0
     candidate = older
@@ -1410,15 +1417,9 @@ def build_training_rows_from_raw_market(
         # total over the optional-input domain and preserve the established
         # feature semantics: unavailable context yields None, never a fallback
         # or a forward-looking value.
-        symbol_minus_spy_5d = (
-            round(return_5d_lagged - spy_return_5d, 6)
-            if return_5d_lagged is not None and spy_return_5d is not None
-            else None
-        )
-        sector_relative_return_5d = (
-            round(return_5d_lagged - sector_return_5d, 6)
-            if return_5d_lagged is not None and sector_return_5d is not None
-            else None
+        symbol_minus_spy_5d = _optional_difference(return_5d_lagged, spy_return_5d)
+        sector_relative_return_5d = _optional_difference(
+            return_5d_lagged, sector_return_5d
         )
         event_fingerprint = hashlib.sha256(
             json.dumps(

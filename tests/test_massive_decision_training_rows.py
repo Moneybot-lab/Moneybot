@@ -1,4 +1,5 @@
 import json
+import inspect
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -329,6 +330,13 @@ def test_relative_context_features_do_not_depend_on_branch_local_temporaries():
     assert summary["rows_joined"] == 1
     assert rows[0]["feature_symbol_minus_spy_5d"] is not None
     assert rows[0]["feature_sector_relative_return_5d"] is not None
+
+
+def test_builder_has_no_legacy_branch_local_relative_return_names():
+    source = inspect.getsource(builder.build_training_rows_from_raw_market)
+
+    assert "aligned_symbol_spy_5d" not in source
+    assert "aligned_spy_5d" not in source
 
 
 def test_each_serialized_observation_has_its_own_validated_timing():
