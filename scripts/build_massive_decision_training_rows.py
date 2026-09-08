@@ -982,6 +982,53 @@ def _feature_safe_splits(
     return safe
 
 
+def _build_observation_timing(
+    *,
+    event: dict[str, Any],
+    fallback_decision_id: str,
+    symbol: str,
+    event_day: str,
+    decision_at: datetime,
+    entry_at: datetime,
+    exit_at: datetime,
+    feature_source_at: dict[str, datetime],
+    feature_split_ids: list[str],
+    label_split_ids: list[str],
+) -> AlphaAtlasV4TimingRecord:
+    """Build and validate the timing envelope before row serialization."""
+    return AlphaAtlasV4TimingRecord(
+        decision_id=str(event.get("decision_id") or fallback_decision_id),
+        symbol=symbol,
+        point_in_time_symbol_id=str(
+            event.get("point_in_time_symbol_id") or f"{symbol}:{event_day}"
+        ),
+        exchange=str(event.get("exchange") or "XNAS"),
+        trading_calendar=EXCHANGE_CALENDAR.identifier,
+        model_feature_contract_version=V4_FEATURE_CONTRACT_VERSION,
+        decision_at=decision_at,
+        feature_cutoff_at=decision_at,
+        latest_source_bar_at=feature_source_at,
+        entry_at=entry_at,
+        label_start_at=entry_at,
+        exit_at=exit_at,
+        entry_price_source="official_regular_session_open",
+        exit_price_source="official_regular_session_close",
+        data_provider_id=str(event.get("data_provider_id") or "massive-flatfile"),
+        corporate_action_adjustment_ids=tuple(
+            sorted(set(feature_split_ids + label_split_ids))
+        ),
+        staleness_status="fresh",
+        rejection_reason=None,
+        code_commit=str(event.get("code_commit") or "unrecorded-research-commit"),
+        dataset_manifest_hash=str(
+            event.get("dataset_manifest_hash") or "pending-write-manifest"
+        ),
+        transaction_cost_bps=None,
+        entry_slippage_bps=None,
+        exit_slippage_bps=None,
+    )
+
+
 def build_training_rows_from_raw_market(
     events: list[dict[str, Any]],
     market: dict[str, list[dict[str, Any]]],
@@ -1011,6 +1058,7 @@ def build_training_rows_from_raw_market(
         "rejected_stale_feature_family": 0,
         "rejected_missing_context": 0,
         "rejected_missing_entry_price": 0,
+        "rejected_invalid_timing": 0,
         "split_events_loaded": len(split_events),
         "training_rows_affected": 0,
         "feature_windows_crossing_splits": 0,
@@ -1355,9 +1403,13 @@ def build_training_rows_from_raw_market(
             else None
         )
         sector_return_5d = _lagged_return(sector_history, sector_idx, 5)
-        # Materialize both relative-return values for every observation. This
-        # avoids relying on alignment temporaries that may only be assigned in
-        # one context branch while preserving the existing None semantics.
+        # Keep relative-return operands local to this observation.  A previous
+        # hosted revision referenced an alignment temporary that was only
+        # assigned on one branch, so an otherwise valid observation could
+        # terminate the entire Track B build with NameError.  These values are
+        # total over the optional-input domain and preserve the established
+        # feature semantics: unavailable context yields None, never a fallback
+        # or a forward-looking value.
         symbol_minus_spy_5d = (
             round(return_5d_lagged - spy_return_5d, 6)
             if return_5d_lagged is not None and spy_return_5d is not None
@@ -1368,6 +1420,64 @@ def build_training_rows_from_raw_market(
             if return_5d_lagged is not None and sector_return_5d is not None
             else None
         )
+        event_fingerprint = hashlib.sha256(
+            json.dumps(
+                event, sort_keys=True, default=str, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+        event_occurrence = event_identity_counts.get(event_fingerprint, 0)
+        event_identity_counts[event_fingerprint] = event_occurrence + 1
+        fallback_decision_id = f"event_{event_fingerprint}_{event_occurrence}"
+        entry_at = EXCHANGE_CALENDAR.session_open(entry_session)
+        exit_at = EXCHANGE_CALENDAR.session_close(exit_session)
+        feature_source_at = {
+            "symbol_daily": EXCHANGE_CALENDAR.session_close(
+                date.fromisoformat(str(asof["date"]))
+            )
+        }
+        feature_availability_at = {
+            "symbol_daily": (
+                symbol_available_at.isoformat() if symbol_available_at else None
+            )
+        }
+        if spy_history and spy_idx is not None:
+            feature_source_at["spy_daily"] = EXCHANGE_CALENDAR.session_close(
+                date.fromisoformat(str(spy_history[spy_idx]["date"]))
+            )
+            feature_availability_at["spy_daily"] = (
+                spy_available_at.isoformat() if spy_available_at else None
+            )
+            feature_source_at["market_regime"] = feature_source_at["spy_daily"]
+            feature_availability_at["market_regime"] = feature_availability_at[
+                "spy_daily"
+            ]
+            feature_source_at["volatility_proxy"] = feature_source_at["spy_daily"]
+            feature_availability_at["volatility_proxy"] = feature_availability_at[
+                "spy_daily"
+            ]
+        if sector_history and sector_idx is not None:
+            feature_source_at["sector_daily"] = EXCHANGE_CALENDAR.session_close(
+                date.fromisoformat(str(sector_history[sector_idx]["date"]))
+            )
+            feature_availability_at["sector_daily"] = (
+                sector_available_at.isoformat() if sector_available_at else None
+            )
+        try:
+            timing = _build_observation_timing(
+                event=event,
+                fallback_decision_id=fallback_decision_id,
+                symbol=symbol,
+                event_day=event_day,
+                decision_at=decision_at,
+                entry_at=entry_at,
+                exit_at=exit_at,
+                feature_source_at=feature_source_at,
+                feature_split_ids=feature_split_ids,
+                label_split_ids=label_split_ids,
+            )
+        except ValueError:
+            summary["rejected_invalid_timing"] += 1
+            continue
         row = {
             "ts": ts,
             "decision_id": timing.decision_id,
