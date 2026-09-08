@@ -88,7 +88,7 @@ def test_replay_uses_production_date_aligned_beta_with_missing_sessions():
     )
 
 
-def test_replay_accepts_first_complete_formula_boundaries():
+def test_replay_accepts_partial_history_and_preserves_reconstructable_nulls():
     dates = pd.bdate_range("2025-10-01", periods=50)
     bars = [
         {
@@ -103,15 +103,42 @@ def test_replay_accepts_first_complete_formula_boundaries():
         for index, day in enumerate(dates)
     ]
     replayed = _replay_v4_features(
-        {"symbol": bars, "spy": bars[-21:], "sector": bars[-6:]},
+        {"symbol": bars[:6], "spy": bars[:6], "sector": bars[:6]},
         {
             "replay_engine_version": "massive-v4-feature-replay.v1",
-            "source_indices": {"symbol": 49, "spy": 20, "sector": 5},
+            "source_indices": {"symbol": 5, "spy": 5, "sector": 5},
         },
     )
-    assert replayed["feature_sma_50"] is not None
-    assert replayed["feature_market_volatility_proxy"] is not None
+    assert replayed["feature_sma_50"] is None
+    assert replayed["feature_market_volatility_proxy"] is None
     assert replayed["feature_sector_relative_return_5d"] is not None
+
+
+def test_replay_matches_shared_train_serve_price_vs_sma_calculation():
+    row_count = 20
+    bars = [
+        {
+            "symbol": "TEST",
+            "date": day.date().isoformat(),
+            "open": 100.0 + index / 7,
+            "high": 101.0 + index / 7,
+            "low": 99.0 + index / 7,
+            "close": 100.0 + index / 7,
+            "volume": 1_000_000.0 + index,
+        }
+        for index, day in enumerate(pd.bdate_range("2025-10-01", periods=row_count))
+    ]
+    replayed = _replay_v4_features(
+        {"symbol": bars, "spy": bars, "sector": bars},
+        {
+            "replay_engine_version": "massive-v4-feature-replay.v1",
+            "source_indices": {"symbol": 19, "spy": 19, "sector": 19},
+        },
+    )
+    shared = builder.build_alpha_atlas_v3_features(
+        symbol_bars=bars, spy_bars=bars, asof_date=bars[-1]["date"]
+    )
+    assert replayed["feature_price_vs_sma_20"] == shared["feature_price_vs_sma_20"]
 
 
 def test_each_walk_forward_fit_is_independent_of_later_fold():
@@ -274,6 +301,26 @@ def test_exact_reconstruction_and_fail_closed_variants(tmp_path):
     row, source = _lineage_row(tmp_path)
     row["return_5d"] = 0.5
     assert "target_mismatch" in verify_observation(row, root=tmp_path)["failures"]
+
+
+def test_exact_reconstruction_accepts_matching_null_features(tmp_path):
+    row, _ = _lineage_row(tmp_path)
+    lineage = row["reconstruction_lineage"]
+    loaded = {}
+    for source in lineage["sources"]:
+        path = tmp_path / source["path"]
+        payload = json.loads(path.read_text())
+        if source["family"] in {"symbol", "spy", "sector"}:
+            payload["rows"] = payload["rows"][:6]
+        path.write_text(json.dumps(payload, sort_keys=True))
+        source["sha256"] = sha256_file(path)
+        loaded[source["family"]] = payload
+    lineage["source_indices"] = {"symbol": 5, "spy": 5, "sector": 5}
+    row.update(_replay_v4_features(loaded, lineage))
+    row["canonical_observation_id"] = canonical_observation_id(row)
+
+    assert row["feature_sma_50"] is None
+    assert verify_observation(row, root=tmp_path)["status"] == "RECONSTRUCTABLE"
 
 
 def test_missing_context_action_and_execution_lineage_fail_closed(tmp_path):
