@@ -26,7 +26,7 @@ def normalize_split(raw: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if adjustment_type not in SUPPORTED_ADJUSTMENT_TYPES:
         return None
-    return {
+    normalized = {
         "ticker": ticker,
         "execution_date": execution_date,
         "adjustment_type": adjustment_type,
@@ -36,6 +36,10 @@ def normalize_split(raw: dict[str, Any]) -> dict[str, Any] | None:
         "historical_adjustment_factor": raw.get("historical_adjustment_factor"),
         "id": str(raw.get("id") or ""),
     }
+    available_at = raw.get("available_at") or raw.get("published_at")
+    if available_at not in (None, ""):
+        normalized["available_at"] = available_at
+    return normalized
 
 
 def canonical_splits(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
