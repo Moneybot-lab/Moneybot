@@ -1,0 +1,66 @@
+name: Recover V3.1 Benchmark Evidence
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Track B run 156
+        uses: actions/download-artifact@v5
+        with:
+          name: track-b-offline-output
+          path: recovery/input/run_156
+          repository: Moneybot-lab/Moneybot
+          run-id: '32700956267'
+          github-token: ${{ github.token }}
+
+      - name: Download Track B run 157
+        uses: actions/download-artifact@v5
+        with:
+          name: track-b-offline-output
+          path: recovery/input/run_157
+          repository: Moneybot-lab/Moneybot
+          run-id: '32820019463'
+          github-token: ${{ github.token }}
+
+      - name: Extract compact benchmark evidence
+        run: |
+          set -euo pipefail
+          python3 scripts/recover_v31_benchmark_evidence.py \
+            --run-156-dir recovery/input/run_156 \
+            --run-157-dir recovery/input/run_157 \
+            --output-dir recovery/output
+
+      - name: Write recovery summary
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path("recovery/output")
+          runs = [json.loads((root / f"run_{number}_manifest.json").read_text()) for number in (156, 157)]
+          comparison = json.loads((root / "comparison.json").read_text())
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as out:
+              out.write("# V3.1 benchmark recovery\n\n")
+              for run in runs:
+                  out.write(f"- Run #{run['run_number']} downloaded: `{run['download_status'] == 'RECOVERED'}`\n")
+                  out.write(f"- Run #{run['run_number']} model artifact found: `{run['model_artifact_found']}`\n")
+                  out.write(f"- Run #{run['run_number']} metadata found: `{run['metadata_found']}`\n")
+                  out.write(f"- Run #{run['run_number']} model SHA-256: `{run['model_artifact_sha256'] or 'NOT_FOUND'}`\n")
+              out.write(f"- Comparison status: `{comparison['status']}`\n")
+          PY
+
+      - name: Upload compact recovery evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha-atlas-v31-benchmark-recovery
+          path: recovery/output
+          if-no-files-found: error
