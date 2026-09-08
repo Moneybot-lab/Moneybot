@@ -4,6 +4,10 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from scripts.build_massive_decision_training_rows import (
+    _aligned_relative_returns,
+    _date_aligned_beta,
+    _feature_safe_splits,
+    _lagged_return,
     build_training_rows_from_raw_market,
     emit_phase0_evidence_bundle,
     load_market_history,

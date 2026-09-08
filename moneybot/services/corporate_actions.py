@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 CORPORATE_ACTION_SCHEMA_VERSION = "moneybot-corporate-actions.v1"
+CORPORATE_ACTION_AVAILABILITY_POLICY_VERSION = (
+    "moneybot-corporate-action-availability.v2"
+)
 # Massive represents stock dividends in the splits feed with the same explicit
 # split_from/split_to share-basis ratio. They are safe to normalize when (and
 # only when) both positive ratio fields are present, exactly like other splits.
