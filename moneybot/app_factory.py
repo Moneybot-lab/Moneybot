@@ -1475,7 +1475,7 @@ def create_app() -> Flask:
                 </table></div>
               </div>
               <div style="overflow-x:auto"><table style="width:100%;background:#f0fdf4;border-collapse:collapse;min-width:980px">
-                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Purchase Price</th><th style="border:1px solid #e5e7eb;padding:8px">Remaining Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Today's Gain/Loss</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Trend</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
+                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Average Purchase Price</th><th style="border:1px solid #e5e7eb;padding:8px">Remaining Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Today's Gain/Loss</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Trend</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
                 <tbody id="rows"></tbody>
               </table></div>
               <div id="tickerModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:center;justify-content:center;padding:14px">
@@ -1844,7 +1844,34 @@ def create_app() -> Flask:
               function selectPortfolioRows(data){
                 const enriched = Array.isArray(data && data.enriched_items) ? data.enriched_items : [];
                 const base = Array.isArray(data && data.items) ? data.items : [];
-                return enriched.length ? enriched : base;
+                const lots = enriched.length ? enriched : base;
+                const grouped = new Map();
+                lots.forEach((lot) => {
+                  const symbol = String(lot.symbol || '').toUpperCase();
+                  if(!symbol) return;
+                  if(!grouped.has(symbol)) grouped.set(symbol, []);
+                  grouped.get(symbol).push(lot);
+                });
+                return Array.from(grouped.values()).map((positionLots) => {
+                  const representative = positionLots[0];
+                  const shares = positionLots.reduce((sum, lot) => sum + Number(lot.shares || 0), 0);
+                  const remainingBasis = positionLots.reduce((sum, lot) => sum + (Number(lot.entry_price || 0) * Number(lot.shares || 0)), 0);
+                  const entryPrice = shares > 0 ? remainingBasis / shares : null;
+                  const currentPrice = typeof representative.current_price === 'number' ? representative.current_price : null;
+                  const performanceAmount = currentPrice === null ? null : (currentPrice * shares) - remainingBasis;
+                  const performancePercent = entryPrice && currentPrice !== null ? ((currentPrice - entryPrice) / entryPrice) * 100 : null;
+                  return {
+                    ...representative,
+                    id: representative.id,
+                    shares,
+                    entry_price: entryPrice,
+                    remaining_cost_basis: remainingBasis,
+                    performance_amount: performanceAmount,
+                    performance_percent: performancePercent,
+                    today_change_amount: positionLots.reduce((sum, lot) => sum + Number(lot.today_change_amount || 0), 0),
+                    lots: positionLots,
+                  };
+                });
               }
 
               function renderRows(items){
@@ -1864,7 +1891,7 @@ def create_app() -> Flask:
                 const totalTodayChange = items.reduce((sum, item) => sum + (typeof item.today_change_amount === 'number' ? item.today_change_amount : 0), 0);
                 const totalPerformance = items.reduce((sum, item) => sum + (typeof item.performance_amount === 'number' ? item.performance_amount : 0), 0);
 
-                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${livePriceCell(i)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:6px;background:#000;min-width:172px"><div id="trend-${idx}" style="width:160px;height:44px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="editRow(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Edit</button></div></td></tr>`).join('')
+                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}<small style="display:block;color:#4d7c0f">${(i.lots || [i]).length} acquisition lot${(i.lots || [i]).length === 1 ? '' : 's'}</small></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${livePriceCell(i)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:6px;background:#000;min-width:172px"><div id="trend-${idx}" style="width:160px;height:44px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="editRow(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Edit</button></div></td></tr>`).join('')
                 + `<tr style="background:#f7fee7;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px;color:#3f3f46;font-size:12px">Click advice badges to see why.</td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
                 items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || [], item.current_price, item.history30_bars || []));
               }
@@ -2009,10 +2036,23 @@ def create_app() -> Flask:
               }
 
               async function markSold(id){
-                const item = currentPortfolioItems.find((entry)=> entry.id === id);
-                if(!item){
+                const position = currentPortfolioItems.find((entry)=> entry.id === id);
+                if(!position){
                   outEl.textContent = 'Unable to find portfolio item.';
                   return;
+                }
+                const openLots = Array.isArray(position.lots) && position.lots.length ? position.lots : [position];
+                let item = openLots[0];
+                if(openLots.length > 1){
+                  const choices = openLots.map((lot, index) => `${index + 1}: ${displayValue(lot.shares)} shares @ ${formatMoney(lot.entry_price)} (${formatDate(lot.created_at)})`).join('\\n');
+                  const selectedRaw = prompt(`Choose the ${position.symbol} lot to sell from:\\n${choices}`, '1');
+                  if(selectedRaw === null) return;
+                  const selectedIndex = Number(selectedRaw) - 1;
+                  if(!Number.isInteger(selectedIndex) || selectedIndex < 0 || selectedIndex >= openLots.length){
+                    outEl.textContent = 'Choose a valid acquisition lot number.';
+                    return;
+                  }
+                  item = openLots[selectedIndex];
                 }
                 const soldPriceRaw = prompt(`Sale price for ${item.symbol} (lot bought ${formatDate(item.created_at)} at ${formatMoney(item.entry_price)}):`, item.current_price ?? '');
                 if(soldPriceRaw === null) return;
@@ -2034,7 +2074,7 @@ def create_app() -> Flask:
                 if(soldAt === null) return;
                 const expected = (soldPrice - Number(item.entry_price || 0)) * sharesSold;
                 if(!confirm(`Expected realized gain/loss: ${formatMoney(expected)}. Record this sale?`)) return;
-                const res = await apiFetch('/api/user-watchlist/' + id + '/sell', {
+                const res = await apiFetch('/api/user-watchlist/' + item.id + '/sell', {
                   method:'POST',
                   headers:{'Content-Type':'application/json'},
                   body:JSON.stringify({ sold_price:soldPrice, shares_sold:sharesSold , sold_at:soldAt })
@@ -2066,7 +2106,7 @@ def create_app() -> Flask:
                   return;
                 }
 
-                const sharesRaw = prompt(`How many shares of ${item.symbol} did you buy? (Current: ${displayValue(item.shares)})`);
+                const sharesRaw = prompt(`How many shares of ${item.symbol} did you buy? (Position currently owns: ${displayValue(item.shares)})`);
                 if(sharesRaw === null) return;
                 const sharesBought = Number(sharesRaw);
                 if(!Number.isFinite(sharesBought) || sharesBought <= 0){
