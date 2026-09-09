@@ -420,6 +420,9 @@ def test_portfolio_page_uses_base_items_when_enrichment_is_empty(monkeypatch):
     assert "function selectPortfolioRows(data)" in body
     assert "return enriched.length ? enriched : base;" in body
     assert "Portfolio data did not load completely. Please refresh in a moment." in body
+    assert "Adding purchase lot…" in body
+    assert "Purchase lot added successfully." in body
+    assert "res.json().catch(() => ({}))" in body
 
 
 def test_create_app_reads_personalization_rollout_settings(monkeypatch):
