@@ -145,6 +145,40 @@ def _ensure_notification_trigger_schema() -> None:
         )
     db.session.commit()
 
+
+def _ensure_portfolio_ledger_schema() -> None:
+    """Non-destructively bridge databases created before the ledger migration.
+
+    Alembic remains the authoritative migration path; this compatibility step
+    matches the application's existing create-all startup strategy.
+    """
+    inspector = db.inspect(db.engine)
+    tables = set(inspector.get_table_names())
+    if "watchlist_items" not in tables or "sold_trades" not in tables:
+        return
+    lot_columns = {column["name"] for column in inspector.get_columns("watchlist_items")}
+    if "original_shares" not in lot_columns:
+        db.session.execute(db.text("ALTER TABLE watchlist_items ADD COLUMN original_shares NUMERIC(16, 6)"))
+    sale_columns = {column["name"] for column in inspector.get_columns("sold_trades")}
+    additions = {
+        "source_lot_id": "INTEGER",
+        "gross_proceeds": "NUMERIC(22, 6)",
+        "assigned_cost_basis": "NUMERIC(22, 6)",
+        "acquired_at": "TIMESTAMP",
+        "created_at": "TIMESTAMP",
+        "updated_at": "TIMESTAMP",
+    }
+    for name, sql_type in additions.items():
+        if name not in sale_columns:
+            db.session.execute(db.text(f"ALTER TABLE sold_trades ADD COLUMN {name} {sql_type}"))
+    db.session.execute(db.text("UPDATE watchlist_items SET original_shares=shares WHERE original_shares IS NULL"))
+    db.session.execute(db.text(
+        "UPDATE sold_trades SET gross_proceeds=COALESCE(gross_proceeds,sold_price*shares_sold), "
+        "assigned_cost_basis=COALESCE(assigned_cost_basis,entry_price*shares_sold), "
+        "created_at=COALESCE(created_at,sold_at), updated_at=COALESCE(updated_at,sold_at)"
+    ))
+    db.session.commit()
+
     db.session.execute(
         db.text(
             "UPDATE notification_trigger_preferences SET "
