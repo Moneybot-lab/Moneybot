@@ -68,14 +68,14 @@ class WatchlistItem(db.Model):
     symbol = db.Column(db.String(16), nullable=False, index=True)
     company = db.Column(db.String(255), nullable=True)
     buy_price = db.Column(db.Numeric(16, 4), nullable=True)
+    # ``shares`` is the remaining quantity.  Keeping the original quantity on
+    # the acquisition lot makes the ledger invariant independently auditable.
     shares = db.Column(db.Numeric(16, 6), nullable=True)
+    original_shares = db.Column(db.Numeric(16, 6), nullable=True)
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     user = db.relationship("User", back_populates="watchlist_items")
-
-    __table_args__ = (
-        db.UniqueConstraint("user_id", "symbol", name="uq_watchlist_user_symbol"),
-    )
+    sales = db.relationship("SoldTrade", back_populates="source_lot", lazy=True)
 
 
 class SoldTrade(db.Model):
@@ -83,14 +83,21 @@ class SoldTrade(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    source_lot_id = db.Column(db.Integer, db.ForeignKey("watchlist_items.id"), nullable=True, index=True)
     symbol = db.Column(db.String(16), nullable=False, index=True)
     shares_sold = db.Column(db.Numeric(16, 6), nullable=False)
     sold_price = db.Column(db.Numeric(16, 4), nullable=False)
     entry_price = db.Column(db.Numeric(16, 4), nullable=False)
     realized_amount = db.Column(db.Numeric(16, 4), nullable=False)
+    gross_proceeds = db.Column(db.Numeric(22, 6), nullable=True)
+    assigned_cost_basis = db.Column(db.Numeric(22, 6), nullable=True)
+    acquired_at = db.Column(db.DateTime, nullable=True)
     sold_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     user = db.relationship("User", back_populates="sold_trades")
+    source_lot = db.relationship("WatchlistItem", back_populates="sales")
 
 
 class FcmDeviceToken(db.Model):

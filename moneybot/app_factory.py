@@ -161,6 +161,50 @@ def _ensure_notification_trigger_schema() -> None:
     db.session.commit()
 
 
+def _ensure_portfolio_ledger_schema() -> None:
+    """Non-destructively bridge databases created before the ledger migration.
+
+    Alembic remains the authoritative migration path; this compatibility step
+    matches the application's existing create-all startup strategy.
+    """
+    inspector = db.inspect(db.engine)
+    tables = set(inspector.get_table_names())
+    if "watchlist_items" not in tables or "sold_trades" not in tables:
+        return
+    # Hosted PostgreSQL databases may already be stamped past the original
+    # repair migration while still retaining the old constraint.  Remove it
+    # idempotently at startup as well as through Alembic.  This DDL is safe
+    # across concurrent web workers because IF EXISTS is used.
+    if db.engine.dialect.name == "postgresql":
+        db.session.execute(db.text(
+            "ALTER TABLE watchlist_items "
+            "DROP CONSTRAINT IF EXISTS uq_watchlist_user_symbol"
+        ))
+        db.session.commit()
+    lot_columns = {column["name"] for column in inspector.get_columns("watchlist_items")}
+    if "original_shares" not in lot_columns:
+        db.session.execute(db.text("ALTER TABLE watchlist_items ADD COLUMN original_shares NUMERIC(16, 6)"))
+    sale_columns = {column["name"] for column in inspector.get_columns("sold_trades")}
+    additions = {
+        "source_lot_id": "INTEGER",
+        "gross_proceeds": "NUMERIC(22, 6)",
+        "assigned_cost_basis": "NUMERIC(22, 6)",
+        "acquired_at": "TIMESTAMP",
+        "created_at": "TIMESTAMP",
+        "updated_at": "TIMESTAMP",
+    }
+    for name, sql_type in additions.items():
+        if name not in sale_columns:
+            db.session.execute(db.text(f"ALTER TABLE sold_trades ADD COLUMN {name} {sql_type}"))
+    db.session.execute(db.text("UPDATE watchlist_items SET original_shares=shares WHERE original_shares IS NULL"))
+    db.session.execute(db.text(
+        "UPDATE sold_trades SET gross_proceeds=COALESCE(gross_proceeds,sold_price*shares_sold), "
+        "assigned_cost_basis=COALESCE(assigned_cost_basis,entry_price*shares_sold), "
+        "created_at=COALESCE(created_at,sold_at), updated_at=COALESCE(updated_at,sold_at)"
+    ))
+    db.session.commit()
+
+
 def _parse_symbol_set(raw: str | None) -> set[str]:
     return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
 
@@ -588,6 +632,7 @@ def create_app() -> Flask:
         db.create_all()
         _ensure_user_profile_schema()
         _ensure_notification_trigger_schema()
+        _ensure_portfolio_ledger_schema()
 
     @app.get("/")
     @app.get("/index.html")
@@ -1371,9 +1416,17 @@ def create_app() -> Flask:
                 <input id="symbol" placeholder="AAPL" required autocapitalize="characters" style="text-transform:uppercase" />
                 <input id="buy_price" type="number" step="0.01" placeholder="buy price"/>
                 <input id="shares" type="number" step="0.0001" placeholder="shares"/>
+                <input id="acquired_date" type="date" title="Acquisition date"/>
                 <button type="submit" style="border:none;background:#16a34a;color:#f0fdf4;padding:9px 14px;border-radius:8px;font-weight:700;cursor:pointer">Add</button>
               </form>
               <div id="out" style="margin:10px 0;color:#166534"></div>
+              <section aria-label="Portfolio accounting summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin:12px 0">
+                <div style="background:#dcfce7;padding:10px;border-radius:8px"><small>Current Market Value</small><strong id="currentMarketValue" style="display:block">$0.00</strong></div>
+                <div style="background:#dcfce7;padding:10px;border-radius:8px"><small>Remaining Cost Basis</small><strong id="remainingCostBasis" style="display:block">$0.00</strong></div>
+                <div style="background:#dcfce7;padding:10px;border-radius:8px"><small>Unrealized Gain/Loss</small><strong id="unrealizedPnl" style="display:block">$0.00</strong></div>
+                <div style="background:#dcfce7;padding:10px;border-radius:8px"><small>Realized Gain/Loss</small><strong id="realizedPnl" style="display:block">$0.00</strong></div>
+                <div style="background:#dcfce7;padding:10px;border-radius:8px"><small>Lifetime Gain/Loss</small><strong id="lifetimePnl" style="display:block">$0.00</strong></div>
+              </section>
               <div id="portfolioLiveStatus" role="status" style="margin:0 0 12px;padding:9px 12px;border-radius:10px;background:#ecfccb;border:1px solid #bef264;color:#3f6212;font-size:13px;font-weight:700">Live prices: connecting…</div>
               <div id="loadingState" style="display:none;align-items:center;justify-content:center;gap:10px;position:fixed;top:16px;right:16px;background:rgba(236,252,203,.95);border:1px solid #bef264;border-radius:999px;padding:10px 14px;z-index:40;color:#14532d;font-weight:700;font-size:.95rem;pointer-events:none">
                 <span style="width:34px;height:34px;border:4px solid #86efac;border-top-color:#16a34a;border-radius:999px;display:inline-block;animation:spin .8s linear infinite"></span>
@@ -1388,7 +1441,7 @@ def create_app() -> Flask:
                 </table></div>
               </div>
               <div style="overflow-x:auto"><table style="width:100%;background:#f0fdf4;border-collapse:collapse;min-width:980px">
-                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Entry</th><th style="border:1px solid #e5e7eb;padding:8px">Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Today's Gain/Loss</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Trend</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
+                <thead><tr><th style="border:1px solid #e5e7eb;padding:8px">Symbol</th><th style="border:1px solid #e5e7eb;padding:8px">Average Purchase Price</th><th style="border:1px solid #e5e7eb;padding:8px">Remaining Shares</th><th style="border:1px solid #e5e7eb;padding:8px">Current Price</th><th style="border:1px solid #e5e7eb;padding:8px">Today's Gain/Loss</th><th style="border:1px solid #e5e7eb;padding:8px">Performance</th><th style="border:1px solid #e5e7eb;padding:8px">Trend</th><th style="border:1px solid #e5e7eb;padding:8px">Score</th><th style="border:1px solid #e5e7eb;padding:8px">Advice</th><th style="border:1px solid #e5e7eb;padding:8px">Action</th></tr></thead>
                 <tbody id="rows"></tbody>
               </table></div>
               <div id="tickerModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;align-items:center;justify-content:center;padding:14px">
@@ -1757,7 +1810,34 @@ def create_app() -> Flask:
               function selectPortfolioRows(data){
                 const enriched = Array.isArray(data && data.enriched_items) ? data.enriched_items : [];
                 const base = Array.isArray(data && data.items) ? data.items : [];
-                return enriched.length ? enriched : base;
+                const lots = enriched.length ? enriched : base;
+                const grouped = new Map();
+                lots.forEach((lot) => {
+                  const symbol = String(lot.symbol || '').toUpperCase();
+                  if(!symbol) return;
+                  if(!grouped.has(symbol)) grouped.set(symbol, []);
+                  grouped.get(symbol).push(lot);
+                });
+                return Array.from(grouped.values()).map((positionLots) => {
+                  const representative = positionLots[0];
+                  const shares = positionLots.reduce((sum, lot) => sum + Number(lot.shares || 0), 0);
+                  const remainingBasis = positionLots.reduce((sum, lot) => sum + (Number(lot.entry_price || 0) * Number(lot.shares || 0)), 0);
+                  const entryPrice = shares > 0 ? remainingBasis / shares : null;
+                  const currentPrice = typeof representative.current_price === 'number' ? representative.current_price : null;
+                  const performanceAmount = currentPrice === null ? null : (currentPrice * shares) - remainingBasis;
+                  const performancePercent = entryPrice && currentPrice !== null ? ((currentPrice - entryPrice) / entryPrice) * 100 : null;
+                  return {
+                    ...representative,
+                    id: representative.id,
+                    shares,
+                    entry_price: entryPrice,
+                    remaining_cost_basis: remainingBasis,
+                    performance_amount: performanceAmount,
+                    performance_percent: performancePercent,
+                    today_change_amount: positionLots.reduce((sum, lot) => sum + Number(lot.today_change_amount || 0), 0),
+                    lots: positionLots,
+                  };
+                });
               }
 
               function renderRows(items){
@@ -1777,7 +1857,7 @@ def create_app() -> Flask:
                 const totalTodayChange = items.reduce((sum, item) => sum + (typeof item.today_change_amount === 'number' ? item.today_change_amount : 0), 0);
                 const totalPerformance = items.reduce((sum, item) => sum + (typeof item.performance_amount === 'number' ? item.performance_amount : 0), 0);
 
-                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}</td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${livePriceCell(i)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:6px;background:#000;min-width:172px"><div id="trend-${idx}" style="width:160px;height:44px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="editRow(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Edit</button></div></td></tr>`).join('')
+                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}<small style="display:block;color:#4d7c0f">${(i.lots || [i]).length} acquisition lot${(i.lots || [i]).length === 1 ? '' : 's'}</small></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${livePriceCell(i)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:6px;background:#000;min-width:172px"><div id="trend-${idx}" style="width:160px;height:44px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="editRow(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Edit</button></div></td></tr>`).join('')
                 + `<tr style="background:#f7fee7;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px;color:#3f3f46;font-size:12px">Click advice badges to see why.</td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
                 items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || [], item.current_price, item.history30_bars || []));
               }
@@ -1799,6 +1879,8 @@ def create_app() -> Flask:
                     return;
                   }
                   renderRows(selectPortfolioRows(data));
+                  const summaryRes = await apiFetch('/api/portfolio-summary');
+                  if(summaryRes.ok){ const summary = await summaryRes.json(); [['currentMarketValue','current_market_value'],['remainingCostBasis','remaining_cost_basis'],['unrealizedPnl','unrealized_gain_loss'],['realizedPnl','realized_gain_loss'],['lifetimePnl','lifetime_gain_loss']].forEach(([id,key])=>{ const el=document.getElementById(id); el.textContent=formatMoney(summary[key]||0); el.style.color=amountColor(summary[key]); }); }
                   startPortfolioLive();
                   if (lifetimePanelEl.style.display !== 'none') {
                     await loadSoldTrades();
@@ -1812,15 +1894,20 @@ def create_app() -> Flask:
               }
               async function addItem(event){
                 if (event) event.preventDefault();
-                const payload = { symbol:normalizeTickerInputValue(symbolEl), buy_price:buyPriceEl.value||null, shares:sharesEl.value||null };
-                const res = await apiFetch('/api/user-watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-                const data = await res.json();
-                if (res.ok) {
-                  outEl.textContent = 'Watchlist item added.';
-                  symbolEl.value=''; buyPriceEl.value=''; sharesEl.value='';
-                  await load();
-                } else {
-                  outEl.textContent = data.error || 'Unable to add item.';
+                outEl.textContent = 'Adding purchase lot…';
+                try {
+                  const payload = { symbol:normalizeTickerInputValue(symbolEl), buy_price:buyPriceEl.value||null, shares:sharesEl.value||null, acquired_date:document.getElementById('acquired_date').value||null };
+                  const res = await apiFetch('/api/user-watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+                  const data = await res.json().catch(() => ({}));
+                  if (res.ok) {
+                    outEl.textContent = 'Purchase lot added successfully.';
+                    symbolEl.value=''; buyPriceEl.value=''; sharesEl.value=''; document.getElementById('acquired_date').value='';
+                    await load();
+                  } else {
+                    outEl.textContent = data.error || `Unable to add purchase lot (HTTP ${res.status}).`;
+                  }
+                } catch (_err) {
+                  outEl.textContent = 'Unable to add purchase lot. Check your connection and try again.';
                 }
               }
 
@@ -1915,12 +2002,25 @@ def create_app() -> Flask:
               }
 
               async function markSold(id){
-                const item = currentPortfolioItems.find((entry)=> entry.id === id);
-                if(!item){
+                const position = currentPortfolioItems.find((entry)=> entry.id === id);
+                if(!position){
                   outEl.textContent = 'Unable to find portfolio item.';
                   return;
                 }
-                const soldPriceRaw = prompt(`What price did you sell ${item.symbol} at?`);
+                const openLots = Array.isArray(position.lots) && position.lots.length ? position.lots : [position];
+                let item = openLots[0];
+                if(openLots.length > 1){
+                  const choices = openLots.map((lot, index) => `${index + 1}: ${displayValue(lot.shares)} shares @ ${formatMoney(lot.entry_price)} (${formatDate(lot.created_at)})`).join('\\n');
+                  const selectedRaw = prompt(`Choose the ${position.symbol} lot to sell from:\\n${choices}`, '1');
+                  if(selectedRaw === null) return;
+                  const selectedIndex = Number(selectedRaw) - 1;
+                  if(!Number.isInteger(selectedIndex) || selectedIndex < 0 || selectedIndex >= openLots.length){
+                    outEl.textContent = 'Choose a valid acquisition lot number.';
+                    return;
+                  }
+                  item = openLots[selectedIndex];
+                }
+                const soldPriceRaw = prompt(`Sale price for ${item.symbol} (lot bought ${formatDate(item.created_at)} at ${formatMoney(item.entry_price)}):`, item.current_price ?? '');
                 if(soldPriceRaw === null) return;
                 const soldPrice = Number(soldPriceRaw);
                 if(!Number.isFinite(soldPrice) || soldPrice <= 0){
@@ -1936,10 +2036,14 @@ def create_app() -> Flask:
                   return;
                 }
 
-                const res = await apiFetch('/api/user-watchlist/' + id + '/sell', {
+                const soldAt = prompt('Sale date (YYYY-MM-DD):', new Date().toISOString().slice(0,10));
+                if(soldAt === null) return;
+                const expected = (soldPrice - Number(item.entry_price || 0)) * sharesSold;
+                if(!confirm(`Expected realized gain/loss: ${formatMoney(expected)}. Record this sale?`)) return;
+                const res = await apiFetch('/api/user-watchlist/' + item.id + '/sell', {
                   method:'POST',
                   headers:{'Content-Type':'application/json'},
-                  body:JSON.stringify({ sold_price:soldPrice, shares_sold:sharesSold })
+                  body:JSON.stringify({ sold_price:soldPrice, shares_sold:sharesSold , sold_at:soldAt })
                 });
                 const data = await res.json();
                 if(!res.ok){
@@ -1968,7 +2072,7 @@ def create_app() -> Flask:
                   return;
                 }
 
-                const sharesRaw = prompt(`How many shares of ${item.symbol} did you buy? (Current: ${displayValue(item.shares)})`);
+                const sharesRaw = prompt(`How many shares of ${item.symbol} did you buy? (Position currently owns: ${displayValue(item.shares)})`);
                 if(sharesRaw === null) return;
                 const sharesBought = Number(sharesRaw);
                 if(!Number.isFinite(sharesBought) || sharesBought <= 0){
@@ -1976,21 +2080,26 @@ def create_app() -> Flask:
                   return;
                 }
 
-                const res = await apiFetch('/api/user-watchlist/' + id + '/buy', {
-                  method:'POST',
-                  headers:{'Content-Type':'application/json'},
-                  body:JSON.stringify({ bought_price:boughtPrice, shares_bought:sharesBought })
-                });
-                const data = await res.json();
-                if(!res.ok){
-                  outEl.textContent = data.error || 'Unable to record buy trade.';
-                  return;
+                outEl.textContent = 'Adding purchase lot…';
+                try {
+                  const res = await apiFetch('/api/user-watchlist/' + id + '/buy', {
+                    method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({ bought_price:boughtPrice, shares_bought:sharesBought })
+                  });
+                  const data = await res.json().catch(() => ({}));
+                  if(!res.ok){
+                    outEl.textContent = data.error || `Unable to add purchase lot (HTTP ${res.status}).`;
+                    return;
+                  }
+                  const lotPrice = data.added && typeof data.added.bought_price === 'number' ? data.added.bought_price : null;
+                  outEl.textContent = lotPrice === null
+                    ? 'Purchase lot added successfully.'
+                    : `Purchase lot added successfully at ${formatMoney(lotPrice)} per share.`;
+                  await load();
+                } catch (_err) {
+                  outEl.textContent = 'Unable to add purchase lot. Check your connection and try again.';
                 }
-                const newEntry = data.added && typeof data.added.new_entry_price === 'number' ? data.added.new_entry_price : null;
-                outEl.textContent = newEntry === null
-                  ? 'Buy trade recorded.'
-                  : `Buy trade recorded (new avg entry ${formatMoney(newEntry)}).`;
-                await load();
               }
 
               async function del(id){

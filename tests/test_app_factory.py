@@ -418,8 +418,16 @@ def test_portfolio_page_uses_base_items_when_enrichment_is_empty(monkeypatch):
     assert res.status_code == 200
     body = res.get_data(as_text=True)
     assert "function selectPortfolioRows(data)" in body
-    assert "return enriched.length ? enriched : base;" in body
+    assert "const lots = enriched.length ? enriched : base;" in body
     assert "Portfolio data did not load completely. Please refresh in a moment." in body
+    assert "Adding purchase lot…" in body
+    assert "Purchase lot added successfully." in body
+    assert "res.json().catch(() => ({}))" in body
+    assert "remainingBasis / shares" in body
+    assert "Average Purchase Price" in body
+    assert "Choose the ${position.symbol} lot to sell from" in body
+    assert "'/sell'" in body and "item.id + '/sell'" in body
+    assert "Position currently owns" in body
 
 
 def test_create_app_reads_personalization_rollout_settings(monkeypatch):

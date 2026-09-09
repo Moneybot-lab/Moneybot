@@ -1622,7 +1622,7 @@ def test_user_watchlist_returns_rows_with_quote_and_history_enrichment():
     assert {item["history30_source"] for item in payload["enriched_items"]} == {"test_history"}
 
 
-def test_user_watchlist_duplicate_symbol_points_to_buy_action():
+def test_user_watchlist_duplicate_symbol_creates_distinct_acquisition_lot():
     client = _client()
     signup = client.post("/api/auth/signup", json=_signup_payload("duplicate@b.com"))
     assert signup.status_code == 201
@@ -1630,10 +1630,10 @@ def test_user_watchlist_duplicate_symbol_points_to_buy_action():
     assert add.status_code == 201
 
     duplicate = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 110, "shares": 2})
-    assert duplicate.status_code == 409
-    assert duplicate.get_json()["error"] == (
-        "Symbol already exists in portfolio. Click Buy in the Action column to add more shares."
-    )
+    assert duplicate.status_code == 201
+    lots = client.get("/api/portfolio-lots").get_json()["items"]
+    assert len(lots) == 2
+    assert {(lot["entry_price"], lot["original_shares"]) for lot in lots} == {(100.0, 1.0), (110.0, 2.0)}
 
 
 def test_forgot_password_returns_generic_success_message():
@@ -1807,7 +1807,7 @@ def test_update_sold_trade_restores_position_after_all_shares_were_sold():
     assert watchlist.status_code == 200
     assert watchlist.get_json()["items"][0]["shares"] == 2.0
 
-def test_buy_watchlist_item_increases_shares_and_recalculates_entry_price():
+def test_buy_watchlist_item_creates_a_new_specific_cost_basis_lot():
     client = _client()
     signup = client.post("/api/auth/signup", json=_signup_payload("buy@b.com"))
     assert signup.status_code == 201
@@ -1819,9 +1819,84 @@ def test_buy_watchlist_item_increases_shares_and_recalculates_entry_price():
     buy = client.post(f"/api/user-watchlist/{item_id}/buy", json={"bought_price": 130, "shares_bought": 5})
     assert buy.status_code == 200
     payload = buy.get_json()
-    assert payload["item"]["shares"] == 15.0
-    assert payload["item"]["entry_price"] == 110.0
-    assert payload["added"]["new_entry_price"] == 110.0
+    assert payload["item"]["shares"] == 5.0
+    assert payload["item"]["entry_price"] == 130.0
+    assert payload["added"]["new_entry_price"] == 130.0
+    lots = client.get("/api/portfolio-lots").get_json()["items"]
+    assert {(lot["entry_price"], lot["shares"]) for lot in lots} == {(100.0, 10.0), (130.0, 5.0)}
+
+
+def test_specific_lot_multiple_sales_and_accounting_invariants():
+    client = _client()
+    assert client.post("/api/auth/signup", json=_signup_payload("ledger@b.com")).status_code == 201
+    low = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 10}).get_json()["item"]
+    high = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 150, "shares": 20}).get_json()["item"]
+
+    first = client.post(f"/api/user-watchlist/{high['id']}/sell", json={"sold_price": 140, "shares_sold": 5})
+    second = client.post(f"/api/user-watchlist/{high['id']}/sell", json={"sold_price": 170, "shares_sold": 5})
+    assert first.status_code == second.status_code == 200
+    assert first.get_json()["sold_trade"]["realized_amount"] == -50.0
+    assert second.get_json()["sold_trade"]["realized_amount"] == 100.0
+
+    lots = {lot["id"]: lot for lot in client.get("/api/portfolio-lots").get_json()["items"]}
+    assert lots[low["id"]]["shares"] == 10.0
+    assert lots[high["id"]]["original_shares"] == 20.0
+    assert lots[high["id"]]["shares_sold"] == 10.0
+    assert lots[high["id"]]["shares"] == 10.0
+    assert lots[high["id"]]["status"] == "PARTIAL"
+    history = client.get("/api/sold-trades").get_json()
+    assert history["total_realized"] == 50.0
+    assert history["realized_by_ticker"] == {"AAPL": 50.0}
+    for sale in history["items"]:
+        assert sale["gross_proceeds"] - sale["assigned_cost_basis"] == sale["realized_amount"]
+
+
+def test_closed_then_rebought_preserves_realized_and_lifetime_pnl():
+    client = _client()
+    client.post("/api/auth/signup", json=_signup_payload("rebuy@b.com"))
+    old = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 10}).get_json()["item"]
+    assert client.post(f"/api/user-watchlist/{old['id']}/sell", json={"sold_price": 120, "shares_sold": 10}).status_code == 200
+    new = client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 140, "shares": 10})
+    assert new.status_code == 201
+
+    active = client.get("/api/user-watchlist?skip_market_data=1").get_json()["items"]
+    assert len(active) == 1 and active[0]["entry_price"] == 140.0
+    lots = client.get("/api/portfolio-lots").get_json()["items"]
+    assert {lot["status"] for lot in lots} == {"OPEN", "CLOSED"}
+    summary = client.get("/api/portfolio-summary").get_json()
+    # Test quote is $150.25: $200 realized + $102.50 unrealized.
+    assert summary["realized_gain_loss"] == 200.0
+    assert summary["unrealized_gain_loss"] == 102.5
+    assert summary["lifetime_gain_loss"] == 302.5
+    assert summary["position_totals"][0]["open_shares"] == 10.0
+
+
+def test_full_lot_loss_is_closed_and_historical_sale_date_is_retained():
+    client = _client()
+    client.post("/api/auth/signup", json=_signup_payload("loss@b.com"))
+    lot = client.post("/api/user-watchlist", json={
+        "symbol": "TSLA", "buy_price": 180, "shares": 10, "acquired_date": "2026-01-02",
+    }).get_json()["item"]
+    sale = client.post(f"/api/user-watchlist/{lot['id']}/sell", json={
+        "sold_price": 150, "shares_sold": 10, "sold_at": "2026-02-03",
+    })
+    assert sale.status_code == 200
+    assert sale.get_json()["sold_trade"]["realized_amount"] == -300.0
+    assert sale.get_json()["sold_trade"]["sold_at"].startswith("2026-02-03")
+    closed = client.get("/api/portfolio-lots").get_json()["items"][0]
+    assert closed["shares"] == 0.0 and closed["status"] == "CLOSED"
+
+
+def test_sale_is_lot_owner_scoped():
+    owner = _client()
+    app = owner.application
+    intruder = app.test_client()
+    owner.post("/api/auth/signup", json=_signup_payload("owner-lot@b.com"))
+    lot_id = owner.post("/api/user-watchlist", json={"symbol": "MSFT", "buy_price": 100, "shares": 1}).get_json()["item"]["id"]
+    intruder.post("/api/auth/signup", json=_signup_payload("intruder-lot@b.com"))
+    response = intruder.post(f"/api/user-watchlist/{lot_id}/sell", json={"sold_price": 120, "shares_sold": 1})
+    assert response.status_code == 404
+    assert owner.get("/api/portfolio-lots").get_json()["items"][0]["shares"] == 1.0
 
 
 def test_buy_watchlist_item_validates_positive_inputs():
