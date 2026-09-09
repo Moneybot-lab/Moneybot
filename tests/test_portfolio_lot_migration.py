@@ -34,7 +34,9 @@ def test_upgrade_removes_legacy_symbol_unique_after_startup_backfill(tmp_path):
                 sold_at DATETIME NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id)
             );
             CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY);
-            INSERT INTO alembic_version VALUES ('20260908_01');
+            -- Simulate the affected deployment: the first repair revision was
+            -- stamped as complete but the uniqueness constraint remained.
+            INSERT INTO alembic_version VALUES ('20260909_01');
             INSERT INTO users VALUES (1,'Test','test','test@example.com','x',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
             INSERT INTO watchlist_items VALUES (1,1,'AAPL',NULL,100,10,CURRENT_TIMESTAMP);
             """
@@ -64,4 +66,4 @@ def test_upgrade_removes_legacy_symbol_unique_after_startup_backfill(tmp_path):
         assert connection.execute(
             "SELECT COUNT(*) FROM watchlist_items WHERE user_id=1 AND symbol='AAPL'"
         ).fetchone()[0] == 2
-        assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "20260909_01"
+        assert connection.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "20260910_01"

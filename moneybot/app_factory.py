@@ -205,6 +205,16 @@ def _ensure_portfolio_ledger_schema() -> None:
     tables = set(inspector.get_table_names())
     if "watchlist_items" not in tables or "sold_trades" not in tables:
         return
+    # Hosted PostgreSQL databases may already be stamped past the original
+    # repair migration while still retaining the old constraint.  Remove it
+    # idempotently at startup as well as through Alembic.  This DDL is safe
+    # across concurrent web workers because IF EXISTS is used.
+    if db.engine.dialect.name == "postgresql":
+        db.session.execute(db.text(
+            "ALTER TABLE watchlist_items "
+            "DROP CONSTRAINT IF EXISTS uq_watchlist_user_symbol"
+        ))
+        db.session.commit()
     lot_columns = {column["name"] for column in inspector.get_columns("watchlist_items")}
     if "original_shares" not in lot_columns:
         db.session.execute(db.text("ALTER TABLE watchlist_items ADD COLUMN original_shares NUMERIC(16, 6)"))

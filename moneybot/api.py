@@ -1818,7 +1818,7 @@ def add_watchlist_item():
         db.session.rollback()
         logging.exception("Unable to create portfolio acquisition lot")
         return jsonify({
-            "error": "Unable to add this lot because the portfolio database migration has not completed.",
+            "error": "Unable to save this purchase lot. Please retry; if it continues, contact support.",
             "request_id": g.request_id,
         }), 409
     return jsonify({"item": _watchlist_item_payload(item), "request_id": g.request_id}), 201
@@ -1969,7 +1969,7 @@ def buy_watchlist_item(item_id: int):
         db.session.rollback()
         logging.exception("Unable to create additional portfolio acquisition lot")
         return jsonify({
-            "error": "Unable to add this lot because the portfolio database migration has not completed.",
+            "error": "Unable to save this purchase lot. Please retry; if it continues, contact support.",
             "request_id": g.request_id,
         }), 409
 
