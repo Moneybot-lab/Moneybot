@@ -11,7 +11,7 @@ services:
     buildCommand: bash scripts/render_build.sh
     startCommand: |
       if [ -d migrations ]; then
-        flask --app app:app db upgrade || echo "Migration step failed; starting web server anyway."
+        flask --app app:app db upgrade
       else
         echo "No migrations directory found; skipping database migration step."
       fi

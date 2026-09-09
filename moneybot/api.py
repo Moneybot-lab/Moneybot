@@ -1812,7 +1812,15 @@ def add_watchlist_item():
         except ValueError:
             return jsonify({"error": "acquired_date must be YYYY-MM-DD", "request_id": g.request_id}), 400
     db.session.add(item)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        logging.exception("Unable to create portfolio acquisition lot")
+        return jsonify({
+            "error": "Unable to add this lot because the portfolio database migration has not completed.",
+            "request_id": g.request_id,
+        }), 409
     return jsonify({"item": _watchlist_item_payload(item), "request_id": g.request_id}), 201
 
 
@@ -1955,7 +1963,15 @@ def buy_watchlist_item(item_id: int):
     new_lot = WatchlistItem(user_id=session["user_id"], symbol=item.symbol, company=item.company,
                             buy_price=bought_price, shares=shares_bought, original_shares=shares_bought)
     db.session.add(new_lot)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        logging.exception("Unable to create additional portfolio acquisition lot")
+        return jsonify({
+            "error": "Unable to add this lot because the portfolio database migration has not completed.",
+            "request_id": g.request_id,
+        }), 409
 
     return jsonify(
         {

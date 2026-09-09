@@ -195,6 +195,40 @@ def _ensure_portfolio_ledger_schema() -> None:
     db.session.commit()
 
 
+def _ensure_portfolio_ledger_schema() -> None:
+    """Non-destructively bridge databases created before the ledger migration.
+
+    Alembic remains the authoritative migration path; this compatibility step
+    matches the application's existing create-all startup strategy.
+    """
+    inspector = db.inspect(db.engine)
+    tables = set(inspector.get_table_names())
+    if "watchlist_items" not in tables or "sold_trades" not in tables:
+        return
+    lot_columns = {column["name"] for column in inspector.get_columns("watchlist_items")}
+    if "original_shares" not in lot_columns:
+        db.session.execute(db.text("ALTER TABLE watchlist_items ADD COLUMN original_shares NUMERIC(16, 6)"))
+    sale_columns = {column["name"] for column in inspector.get_columns("sold_trades")}
+    additions = {
+        "source_lot_id": "INTEGER",
+        "gross_proceeds": "NUMERIC(22, 6)",
+        "assigned_cost_basis": "NUMERIC(22, 6)",
+        "acquired_at": "TIMESTAMP",
+        "created_at": "TIMESTAMP",
+        "updated_at": "TIMESTAMP",
+    }
+    for name, sql_type in additions.items():
+        if name not in sale_columns:
+            db.session.execute(db.text(f"ALTER TABLE sold_trades ADD COLUMN {name} {sql_type}"))
+    db.session.execute(db.text("UPDATE watchlist_items SET original_shares=shares WHERE original_shares IS NULL"))
+    db.session.execute(db.text(
+        "UPDATE sold_trades SET gross_proceeds=COALESCE(gross_proceeds,sold_price*shares_sold), "
+        "assigned_cost_basis=COALESCE(assigned_cost_basis,entry_price*shares_sold), "
+        "created_at=COALESCE(created_at,sold_at), updated_at=COALESCE(updated_at,sold_at)"
+    ))
+    db.session.commit()
+
+
 def _parse_symbol_set(raw: str | None) -> set[str]:
     return {token.strip().upper() for token in str(raw or "").split(",") if token.strip()}
 
@@ -1857,15 +1891,20 @@ def create_app() -> Flask:
               }
               async function addItem(event){
                 if (event) event.preventDefault();
-                const payload = { symbol:normalizeTickerInputValue(symbolEl), buy_price:buyPriceEl.value||null, shares:sharesEl.value||null, acquired_date:document.getElementById('acquired_date').value||null };
-                const res = await apiFetch('/api/user-watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-                const data = await res.json();
-                if (res.ok) {
-                  outEl.textContent = 'Watchlist item added.';
-                  symbolEl.value=''; buyPriceEl.value=''; sharesEl.value='';
-                  await load();
-                } else {
-                  outEl.textContent = data.error || 'Unable to add item.';
+                outEl.textContent = 'Adding purchase lot…';
+                try {
+                  const payload = { symbol:normalizeTickerInputValue(symbolEl), buy_price:buyPriceEl.value||null, shares:sharesEl.value||null, acquired_date:document.getElementById('acquired_date').value||null };
+                  const res = await apiFetch('/api/user-watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+                  const data = await res.json().catch(() => ({}));
+                  if (res.ok) {
+                    outEl.textContent = 'Purchase lot added successfully.';
+                    symbolEl.value=''; buyPriceEl.value=''; sharesEl.value=''; document.getElementById('acquired_date').value='';
+                    await load();
+                  } else {
+                    outEl.textContent = data.error || `Unable to add purchase lot (HTTP ${res.status}).`;
+                  }
+                } catch (_err) {
+                  outEl.textContent = 'Unable to add purchase lot. Check your connection and try again.';
                 }
               }
 
@@ -2025,21 +2064,26 @@ def create_app() -> Flask:
                   return;
                 }
 
-                const res = await apiFetch('/api/user-watchlist/' + id + '/buy', {
-                  method:'POST',
-                  headers:{'Content-Type':'application/json'},
-                  body:JSON.stringify({ bought_price:boughtPrice, shares_bought:sharesBought })
-                });
-                const data = await res.json();
-                if(!res.ok){
-                  outEl.textContent = data.error || 'Unable to record buy trade.';
-                  return;
+                outEl.textContent = 'Adding purchase lot…';
+                try {
+                  const res = await apiFetch('/api/user-watchlist/' + id + '/buy', {
+                    method:'POST',
+                    headers:{'Content-Type':'application/json'},
+                    body:JSON.stringify({ bought_price:boughtPrice, shares_bought:sharesBought })
+                  });
+                  const data = await res.json().catch(() => ({}));
+                  if(!res.ok){
+                    outEl.textContent = data.error || `Unable to add purchase lot (HTTP ${res.status}).`;
+                    return;
+                  }
+                  const lotPrice = data.added && typeof data.added.bought_price === 'number' ? data.added.bought_price : null;
+                  outEl.textContent = lotPrice === null
+                    ? 'Purchase lot added successfully.'
+                    : `Purchase lot added successfully at ${formatMoney(lotPrice)} per share.`;
+                  await load();
+                } catch (_err) {
+                  outEl.textContent = 'Unable to add purchase lot. Check your connection and try again.';
                 }
-                const newEntry = data.added && typeof data.added.new_entry_price === 'number' ? data.added.new_entry_price : null;
-                outEl.textContent = newEntry === null
-                  ? 'Buy trade recorded.'
-                  : `Buy trade recorded (new avg entry ${formatMoney(newEntry)}).`;
-                await load();
               }
 
               async function del(id){
