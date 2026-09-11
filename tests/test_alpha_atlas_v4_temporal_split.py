@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import random
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
 from moneybot.services.alpha_atlas_v4_temporal_split import (
     NO_CANDIDATE_STATUS,
     TemporalSplitDataError,
+    plan_v4_walk_forward_folds,
     plan_v4_temporal_split,
     validate_split_plan,
 )
@@ -246,3 +247,109 @@ def test_challenger_consumes_exact_frozen_v4_plan(tmp_path):
         manifest["temporal_validation_policy"]["split_input_sha256"]
         == result.plan["input_sha256"]
     )
+
+
+def test_v4_walk_forward_is_grouped_deterministic_and_holdout_isolated():
+    rows = _dataset(days=24, rows_per_day=3)
+    development_ids = {row["canonical_observation_id"] for row in rows[: 18 * 3]}
+    holdout_ids = {row["canonical_observation_id"] for row in rows} - development_ids
+
+    expected = plan_v4_walk_forward_folds(rows, development_ids=development_ids)
+    shuffled = list(rows)
+    random.Random(91).shuffle(shuffled)
+    actual = plan_v4_walk_forward_folds(shuffled, development_ids=development_ids)
+
+    holdout_changed = [
+        (
+            {
+                **row,
+                "label_up_5d": 1 - row["label_up_5d"],
+                "return_5d": -row["return_5d"],
+                "feature_close": 1_000_000.0,
+            }
+            if row["canonical_observation_id"] in holdout_ids
+            else row
+        )
+        for row in rows
+    ]
+    changed = plan_v4_walk_forward_folds(
+        holdout_changed, development_ids=development_ids
+    )
+
+    assert actual == expected
+    assert changed == expected
+    assert expected
+    for fold in expected:
+        members = set(fold["train_ids"]) | set(fold["validation_ids"])
+        assert not members & holdout_ids
+        assert fold["final_holdout_overlap_count"] == 0
+        for session in _sessions(18):
+            group = {f"obs-{session.isoformat()}-{index}" for index in range(3)}
+            assert not (
+                group & set(fold["train_ids"]) and group - set(fold["train_ids"])
+            )
+            assert not (
+                group & set(fold["validation_ids"])
+                and group - set(fold["validation_ids"])
+            )
+
+
+def test_v4_walk_forward_purges_same_day_exit_and_decision_to_entry_overlap():
+    rows = _dataset(days=18, rows_per_day=2)
+    ids = {row["canonical_observation_id"] for row in rows}
+    baseline = plan_v4_walk_forward_folds(rows, development_ids=ids, embargo_sessions=0)
+    first = baseline[0]
+    validation = next(
+        row
+        for row in rows
+        if row["canonical_observation_id"] in first["validation_ids"]
+    )
+    decision = datetime.fromisoformat(validation["decision_at"])
+    entry = datetime.fromisoformat(validation["entry_at"])
+    candidates = [
+        row for row in rows if row["canonical_observation_id"] in first["train_ids"]
+    ]
+
+    same_day = candidates[-1]
+    same_day["exit_at"] = entry.replace(hour=20, minute=0).isoformat()
+    between = candidates[-2]
+    between["exit_at"] = (decision + (entry - decision) / 2).isoformat()
+    repaired = plan_v4_walk_forward_folds(
+        rows, development_ids=ids, embargo_sessions=0
+    )[0]
+
+    assert same_day["canonical_observation_id"] not in repaired["train_ids"]
+    assert between["canonical_observation_id"] not in repaired["train_ids"]
+    assert repaired["purged_train_rows"] >= 2
+    assert (
+        datetime.fromisoformat(repaired["latest_train_label_completion_at"])
+        < decision
+        < entry
+    )
+
+
+def test_five_session_horizon_crosses_weekend_and_market_holiday():
+    row = _row(date(2026, 7, 1), 0, horizon=5)
+    # Entry is July 2; July 3 is the observed Independence Day holiday.
+    assert row["entry_session_date"] == "2026-07-02"
+    assert row["exit_session_date"] == "2026-07-09"
+    assert datetime.fromisoformat(row["exit_at"]).tzinfo == timezone.utc
+
+
+def test_v4_walk_forward_zero_history_and_bad_timing_fail_closed():
+    short = _dataset(days=5, rows_per_day=2)
+    assert (
+        plan_v4_walk_forward_folds(
+            short, development_ids={row["canonical_observation_id"] for row in short}
+        )
+        == []
+    )
+    malformed = _dataset(days=8, rows_per_day=2)
+    malformed[0]["decision_at"] = "not-a-timestamp"
+    with pytest.raises(
+        TemporalSplitDataError, match="invalid_timing_field:decision_at"
+    ):
+        plan_v4_walk_forward_folds(
+            malformed,
+            development_ids={row["canonical_observation_id"] for row in malformed},
+        )
