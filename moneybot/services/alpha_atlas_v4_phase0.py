@@ -613,6 +613,38 @@ def verify_observation(
             failures.append("target_mismatch")
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         failures.append("missing_executable_label_lineage")
+    if row.get("valuation_path_policy_version") is not None:
+        valuation_path = row.get("valuation_path")
+        if not isinstance(valuation_path, list) or not valuation_path:
+            failures.append("missing_daily_valuation_path")
+        else:
+            try:
+                sessions = [date.fromisoformat(str(item["session"])) for item in valuation_path]
+                if any(not ExchangeCalendar().is_trading_day(session) for session in sessions):
+                    failures.append("valuation_path_contains_non_session")
+                if sessions != sorted(set(sessions)):
+                    failures.append("valuation_path_sessions_not_unique_ordered")
+                if any(ExchangeCalendar().next_session(left) != right for left, right in zip(sessions, sessions[1:])):
+                    failures.append("valuation_path_missing_session")
+                if sessions[0].isoformat() != str(row.get("entry_session_date")) or sessions[-1].isoformat() != str(row.get("exit_session_date")):
+                    failures.append("valuation_path_boundary_mismatch")
+                for item in valuation_path:
+                    if not np.isclose(float(item["adjusted_close"]), float(item["raw_close"]) * float(item["split_adjustment_factor"]), rtol=tolerance, atol=tolerance):
+                        failures.append("valuation_path_adjustment_mismatch")
+                        break
+                if not np.isclose(float(valuation_path[-1]["adjusted_close"]), float(row["adjusted_exit_price"]), rtol=tolerance, atol=tolerance):
+                    failures.append("valuation_path_exit_price_mismatch")
+                source_valuation = loaded.get("valuation")
+                if source_valuation and [
+                    (str(item.get("date")), float(item.get("close")))
+                    for item in source_valuation
+                ] != [
+                    (str(item["session"]), float(item["raw_close"]))
+                    for item in valuation_path
+                ]:
+                    failures.append("valuation_path_source_evidence_mismatch")
+            except (KeyError, TypeError, ValueError):
+                failures.append("malformed_daily_valuation_path")
     action_source = lineage.get("corporate_action_source") or {}
     action_relative = str(action_source.get("path") or "")
     action_path = (root / action_relative).resolve()
@@ -937,7 +969,11 @@ def _resolve_evidence_bundle(
                 not pd.isna(cutoff)
                 and available > cutoff
                 and source_row_id
-                not in {record.get("entry_row_id"), record.get("exit_row_id")}
+                not in {
+                    record.get("entry_row_id"),
+                    record.get("exit_row_id"),
+                    *(record.get("valuation_row_ids") or []),
+                }
             ):
                 failures.append(f"future_source_availability:{family}")
             output.append(content)
@@ -948,6 +984,9 @@ def _resolve_evidence_bundle(
         "spy": resolve_rows(record.get("spy_row_ids") or [], "spy"),
         "sector": resolve_rows(record.get("sector_row_ids") or [], "sector"),
         "reference": {},
+        "valuation": resolve_rows(
+            record.get("valuation_row_ids") or [], "valuation"
+        ),
     }
     identity_by_id = {
         item.get("security_identity_evidence_id"): item

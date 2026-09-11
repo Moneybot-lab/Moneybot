@@ -64,6 +64,8 @@ _MATERIAL_EXACT_FIELDS = {
     "adjusted_entry_price",
     "raw_exit_price",
     "adjusted_exit_price",
+    "valuation_path_policy_version",
+    "valuation_path",
     "label_horizon_sessions",
     "label_split_ids",
     "label_split_adjustment_factor",

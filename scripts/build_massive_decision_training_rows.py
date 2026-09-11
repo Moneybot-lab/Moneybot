@@ -1180,6 +1180,25 @@ def build_training_rows_from_raw_market(
         label_factor = price_factor_between(
             splits_by_symbol.get(symbol, []), str(entry["date"]), str(future["date"])
         )
+        valuation_path = []
+        for valuation_bar in raw_history[entry_idx : label_idx + 1]:
+            raw_close = _coerce_float(valuation_bar.get("close"))
+            if raw_close is None:
+                continue
+            valuation_factor = price_factor_between(
+                splits_by_symbol.get(symbol, []),
+                str(valuation_bar["date"]),
+                str(future["date"]),
+            )
+            valuation_path.append(
+                {
+                    "session": str(valuation_bar["date"]),
+                    "raw_close": float(raw_close),
+                    "split_adjustment_factor": float(valuation_factor),
+                    "adjusted_close": float(raw_close) * float(valuation_factor),
+                    "price_source": "massive_flatfile_official_daily_close",
+                }
+            )
         return_fwd = round(
             split_adjusted_forward_return(
                 float(entry["open"]),
@@ -1487,6 +1506,8 @@ def build_training_rows_from_raw_market(
             "adjusted_entry_price": float(entry["open"]) * label_factor,
             "raw_exit_price": float(future["close"]),
             "adjusted_exit_price": float(future["close"]),
+            "valuation_path_policy_version": "alpha-atlas-v4-daily-close-valuation.v1",
+            "valuation_path": valuation_path,
             "symbol": symbol,
             "sector_benchmark_symbol": sector_benchmark_symbol,
             "endpoint": str(event.get("endpoint") or "unknown"),
@@ -1947,6 +1968,7 @@ def emit_phase0_evidence_bundle(
         )
         entry_id = add_window([symbol_raw[entry_idx]])[0]
         exit_id = add_window([symbol_raw[exit_idx]])[0]
+        valuation_row_ids = add_window(symbol_raw[entry_idx : exit_idx + 1])
 
         identity_started = time.perf_counter()
         identity_id = "identity_" + _json_sha256(
@@ -2046,6 +2068,7 @@ def emit_phase0_evidence_bundle(
                 exit_id if int(row["label_horizon_sessions"]) == 10 else None
             ),
             "exit_row_id": exit_id,
+            "valuation_row_ids": valuation_row_ids,
             "corporate_action_evidence_id": action_id,
             "feature_contract_version": V4_FEATURE_CONTRACT_VERSION,
             "timing_contract_version": ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
