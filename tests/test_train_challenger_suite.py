@@ -5,7 +5,45 @@ import pandas as pd
 import pytest
 
 from moneybot.services.deterministic_model import BaselineModelArtifact, save_artifact
-from scripts.train_challenger_suite import _artifact_scored_mistake_rows, _specialized_training_inputs, _write_daily_mistake_slices, train_challenger_suite
+from scripts.train_challenger_suite import _apply_walk_forward_metrics, _artifact_scored_mistake_rows, _chronologically_order_rows, _specialized_training_inputs, _write_daily_mistake_slices, train_challenger_suite
+
+
+def test_chronological_order_prefers_event_date_over_mixed_timestamp_groups():
+    frame = pd.DataFrame({
+        "event_date": ["2026-08-01", "2026-04-01", "2026-07-01", "2026-05-01"],
+        "ts": [1, 2, 3, 4],
+        "symbol": ["D", "A", "C", "B"],
+    })
+
+    ordered = _chronologically_order_rows(frame)
+
+    assert ordered["event_date"].tolist() == ["2026-04-01", "2026-05-01", "2026-07-01", "2026-08-01"]
+
+
+def test_unusable_walk_forward_fold_cannot_pass_validation():
+    clean = pd.DataFrame({
+        "event_date": ["2026-04-01", "2026-04-02", "2026-08-01", "2026-08-02"],
+        "feature_signal": [0.0, 1.0, 0.0, 1.0],
+        "label_up_5d": [0, 1, 0, 1],
+        "return_5d": [-0.01, 0.01, -0.01, 0.01],
+    })
+    challenger = {
+        "model_version": "challenger-baseline-always-up-v1",
+        "model_type": "baseline_classifier",
+        "metrics": {},
+        "spec": {},
+    }
+
+    _apply_walk_forward_metrics(
+        [challenger], clean=clean, folds=[(0, 2, 4), (2, 3, 4)],
+        feature_columns=["feature_signal"], target_col="label_up_5d",
+        return_col="return_5d", horizon_days=5,
+    )
+
+    walk_forward = challenger["metrics"]["walk_forward"]
+    assert walk_forward["unusable_window_count"] >= 1
+    assert walk_forward["all_windows_usable"] is False
+    assert challenger["metrics"]["walk_forward_passed"] is False
 
 
 def test_mistake_mining_uses_artifact_probabilities_and_threshold(tmp_path):
