@@ -44,6 +44,7 @@ def _trade(
         "adjusted_entry_price": entry_price,
         "adjusted_exit_price": prices[-1],
         "valuation_path": sessions,
+        "valuation_path_policy_version": "alpha-atlas-v4-daily-close-valuation.v1",
         "score": score,
         "prediction": 1,
     }

@@ -12,6 +12,7 @@ from moneybot.services.market_data_providers import ExchangeCalendar
 
 EXECUTION_POLICY_VERSION = "alpha-atlas-v4-unlevered-long-cash.v1"
 PORTFOLIO_PATH_SCHEMA = "alpha-atlas-v4-portfolio-path.v1"
+VALUATION_PATH_POLICY_VERSION = "alpha-atlas-v4-daily-close-valuation.v1"
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,8 @@ def reconstruct_v4_portfolio_path(
             reasons.append(f"missing_evaluation_interval_evidence:{identifier}")
         if int(row.get("prediction", 0)) != 1:
             continue
+        if row.get("valuation_path_policy_version") != VALUATION_PATH_POLICY_VERSION:
+            reasons.append(f"uncertified_valuation_policy:{identifier}")
         try:
             decision = datetime.fromisoformat(str(row["decision_at"]))
             entry = datetime.fromisoformat(str(row["entry_at"]))
