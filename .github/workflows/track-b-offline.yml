@@ -393,6 +393,8 @@ jobs:
           canonical = json.loads(Path(os.environ["CANONICAL_DIAGNOSTICS"]).read_text())
           quality = json.loads(Path(os.environ["CLEANING_QUALITY_REPORT"]).read_text())
           split_plan = json.loads((root / "challenger_suite/challenger_split_plan.json").read_text())
+          backtest_path = root / "challenger_suite/backtest_report.json"
+          backtest = json.loads(backtest_path.read_text()) if backtest_path.is_file() else {}
           certification_path = Path(os.environ["PHASE0_DIR"]) / "temporal_safety_certification.json"
           certification = json.loads(certification_path.read_text()) if certification_path.is_file() else {"status": "NOT_EVALUATED"}
           summary = {
@@ -412,6 +414,9 @@ jobs:
               "phase0_certification_status": certification["status"],
               "phase0_certification_passed": certification["status"] == "VERIFIED_FOR_THIS_ARTIFACT",
               "split_plan_sha256": split_plan["plan_sha256"],
+              "primary_portfolio_candidate": backtest.get("primary_portfolio_candidate"),
+              "portfolio_path_valid": bool((backtest.get("economic_backtest_validity") or {}).get("valid")),
+              "portfolio_path_invalid_reasons": (backtest.get("economic_backtest_validity") or {}).get("invalid_reasons", []),
           }
           (root / "track_b_v4_research_summary.json").write_text(
               json.dumps(summary, indent=2, sort_keys=True) + "\n",
