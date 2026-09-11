@@ -43,6 +43,7 @@ def plan_v4_walk_forward_folds(
     rows: Iterable[Mapping[str, Any]],
     *,
     development_ids: set[str],
+    final_holdout_ids: set[str] | None = None,
     max_windows: int = 3,
     embargo_sessions: int = 1,
 ) -> list[dict[str, Any]]:
@@ -53,6 +54,9 @@ def plan_v4_walk_forward_folds(
     entry, and membership is restricted to the frozen development side.
     """
     calendar = ExchangeCalendar()
+    final_holdout_ids = final_holdout_ids or set()
+    if development_ids & final_holdout_ids:
+        raise TemporalSplitDataError("development_holdout_id_overlap")
     validated = [_validate_row(row) for row in rows]
     by_id = {item["id"]: item for item in validated}
     if len(by_id) != len(validated):
@@ -62,7 +66,13 @@ def plan_v4_walk_forward_folds(
         raise TemporalSplitDataError("development_id_missing_from_input")
     items = [by_id[identifier] for identifier in development_ids]
     for item in items:
-        item["group"] = _session_date(calendar, item["times"]["feature_cutoff_at"])
+        if item["row"].get("exchange_calendar") != calendar.identifier:
+            raise TemporalSplitDataError("incompatible_exchange_calendar")
+        group, phase = _walk_forward_feature_session(
+            calendar, item["times"]["feature_cutoff_at"]
+        )
+        item["group"] = group
+        item["group_phase"] = phase
     groups = sorted({item["group"] for item in items})
     if len(groups) < 6:
         return []
@@ -76,7 +86,11 @@ def plan_v4_walk_forward_folds(
         train_start = 0 if index < 2 else max(0, validation_start - test_groups * 3)
         planned_train_groups = set(groups[train_start:validation_start])
         planned_validation_groups = groups[validation_start:validation_end]
-        embargoed_groups = set(planned_validation_groups[: max(0, embargo_sessions)])
+        validation_boundary = planned_validation_groups[0]
+        embargo_dates = _embargo_session_dates(
+            calendar, validation_boundary, embargo_sessions
+        )
+        embargoed_groups = set(embargo_dates)
         usable_validation_groups = set(planned_validation_groups) - embargoed_groups
         pre_train = [item for item in items if item["group"] in planned_train_groups]
         pre_validation = [
@@ -108,6 +122,28 @@ def plan_v4_walk_forward_folds(
             reasons.append("training_label_not_available_before_validation_decision")
         train_ids = sorted(item["id"] for item in train)
         validation_ids = sorted(item["id"] for item in pre_validation)
+        planned_train_ids = {item["id"] for item in pre_train}
+        planned_validation_ids = {
+            item["id"]
+            for item in items
+            if item["group"] in set(planned_validation_groups)
+        }
+        retained_train_by_group = Counter(item["group"] for item in train)
+        planned_train_by_group = Counter(item["group"] for item in pre_train)
+        partially_purged = sorted(
+            group
+            for group, count in retained_train_by_group.items()
+            if count != planned_train_by_group[group]
+        )
+        invalid_groups = sorted(
+            group
+            for group in ({item["group"] for item in pre_train + pre_validation})
+            if not calendar.is_trading_day(datetime.fromisoformat(group).date())
+        )
+        train_validation_overlap = set(train_ids) & set(validation_ids)
+        holdout_overlap = (set(train_ids) | set(validation_ids)) & final_holdout_ids
+        planned_integrity = len(planned_train_ids & planned_validation_ids) == 0
+        retained_integrity = not partially_purged
         folds.append(
             {
                 "fold_index": index + 1,
@@ -115,6 +151,25 @@ def plan_v4_walk_forward_folds(
                 "validation_ids": validation_ids,
                 "usable": not reasons,
                 "unusable_reason": ";".join(reasons) or None,
+                "grouping_policy": "feature_cutoff_associated_xnys_session.v1",
+                "calendar_identifier": calendar.identifier,
+                "group_phase_counts": dict(
+                    sorted(
+                        Counter(
+                            item["group_phase"]
+                            for item in pre_train
+                            + [
+                                item
+                                for item in items
+                                if item["group"] in set(planned_validation_groups)
+                            ]
+                        ).items()
+                    )
+                ),
+                "planned_train_first_session": min(planned_train_groups),
+                "planned_train_last_session": max(planned_train_groups),
+                "planned_validation_first_session": planned_validation_groups[0],
+                "planned_validation_last_session": planned_validation_groups[-1],
                 "train_group_count": len({item["group"] for item in train}),
                 "validation_group_count": len(usable_validation_groups),
                 "train_rows_before": len(pre_train),
@@ -126,6 +181,13 @@ def plan_v4_walk_forward_folds(
                 "purged_train_rows": len(pre_train) - len(train),
                 "embargoed_validation_rows": sum(
                     item["group"] in embargoed_groups for item in items
+                ),
+                "embargo_session_dates": embargo_dates,
+                "observed_embargo_groups": sorted(
+                    set(planned_validation_groups) & embargoed_groups
+                ),
+                "observed_embargo_group_count": len(
+                    set(planned_validation_groups) & embargoed_groups
                 ),
                 "latest_train_label_completion_at": latest_exit.isoformat()
                 if latest_exit
@@ -144,17 +206,68 @@ def plan_v4_walk_forward_folds(
                 ),
                 "validation_first_group": min(usable_validation_groups, default=None),
                 "validation_last_group": max(usable_validation_groups, default=None),
-                "complete_group_integrity": True,
+                "planned_group_integrity_passed": planned_integrity,
+                "retained_group_integrity_passed": retained_integrity,
+                "complete_group_integrity": planned_integrity and retained_integrity,
+                "partially_purged_train_sessions": partially_purged,
+                "train_validation_id_overlap_count": len(train_validation_overlap),
+                "invalid_session_groups": invalid_groups,
+                "invalid_session_group_count": len(invalid_groups),
+                "missing_evidence_reasons": [],
                 "timing_boundary_passed": bool(
                     latest_exit
                     and earliest_decision
                     and latest_exit < earliest_decision
                 ),
-                "final_holdout_overlap_count": 0,
+                "final_holdout_overlap_count": len(holdout_overlap),
                 "embargo_sessions": embargo_sessions,
             }
         )
     return folds
+
+
+def _walk_forward_feature_session(
+    calendar: ExchangeCalendar, instant: datetime
+) -> tuple[str, str]:
+    """Associate a feature cutoff with the XNYS session whose evidence it can use.
+
+    Premarket cutoffs precede the current session and therefore belong to the
+    previous completed session.  Regular/after-hours cutoffs belong to the
+    current session.  Overnight post-session cutoffs retain that day's session;
+    weekend and holiday cutoffs belong to the previous exchange session.
+    """
+    local_day = calendar.local_date(instant)
+    phase = calendar.session_at(instant)
+    if not calendar.is_trading_day(local_day):
+        session = calendar.previous_session(local_day)
+        phase = "weekend_or_holiday"
+    elif instant < calendar.session_open(local_day):
+        session = calendar.previous_session(local_day)
+        phase = "premarket" if phase == "pre" else "preopen_closed"
+    else:
+        session = local_day
+        if phase == "closed":
+            phase = "postmarket_closed"
+    if not calendar.is_trading_day(session):
+        raise TemporalSplitDataError("feature_cutoff_has_no_valid_exchange_session")
+    return session.isoformat(), phase
+
+
+def _embargo_session_dates(
+    calendar: ExchangeCalendar, boundary_session: str, count: int
+) -> list[str]:
+    """Return the embargo sessions, including the validation boundary session."""
+    if count < 0:
+        raise TemporalSplitDataError("invalid_embargo_session_count")
+    current = datetime.fromisoformat(boundary_session).date()
+    if not calendar.is_trading_day(current):
+        raise TemporalSplitDataError("invalid_validation_boundary_session")
+    sessions: list[str] = []
+    for index in range(count):
+        if index:
+            current = calendar.next_session(current)
+        sessions.append(current.isoformat())
+    return sessions
 
 
 def file_sha256(path: Path) -> str:

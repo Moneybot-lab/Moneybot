@@ -2904,6 +2904,7 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         walk_forward_folds = plan_v4_walk_forward_folds(
             development_unfilled.to_dict(orient="records"),
             development_ids=train_ids,
+            final_holdout_ids=test_ids,
             embargo_sessions=EMBARGO_DAYS,
         )
     else:

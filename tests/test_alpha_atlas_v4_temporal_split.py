@@ -9,6 +9,8 @@ import pytest
 from moneybot.services.alpha_atlas_v4_temporal_split import (
     NO_CANDIDATE_STATUS,
     TemporalSplitDataError,
+    _embargo_session_dates,
+    _walk_forward_feature_session,
     plan_v4_walk_forward_folds,
     plan_v4_temporal_split,
     validate_split_plan,
@@ -254,10 +256,18 @@ def test_v4_walk_forward_is_grouped_deterministic_and_holdout_isolated():
     development_ids = {row["canonical_observation_id"] for row in rows[: 18 * 3]}
     holdout_ids = {row["canonical_observation_id"] for row in rows} - development_ids
 
-    expected = plan_v4_walk_forward_folds(rows, development_ids=development_ids)
+    expected = plan_v4_walk_forward_folds(
+        rows,
+        development_ids=development_ids,
+        final_holdout_ids=holdout_ids,
+    )
     shuffled = list(rows)
     random.Random(91).shuffle(shuffled)
-    actual = plan_v4_walk_forward_folds(shuffled, development_ids=development_ids)
+    actual = plan_v4_walk_forward_folds(
+        shuffled,
+        development_ids=development_ids,
+        final_holdout_ids=holdout_ids,
+    )
 
     holdout_changed = [
         (
@@ -273,7 +283,10 @@ def test_v4_walk_forward_is_grouped_deterministic_and_holdout_isolated():
         for row in rows
     ]
     changed = plan_v4_walk_forward_folds(
-        holdout_changed, development_ids=development_ids
+        holdout_changed,
+        development_ids=development_ids,
+        final_holdout_ids=holdout_ids,
+
     )
 
     assert actual == expected
@@ -283,6 +296,16 @@ def test_v4_walk_forward_is_grouped_deterministic_and_holdout_isolated():
         members = set(fold["train_ids"]) | set(fold["validation_ids"])
         assert not members & holdout_ids
         assert fold["final_holdout_overlap_count"] == 0
+        assert not fold["invalid_session_groups"]
+        assert all(
+            CALENDAR.is_trading_day(date.fromisoformat(key))
+            for key in (
+                fold["train_first_group"],
+                fold["train_last_group"],
+                fold["validation_first_group"],
+                fold["validation_last_group"],
+            )
+        )
         for session in _sessions(18):
             group = {f"obs-{session.isoformat()}-{index}" for index in range(3)}
             assert not (
@@ -353,3 +376,90 @@ def test_v4_walk_forward_zero_history_and_bad_timing_fail_closed():
             malformed,
             development_ids={row["canonical_observation_id"] for row in malformed},
         )
+
+
+def test_walk_forward_session_mapping_handles_sunday_holiday_and_market_phases():
+    def mapped(local_value: str) -> tuple[str, str]:
+        instant = datetime.fromisoformat(local_value).replace(tzinfo=CALENDAR.timezone)
+        return _walk_forward_feature_session(CALENDAR, instant.astimezone(timezone.utc))
+
+    assert mapped("2026-05-31T12:00:00") == ("2026-05-29", "weekend_or_holiday")
+    assert mapped("2026-06-01T08:00:00") == ("2026-05-29", "premarket")
+    assert mapped("2026-06-01T10:00:00") == ("2026-06-01", "regular")
+    assert mapped("2026-06-01T17:00:00") == ("2026-06-01", "after")
+    assert mapped("2026-07-03T12:00:00") == ("2026-07-02", "weekend_or_holiday")
+    assert mapped("2026-07-04T12:00:00") == ("2026-07-02", "weekend_or_holiday")
+    assert mapped("2026-07-05T12:00:00") == ("2026-07-02", "weekend_or_holiday")
+
+
+def test_walk_forward_session_mapping_honors_dst_and_early_close():
+    winter = CALENDAR.session_open(date(2026, 1, 5))
+    summer = CALENDAR.session_open(date(2026, 6, 1))
+    assert (winter.hour, summer.hour) == (14, 13)
+    assert _walk_forward_feature_session(CALENDAR, winter)[0] == "2026-01-05"
+    assert _walk_forward_feature_session(CALENDAR, summer)[0] == "2026-06-01"
+
+    early_close = date(2026, 11, 27)
+    cutoff = CALENDAR.session_close(early_close) + timedelta(minutes=30)
+    assert CALENDAR.is_early_close(early_close)
+    assert _walk_forward_feature_session(CALENDAR, cutoff) == (
+        "2026-11-27",
+        "after",
+    )
+
+
+@pytest.mark.parametrize(
+    ("count", "expected"),
+    [
+        (0, []),
+        (1, ["2026-07-02"]),
+        (2, ["2026-07-02", "2026-07-06"]),
+        (3, ["2026-07-02", "2026-07-06", "2026-07-07"]),
+    ],
+)
+def test_embargo_counts_exchange_sessions_not_observed_dates(count, expected):
+    assert _embargo_session_dates(CALENDAR, "2026-07-02", count) == expected
+
+
+def test_missing_observed_session_counts_without_removing_extra_group():
+    sessions = _sessions(18)
+    rows = _dataset(days=18, rows_per_day=2)
+    # With one group absent the 17-group fixture's first boundary is Jan 20.
+    # Remove every observation from the next valid session to reproduce a gap.
+    missing_session = sessions[12]
+    rows = [
+        row
+        for row in rows
+        if not row["canonical_observation_id"].startswith(
+            f"obs-{missing_session.isoformat()}-"
+        )
+    ]
+    ids = {row["canonical_observation_id"] for row in rows}
+    fold = plan_v4_walk_forward_folds(rows, development_ids=ids, embargo_sessions=2)[0]
+
+    assert fold["embargo_session_dates"] == [
+        "2026-01-20",
+        "2026-01-21",
+    ]
+    assert fold["observed_embargo_groups"] == ["2026-01-20"]
+    assert fold["validation_first_group"] == "2026-01-22"
+    assert fold["embargoed_validation_rows"] == 2
+
+
+def test_embargo_exhaustion_is_explicitly_unusable():
+    rows = _dataset(days=6, rows_per_day=2)
+    ids = {row["canonical_observation_id"] for row in rows}
+    fold = plan_v4_walk_forward_folds(rows, development_ids=ids, embargo_sessions=1)[0]
+    assert fold["usable"] is False
+    assert fold["unusable_reason"] == (
+        "empty_training_after_timing_purge;empty_validation_after_session_embargo"
+    )
+    assert fold["embargo_session_dates"] == [fold["planned_validation_first_session"]]
+
+
+def test_walk_forward_rejects_missing_or_ambiguous_calendar_evidence():
+    rows = _dataset(days=8, rows_per_day=2)
+    ids = {row["canonical_observation_id"] for row in rows}
+    rows[0]["exchange_calendar"] = "unknown-calendar"
+    with pytest.raises(TemporalSplitDataError, match="incompatible_exchange_calendar"):
+        plan_v4_walk_forward_folds(rows, development_ids=ids)
