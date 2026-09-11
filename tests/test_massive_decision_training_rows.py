@@ -66,6 +66,11 @@ def test_build_training_rows_uses_only_asof_features_and_future_label(tmp_path):
     assert row["feature_return_1d_lagged"] == round(15 / 14 - 1, 6)
     assert row["return_3d"] == round(21 / 16 - 1, 6)
     assert row["label_up_3d"] == 1
+    assert row["valuation_path_policy_version"] == "alpha-atlas-v4-daily-close-valuation.v1"
+    assert [item["session"] for item in row["valuation_path"]] == [
+        day.isoformat() for day in days[6:9]
+    ]
+    assert [item["adjusted_close"] for item in row["valuation_path"]] == [16.0, 18.0, 21.0]
     assert row["leakage_guard"].startswith("v4_features_at_or_before_cutoff")
 
 

@@ -7,7 +7,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -18,7 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from moneybot.services.deterministic_model import fit_probability_calibration, load_artifact, predict_proba, summarize_binary_predictions, train_logistic_baseline
 from moneybot.services.temporal_validation import purged_embargoed_split
-from moneybot.services.alpha_atlas_v4_temporal_split import validate_split_plan
+from moneybot.services.alpha_atlas_v4_temporal_split import plan_v4_walk_forward_folds, validate_split_plan
 from moneybot.services.decision_target import HORIZON_DAYS, TARGET_NAME, target_metadata
 from scripts.day10_train_candidate_model import _backtest_compatible_feature_columns, _chronological_split, _fill_feature_gaps, _future_safe_feature_columns, _prepare_frame, _select_feature_columns
 from moneybot.services.alpha_atlas_v4_phase0 import apply_feature_fill_policy, fit_feature_fill_policy
@@ -483,28 +483,31 @@ def _apply_walk_forward_metrics(
     challengers: list[dict[str, Any]],
     *,
     clean: pd.DataFrame,
-    folds: list[tuple[int, int, int]],
+    folds: list[Any],
     feature_columns: list[str],
     target_col: str,
     return_col: str | None,
     horizon_days: int,
     fit_source: pd.DataFrame | None = None,
+    fit_observer: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
-    if not folds:
-        return
     for challenger in challengers:
         fold_metrics: list[dict[str, Any]] = []
         unusable_folds = 0
-        for train_start, train_end, test_end in folds:
+        for fold_index, fold in enumerate(folds, start=1):
             source = fit_source if fit_source is not None else clean
-            fold_train = source.iloc[train_start:train_end]
-            fold_test = source.iloc[train_end:test_end]
-            fold_train, fold_test, _ = purged_embargoed_split(
-                fold_train,
-                fold_test,
-                horizon_days=horizon_days,
-                embargo_days=EMBARGO_DAYS,
-            )
+            if isinstance(fold, dict):
+                if not fold.get("usable"):
+                    unusable_folds += 1
+                    continue
+                ids = source["canonical_observation_id"].astype(str)
+                fold_train = source.loc[ids.isin(fold["train_ids"])].copy()
+                fold_test = source.loc[ids.isin(fold["validation_ids"])].copy()
+            else:
+                train_start, train_end, test_end = fold
+                fold_train = source.iloc[train_start:train_end]
+                fold_test = source.iloc[train_end:test_end]
+                fold_train, fold_test, _ = purged_embargoed_split(fold_train, fold_test, horizon_days=horizon_days, embargo_days=EMBARGO_DAYS)
             if fold_train.empty or fold_test.empty:
                 unusable_folds += 1
                 continue
@@ -518,10 +521,12 @@ def _apply_walk_forward_metrics(
             fold_returns = fold_test[return_col].to_numpy(dtype=float) if return_col else None
             model_type = challenger.get("model_type")
             spec = challenger.get("spec", {})
+            learned_state: dict[str, Any]
             if model_type == "logistic_regression":
                 artifact = _train_logistic_recipe(fold_train, y_train, feature_columns, return_col, spec)
                 scores = predict_proba(artifact, X_test)
                 preds = (scores >= artifact.decision_threshold).astype(int)
+                learned_state = {"model": artifact.to_dict()}
             elif model_type == "calibrated_linear":
                 artifact, _, _ = _train_calibrated_linear_recipe(
                     fold_train,
@@ -533,6 +538,7 @@ def _apply_walk_forward_metrics(
                 )
                 scores = predict_proba(artifact, fold_test[artifact.feature_columns].to_numpy(dtype=float))
                 preds = (scores >= artifact.decision_threshold).astype(int)
+                learned_state = {"model": artifact.to_dict()}
             elif model_type == "shallow_decision_tree":
                 min_leaf = min(int(spec["min_leaf"]), max(2, len(fold_train) // 10))
                 tree = _fit_shallow_tree(
@@ -544,6 +550,7 @@ def _apply_walk_forward_metrics(
                 )
                 scores = _shallow_tree_scores(tree, fold_test)
                 preds = (scores >= float(spec["threshold"])).astype(int)
+                learned_state = {"tree": tree, "threshold": float(spec["threshold"])}
             elif model_type == "two_stage_risk_filter":
                 decision_model, risk_model, _, _, _ = _train_two_stage_risk_recipe(
                     fold_train,
@@ -554,18 +561,22 @@ def _apply_walk_forward_metrics(
                     horizon_days=horizon_days,
                 )
                 scores, _, preds = _two_stage_scores(decision_model, risk_model, fold_test, float(spec["risk_threshold"]))
+                learned_state = {"decision_model": decision_model.to_dict(), "risk_model": risk_model.to_dict()}
             elif model_type == "hard_example_linear":
                 artifact, _, _ = _train_hard_example_recipe(fold_train, target_col, feature_columns, return_col, spec)
                 scores = predict_proba(artifact, fold_test[artifact.feature_columns].to_numpy(dtype=float))
                 preds = (scores >= artifact.decision_threshold).astype(int)
+                learned_state = {"model": artifact.to_dict()}
             elif model_type == "ranking_lane_linear":
                 artifact = _train_ranking_lane_recipe(fold_train, feature_columns, return_col, spec)
                 scores = predict_proba(artifact, fold_test[artifact.feature_columns].to_numpy(dtype=float))
                 preds = (scores >= artifact.decision_threshold).astype(int)
+                learned_state = {"model": artifact.to_dict()}
             elif model_type == "abstention_linear":
                 artifact, _, _ = _train_calibrated_linear_recipe(fold_train, target_col, feature_columns, return_col, spec, horizon_days=horizon_days)
                 scores = predict_proba(artifact, fold_test[artifact.feature_columns].to_numpy(dtype=float))
                 preds, _ = _abstention_predictions(scores, artifact.decision_threshold, spec["abstention"])
+                learned_state = {"model": artifact.to_dict(), "abstention": spec["abstention"]}
             elif model_type == "decision_stump":
                 feature = str(spec.get("feature", ""))
                 if feature not in fold_train.columns or feature not in fold_test.columns:
@@ -574,6 +585,7 @@ def _apply_walk_forward_metrics(
                 direction = str(spec.get("direction", "gte_positive"))
                 scores = fold_test[feature].to_numpy(dtype=float)
                 preds = _stump_predictions(scores, threshold, direction)
+                learned_state = {"feature": feature, "threshold": threshold, "direction": direction}
             elif model_type == "baseline_classifier":
                 majority_class = int(float(y_train.mean()) >= 0.5)
                 if challenger.get("model_version") == "challenger-baseline-always-up-v1":
@@ -583,12 +595,28 @@ def _apply_walk_forward_metrics(
                 else:
                     preds = np.full_like(y_test, majority_class, dtype=int)
                 scores = preds.astype(float)
+                learned_state = {"majority_class": majority_class}
             else:
                 continue
             metrics = summarize_binary_predictions(y_test, preds)
             metrics.update(_ranking_metrics(scores, y_test, fold_returns))
             metrics.update(_prediction_profile(preds, fold_test, return_col))
             fold_metrics.append(metrics)
+            if fit_observer is not None:
+                fit_observer(
+                    {
+                        "fold_index": fold_index,
+                        "model_version": challenger["model_version"],
+                        "model_type": model_type,
+                        "train_ids": sorted(fold_train["canonical_observation_id"].astype(str)) if "canonical_observation_id" in fold_train else list(fold_train.index),
+                        "validation_ids": sorted(fold_test["canonical_observation_id"].astype(str)) if "canonical_observation_id" in fold_test else list(fold_test.index),
+                        "fill_policy": fold_policy if fit_source is not None else None,
+                        "learned_state": learned_state,
+                        "scores": scores.tolist(),
+                        "predictions": preds.tolist(),
+                        "metrics": metrics,
+                    }
+                )
         walk_forward = _average_metric_dicts(fold_metrics)
         if walk_forward:
             positive_windows = sum(1 for metrics in fold_metrics if float(metrics.get("ranking_objective", 0.0)) > 0.0)
@@ -2747,7 +2775,7 @@ def _add_baseline_challengers(challengers: list[dict[str, Any]], *, output_dir: 
         challengers.append({"model_version": model_version, "model_type": "baseline_classifier", "model_path": str(model_path), "metrics": metrics, "spec": spec, "lineage": lineage})
 
 
-def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: float = 0.8, horizon_days: int = 5, min_rows: int = 200, split_plan_path: Path | None = None) -> dict[str, Any]:
+def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: float = 0.8, horizon_days: int = 5, min_rows: int = 200, split_plan_path: Path | None = None, walk_forward_observer: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     df = _load_jsonl(input_path)
     if df.empty:
         raise ValueError("No rows available in input dataset")
@@ -2895,7 +2923,19 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
             payload = json.loads(model_path.read_text(encoding="utf-8"))
             payload.setdefault("lineage", {})["dataset_lineage"] = dataset_lineage
             _write_artifact(model_path, payload)
-    walk_forward_folds = _walk_forward_splits(clean)
+    if is_v4:
+        development_unfilled = unfilled.loc[
+            unfilled["canonical_observation_id"].astype(str).isin(train_ids)
+        ].copy()
+        walk_forward_folds = plan_v4_walk_forward_folds(
+            development_unfilled.to_dict(orient="records"),
+            development_ids=train_ids,
+            final_holdout_ids=test_ids,
+            embargo_sessions=EMBARGO_DAYS,
+        )
+    else:
+        development_unfilled = unfilled
+        walk_forward_folds = _walk_forward_splits(clean)
     _apply_walk_forward_metrics(
         challengers,
         clean=clean,
@@ -2904,17 +2944,21 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         target_col=target_col,
         return_col=return_col,
         horizon_days=horizon_days,
-        fit_source=unfilled if is_v4 else None,
+        fit_source=development_unfilled if is_v4 else None,
+        fit_observer=walk_forward_observer,
     )
 
     ranked = sorted(
         challengers,
         key=lambda item: (
             bool(item["metrics"].get("walk_forward_passed", False)),
-            item["metrics"].get("walk_forward_ranking_objective", item["metrics"].get("ranking_objective", 0)),
-            item["metrics"].get("ranking_objective", 0),
-            item["metrics"].get("top_k_avg_return", 0),
-            item["metrics"].get("accuracy", 0),
+            item["metrics"].get("walk_forward_ranking_objective", 0),
+            *( () if is_v4 else (
+                item["metrics"].get("ranking_objective", 0),
+                item["metrics"].get("top_k_avg_return", 0),
+                item["metrics"].get("accuracy", 0),
+            )),
+            item["model_version"],
         ),
         reverse=True,
     )
@@ -2928,22 +2972,16 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         model_path=Path(str(scoring_challenger["model_path"])),
     )
     walk_forward_windows: list[dict[str, Any]] = []
-    for start, train_end, test_end in walk_forward_folds:
-        _, _, diagnostics = purged_embargoed_split(
-            clean.iloc[start:train_end],
-            clean.iloc[train_end:test_end],
-            horizon_days=horizon_days,
-            embargo_days=EMBARGO_DAYS,
-        )
-        walk_forward_windows.append(
-            {
-                "train_start_row": start,
-                "train_end_row": train_end,
-                "test_start_row": train_end,
-                "test_end_row": test_end,
-                "temporal_split": diagnostics,
-            }
-        )
+    for fold in walk_forward_folds:
+        if isinstance(fold, dict):
+            walk_forward_windows.append({key: value for key, value in fold.items() if key not in {"train_ids", "validation_ids"}} | {
+                "train_canonical_observation_ids": fold["train_ids"],
+                "validation_canonical_observation_ids": fold["validation_ids"],
+            })
+        else:
+            start, train_end, test_end = fold
+            _, _, diagnostics = purged_embargoed_split(clean.iloc[start:train_end], clean.iloc[train_end:test_end], horizon_days=horizon_days, embargo_days=EMBARGO_DAYS)
+            walk_forward_windows.append({"train_start_row": start, "train_end_row": train_end, "test_start_row": train_end, "test_end_row": test_end, "temporal_split": diagnostics})
     model_type_counts = {model_type: sum(1 for item in challengers if item["model_type"] == model_type) for model_type in sorted({item["model_type"] for item in challengers})}
     phase_2_challengers = [item for item in challengers if item["model_type"] in {"calibrated_linear", "shallow_decision_tree", "two_stage_risk_filter", "hard_example_linear", "ranking_lane_linear"}]
     phase_2_fingerprints = {
@@ -2954,8 +2992,8 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
     ranking_lane = [item for item in challengers if item.get("candidate_lane") == "ranking" or item.get("specialized_family") == "ranking_top5_model"]
     ranking_versions = {item["model_version"] for item in ranking_lane}
     decision_lane = [item for item in challengers if item["model_version"] not in ranking_versions]
-    decision_lane_ranked = sorted(decision_lane, key=lambda item: (bool(item["metrics"].get("walk_forward_passed")), item["metrics"].get("accuracy", 0.0), -item["metrics"].get("big_loss_prediction_rate", 0.0)), reverse=True)
-    ranking_lane_ranked = sorted(ranking_lane, key=lambda item: (bool(item["metrics"].get("walk_forward_passed")), item["metrics"].get("walk_forward_ranking_objective", 0.0), item["metrics"].get("ranking_objective", 0.0)), reverse=True)
+    decision_lane_ranked = sorted(decision_lane, key=lambda item: (bool(item["metrics"].get("walk_forward_passed")), item["metrics"].get("walk_forward_ranking_objective", 0.0), *( () if is_v4 else (item["metrics"].get("accuracy", 0.0), -item["metrics"].get("big_loss_prediction_rate", 0.0))), item["model_version"]), reverse=True)
+    ranking_lane_ranked = sorted(ranking_lane, key=lambda item: (bool(item["metrics"].get("walk_forward_passed")), item["metrics"].get("walk_forward_ranking_objective", 0.0), *( () if is_v4 else (item["metrics"].get("ranking_objective", 0.0),)), item["model_version"]), reverse=True)
     manifest = {
         "schema_version": SUITE_SCHEMA_VERSION,
         "lineage_schema_version": LINEAGE_SCHEMA_VERSION,
@@ -2976,7 +3014,7 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
         "target_column": target_col,
         "decision_target": target_metadata(),
         "dataset_lineage": dataset_lineage,
-        "ranking_selection_policy": "rank by walk-forward pass status across multiple windows, then walk-forward top-K capped-exposure ranking_objective, holdout ranking objective, top-K average return, then accuracy",
+        "ranking_selection_policy": ("V4 development-only walk-forward pass and ranking objective; frozen final holdout is reporting-only" if is_v4 else "rank by walk-forward pass status across multiple windows, then walk-forward top-K capped-exposure ranking_objective, holdout ranking objective, top-K average return, then accuracy"),
         "promotion_policy": "prefer candidates with positive ranking_objective in at least two walk-forward windows before promotion",
         "ranking_metric_names": ["top_k_precision", "top_k_avg_return", "pairwise_ranking_loss", "big_gain_capture", "big_loss_demotion", "ranking_objective", "walk_forward_ranking_objective", "walk_forward_passed"],
         "feature_columns": feature_columns,

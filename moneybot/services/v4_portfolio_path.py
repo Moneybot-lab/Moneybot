@@ -1,0 +1,411 @@
+"""Deterministic research-only V4 execution ledger and daily equity path."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import asdict, dataclass
+from datetime import date, datetime
+from typing import Any, Iterable, Mapping
+
+from moneybot.services.market_data_providers import ExchangeCalendar
+
+EXECUTION_POLICY_VERSION = "alpha-atlas-v4-unlevered-long-cash.v1"
+PORTFOLIO_PATH_SCHEMA = "alpha-atlas-v4-portfolio-path.v1"
+VALUATION_PATH_POLICY_VERSION = "alpha-atlas-v4-daily-close-valuation.v1"
+
+
+@dataclass(frozen=True)
+class V4ExecutionPolicy:
+    starting_capital: float = 100_000.0
+    max_positions: int = 5
+    gross_exposure_limit: float = 1.0
+    fractional_shares: bool = True
+    transaction_cost_bps: float = 5.0
+    slippage_bps: float = 5.0
+    repeated_symbol_policy: str = "reject_while_open"
+    duplicate_policy: str = "one_order_per_canonical_observation_id"
+    event_order: str = "entries_at_open_then_exits_and_marks_at_close"
+    dividends: str = "excluded_price_return_only"
+    split_policy: str = "backward_adjusted_price_basis_no_quantity_readjustment"
+    version: str = EXECUTION_POLICY_VERSION
+
+    def payload(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def _hash(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def reconstruct_v4_portfolio_path(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    candidate_id: str,
+    input_sha256: str,
+    policy: V4ExecutionPolicy,
+    candidate_scope: str = "decision",
+) -> dict[str, Any]:
+    """Execute positive decision-lane signals and mark every XNYS close.
+
+    Slippage changes the fill price once at entry and exit; fees are separate
+    cash charges once per fill.  Positions use fixed fractional notional equal
+    to starting capital / max_positions and are never leveraged.
+    """
+    calendar = ExchangeCalendar()
+    source = [dict(row) for row in rows]
+    reasons: list[str] = []
+    if candidate_scope != "decision":
+        reasons.append(f"unsupported_candidate_scope:{candidate_scope}")
+    seen: set[str] = set()
+    orders: list[dict[str, Any]] = []
+    interval_entries: list[date] = []
+    interval_exits: list[date] = []
+    for row in source:
+        identifier = str(row.get("canonical_observation_id") or "")
+        if not identifier:
+            reasons.append("missing_canonical_observation_id")
+            continue
+        if identifier in seen:
+            continue
+        seen.add(identifier)
+        try:
+            interval_entries.append(
+                calendar.local_date(datetime.fromisoformat(str(row["entry_at"])))
+            )
+            interval_exits.append(
+                calendar.local_date(datetime.fromisoformat(str(row["exit_at"])))
+            )
+        except (KeyError, TypeError, ValueError):
+            reasons.append(f"missing_evaluation_interval_evidence:{identifier}")
+        if int(row.get("prediction", 0)) != 1:
+            continue
+        if row.get("valuation_path_policy_version") != VALUATION_PATH_POLICY_VERSION:
+            reasons.append(f"uncertified_valuation_policy:{identifier}")
+        try:
+            decision = datetime.fromisoformat(str(row["decision_at"]))
+            entry = datetime.fromisoformat(str(row["entry_at"]))
+            exit_at = datetime.fromisoformat(str(row["exit_at"]))
+            entry_price = float(row["adjusted_entry_price"])
+            exit_price = float(row["adjusted_exit_price"])
+            marks = {
+                str(mark["session"]): float(mark["adjusted_close"])
+                for mark in row["valuation_path"]
+            }
+        except (KeyError, TypeError, ValueError):
+            reasons.append(f"missing_execution_or_valuation_evidence:{identifier}")
+            continue
+        entry_session = calendar.local_date(entry)
+        exit_session = calendar.local_date(exit_at)
+        expected: list[str] = []
+        current = entry_session
+        while current <= exit_session:
+            if calendar.is_trading_day(current):
+                expected.append(current.isoformat())
+            current = calendar.next_session(current)
+        missing = sorted(set(expected) - set(marks))
+        if missing:
+            reasons.append(
+                f"missing_valuation_sessions:{identifier}:{','.join(missing)}"
+            )
+        if entry != calendar.session_open(
+            entry_session
+        ) or exit_at != calendar.session_close(exit_session):
+            reasons.append(f"invalid_execution_timestamps:{identifier}")
+        orders.append(
+            {
+                "canonical_observation_id": identifier,
+                "symbol": str(row.get("symbol") or ""),
+                "security_id": str(row.get("point_in_time_symbol_id") or ""),
+                "decision_at": decision.isoformat(),
+                "entry_at": entry.isoformat(),
+                "exit_at": exit_at.isoformat(),
+                "entry_session": entry_session.isoformat(),
+                "exit_session": exit_session.isoformat(),
+                "score": float(row.get("score", 0.0)),
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "marks": marks,
+            }
+        )
+    orders.sort(
+        key=lambda row: (
+            row["entry_at"],
+            row["decision_at"],
+            -row["score"],
+            row["canonical_observation_id"],
+        )
+    )
+    if (
+        policy.starting_capital <= 0
+        or policy.max_positions <= 0
+        or not 0 < policy.gross_exposure_limit <= 1
+    ):
+        reasons.append("invalid_execution_policy")
+
+    first = min(interval_entries, default=None)
+    last = max(interval_exits, default=None)
+    sessions: list[date] = []
+    if first and last:
+        current = first
+        while current <= last:
+            sessions.append(current)
+            current = calendar.next_session(current)
+    cash = float(policy.starting_capital)
+    positions: dict[str, dict[str, Any]] = {}
+    ledger: list[dict[str, Any]] = []
+    equity: list[dict[str, Any]] = []
+    fees = slippage = realized = turnover_notional = 0.0
+    rejected = 0
+    previous_equity = policy.starting_capital
+    if first:
+        equity.append(
+            {
+                "session": calendar.previous_session(first).isoformat(),
+                "cash": cash,
+                "market_value": 0.0,
+                "realized_pnl": 0.0,
+                "unrealized_pnl": 0.0,
+                "cumulative_fees": 0.0,
+                "cumulative_slippage": 0.0,
+                "total_equity": cash,
+                "high_water_mark": cash,
+                "drawdown": 0.0,
+                "daily_return": 0.0,
+                "gross_exposure": 0.0,
+                "open_positions": 0,
+                "observation_type": "initial_capital",
+            }
+        )
+    allocation_budget = (
+        policy.starting_capital
+        * policy.gross_exposure_limit
+        / max(1, policy.max_positions)
+    )
+    for session in sessions:
+        key = session.isoformat()
+        for order in (row for row in orders if row["entry_session"] == key):
+            reason = None
+            if order["symbol"] in positions or any(
+                position["security_id"]
+                and position["security_id"] == order["security_id"]
+                for position in positions.values()
+            ):
+                reason = "repeated_symbol_while_open"
+            elif len(positions) >= policy.max_positions:
+                reason = "maximum_positions_reached"
+            entry_fill = order["entry_price"] * (1 + policy.slippage_bps / 10_000)
+            fee_rate = policy.transaction_cost_bps / 10_000
+            entry_notional = allocation_budget / (1 + fee_rate)
+            quantity = entry_notional / entry_fill
+            fee = entry_notional * fee_rate
+            if reason is None and cash + 1e-9 < entry_notional + fee:
+                reason = "insufficient_cash"
+            if reason:
+                rejected += 1
+                ledger.append(
+                    {
+                        **order,
+                        "event": "order_rejected",
+                        "session": key,
+                        "reason": reason,
+                    }
+                )
+                continue
+            cash -= entry_notional + fee
+            fees += fee
+            slippage += quantity * (entry_fill - order["entry_price"])
+            turnover_notional += entry_notional
+            positions[order["symbol"]] = {
+                **order,
+                "quantity": quantity,
+                "entry_cash": entry_notional + fee,
+            }
+            ledger.append(
+                {
+                    "event": "entry_fill",
+                    "session": key,
+                    "canonical_observation_id": order["canonical_observation_id"],
+                    "symbol": order["symbol"],
+                    "quantity": quantity,
+                    "reference_price": order["entry_price"],
+                    "fill_price": entry_fill,
+                    "notional": entry_notional,
+                    "fee": fee,
+                }
+            )
+        closing = [
+            position
+            for position in positions.values()
+            if position["exit_session"] == key
+        ]
+        for position in sorted(
+            closing, key=lambda row: (row["exit_at"], row["canonical_observation_id"])
+        ):
+            exit_fill = position["exit_price"] * (1 - policy.slippage_bps / 10_000)
+            gross = position["quantity"] * exit_fill
+            fee = gross * policy.transaction_cost_bps / 10_000
+            cash += gross - fee
+            fees += fee
+            slippage += position["quantity"] * (position["exit_price"] - exit_fill)
+            turnover_notional += gross
+            trade_pnl = gross - fee - position["entry_cash"]
+            realized += trade_pnl
+            ledger.append(
+                {
+                    "event": "exit_fill",
+                    "session": key,
+                    "canonical_observation_id": position["canonical_observation_id"],
+                    "symbol": position["symbol"],
+                    "quantity": position["quantity"],
+                    "reference_price": position["exit_price"],
+                    "fill_price": exit_fill,
+                    "notional": gross,
+                    "fee": fee,
+                    "realized_pnl": trade_pnl,
+                }
+            )
+            del positions[position["symbol"]]
+        market_value = 0.0
+        open_cost = 0.0
+        for position in positions.values():
+            mark = position["marks"].get(key)
+            if mark is None:
+                reasons.append(
+                    f"missing_open_position_mark:{position['canonical_observation_id']}:{key}"
+                )
+                continue
+            market_value += position["quantity"] * mark
+            open_cost += position["entry_cash"]
+        total = cash + market_value
+        peak = max([row["high_water_mark"] for row in equity] + [total])
+        equity.append(
+            {
+                "session": key,
+                "cash": cash,
+                "market_value": market_value,
+                "realized_pnl": realized,
+                "unrealized_pnl": market_value - open_cost,
+                "cumulative_fees": fees,
+                "cumulative_slippage": slippage,
+                "total_equity": total,
+                "high_water_mark": peak,
+                "drawdown": total / peak - 1 if peak else 0.0,
+                "daily_return": total / previous_equity - 1 if previous_equity else 0.0,
+                "gross_exposure": market_value / total if total else 0.0,
+                "open_positions": len(positions),
+                "observation_type": "session_close",
+            }
+        )
+        previous_equity = total
+    if positions:
+        reasons.append("open_positions_at_terminal_session")
+    if (
+        equity
+        and not positions
+        and abs(equity[-1]["total_equity"] - (policy.starting_capital + realized))
+        > 1e-6
+    ):
+        reasons.append("ledger_equity_reconciliation_failed")
+    if any(
+        row["gross_exposure"] > policy.gross_exposure_limit + 1e-9 for row in equity
+    ):
+        reasons.append("gross_exposure_limit_exceeded")
+    unique_reasons = sorted(set(reasons))
+    valid = not unique_reasons
+    trough = min(equity, key=lambda row: row["drawdown"], default=None)
+    peak_date = None
+    recovery_session = None
+    drawdown_duration_sessions = None
+    if trough:
+        prior = [row for row in equity if row["session"] <= trough["session"]]
+        peak_date = max(prior, key=lambda row: row["total_equity"])["session"]
+        peak_index = next(
+            index for index, row in enumerate(equity) if row["session"] == peak_date
+        )
+        trough_index = equity.index(trough)
+        recovery = next(
+            (
+                row
+                for row in equity[trough_index + 1 :]
+                if row["total_equity"] >= trough["high_water_mark"]
+            ),
+            None,
+        )
+        recovery_session = recovery["session"] if recovery else None
+        recovery_index = next(
+            (index for index, row in enumerate(equity) if row is recovery),
+            len(equity) - 1,
+        )
+        drawdown_duration_sessions = recovery_index - peak_index
+    metrics = {
+        "path_valid": valid,
+        "evidence_sufficient": valid,
+        "invalid_reasons": unique_reasons,
+        "starting_capital": policy.starting_capital,
+        "ending_equity": equity[-1]["total_equity"] if equity else None,
+        "cumulative_return": equity[-1]["total_equity"] / policy.starting_capital - 1
+        if equity
+        else None,
+        "max_drawdown": trough["drawdown"] if valid and trough else None,
+        "drawdown_sign_convention": "negative_fraction_from_prior_close_high_water_mark; close_to_close_not_intraday",
+        "drawdown_peak_session": peak_date if valid else None,
+        "drawdown_trough_session": trough["session"] if valid and trough else None,
+        "drawdown_recovered": bool(
+            valid and trough and equity[-1]["total_equity"] >= trough["high_water_mark"]
+        ),
+        "drawdown_recovery_session": recovery_session if valid else None,
+        "drawdown_duration_sessions": drawdown_duration_sessions if valid else None,
+        "trade_count": sum(row["event"] == "exit_fill" for row in ledger),
+        "rejected_order_count": rejected,
+        "turnover": turnover_notional / policy.starting_capital,
+        "cumulative_fees": fees,
+        "cumulative_slippage": slippage,
+        "extended_valuation_end_session": last.isoformat() if last else None,
+    }
+    policy_payload = policy.payload()
+    evidence = [
+        {
+            key: row.get(key)
+            for key in (
+                "canonical_observation_id",
+                "security_id",
+                "entry_at",
+                "exit_at",
+                "entry_price",
+                "exit_price",
+                "marks",
+            )
+        }
+        for row in orders
+    ]
+    return {
+        "schema_version": PORTFOLIO_PATH_SCHEMA,
+        "candidate_id": candidate_id,
+        "evaluated_split": "frozen_final_holdout",
+        "input_sha256": input_sha256,
+        "candidate_scope": candidate_scope,
+        "policy": policy_payload,
+        "policy_sha256": _hash(policy_payload),
+        "orders_and_position_events": ledger,
+        "daily_equity": equity,
+        "valuation_evidence_manifest": {
+            "basis": policy.split_policy,
+            "dividends": policy.dividends,
+            "calendar": calendar.identifier,
+            "required_price_fields": [
+                "adjusted_entry_price",
+                "adjusted_exit_price",
+                "valuation_path[].adjusted_close",
+            ],
+            "source_rows": len(source),
+            "unique_canonical_ids": len(seen),
+            "valuation_evidence_sha256": _hash(evidence),
+            "evidence": evidence,
+        },
+        "metrics": metrics,
+        "automatic_promotion": False,
+        "research_only": True,
+    }
