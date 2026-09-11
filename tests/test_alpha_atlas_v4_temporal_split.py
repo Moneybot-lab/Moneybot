@@ -286,6 +286,7 @@ def test_v4_walk_forward_is_grouped_deterministic_and_holdout_isolated():
         holdout_changed,
         development_ids=development_ids,
         final_holdout_ids=holdout_ids,
+
     )
 
     assert actual == expected
