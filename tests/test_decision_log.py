@@ -1,6 +1,18 @@
 from pathlib import Path
 
-from moneybot.services.decision_log import DecisionLogger, summarize_decision_events
+from moneybot.services.decision_log import DecisionLogger, read_decision_events, summarize_decision_events
+
+
+def test_uncapped_reader_loads_complete_export_larger_than_canonical_workflow_old_cap(tmp_path: Path):
+    path = tmp_path / "events.jsonl"
+    record_count = 50_612
+    path.write_text("".join(f'{{"ts": {index}}}\n' for index in range(record_count)), encoding="utf-8")
+
+    events = read_decision_events(str(path), limit=None)
+
+    assert len(events) == record_count
+    assert events[0]["ts"] == 0
+    assert events[-1]["ts"] == record_count - 1
 
 
 def test_decision_logger_tracks_counts_and_writes_file(tmp_path: Path):

@@ -212,6 +212,7 @@ def test_builder_has_optimized_timeout_and_performance_telemetry():
         "timeout 600 python3 scripts/build_massive_decision_training_rows.py"
         not in build
     )
+    assert "--limit" not in build
 
 
 def test_v2_production_boundary_and_v4_no_promotion_are_unchanged():

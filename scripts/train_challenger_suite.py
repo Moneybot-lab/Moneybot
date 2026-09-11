@@ -148,6 +148,29 @@ def _walk_forward_splits(df: pd.DataFrame, *, max_windows: int = 3) -> list[tupl
     return folds
 
 
+def _chronologically_order_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Order observations by their effective event time before positional splits."""
+    ordered = df.copy()
+    event_times = None
+    if "event_date" in ordered.columns:
+        parsed_dates = pd.to_datetime(ordered["event_date"], utc=True, errors="coerce")
+        if parsed_dates.notna().all():
+            event_times = parsed_dates
+    if event_times is None and "ts" in ordered.columns:
+        numeric = pd.to_numeric(ordered["ts"], errors="coerce")
+        if numeric.notna().all():
+            event_times = pd.to_datetime(numeric, unit="s", utc=True, errors="coerce")
+    if event_times is None or not event_times.notna().all():
+        return ordered.reset_index(drop=True)
+    ordered["_event_time_order"] = event_times
+    tie_breakers = ["_event_time_order"]
+    if "ts" in ordered.columns:
+        tie_breakers.append("ts")
+    if "canonical_observation_id" in ordered.columns:
+        tie_breakers.append("canonical_observation_id")
+    return ordered.sort_values(tie_breakers, kind="stable").drop(columns="_event_time_order").reset_index(drop=True)
+
+
 def _average_metric_dicts(metric_dicts: list[dict[str, Any]]) -> dict[str, Any]:
     if not metric_dicts:
         return {}
@@ -471,6 +494,7 @@ def _apply_walk_forward_metrics(
         return
     for challenger in challengers:
         fold_metrics: list[dict[str, Any]] = []
+        unusable_folds = 0
         for train_start, train_end, test_end in folds:
             source = fit_source if fit_source is not None else clean
             fold_train = source.iloc[train_start:train_end]
@@ -482,6 +506,7 @@ def _apply_walk_forward_metrics(
                 embargo_days=EMBARGO_DAYS,
             )
             if fold_train.empty or fold_test.empty:
+                unusable_folds += 1
                 continue
             if fit_source is not None:
                 fold_policy = fit_feature_fill_policy(fold_train, feature_columns)
@@ -570,13 +595,27 @@ def _apply_walk_forward_metrics(
             min_positive_windows = min(len(fold_metrics), max(2, int(np.ceil(len(fold_metrics) / 2))))
             walk_forward["positive_ranking_windows"] = positive_windows
             walk_forward["min_positive_windows_required"] = min_positive_windows
-            walk_forward["passed"] = positive_windows >= min_positive_windows
+            walk_forward["planned_window_count"] = len(folds)
+            walk_forward["unusable_window_count"] = unusable_folds
+            walk_forward["all_windows_usable"] = unusable_folds == 0
+            walk_forward["passed"] = unusable_folds == 0 and positive_windows >= min_positive_windows
             walk_forward["zero_big_loss_windows"] = sum(1 for metrics in fold_metrics if int(metrics.get("big_loss_predictions", 0)) == 0)
             walk_forward["zero_big_loss_window_rate"] = round(walk_forward["zero_big_loss_windows"] / len(fold_metrics), 6)
             challenger["metrics"]["walk_forward"] = walk_forward
             challenger["metrics"]["walk_forward_passed"] = walk_forward["passed"]
             challenger["metrics"]["walk_forward_ranking_objective"] = walk_forward.get("ranking_objective", 0.0)
             challenger["metrics"]["walk_forward_recipe_reproduced"] = True
+        else:
+            challenger["metrics"]["walk_forward"] = {
+                "window_count": 0,
+                "planned_window_count": len(folds),
+                "unusable_window_count": unusable_folds,
+                "all_windows_usable": False,
+                "passed": False,
+            }
+            challenger["metrics"]["walk_forward_passed"] = False
+            challenger["metrics"]["walk_forward_ranking_objective"] = 0.0
+            challenger["metrics"]["walk_forward_recipe_reproduced"] = False
 
 
 
@@ -2722,8 +2761,7 @@ def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: f
             raise ValueError("V4 challenger training requires a frozen temporal split plan")
         frozen_plan = json.loads(split_plan_path.read_text(encoding="utf-8"))
         train_ids, test_ids = validate_split_plan(frozen_plan, input_path=input_path)
-    if "ts" in df.columns:
-        df = df.sort_values("ts").reset_index(drop=True)
+    df = _chronologically_order_rows(df)
     df = _prepare_frame(df)
     target_col = _target(df, horizon_days)
     df[target_col] = pd.to_numeric(df[target_col], errors="coerce")
