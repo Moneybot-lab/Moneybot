@@ -39,6 +39,124 @@ class TemporalSplitResult:
     diagnostics: dict[str, Any]
 
 
+def plan_v4_walk_forward_folds(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    development_ids: set[str],
+    max_windows: int = 3,
+    embargo_sessions: int = 1,
+) -> list[dict[str, Any]]:
+    """Plan deterministic folds from complete V4 cutoff-session groups.
+
+    Unlike the frozen final split, these folds are selection evidence.  Their
+    safety boundary is therefore the validation *decision*, not its later
+    entry, and membership is restricted to the frozen development side.
+    """
+    calendar = ExchangeCalendar()
+    validated = [_validate_row(row) for row in rows]
+    by_id = {item["id"]: item for item in validated}
+    if len(by_id) != len(validated):
+        raise TemporalSplitDataError("duplicate_canonical_observation_id")
+    missing = development_ids - set(by_id)
+    if missing:
+        raise TemporalSplitDataError("development_id_missing_from_input")
+    items = [by_id[identifier] for identifier in development_ids]
+    for item in items:
+        item["group"] = _session_date(calendar, item["times"]["feature_cutoff_at"])
+    groups = sorted({item["group"] for item in items})
+    if len(groups) < 6:
+        return []
+    test_groups = max(1, len(groups) // 6)
+    count = min(max_windows, max(1, len(groups) // test_groups - 2))
+    first_validation = max(test_groups * 2, len(groups) - count * test_groups)
+    folds: list[dict[str, Any]] = []
+    for index in range(count):
+        validation_start = first_validation + index * test_groups
+        validation_end = min(len(groups), validation_start + test_groups)
+        train_start = 0 if index < 2 else max(0, validation_start - test_groups * 3)
+        planned_train_groups = set(groups[train_start:validation_start])
+        planned_validation_groups = groups[validation_start:validation_end]
+        embargoed_groups = set(planned_validation_groups[: max(0, embargo_sessions)])
+        usable_validation_groups = set(planned_validation_groups) - embargoed_groups
+        pre_train = [item for item in items if item["group"] in planned_train_groups]
+        pre_validation = [
+            item for item in items if item["group"] in usable_validation_groups
+        ]
+        earliest_decision = min(
+            (item["times"]["decision_at"] for item in pre_validation), default=None
+        )
+        earliest_entry = min(
+            (item["times"]["entry_at"] for item in pre_validation), default=None
+        )
+        train = [
+            item
+            for item in pre_train
+            if earliest_decision is not None
+            and item["times"]["exit_at"] < earliest_decision
+        ]
+        latest_exit = max((item["times"]["exit_at"] for item in train), default=None)
+        reasons: list[str] = []
+        if not train:
+            reasons.append("empty_training_after_timing_purge")
+        if not pre_validation:
+            reasons.append("empty_validation_after_session_embargo")
+        if (
+            latest_exit is not None
+            and earliest_decision is not None
+            and not latest_exit < earliest_decision
+        ):
+            reasons.append("training_label_not_available_before_validation_decision")
+        train_ids = sorted(item["id"] for item in train)
+        validation_ids = sorted(item["id"] for item in pre_validation)
+        folds.append(
+            {
+                "fold_index": index + 1,
+                "train_ids": train_ids,
+                "validation_ids": validation_ids,
+                "usable": not reasons,
+                "unusable_reason": ";".join(reasons) or None,
+                "train_group_count": len({item["group"] for item in train}),
+                "validation_group_count": len(usable_validation_groups),
+                "train_rows_before": len(pre_train),
+                "train_rows_after": len(train),
+                "validation_rows_before": sum(
+                    item["group"] in set(planned_validation_groups) for item in items
+                ),
+                "validation_rows_after": len(pre_validation),
+                "purged_train_rows": len(pre_train) - len(train),
+                "embargoed_validation_rows": sum(
+                    item["group"] in embargoed_groups for item in items
+                ),
+                "latest_train_label_completion_at": latest_exit.isoformat()
+                if latest_exit
+                else None,
+                "earliest_validation_decision_at": earliest_decision.isoformat()
+                if earliest_decision
+                else None,
+                "earliest_validation_entry_at": earliest_entry.isoformat()
+                if earliest_entry
+                else None,
+                "train_first_group": min(
+                    (item["group"] for item in train), default=None
+                ),
+                "train_last_group": max(
+                    (item["group"] for item in train), default=None
+                ),
+                "validation_first_group": min(usable_validation_groups, default=None),
+                "validation_last_group": max(usable_validation_groups, default=None),
+                "complete_group_integrity": True,
+                "timing_boundary_passed": bool(
+                    latest_exit
+                    and earliest_decision
+                    and latest_exit < earliest_decision
+                ),
+                "final_holdout_overlap_count": 0,
+                "embargo_sessions": embargo_sessions,
+            }
+        )
+    return folds
+
+
 def file_sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
