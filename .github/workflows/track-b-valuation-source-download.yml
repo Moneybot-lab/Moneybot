@@ -1,0 +1,184 @@
+name: Track B Valuation Source Download
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+  AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_EC2_METADATA_DISABLED: "true"
+  AWS_MAX_ATTEMPTS: "3"
+  AWS_RETRY_MODE: standard
+  DIAGNOSTIC_DIR: data/track_b/valuation_source_download
+
+jobs:
+  download-valuation-sources:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install AWS CLI
+        run: |
+          python -m pip install --disable-pip-version-check awscli
+          aws --version
+
+      - name: Download fixed valuation source files
+        id: download
+        env:
+          MASSIVE_FLATFILES_ACCESS_KEY_ID: ${{ secrets.MASSIVE_FLATFILES_ACCESS_KEY_ID }}
+          MASSIVE_FLATFILES_SECRET_ACCESS_KEY: ${{ secrets.MASSIVE_FLATFILES_SECRET_ACCESS_KEY }}
+          MASSIVE_FLATFILES_ENDPOINT: ${{ secrets.MASSIVE_FLATFILES_ENDPOINT }}
+          MASSIVE_FLATFILES_BUCKET: ${{ secrets.MASSIVE_FLATFILES_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.MASSIVE_FLATFILES_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.MASSIVE_FLATFILES_SECRET_ACCESS_KEY }}
+        run: |
+          set -uo pipefail
+          mkdir -p "$DIAGNOSTIC_DIR"
+          overall_status=0
+          configuration_status=0
+
+          if [ -z "$MASSIVE_FLATFILES_ACCESS_KEY_ID" ] || [ -z "$MASSIVE_FLATFILES_SECRET_ACCESS_KEY" ]; then
+            echo "Required Massive flat-file credentials are not configured." >&2
+            overall_status=1
+            configuration_status=1
+          fi
+          if [ "$MASSIVE_FLATFILES_ENDPOINT" != "https://files.massive.com" ]; then
+            echo "Configured Massive endpoint does not match the fixed diagnostic endpoint." >&2
+            overall_status=1
+            configuration_status=1
+          fi
+          if [ "$MASSIVE_FLATFILES_BUCKET" != "flatfiles" ]; then
+            echo "Configured Massive bucket does not match the fixed diagnostic bucket." >&2
+            overall_status=1
+            configuration_status=1
+          fi
+
+          download_one() {
+            local filename="$1"
+            local object_uri="s3://flatfiles/us_stocks_sip/day_aggs_v1/2026/07/${filename}"
+            local destination="$DIAGNOSTIC_DIR/$filename"
+            if [ "$configuration_status" -ne 0 ]; then
+              printf '%s\n' "not_attempted_configuration_error" > "$DIAGNOSTIC_DIR/${filename}.download_status"
+              return
+            fi
+            if aws s3 cp "$object_uri" "$destination" \
+              --endpoint-url "https://files.massive.com" \
+              --only-show-errors \
+              --no-progress \
+              --cli-connect-timeout 15 \
+              --cli-read-timeout 120; then
+              printf '%s\n' "downloaded" > "$DIAGNOSTIC_DIR/${filename}.download_status"
+              if gzip -t "$destination"; then
+                printf '%s\n' "valid" > "$DIAGNOSTIC_DIR/${filename}.gzip_status"
+              else
+                printf '%s\n' "invalid" > "$DIAGNOSTIC_DIR/${filename}.gzip_status"
+                overall_status=1
+              fi
+            else
+              printf '%s\n' "failed" > "$DIAGNOSTIC_DIR/${filename}.download_status"
+              overall_status=1
+            fi
+          }
+
+          download_one "2026-07-23.csv.gz"
+          download_one "2026-07-24.csv.gz"
+
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          root = Path(os.environ["DIAGNOSTIC_DIR"])
+          expected = {
+              "2026-07-23.csv.gz": "1105a209470db9d35e70b9a1de83bf2f0a5631f77272cd5f666410bf04ef6cc7",
+              "2026-07-24.csv.gz": "8c2f6a111f94212691c39734a3099f481c6379743b856d96e0e2dea80b8793c0",
+          }
+          files = []
+          for filename, expected_sha256 in expected.items():
+              path = root / filename
+              status_path = root / f"{filename}.download_status"
+              gzip_path = root / f"{filename}.gzip_status"
+              actual_sha256 = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+              files.append({
+                  "filename": filename,
+                  "object_key": f"us_stocks_sip/day_aggs_v1/2026/07/{filename}",
+                  "download_status": status_path.read_text().strip() if status_path.is_file() else "not_attempted",
+                  "compressed_bytes": path.stat().st_size if path.is_file() else None,
+                  "actual_sha256": actual_sha256,
+                  "expected_sha256": expected_sha256,
+                  "hash_match": actual_sha256 == expected_sha256 if actual_sha256 else False,
+                  "gzip_integrity": gzip_path.read_text().strip() if gzip_path.is_file() else "not_checked",
+              })
+          manifest = {
+              "schema_version": "track-b-valuation-source-download.v1",
+              "original_track_b_run_id": "34660765111-1",
+              "diagnostic_workflow_run_id": f"{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}",
+              "checked_out_sha": os.environ["GITHUB_SHA"],
+              "retrieved_at_utc": datetime.now(timezone.utc).isoformat(),
+              "endpoint": "https://files.massive.com",
+              "bucket": "flatfiles",
+              "files": files,
+              "all_downloads_succeeded": all(item["download_status"] == "downloaded" for item in files),
+              "all_gzip_valid": all(item["gzip_integrity"] == "valid" for item in files),
+              "all_hashes_match_original_run": all(item["hash_match"] for item in files),
+              "hash_mismatch_warning": "A mismatch means this download does not reproduce the original source snapshot; downloaded bytes are preserved for diagnosis." if any(not item["hash_match"] for item in files) else None,
+          }
+          (root / "download_manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+          PY
+          manifest_status=$?
+          if [ "$manifest_status" -ne 0 ]; then
+            echo "Failed to write sanitized diagnostic manifest." >&2
+            overall_status=1
+          fi
+
+          rm -f "$DIAGNOSTIC_DIR"/*.download_status "$DIAGNOSTIC_DIR"/*.gzip_status
+          exit "$overall_status"
+
+      - name: Write diagnostic summary
+        if: always()
+        env:
+          ARTIFACT_NAME: track-b-valuation-source-files-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+          from pathlib import Path
+
+          manifest_path = Path(os.environ["DIAGNOSTIC_DIR"]) / "download_manifest.json"
+          print("## Track B valuation source download")
+          if not manifest_path.is_file():
+              print("Download manifest was not produced; inspect the failed job steps.")
+          else:
+              manifest = json.loads(manifest_path.read_text())
+              print("| File | Download | Gzip | SHA-256 matches run 34660765111-1 |")
+              print("|---|---|---|---|")
+              for item in manifest["files"]:
+                  print(f"| `{item['filename']}` | {item['download_status']} | {item['gzip_integrity']} | {item['hash_match']} |")
+              if not manifest["all_hashes_match_original_run"]:
+                  print("\n> **Warning:** At least one provider object differs from the original Track B source hash. Do not treat it as the original snapshot.")
+          print(f"\nDownload artifact **{os.environ['ARTIFACT_NAME']}** from this workflow run's Artifacts section.")
+          PY
+
+      - name: Upload valuation source diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: track-b-valuation-source-files-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.DIAGNOSTIC_DIR }}
+          retention-days: 7
+          if-no-files-found: warn
