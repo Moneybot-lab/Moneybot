@@ -50,6 +50,7 @@ env:
   CLEANING_QUALITY_REPORT: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/training_quality/model_quality_report.json
   FEATURE_STORE_DIR: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/flat_feature_store
   PHASE0_DIR: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/phase0
+  VALUATION_COVERAGE_REPORT: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/phase0/valuation_coverage_report.json
   TRACK_B_ARTIFACT_DIR: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
@@ -238,6 +239,33 @@ jobs:
           echo "TRACK_B_FAILED_STAGE=validate_raw" >> "$GITHUB_ENV"
           python3 scripts/validate_alpha_atlas_v4_workflow_artifacts.py \
             --stage raw --rows "$RAW_V4_ROWS" --manifest "$RAW_V4_MANIFEST"
+
+      - name: Preflight daily valuation evidence coverage
+        run: |
+          set -euo pipefail
+          echo "TRACK_B_FAILED_STAGE=valuation_coverage" >> "$GITHUB_ENV"
+          python3 scripts/check_alpha_atlas_v4_valuation_coverage.py \
+            --input "$RAW_V4_ROWS" \
+            --output "$VALUATION_COVERAGE_REPORT"
+
+      - name: Summarize daily valuation evidence coverage
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+          from pathlib import Path
+          path = Path(os.environ["VALUATION_COVERAGE_REPORT"])
+          print("## Daily valuation evidence coverage")
+          if not path.is_file():
+              print("Coverage report was not produced; certification remains blocked.")
+          else:
+              report = json.loads(path.read_text())
+              print(f"Status: **{report['coverage_status']}**")
+              print(f"Affected observations: {report['affected_observation_count']}")
+              for item in report["unique_missing_symbol_sessions"]:
+                  print(f"- {item['symbol']} {item['session']}")
+          PY
 
       - name: Canonicalize V4 economic observations
         run: |
