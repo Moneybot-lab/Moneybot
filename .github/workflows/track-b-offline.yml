@@ -50,6 +50,7 @@ env:
   CLEANING_QUALITY_REPORT: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/training_quality/model_quality_report.json
   FEATURE_STORE_DIR: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/flat_feature_store
   PHASE0_DIR: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/phase0
+  VALUATION_COVERAGE_REPORT: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}/phase0/valuation_coverage_report.json
   TRACK_B_ARTIFACT_DIR: data/track_b/runs/${{ github.run_id }}-${{ github.run_attempt }}
 
 jobs:
@@ -239,6 +240,33 @@ jobs:
           python3 scripts/validate_alpha_atlas_v4_workflow_artifacts.py \
             --stage raw --rows "$RAW_V4_ROWS" --manifest "$RAW_V4_MANIFEST"
 
+      - name: Preflight daily valuation evidence coverage
+        run: |
+          set -euo pipefail
+          echo "TRACK_B_FAILED_STAGE=valuation_coverage" >> "$GITHUB_ENV"
+          python3 scripts/check_alpha_atlas_v4_valuation_coverage.py \
+            --input "$RAW_V4_ROWS" \
+            --output "$VALUATION_COVERAGE_REPORT"
+
+      - name: Summarize daily valuation evidence coverage
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import os
+          from pathlib import Path
+          path = Path(os.environ["VALUATION_COVERAGE_REPORT"])
+          print("## Daily valuation evidence coverage")
+          if not path.is_file():
+              print("Coverage report was not produced; certification remains blocked.")
+          else:
+              report = json.loads(path.read_text())
+              print(f"Status: **{report['coverage_status']}**")
+              print(f"Affected observations: {report['affected_observation_count']}")
+              for item in report["unique_missing_symbol_sessions"]:
+                  print(f"- {item['symbol']} {item['session']}")
+          PY
+
       - name: Canonicalize V4 economic observations
         run: |
           set -euo pipefail
@@ -393,6 +421,8 @@ jobs:
           canonical = json.loads(Path(os.environ["CANONICAL_DIAGNOSTICS"]).read_text())
           quality = json.loads(Path(os.environ["CLEANING_QUALITY_REPORT"]).read_text())
           split_plan = json.loads((root / "challenger_suite/challenger_split_plan.json").read_text())
+          backtest_path = root / "challenger_suite/backtest_report.json"
+          backtest = json.loads(backtest_path.read_text()) if backtest_path.is_file() else {}
           certification_path = Path(os.environ["PHASE0_DIR"]) / "temporal_safety_certification.json"
           certification = json.loads(certification_path.read_text()) if certification_path.is_file() else {"status": "NOT_EVALUATED"}
           summary = {
@@ -412,6 +442,9 @@ jobs:
               "phase0_certification_status": certification["status"],
               "phase0_certification_passed": certification["status"] == "VERIFIED_FOR_THIS_ARTIFACT",
               "split_plan_sha256": split_plan["plan_sha256"],
+              "primary_portfolio_candidate": backtest.get("primary_portfolio_candidate"),
+              "portfolio_path_valid": bool((backtest.get("economic_backtest_validity") or {}).get("valid")),
+              "portfolio_path_invalid_reasons": (backtest.get("economic_backtest_validity") or {}).get("invalid_reasons", []),
           }
           (root / "track_b_v4_research_summary.json").write_text(
               json.dumps(summary, indent=2, sort_keys=True) + "\n",
