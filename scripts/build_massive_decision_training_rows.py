@@ -30,7 +30,6 @@ from moneybot.services.decision_target import (
     target_metadata,
 )
 from moneybot.services.corporate_actions import (
-    CORPORATE_ACTION_AVAILABILITY_POLICY_VERSION,
     CORPORATE_ACTION_SCHEMA_VERSION,
     adjust_bars_to_asof,
     index_splits,
@@ -1180,6 +1179,25 @@ def build_training_rows_from_raw_market(
         label_factor = price_factor_between(
             splits_by_symbol.get(symbol, []), str(entry["date"]), str(future["date"])
         )
+        valuation_path = []
+        for valuation_bar in raw_history[entry_idx : label_idx + 1]:
+            raw_close = _coerce_float(valuation_bar.get("close"))
+            if raw_close is None:
+                continue
+            valuation_factor = price_factor_between(
+                splits_by_symbol.get(symbol, []),
+                str(valuation_bar["date"]),
+                str(future["date"]),
+            )
+            valuation_path.append(
+                {
+                    "session": str(valuation_bar["date"]),
+                    "raw_close": float(raw_close),
+                    "split_adjustment_factor": float(valuation_factor),
+                    "adjusted_close": float(raw_close) * float(valuation_factor),
+                    "price_source": "massive_flatfile_official_daily_close",
+                }
+            )
         return_fwd = round(
             split_adjusted_forward_return(
                 float(entry["open"]),
@@ -1487,6 +1505,8 @@ def build_training_rows_from_raw_market(
             "adjusted_entry_price": float(entry["open"]) * label_factor,
             "raw_exit_price": float(future["close"]),
             "adjusted_exit_price": float(future["close"]),
+            "valuation_path_policy_version": "alpha-atlas-v4-daily-close-valuation.v1",
+            "valuation_path": valuation_path,
             "symbol": symbol,
             "sector_benchmark_symbol": sector_benchmark_symbol,
             "endpoint": str(event.get("endpoint") or "unknown"),
@@ -1947,6 +1967,7 @@ def emit_phase0_evidence_bundle(
         )
         entry_id = add_window([symbol_raw[entry_idx]])[0]
         exit_id = add_window([symbol_raw[exit_idx]])[0]
+        valuation_row_ids = add_window(symbol_raw[entry_idx : exit_idx + 1])
 
         identity_started = time.perf_counter()
         identity_id = "identity_" + _json_sha256(
@@ -2046,6 +2067,7 @@ def emit_phase0_evidence_bundle(
                 exit_id if int(row["label_horizon_sessions"]) == 10 else None
             ),
             "exit_row_id": exit_id,
+            "valuation_row_ids": valuation_row_ids,
             "corporate_action_evidence_id": action_id,
             "feature_contract_version": V4_FEATURE_CONTRACT_VERSION,
             "timing_contract_version": ALPHA_ATLAS_V4_TIMING_CONTRACT_VERSION,
@@ -2254,7 +2276,8 @@ def write_rows(
         "output_path": str(output_path_label or path),
         "horizon_days": horizon_days,
         "temporal_safety": {
-            "schema_version": "alpha-atlas-v4-temporal-safety-certification.v1",
+            "schema_version": "alpha-atlas-v4-core-observation-certification.v2",
+            "scope": "FULL_OBSERVATION_FEATURE_LABEL_TIMING",
             "status": "NOT_EVALUATED",
             "reason": "builder output has not yet been independently reconstructed and hash-certified",
             "legacy_leakage_safe_accepted": False,

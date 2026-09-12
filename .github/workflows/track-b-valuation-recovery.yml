@@ -1,0 +1,49 @@
+name: Track B Valuation Evidence Recovery
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  VALUATION_RECOVERY_DIR: data/track_b/valuation_recovery
+
+jobs:
+  recover-fixed-missing-marks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Retrieve fixed missing valuation marks
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: python3 scripts/recover_alpha_atlas_v4_valuation_evidence.py
+      - name: Write recovery summary
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          path = Path("data/track_b/valuation_recovery/recovery_diagnostics.json")
+          print("## Track B valuation evidence recovery")
+          if not path.is_file():
+              print("Recovery did not produce diagnostics.")
+          else:
+              report = json.loads(path.read_text())
+              print(f"Status: **{report['status']}**")
+              for attempt in report["attempts"]:
+                  print(f"- {attempt.get('symbol', 'configuration')}: {attempt['outcome']}")
+          PY
+      - name: Upload recovery evidence and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: track-b-valuation-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: data/track_b/valuation_recovery/**
+          retention-days: 7
+          if-no-files-found: warn

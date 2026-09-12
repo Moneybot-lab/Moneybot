@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import math
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -17,13 +18,133 @@ from moneybot.services.alpha_atlas_v4_canonical_observations import (
     canonical_observation_id,
 )
 from moneybot.services.market_data_providers import ExchangeCalendar
+from moneybot.services.corporate_actions import canonical_splits, price_factor_between
 
 FEATURE_CONTRACT_VERSION = "alpha-atlas-v4-features.v2"
 FEATURE_REGISTRY_VERSION = "alpha-atlas-v4-feature-registry.v1"
 FILL_POLICY_VERSION = "alpha-atlas-v4-feature-fill-policy.v1"
-RECONSTRUCTION_VERSION = "alpha-atlas-v4-reconstructability.v1"
-TEMPORAL_CERTIFICATION_VERSION = "alpha-atlas-v4-temporal-safety-certification.v1"
+RECONSTRUCTION_VERSION = "alpha-atlas-v4-core-observation-reconstruction.v2"
+TEMPORAL_CERTIFICATION_VERSION = "alpha-atlas-v4-core-observation-certification.v2"
 RECONSTRUCTION_LINEAGE_VERSION = "alpha-atlas-v4-reconstruction-lineage.v1"
+VALUATION_PATH_POLICY_VERSION = "alpha-atlas-v4-daily-close-valuation.v1"
+
+
+def _verify_valuation_path(
+    row: Mapping[str, Any],
+    *,
+    lineage: Mapping[str, Any],
+    loaded: Mapping[str, Any],
+    bundle_mode: bool,
+    tolerance: float,
+) -> list[str]:
+    """Replay daily valuation prices from source rows and action evidence."""
+    required = bool(
+        row.get("valuation_path_policy_version") is not None
+        or row.get("valuation_path") is not None
+        or (bundle_mode and "valuation_row_ids" in lineage)
+    )
+    if not required:
+        return []  # Explicit compatibility for pre-valuation lineage records.
+    failures: list[str] = []
+    if row.get("valuation_path_policy_version") != VALUATION_PATH_POLICY_VERSION:
+        failures.append("missing_or_incompatible_valuation_path_policy")
+    path = row.get("valuation_path")
+    if not isinstance(path, list) or not path:
+        return failures + ["missing_daily_valuation_path"]
+    references = lineage.get("valuation_row_ids") if bundle_mode else None
+    if not isinstance(references, list) or not references:
+        failures.append("missing_valuation_source_references")
+    elif len(references) != len(set(references)):
+        failures.append("duplicate_valuation_source_references")
+    source = loaded.get("valuation")
+    if not isinstance(source, list) or not source:
+        failures.append("missing_valuation_source_evidence")
+        source = []
+    action_payload = loaded.get("corporate_actions")
+    if not isinstance(action_payload, dict) or not isinstance(
+        action_payload.get("actions"), list
+    ):
+        failures.append("missing_or_malformed_valuation_action_evidence")
+        actions = []
+    else:
+        raw_actions = action_payload["actions"]
+        actions = canonical_splits(raw_actions)
+        if len(actions) != len(raw_actions):
+            failures.append("malformed_valuation_action_evidence")
+        if action_payload.get("symbol") != row.get("symbol"):
+            failures.append("valuation_action_security_mismatch")
+        action_ids = [str(action.get("id") or "") for action in actions]
+        if not all(action_ids) or len(action_ids) != len(set(action_ids)):
+            failures.append("malformed_valuation_action_identity")
+        if any(action.get("ticker") != row.get("symbol") for action in actions):
+            failures.append("valuation_action_security_mismatch")
+    try:
+        sessions = [date.fromisoformat(str(item["session"])) for item in path]
+        source_sessions = [date.fromisoformat(str(item["date"])) for item in source]
+        calendar = ExchangeCalendar()
+        if sessions != sorted(set(sessions)):
+            failures.append("valuation_path_sessions_not_unique_ordered")
+        if source_sessions != sorted(set(source_sessions)):
+            failures.append("valuation_source_sessions_not_unique_ordered")
+        if sessions != source_sessions:
+            failures.append("valuation_path_source_session_mismatch")
+        if any(not calendar.is_trading_day(session) for session in sessions):
+            failures.append("valuation_path_contains_non_session")
+        if any(
+            calendar.next_session(left) != right
+            for left, right in zip(sessions, sessions[1:])
+        ):
+            failures.append("valuation_path_missing_session")
+        if sessions[0].isoformat() != str(row.get("entry_session_date")) or sessions[
+            -1
+        ].isoformat() != str(row.get("exit_session_date")):
+            failures.append("valuation_path_boundary_mismatch")
+        exit_session = str(row["exit_session_date"])
+        for item, evidence in zip(path, source):
+            raw_close = float(evidence["close"])
+            supplied_raw = float(item["raw_close"])
+            supplied_factor = float(item["split_adjustment_factor"])
+            supplied_adjusted = float(item["adjusted_close"])
+            if evidence.get("symbol") != row.get("symbol"):
+                failures.append("valuation_source_security_mismatch")
+            if not all(
+                math.isfinite(value) and value > 0
+                for value in (
+                    raw_close,
+                    supplied_raw,
+                    supplied_factor,
+                    supplied_adjusted,
+                )
+            ):
+                failures.append("valuation_path_nonpositive_or_nonfinite")
+                continue
+            if not np.isclose(supplied_raw, raw_close, rtol=tolerance, atol=tolerance):
+                failures.append("valuation_path_raw_close_mismatch")
+            expected_factor = price_factor_between(
+                actions, str(evidence["date"]), exit_session
+            )
+            if not np.isclose(
+                supplied_factor, expected_factor, rtol=tolerance, atol=tolerance
+            ):
+                failures.append("valuation_path_independent_factor_mismatch")
+            if not np.isclose(
+                supplied_adjusted,
+                raw_close * expected_factor,
+                rtol=tolerance,
+                atol=tolerance,
+            ):
+                failures.append("valuation_path_independent_adjusted_close_mismatch")
+        if not np.isclose(
+            float(path[-1]["adjusted_close"]),
+            float(row["adjusted_exit_price"]),
+            rtol=tolerance,
+            atol=tolerance,
+        ):
+            failures.append("valuation_path_exit_price_mismatch")
+    except (KeyError, TypeError, ValueError, OverflowError):
+        failures.append("malformed_daily_valuation_path")
+    return sorted(set(failures))
+
 
 MODEL_FEATURES = (
     "feature_above_vwap",
@@ -337,7 +458,7 @@ def validate_feature_registry(
     actual = set(map(str, columns))
     if actual != expected:
         raise ValueError(
-            f"V4 feature registry mismatch missing={sorted(expected-actual)} unexpected={sorted(actual-expected)}"
+            f"V4 feature registry mismatch missing={sorted(expected - actual)} unexpected={sorted(actual - expected)}"
         )
     if any(name in actual for name in PRIOR_REQUEST_FEATURES):
         raise ValueError("prior-request state cannot be V4 model evidence")
@@ -524,7 +645,7 @@ def verify_observation(
         failures.extend(bundle_failures)
         lineage = resolved
     required = {"symbol", "spy", "sector", "reference"}
-    for source_spec in ([] if bundle_mode else lineage.get("sources") or []):
+    for source_spec in [] if bundle_mode else lineage.get("sources") or []:
         family = str(source_spec.get("family") or "")
         required.discard(family)
         relative = str(source_spec.get("path") or "")
@@ -613,6 +734,22 @@ def verify_observation(
             failures.append("target_mismatch")
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         failures.append("missing_executable_label_lineage")
+    valuation_failures = _verify_valuation_path(
+        row,
+        lineage=lineage,
+        loaded=loaded,
+        bundle_mode=bundle_mode,
+        tolerance=tolerance,
+    )
+    shared_valuation_integrity = {
+        "missing_or_malformed_valuation_action_evidence",
+        "malformed_valuation_action_evidence",
+        "malformed_valuation_action_identity",
+        "valuation_action_security_mismatch",
+    }
+    failures.extend(
+        reason for reason in valuation_failures if reason in shared_valuation_integrity
+    )
     action_source = lineage.get("corporate_action_source") or {}
     action_relative = str(action_source.get("path") or "")
     action_path = (root / action_relative).resolve()
@@ -707,11 +844,48 @@ def verify_observation(
         "corporate_action_manifest_sha256"
     ):
         failures.append("corporate_action_lineage_mismatch")
+    # Post-entry daily marks are not model inputs or label/execution evidence.
+    # Resolution failures confined to valuation references belong to the
+    # selected-portfolio scope; source-object/manifest failures remain core.
+    valuation_resolution_failures = [
+        reason
+        for reason in failures
+        if reason.startswith(
+            (
+                "missing_selected_source_row:valuation:",
+                "selected_source_row_hash_mismatch:valuation:",
+                "invalid_semantic_availability:valuation:",
+                "missing_source_timestamp:valuation",
+            )
+        )
+    ]
+    failures = [
+        reason for reason in failures if reason not in valuation_resolution_failures
+    ]
+    valuation_failures = sorted(set(valuation_failures + valuation_resolution_failures))
     status = "RECONSTRUCTABLE" if not failures else "NOT_RECONSTRUCTABLE"
+    valuation_required = bool(
+        row.get("valuation_path_policy_version") is not None
+        or row.get("valuation_path") is not None
+        or (bundle_mode and "valuation_row_ids" in lineage)
+    )
     return {
         "canonical_observation_id": row.get("canonical_observation_id"),
         "status": status,
         "failures": sorted(set(failures)),
+        "valuation_certification": {
+            "scope": "OBSERVATION_VALUATION_DIAGNOSTIC_ONLY",
+            "status": "VERIFIED"
+            if valuation_required and not valuation_failures
+            else "INCOMPLETE",
+            "required": valuation_required,
+            "policy_version": row.get("valuation_path_policy_version"),
+            "path_sessions": len(row.get("valuation_path") or []),
+            "resolved_source_sessions": len(loaded.get("valuation") or []),
+            "independent_adjustments_verified": valuation_required
+            and not valuation_failures,
+            "failures": valuation_failures,
+        },
     }
 
 
@@ -937,7 +1111,11 @@ def _resolve_evidence_bundle(
                 not pd.isna(cutoff)
                 and available > cutoff
                 and source_row_id
-                not in {record.get("entry_row_id"), record.get("exit_row_id")}
+                not in {
+                    record.get("entry_row_id"),
+                    record.get("exit_row_id"),
+                    *(record.get("valuation_row_ids") or []),
+                }
             ):
                 failures.append(f"future_source_availability:{family}")
             output.append(content)
@@ -948,6 +1126,7 @@ def _resolve_evidence_bundle(
         "spy": resolve_rows(record.get("spy_row_ids") or [], "spy"),
         "sector": resolve_rows(record.get("sector_row_ids") or [], "sector"),
         "reference": {},
+        "valuation": resolve_rows(record.get("valuation_row_ids") or [], "valuation"),
     }
     identity_by_id = {
         item.get("security_identity_evidence_id"): item
@@ -1055,6 +1234,7 @@ def build_temporal_safety_certification(
     )
     return {
         "schema_version": TEMPORAL_CERTIFICATION_VERSION,
+        "scope": "FULL_OBSERVATION_FEATURE_LABEL_TIMING",
         "status": (
             "VERIFIED_FOR_THIS_ARTIFACT"
             if verified
@@ -1088,6 +1268,8 @@ def validate_temporal_safety_certification(
 ) -> None:
     if certification.get("schema_version") != TEMPORAL_CERTIFICATION_VERSION:
         raise ValueError("unsupported temporal-safety certification")
+    if certification.get("scope") != "FULL_OBSERVATION_FEATURE_LABEL_TIMING":
+        raise ValueError("wrong certification scope for core observation evidence")
     if certification.get("status") != "VERIFIED_FOR_THIS_ARTIFACT":
         raise ValueError("artifact lacks full temporal-safety certification")
     if certification.get("artifact_sha256") != sha256_file(artifact_path):

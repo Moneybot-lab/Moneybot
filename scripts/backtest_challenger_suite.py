@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from moneybot.services.decision_target import HORIZON_DAYS, TARGET_NAME
+from moneybot.services.v4_portfolio_path import V4ExecutionPolicy, reconstruct_v4_portfolio_path
 from scripts.day10_train_candidate_model import _future_safe_feature_columns, _prepare_frame
 
 BACKTEST_SCHEMA_VERSION = "moneybot-challenger-backtest.v2"
@@ -31,6 +33,10 @@ def _load_jsonl(path: Path) -> pd.DataFrame:
 
 def _load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _sigmoid(values: np.ndarray) -> np.ndarray:
@@ -427,7 +433,6 @@ def _selected_threshold_support(frame: pd.DataFrame, preds: np.ndarray, returns:
     dates = _event_series(frame)
     symbols = frame["symbol"].fillna("").astype(str).str.upper() if "symbol" in frame.columns else pd.Series("unknown", index=frame.index)
     groups = pd.Series(symbols.astype(str).to_numpy() + "|" + dates.astype(str).to_numpy())
-    selected_returns = returns[selected]
     big_gain = returns >= 0.03
     big_loss = returns < -0.03
     selected_groups = groups[selected]
@@ -566,8 +571,20 @@ def backtest_challenger_suite(
     max_ece: float = 0.20,
     min_excess_return: float = 0.0,
     max_drift_shift: float = 3.0,
+    core_verification_report_path: Path | None = None,
+    core_certification_path: Path | None = None,
 ) -> dict[str, Any]:
     suite = _load_json(suite_manifest_path)
+    valuation_verifications = None
+    core_certification_sha256 = None
+    if core_verification_report_path is not None:
+        verification_report = _load_json(core_verification_report_path)
+        valuation_verifications = {
+            str(item.get("canonical_observation_id") or ""): item.get("valuation_certification", {})
+            for item in verification_report.get("results", [])
+        }
+    if core_certification_path is not None:
+        core_certification_sha256 = _file_sha256(core_certification_path)
     raw = _prepare_frame(_load_jsonl(feature_store_path))
     if "ts" in raw.columns:
         raw = raw.sort_values("ts")
@@ -601,6 +618,8 @@ def backtest_challenger_suite(
         },
     }
     challengers: list[dict[str, Any]] = []
+    development_selected_version = next(iter((suite.get("candidate_lanes") or {}).get("decision", {}).get("ranked_model_versions") or suite.get("ranked_model_versions") or []), None)
+    primary_portfolio = None
     for challenger in suite.get("challengers") or []:
         artifact = _load_json(Path(challenger["model_path"]))
         probs, preds = _predict(artifact, frame, features)
@@ -642,6 +661,33 @@ def backtest_challenger_suite(
                 "invalid_reasons": ["daily mark-to-market portfolio path unavailable; drawdown gate cannot be proven"],
             },
         }
+        if challenger.get("model_version") == development_selected_version:
+            portfolio_rows = frame.copy()
+            portfolio_rows["score"] = probs
+            portfolio_rows["prediction"] = preds
+            primary_portfolio = reconstruct_v4_portfolio_path(
+                portfolio_rows.to_dict(orient="records"),
+                candidate_id=str(development_selected_version),
+                input_sha256=_file_sha256(feature_store_path),
+                policy=V4ExecutionPolicy(transaction_cost_bps=transaction_cost_bps, slippage_bps=slippage_bps),
+                candidate_scope="decision",
+                valuation_verifications=valuation_verifications,
+                core_certification_sha256=core_certification_sha256,
+            )
+            path_metrics = primary_portfolio["metrics"]
+            metrics["portfolio_path"] = path_metrics
+            if path_metrics["path_valid"]:
+                metrics.update({
+                    "total_return_net": round(float(path_metrics["cumulative_return"]), 6),
+                    "total_return_net_evaluable": True,
+                    "max_drawdown": round(float(path_metrics["max_drawdown"]), 6),
+                    "max_drawdown_evaluable": True,
+                    "max_drawdown_reason": None,
+                    "turnover": round(float(path_metrics["turnover"]), 6),
+                })
+                metrics["economic_backtest_validity"].update({"valid": True, "portfolio_path_available": True, "path_dependent_metrics_evaluable": True, "invalid_reasons": []})
+            else:
+                metrics["max_drawdown_reason"] = ";".join(path_metrics["invalid_reasons"])
         slope = float(artifact.get("calibration_slope", 1.0) if "calibration_slope" in artifact else artifact.get("decision_model", {}).get("calibration_slope", 1.0))
         intercept = float(artifact.get("calibration_intercept", 0.0) if "calibration_intercept" in artifact else artifact.get("decision_model", {}).get("calibration_intercept", 0.0))
         metrics["calibration"].update({
@@ -875,6 +921,13 @@ def backtest_challenger_suite(
         "shadow_candidates": [item["model_version"] for item in shadow_candidates],
         "retention_policy": "retain every non-dominated candidate on the lane-specific Pareto frontier; do not collapse research retention to one overall winner",
         "ranking_policy": "frozen top-5 selection is performed within each event date; global holdout ranking is not a promotion-quality simulation",
+        "primary_portfolio_candidate": development_selected_version,
+        "primary_portfolio_selection_policy": "development-ranked candidate frozen before final-holdout portfolio evaluation; no holdout replacement selection",
+        "selected_portfolio_valuation_certification": (
+            primary_portfolio["portfolio_valuation_certification"]
+            if primary_portfolio
+            else None
+        ),
         "routing_policy": "shadow-log first; user-facing routing remains disabled until gates pass and human promotion occurs",
         "candidate_family_report": candidate_family_report,
         "calibration_stability_report": calibration_stability_report,
@@ -892,19 +945,33 @@ def backtest_challenger_suite(
         "candidate_feature_coverage_segmented_report": candidate_feature_coverage_segmented_report,
         "duplicate_weighting_report": duplicate_weighting_report,
         "economic_backtest_validity": {
-            "valid": False,
+            "valid": bool(primary_portfolio and primary_portfolio["metrics"]["path_valid"]),
             "cross_sectional_rows_handled": True,
             "duplicate_weighting_applied": True,
             "overlapping_horizon_handled": True,
             "transaction_cost_semantics_valid": True,
-            "portfolio_path_available": False,
-            "path_dependent_metrics_evaluable": False,
+            "portfolio_path_available": bool(primary_portfolio and primary_portfolio["metrics"]["path_valid"]),
+            "path_dependent_metrics_evaluable": bool(primary_portfolio and primary_portfolio["metrics"]["path_valid"]),
             "benchmark_comparison_valid": benchmark["benchmark_comparison_valid"],
-            "invalid_reasons": ["daily mark-to-market portfolio path unavailable; promotion drawdown evidence fails closed"],
+            "invalid_reasons": ([] if primary_portfolio and primary_portfolio["metrics"]["path_valid"] else (primary_portfolio["metrics"]["invalid_reasons"] if primary_portfolio else ["daily mark-to-market portfolio path unavailable; promotion drawdown evidence fails closed"])),
         },
         "final_summary": track_b_suite_diagnosis,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    if primary_portfolio is not None:
+        portfolio_dir = output_path.parent / "portfolio_path"
+        portfolio_dir.mkdir(parents=True, exist_ok=True)
+        portfolio_artifacts = {
+            "execution_policy.json": primary_portfolio["policy"],
+            "execution_ledger.json": {"schema_version": primary_portfolio["schema_version"], "candidate_id": primary_portfolio["candidate_id"], "events": primary_portfolio["orders_and_position_events"]},
+            "daily_portfolio_equity.json": {"schema_version": primary_portfolio["schema_version"], "candidate_id": primary_portfolio["candidate_id"], "rows": primary_portfolio["daily_equity"]},
+            "valuation_evidence_manifest.json": primary_portfolio["valuation_evidence_manifest"],
+            "selected_portfolio_valuation_certification.json": primary_portfolio["portfolio_valuation_certification"],
+            "portfolio_metrics.json": primary_portfolio["metrics"],
+        }
+        for name, payload in portfolio_artifacts.items():
+            (portfolio_dir / name).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        report["primary_portfolio_artifacts"] = {name: str(portfolio_dir / name) for name in portfolio_artifacts}
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
     extra_reports = {
         "track_b_suite_diagnosis.json": track_b_suite_diagnosis,
@@ -938,6 +1005,8 @@ def main() -> None:
     parser.add_argument("--transaction-cost-bps", type=float, default=5.0)
     parser.add_argument("--slippage-bps", type=float, default=5.0)
     parser.add_argument("--min-rows", type=int, default=20)
+    parser.add_argument("--core-verification-report")
+    parser.add_argument("--core-certification")
     args = parser.parse_args()
     report = backtest_challenger_suite(
         suite_manifest_path=Path(args.suite_manifest),
@@ -947,6 +1016,8 @@ def main() -> None:
         transaction_cost_bps=args.transaction_cost_bps,
         slippage_bps=args.slippage_bps,
         min_rows=args.min_rows,
+        core_verification_report_path=Path(args.core_verification_report) if args.core_verification_report else None,
+        core_certification_path=Path(args.core_certification) if args.core_certification else None,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
 
