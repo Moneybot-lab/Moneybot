@@ -21,6 +21,11 @@ def main() -> int:
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--supplement")
+    parser.add_argument(
+        "--diagnostic-only",
+        action="store_true",
+        help="Report all-observation gaps without treating them as core-certification failures.",
+    )
     args = parser.parse_args()
     rows = [
         json.loads(line)
@@ -46,7 +51,7 @@ def main() -> int:
     print(
         f"valuation coverage: {report['coverage_status']}; affected={report['affected_observation_count']}"
     )
-    return 0 if report["certification_may_proceed"] else 2
+    return 0 if args.diagnostic_only or report["certification_may_proceed"] else 2
 
 
 if __name__ == "__main__":

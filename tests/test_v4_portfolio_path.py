@@ -9,6 +9,7 @@ from moneybot.services.market_data_providers import ExchangeCalendar
 from moneybot.services.v4_portfolio_path import (
     V4ExecutionPolicy,
     reconstruct_v4_portfolio_path,
+    validate_selected_portfolio_valuation_certification,
 )
 from scripts.backtest_challenger_suite import backtest_challenger_suite
 
@@ -217,7 +218,7 @@ def test_calendar_split_basis_and_missing_evidence_fail_closed():
     invalid = _run([missing], max_positions=1)
     assert invalid["metrics"]["path_valid"] is False
     assert any(
-        reason.startswith("missing_valuation_sessions:missing:")
+        reason.startswith("missing_holding_valuation_sessions:missing:")
         for reason in invalid["metrics"]["invalid_reasons"]
     )
     assert invalid["metrics"]["max_drawdown"] is None
@@ -227,7 +228,7 @@ def test_calendar_split_basis_and_missing_evidence_fail_closed():
     missing_exit = _run([no_exit], max_positions=1)
     assert missing_exit["metrics"]["path_valid"] is False
     assert (
-        "missing_execution_or_valuation_evidence:no-exit"
+        "missing_execution_evidence:no-exit"
         in missing_exit["metrics"]["invalid_reasons"]
     )
 
@@ -254,6 +255,15 @@ def test_policy_and_input_lineage_hashes_change():
     )
     assert first["policy_sha256"] != changed_policy["policy_sha256"]
     assert first["input_sha256"] != changed_input["input_sha256"]
+    validate_selected_portfolio_valuation_certification(
+        first["portfolio_valuation_certification"], first
+    )
+    wrong_scope = {
+        **first["portfolio_valuation_certification"],
+        "scope": "FULL_OBSERVATION_FEATURE_LABEL_TIMING",
+    }
+    with pytest.raises(ValueError, match="wrong certification scope"):
+        validate_selected_portfolio_valuation_certification(wrong_scope, first)
 
 
 def test_abstention_produces_a_valid_cash_only_path_for_every_session():
@@ -273,6 +283,62 @@ def test_abstention_produces_a_valid_cash_only_path_for_every_session():
         "2026-01-06",
         "2026-01-07",
     ]
+
+
+def test_valuation_scope_uses_actual_holdings_and_does_not_change_execution():
+    held = _trade("held", "HELD", date(2026, 1, 5), [10, 9, 11])
+    rejected = _trade("rejected", "REJ", date(2026, 1, 5), [10, 9, 11], score=0.1)
+    missing_unheld = _trade("unheld", "NONE", date(2026, 1, 5), [10, 9, 11])
+    missing_unheld["prediction"] = 0
+    del rejected["valuation_path"][1]
+    del missing_unheld["valuation_path"][1]
+    result = _run([held, rejected, missing_unheld], max_positions=1)
+    assert result["metrics"]["path_valid"] is True
+    assert result["portfolio_valuation_certification"]["status"] == "VERIFIED"
+    assert (
+        next(
+            event
+            for event in result["orders_and_position_events"]
+            if event.get("canonical_observation_id") == "rejected"
+        )["reason"]
+        == "maximum_positions_reached"
+    )
+
+    missing_held = _trade("held", "HELD", date(2026, 1, 5), [10, 9, 11])
+    del missing_held["valuation_path"][1]
+    invalid = _run([missing_held, rejected, missing_unheld], max_positions=1)
+    execution_fields = (
+        "event",
+        "session",
+        "canonical_observation_id",
+        "symbol",
+        "quantity",
+        "fill_price",
+    )
+
+    def normalize(output):
+        return [
+            {key: event.get(key) for key in execution_fields}
+            for event in output["orders_and_position_events"]
+        ]
+
+    assert normalize(invalid) == normalize(result)
+    unknown = next(
+        row for row in invalid["daily_equity"] if row["session"] == "2026-01-06"
+    )
+    assert unknown["open_positions"] == 1
+    assert unknown["market_value"] is None
+    assert unknown["total_equity"] is None
+    assert unknown["gross_exposure"] is None
+    assert unknown["missing_position_marks"] == [
+        {"canonical_observation_id": "held", "symbol": "HELD", "session": "2026-01-06"}
+    ]
+    assert invalid["metrics"]["max_drawdown_evaluable"] is False
+    assert invalid["metrics"]["max_drawdown"] is None
+    assert (
+        invalid["portfolio_valuation_certification"]["status"]
+        == "INSUFFICIENT_EVIDENCE"
+    )
 
 
 def test_backtest_integration_writes_primary_path_and_keeps_routing_disabled(tmp_path):
@@ -313,6 +379,24 @@ def test_backtest_integration_writes_primary_path_and_keeps_routing_disabled(tmp
     }
     suite_path = models / "challenger_suite_manifest.json"
     suite_path.write_text(json.dumps(suite))
+    verification_path = tmp_path / "core_report.json"
+    verification_path.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "canonical_observation_id": "a",
+                        "valuation_certification": {
+                            "status": "VERIFIED",
+                            "failures": [],
+                        },
+                    }
+                ]
+            }
+        )
+    )
+    core_certificate = tmp_path / "core_certificate.json"
+    core_certificate.write_text('{"scope":"FULL_OBSERVATION_FEATURE_LABEL_TIMING"}')
 
     report = backtest_challenger_suite(
         suite_manifest_path=suite_path,
@@ -321,6 +405,8 @@ def test_backtest_integration_writes_primary_path_and_keeps_routing_disabled(tmp
         min_rows=1,
         transaction_cost_bps=0,
         slippage_bps=0,
+        core_verification_report_path=verification_path,
+        core_certification_path=core_certificate,
     )
     candidate = report["challengers"][0]
     assert candidate["backtest_metrics"]["max_drawdown_evaluable"] is True
@@ -336,5 +422,14 @@ def test_backtest_integration_writes_primary_path_and_keeps_routing_disabled(tmp
         "execution_ledger.json",
         "daily_portfolio_equity.json",
         "valuation_evidence_manifest.json",
+        "selected_portfolio_valuation_certification.json",
         "portfolio_metrics.json",
     }
+    certificate = json.loads(
+        (
+            tmp_path / "portfolio_path/selected_portfolio_valuation_certification.json"
+        ).read_text()
+    )
+    assert certificate["scope"] == "SELECTED_PORTFOLIO_ACTUAL_HOLDINGS"
+    assert certificate["status"] == "VERIFIED"
+    assert certificate["core_certification_sha256"]

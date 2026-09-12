@@ -131,6 +131,8 @@ def test_real_phase0_certifies_independently_replayed_valuation_adjustments(
     result = verify_observation(row, root=evidence)
     assert result["status"] == "RECONSTRUCTABLE", result["failures"]
     assert result["valuation_certification"] == {
+        "scope": "OBSERVATION_VALUATION_DIAGNOSTIC_ONLY",
+        "status": "VERIFIED",
         "required": True,
         "policy_version": "alpha-atlas-v4-daily-close-valuation.v1",
         "path_sessions": 5,
@@ -148,7 +150,9 @@ def test_missing_empty_and_partial_valuation_references_fail(tmp_path):
         "observation_lineage",
         lambda records: records[0].update(valuation_row_ids=[]),
     )
-    failures = verify_observation(row, root=evidence)["failures"]
+    failures = verify_observation(row, root=evidence)["valuation_certification"][
+        "failures"
+    ]
     assert "missing_valuation_source_references" in failures
     assert "missing_valuation_source_evidence" in failures
 
@@ -161,7 +165,7 @@ def test_missing_empty_and_partial_valuation_references_fail(tmp_path):
     )
     assert (
         "valuation_path_source_session_mismatch"
-        in verify_observation(row, root=evidence)["failures"]
+        in verify_observation(row, root=evidence)["valuation_certification"]["failures"]
     )
 
     row, evidence = _fixture(tmp_path / "duplicate")
@@ -175,7 +179,7 @@ def test_missing_empty_and_partial_valuation_references_fail(tmp_path):
     )
     assert (
         "duplicate_valuation_source_references"
-        in verify_observation(row, root=evidence)["failures"]
+        in verify_observation(row, root=evidence)["valuation_certification"]["failures"]
     )
 
 
@@ -195,7 +199,10 @@ def test_missing_empty_and_partial_valuation_references_fail(tmp_path):
 def test_wrong_embedded_source_values_fail_semantic_replay(tmp_path, mutation, reason):
     row, evidence = _fixture(tmp_path)
     mutation(row["valuation_path"][1])
-    assert reason in verify_observation(row, root=evidence)["failures"]
+    assert (
+        reason
+        in verify_observation(row, root=evidence)["valuation_certification"]["failures"]
+    )
 
 
 def test_wrong_source_security_fails_with_valid_bundle_hashes(tmp_path):
@@ -232,7 +239,7 @@ def test_wrong_source_security_fails_with_valid_bundle_hashes(tmp_path):
     _rewrite_partition(row, evidence, "selected_market_rows", mutate)
     assert (
         "valuation_source_security_mismatch"
-        in verify_observation(row, root=evidence)["failures"]
+        in verify_observation(row, root=evidence)["valuation_certification"]["failures"]
     )
 
 
@@ -241,16 +248,23 @@ def test_joint_factor_and_adjusted_close_tamper_fails_independent_replay(tmp_pat
     item = row["valuation_path"][0]
     item["split_adjustment_factor"] *= 3
     item["adjusted_close"] = item["raw_close"] * item["split_adjustment_factor"]
-    failures = verify_observation(row, root=evidence)["failures"]
+    failures = verify_observation(row, root=evidence)["valuation_certification"][
+        "failures"
+    ]
     assert "valuation_path_independent_factor_mismatch" in failures
     assert "valuation_path_independent_adjusted_close_mismatch" in failures
 
 
-def test_missing_policy_or_action_evidence_fails_and_blocks_certification(tmp_path):
+def test_missing_policy_is_diagnostic_but_required_action_integrity_remains_core(
+    tmp_path,
+):
     row, evidence = _fixture(tmp_path)
     row.pop("valuation_path_policy_version")
     observation = verify_observation(row, root=evidence)
-    assert "missing_or_incompatible_valuation_path_policy" in observation["failures"]
+    assert (
+        "missing_or_incompatible_valuation_path_policy"
+        in observation["valuation_certification"]["failures"]
+    )
     artifact = tmp_path / "mutated.jsonl"
     artifact.write_text(json.dumps(row, sort_keys=True, default=str) + "\n")
     report = verify_artifact(artifact, root=evidence)
@@ -259,7 +273,7 @@ def test_missing_policy_or_action_evidence_fails_and_blocks_certification(tmp_pa
         verification_report=report,
         timing_contract_version="alpha-atlas-v4-prediction-execution-contract.v1",
     )
-    assert certification["status"] != "VERIFIED_FOR_THIS_ARTIFACT"
+    assert certification["status"] == "VERIFIED_FOR_THIS_ARTIFACT"
     row.update(score=0.9, prediction=1)
     portfolio = reconstruct_v4_portfolio_path(
         [row],
@@ -277,7 +291,9 @@ def test_missing_policy_or_action_evidence_fails_and_blocks_certification(tmp_pa
     missing_path.pop("valuation_path")
     assert (
         "missing_daily_valuation_path"
-        in verify_observation(missing_path, root=missing_path_evidence)["failures"]
+        in verify_observation(missing_path, root=missing_path_evidence)[
+            "valuation_certification"
+        ]["failures"]
     )
 
     row, evidence = _fixture(tmp_path / "actions")
@@ -289,7 +305,7 @@ def test_missing_policy_or_action_evidence_fails_and_blocks_certification(tmp_pa
     )
     assert (
         "missing_or_malformed_valuation_action_evidence"
-        in verify_observation(row, root=evidence)["failures"]
+        in verify_observation(row, root=evidence)["valuation_certification"]["failures"]
     )
 
     row, evidence = _fixture(tmp_path / "malformed", ((58, 1, 2),))
@@ -301,5 +317,5 @@ def test_missing_policy_or_action_evidence_fails_and_blocks_certification(tmp_pa
     )
     assert (
         "malformed_valuation_action_evidence"
-        in verify_observation(row, root=evidence)["failures"]
+        in verify_observation(row, root=evidence)["valuation_certification"]["failures"]
     )

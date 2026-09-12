@@ -206,9 +206,9 @@ def test_spy_returns_use_spy_timeline_while_beta_remains_date_aligned(
 
     assert replayed["feature_spy_return_1d"] == round(738.18 / 747.41 - 1, 6)
     persisted_spy_return_5d = -0.016704
-    assert (
-        replayed["feature_spy_return_5d"] == persisted_spy_return_5d
-    ), failed_observation_id
+    assert replayed["feature_spy_return_5d"] == persisted_spy_return_5d, (
+        failed_observation_id
+    )
     assert replayed["feature_spy_return_5d"] != round(747.41 / 754.81 - 1, 6)
     assert replayed["feature_symbol_minus_spy_5d"] == round(
         symbol_return5 - replayed["feature_spy_return_5d"], 6
@@ -373,9 +373,9 @@ def test_exact_reconstruction_and_fail_closed_variants(tmp_path):
         in verify_observation(row, root=tmp_path)["failures"]
     )
     row, source = _lineage_row(tmp_path)
-    row["reconstruction_lineage"]["sources"][1][
-        "available_at"
-    ] = "2027-01-01T00:00:00+00:00"
+    row["reconstruction_lineage"]["sources"][1]["available_at"] = (
+        "2027-01-01T00:00:00+00:00"
+    )
     assert (
         "future_source_availability:spy"
         in verify_observation(row, root=tmp_path)["failures"]
@@ -531,6 +531,11 @@ def test_temporal_certification_is_hash_bound_and_never_trusts_legacy_boolean(tm
     validate_temporal_safety_certification(
         certification, artifact_path=artifact, verification_report=report
     )
+    wrong_scope = {**certification, "scope": "SELECTED_PORTFOLIO_ACTUAL_HOLDINGS"}
+    with pytest.raises(ValueError, match="wrong certification scope"):
+        validate_temporal_safety_certification(
+            wrong_scope, artifact_path=artifact, verification_report=report
+        )
     artifact.write_text(json.dumps({**row, "forged": True}, sort_keys=True) + "\n")
     with pytest.raises(ValueError, match="artifact hash mismatch"):
         validate_temporal_safety_certification(

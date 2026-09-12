@@ -433,7 +433,6 @@ def _selected_threshold_support(frame: pd.DataFrame, preds: np.ndarray, returns:
     dates = _event_series(frame)
     symbols = frame["symbol"].fillna("").astype(str).str.upper() if "symbol" in frame.columns else pd.Series("unknown", index=frame.index)
     groups = pd.Series(symbols.astype(str).to_numpy() + "|" + dates.astype(str).to_numpy())
-    selected_returns = returns[selected]
     big_gain = returns >= 0.03
     big_loss = returns < -0.03
     selected_groups = groups[selected]
@@ -572,8 +571,20 @@ def backtest_challenger_suite(
     max_ece: float = 0.20,
     min_excess_return: float = 0.0,
     max_drift_shift: float = 3.0,
+    core_verification_report_path: Path | None = None,
+    core_certification_path: Path | None = None,
 ) -> dict[str, Any]:
     suite = _load_json(suite_manifest_path)
+    valuation_verifications = None
+    core_certification_sha256 = None
+    if core_verification_report_path is not None:
+        verification_report = _load_json(core_verification_report_path)
+        valuation_verifications = {
+            str(item.get("canonical_observation_id") or ""): item.get("valuation_certification", {})
+            for item in verification_report.get("results", [])
+        }
+    if core_certification_path is not None:
+        core_certification_sha256 = _file_sha256(core_certification_path)
     raw = _prepare_frame(_load_jsonl(feature_store_path))
     if "ts" in raw.columns:
         raw = raw.sort_values("ts")
@@ -660,6 +671,8 @@ def backtest_challenger_suite(
                 input_sha256=_file_sha256(feature_store_path),
                 policy=V4ExecutionPolicy(transaction_cost_bps=transaction_cost_bps, slippage_bps=slippage_bps),
                 candidate_scope="decision",
+                valuation_verifications=valuation_verifications,
+                core_certification_sha256=core_certification_sha256,
             )
             path_metrics = primary_portfolio["metrics"]
             metrics["portfolio_path"] = path_metrics
@@ -910,6 +923,11 @@ def backtest_challenger_suite(
         "ranking_policy": "frozen top-5 selection is performed within each event date; global holdout ranking is not a promotion-quality simulation",
         "primary_portfolio_candidate": development_selected_version,
         "primary_portfolio_selection_policy": "development-ranked candidate frozen before final-holdout portfolio evaluation; no holdout replacement selection",
+        "selected_portfolio_valuation_certification": (
+            primary_portfolio["portfolio_valuation_certification"]
+            if primary_portfolio
+            else None
+        ),
         "routing_policy": "shadow-log first; user-facing routing remains disabled until gates pass and human promotion occurs",
         "candidate_family_report": candidate_family_report,
         "calibration_stability_report": calibration_stability_report,
@@ -948,6 +966,7 @@ def backtest_challenger_suite(
             "execution_ledger.json": {"schema_version": primary_portfolio["schema_version"], "candidate_id": primary_portfolio["candidate_id"], "events": primary_portfolio["orders_and_position_events"]},
             "daily_portfolio_equity.json": {"schema_version": primary_portfolio["schema_version"], "candidate_id": primary_portfolio["candidate_id"], "rows": primary_portfolio["daily_equity"]},
             "valuation_evidence_manifest.json": primary_portfolio["valuation_evidence_manifest"],
+            "selected_portfolio_valuation_certification.json": primary_portfolio["portfolio_valuation_certification"],
             "portfolio_metrics.json": primary_portfolio["metrics"],
         }
         for name, payload in portfolio_artifacts.items():
@@ -986,6 +1005,8 @@ def main() -> None:
     parser.add_argument("--transaction-cost-bps", type=float, default=5.0)
     parser.add_argument("--slippage-bps", type=float, default=5.0)
     parser.add_argument("--min-rows", type=int, default=20)
+    parser.add_argument("--core-verification-report")
+    parser.add_argument("--core-certification")
     args = parser.parse_args()
     report = backtest_challenger_suite(
         suite_manifest_path=Path(args.suite_manifest),
@@ -995,6 +1016,8 @@ def main() -> None:
         transaction_cost_bps=args.transaction_cost_bps,
         slippage_bps=args.slippage_bps,
         min_rows=args.min_rows,
+        core_verification_report_path=Path(args.core_verification_report) if args.core_verification_report else None,
+        core_certification_path=Path(args.core_certification) if args.core_certification else None,
     )
     print(json.dumps(report, indent=2, sort_keys=True))
 

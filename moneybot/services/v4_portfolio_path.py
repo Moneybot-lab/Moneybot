@@ -12,6 +12,9 @@ from moneybot.services.market_data_providers import ExchangeCalendar
 
 EXECUTION_POLICY_VERSION = "alpha-atlas-v4-unlevered-long-cash.v1"
 PORTFOLIO_PATH_SCHEMA = "alpha-atlas-v4-portfolio-path.v1"
+PORTFOLIO_VALUATION_CERTIFICATION_SCHEMA = (
+    "alpha-atlas-v4-selected-portfolio-valuation-certification.v1"
+)
 VALUATION_PATH_POLICY_VERSION = "alpha-atlas-v4-daily-close-valuation.v1"
 
 
@@ -40,6 +43,32 @@ def _hash(value: Any) -> str:
     ).hexdigest()
 
 
+def validate_selected_portfolio_valuation_certification(
+    certification: Mapping[str, Any], portfolio: Mapping[str, Any]
+) -> None:
+    """Reject stale, wrong-scope, or non-verified portfolio certificates."""
+    if certification.get("schema_version") != PORTFOLIO_VALUATION_CERTIFICATION_SCHEMA:
+        raise ValueError("unsupported selected-portfolio valuation certification")
+    if certification.get("scope") != "SELECTED_PORTFOLIO_ACTUAL_HOLDINGS":
+        raise ValueError("wrong certification scope for selected portfolio")
+    if certification.get("status") != "VERIFIED":
+        raise ValueError("selected portfolio lacks complete valuation certification")
+    expected = {
+        "candidate_id": portfolio.get("candidate_id"),
+        "input_sha256": portfolio.get("input_sha256"),
+        "policy_sha256": portfolio.get("policy_sha256"),
+        "core_certification_sha256": portfolio.get("core_certification_sha256"),
+        "execution_events_sha256": _hash(portfolio.get("orders_and_position_events")),
+        "holding_valuation_evidence_sha256": _hash(
+            (portfolio.get("valuation_evidence_manifest") or {}).get("evidence")
+        ),
+    }
+    if any(certification.get(key) != value for key, value in expected.items()):
+        raise ValueError(
+            "selected-portfolio valuation certification is stale or forged"
+        )
+
+
 def reconstruct_v4_portfolio_path(
     rows: Iterable[Mapping[str, Any]],
     *,
@@ -47,6 +76,8 @@ def reconstruct_v4_portfolio_path(
     input_sha256: str,
     policy: V4ExecutionPolicy,
     candidate_scope: str = "decision",
+    valuation_verifications: Mapping[str, Mapping[str, Any]] | None = None,
+    core_certification_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Execute positive decision-lane signals and mark every XNYS close.
 
@@ -82,21 +113,25 @@ def reconstruct_v4_portfolio_path(
             reasons.append(f"missing_evaluation_interval_evidence:{identifier}")
         if int(row.get("prediction", 0)) != 1:
             continue
-        if row.get("valuation_path_policy_version") != VALUATION_PATH_POLICY_VERSION:
-            reasons.append(f"uncertified_valuation_policy:{identifier}")
         try:
             decision = datetime.fromisoformat(str(row["decision_at"]))
             entry = datetime.fromisoformat(str(row["entry_at"]))
             exit_at = datetime.fromisoformat(str(row["exit_at"]))
             entry_price = float(row["adjusted_entry_price"])
             exit_price = float(row["adjusted_exit_price"])
+        except (KeyError, TypeError, ValueError):
+            reasons.append(f"missing_execution_evidence:{identifier}")
+            continue
+        marks = {}
+        try:
             marks = {
                 str(mark["session"]): float(mark["adjusted_close"])
-                for mark in row["valuation_path"]
+                for mark in row.get("valuation_path") or []
             }
-        except (KeyError, TypeError, ValueError):
-            reasons.append(f"missing_execution_or_valuation_evidence:{identifier}")
-            continue
+        except (TypeError, ValueError, KeyError):
+            # This cannot affect order creation; an accepted holding will fail
+            # valuation certification below.
+            marks = {}
         entry_session = calendar.local_date(entry)
         exit_session = calendar.local_date(exit_at)
         expected: list[str] = []
@@ -105,11 +140,6 @@ def reconstruct_v4_portfolio_path(
             if calendar.is_trading_day(current):
                 expected.append(current.isoformat())
             current = calendar.next_session(current)
-        missing = sorted(set(expected) - set(marks))
-        if missing:
-            reasons.append(
-                f"missing_valuation_sessions:{identifier}:{','.join(missing)}"
-            )
         if entry != calendar.session_open(
             entry_session
         ) or exit_at != calendar.session_close(exit_session):
@@ -128,6 +158,8 @@ def reconstruct_v4_portfolio_path(
                 "entry_price": entry_price,
                 "exit_price": exit_price,
                 "marks": marks,
+                "valuation_policy_version": row.get("valuation_path_policy_version"),
+                "required_valuation_sessions": expected,
             }
         )
     orders.sort(
@@ -223,6 +255,27 @@ def reconstruct_v4_portfolio_path(
                 "quantity": quantity,
                 "entry_cash": entry_notional + fee,
             }
+            missing = sorted(
+                set(order["required_valuation_sessions"]) - set(order["marks"])
+            )
+            if order["valuation_policy_version"] != VALUATION_PATH_POLICY_VERSION:
+                reasons.append(
+                    f"uncertified_valuation_policy:{order['canonical_observation_id']}"
+                )
+            if missing:
+                reasons.append(
+                    f"missing_holding_valuation_sessions:{order['canonical_observation_id']}:{','.join(missing)}"
+                )
+            if valuation_verifications is not None:
+                verification = valuation_verifications.get(
+                    order["canonical_observation_id"], {}
+                )
+                if verification.get("status") != "VERIFIED":
+                    failures = verification.get("failures") or ["missing_verification"]
+                    reasons.extend(
+                        f"holding_valuation_verification_failed:{order['canonical_observation_id']}:{reason}"
+                        for reason in failures
+                    )
             ledger.append(
                 {
                     "event": "entry_fill",
@@ -268,34 +321,55 @@ def reconstruct_v4_portfolio_path(
                 }
             )
             del positions[position["symbol"]]
-        market_value = 0.0
+        market_value: float | None = 0.0
         open_cost = 0.0
+        missing_open_marks: list[dict[str, str]] = []
         for position in positions.values():
             mark = position["marks"].get(key)
             if mark is None:
-                reasons.append(
-                    f"missing_open_position_mark:{position['canonical_observation_id']}:{key}"
+                missing_open_marks.append(
+                    {
+                        "canonical_observation_id": position[
+                            "canonical_observation_id"
+                        ],
+                        "symbol": position["symbol"],
+                        "session": key,
+                    }
                 )
+                market_value = None
                 continue
-            market_value += position["quantity"] * mark
+            if market_value is not None:
+                market_value += position["quantity"] * mark
             open_cost += position["entry_cash"]
-        total = cash + market_value
-        peak = max([row["high_water_mark"] for row in equity] + [total])
+        total = cash + market_value if market_value is not None else None
+        known_peaks = [
+            row["high_water_mark"]
+            for row in equity
+            if row["high_water_mark"] is not None
+        ]
+        peak = max(known_peaks + [total]) if total is not None else None
         equity.append(
             {
                 "session": key,
                 "cash": cash,
                 "market_value": market_value,
                 "realized_pnl": realized,
-                "unrealized_pnl": market_value - open_cost,
+                "unrealized_pnl": market_value - open_cost
+                if market_value is not None
+                else None,
                 "cumulative_fees": fees,
                 "cumulative_slippage": slippage,
                 "total_equity": total,
                 "high_water_mark": peak,
-                "drawdown": total / peak - 1 if peak else 0.0,
-                "daily_return": total / previous_equity - 1 if previous_equity else 0.0,
-                "gross_exposure": market_value / total if total else 0.0,
+                "drawdown": total / peak - 1 if total is not None and peak else None,
+                "daily_return": total / previous_equity - 1
+                if total is not None and previous_equity is not None and previous_equity
+                else None,
+                "gross_exposure": market_value / total
+                if market_value is not None and total
+                else None,
                 "open_positions": len(positions),
+                "missing_position_marks": missing_open_marks,
                 "observation_type": "session_close",
             }
         )
@@ -305,22 +379,26 @@ def reconstruct_v4_portfolio_path(
     if (
         equity
         and not positions
+        and equity[-1]["total_equity"] is not None
         and abs(equity[-1]["total_equity"] - (policy.starting_capital + realized))
         > 1e-6
     ):
         reasons.append("ledger_equity_reconciliation_failed")
     if any(
-        row["gross_exposure"] > policy.gross_exposure_limit + 1e-9 for row in equity
+        row["gross_exposure"] is not None
+        and row["gross_exposure"] > policy.gross_exposure_limit + 1e-9
+        for row in equity
     ):
         reasons.append("gross_exposure_limit_exceeded")
     unique_reasons = sorted(set(reasons))
     valid = not unique_reasons
-    trough = min(equity, key=lambda row: row["drawdown"], default=None)
+    known_equity = [row for row in equity if row["drawdown"] is not None]
+    trough = min(known_equity, key=lambda row: row["drawdown"], default=None)
     peak_date = None
     recovery_session = None
     drawdown_duration_sessions = None
     if trough:
-        prior = [row for row in equity if row["session"] <= trough["session"]]
+        prior = [row for row in known_equity if row["session"] <= trough["session"]]
         peak_date = max(prior, key=lambda row: row["total_equity"])["session"]
         peak_index = next(
             index for index, row in enumerate(equity) if row["session"] == peak_date
@@ -330,7 +408,8 @@ def reconstruct_v4_portfolio_path(
             (
                 row
                 for row in equity[trough_index + 1 :]
-                if row["total_equity"] >= trough["high_water_mark"]
+                if row["total_equity"] is not None
+                and row["total_equity"] >= trough["high_water_mark"]
             ),
             None,
         )
@@ -343,11 +422,12 @@ def reconstruct_v4_portfolio_path(
     metrics = {
         "path_valid": valid,
         "evidence_sufficient": valid,
+        "max_drawdown_evaluable": valid,
         "invalid_reasons": unique_reasons,
         "starting_capital": policy.starting_capital,
         "ending_equity": equity[-1]["total_equity"] if equity else None,
         "cumulative_return": equity[-1]["total_equity"] / policy.starting_capital - 1
-        if equity
+        if equity and equity[-1]["total_equity"] is not None
         else None,
         "max_drawdown": trough["drawdown"] if valid and trough else None,
         "drawdown_sign_convention": "negative_fraction_from_prior_close_high_water_mark; close_to_close_not_intraday",
@@ -366,6 +446,11 @@ def reconstruct_v4_portfolio_path(
         "extended_valuation_end_session": last.isoformat() if last else None,
     }
     policy_payload = policy.payload()
+    accepted_ids = {
+        row["canonical_observation_id"]
+        for row in ledger
+        if row["event"] == "entry_fill"
+    }
     evidence = [
         {
             key: row.get(key)
@@ -380,12 +465,29 @@ def reconstruct_v4_portfolio_path(
             )
         }
         for row in orders
+        if row["canonical_observation_id"] in accepted_ids
     ]
+    ledger_hash = _hash(ledger)
+    evidence_hash = _hash(evidence)
+    valuation_certificate = {
+        "schema_version": PORTFOLIO_VALUATION_CERTIFICATION_SCHEMA,
+        "scope": "SELECTED_PORTFOLIO_ACTUAL_HOLDINGS",
+        "status": "VERIFIED" if valid else "INSUFFICIENT_EVIDENCE",
+        "candidate_id": candidate_id,
+        "input_sha256": input_sha256,
+        "core_certification_sha256": core_certification_sha256,
+        "policy_sha256": _hash(policy.payload()),
+        "execution_events_sha256": ledger_hash,
+        "holding_valuation_evidence_sha256": evidence_hash,
+        "invalid_reasons": unique_reasons,
+        "all_required_holding_marks_verified": valid,
+    }
     return {
         "schema_version": PORTFOLIO_PATH_SCHEMA,
         "candidate_id": candidate_id,
         "evaluated_split": "frozen_final_holdout",
         "input_sha256": input_sha256,
+        "core_certification_sha256": core_certification_sha256,
         "candidate_scope": candidate_scope,
         "policy": policy_payload,
         "policy_sha256": _hash(policy_payload),
@@ -402,9 +504,10 @@ def reconstruct_v4_portfolio_path(
             ],
             "source_rows": len(source),
             "unique_canonical_ids": len(seen),
-            "valuation_evidence_sha256": _hash(evidence),
+            "valuation_evidence_sha256": evidence_hash,
             "evidence": evidence,
         },
+        "portfolio_valuation_certification": valuation_certificate,
         "metrics": metrics,
         "automatic_promotion": False,
         "research_only": True,

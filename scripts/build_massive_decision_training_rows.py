@@ -30,7 +30,6 @@ from moneybot.services.decision_target import (
     target_metadata,
 )
 from moneybot.services.corporate_actions import (
-    CORPORATE_ACTION_AVAILABILITY_POLICY_VERSION,
     CORPORATE_ACTION_SCHEMA_VERSION,
     adjust_bars_to_asof,
     index_splits,
@@ -2277,7 +2276,8 @@ def write_rows(
         "output_path": str(output_path_label or path),
         "horizon_days": horizon_days,
         "temporal_safety": {
-            "schema_version": "alpha-atlas-v4-temporal-safety-certification.v1",
+            "schema_version": "alpha-atlas-v4-core-observation-certification.v2",
+            "scope": "FULL_OBSERVATION_FEATURE_LABEL_TIMING",
             "status": "NOT_EVALUATED",
             "reason": "builder output has not yet been independently reconstructed and hash-certified",
             "legacy_leakage_safe_accepted": False,

@@ -45,6 +45,11 @@ def verify_artifact(
     cache = {}
     results = [verify_observation(row, root=root, cache=cache) for row in selected]
     reasons = Counter(reason for result in results for reason in result["failures"])
+    valuation_reasons = Counter(
+        reason
+        for result in results
+        for reason in result.get("valuation_certification", {}).get("failures", [])
+    )
     failures = sum(result["status"] != "RECONSTRUCTABLE" for result in results)
     full_scope = len(selected) == len(rows) and not observation_id
     report = {
@@ -63,6 +68,8 @@ def verify_artifact(
         "reconstructable_rows": len(selected) - failures,
         "failure_count": failures,
         "failure_reasons": dict(sorted(reasons.items())),
+        "valuation_diagnostic_failure_count": sum(valuation_reasons.values()),
+        "valuation_diagnostic_failure_reasons": dict(sorted(valuation_reasons.items())),
         "results": results,
     }
     report["results_sha256"] = sha256_value(results)

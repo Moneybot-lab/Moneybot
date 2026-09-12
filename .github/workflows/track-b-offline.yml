@@ -246,7 +246,12 @@ jobs:
           echo "TRACK_B_FAILED_STAGE=valuation_coverage" >> "$GITHUB_ENV"
           python3 scripts/check_alpha_atlas_v4_valuation_coverage.py \
             --input "$RAW_V4_ROWS" \
-            --output "$VALUATION_COVERAGE_REPORT"
+            --output "$VALUATION_COVERAGE_REPORT" \
+            --diagnostic-only
+
+      - name: Require valuation coverage report without blocking core certification
+        if: always()
+        run: test -s "$VALUATION_COVERAGE_REPORT"
 
       - name: Summarize daily valuation evidence coverage
         if: always()
@@ -359,6 +364,8 @@ jobs:
             --suite-manifest "$TRACK_B_ARTIFACT_DIR/challenger_suite"/challenger_suite_manifest.json \
             --feature-store "$TRACK_B_ARTIFACT_DIR/challenger_suite/challenger_test.jsonl" \
             --output "$TRACK_B_ARTIFACT_DIR/challenger_suite"/backtest_report.json \
+            --core-verification-report "$PHASE0_DIR/reconstructability_report.json" \
+            --core-certification "$PHASE0_DIR/temporal_safety_certification.json" \
             --min-rows "$TRACK_B_MIN_ROWS" \
             --transaction-cost-bps 5 \
             --slippage-bps 5
@@ -440,11 +447,13 @@ jobs:
               "v2_production_comparison_performed": False,
               "status": ("completed_research_pipeline" if split_plan["status"] == "FEASIBLE" else split_plan["status"]),
               "phase0_certification_status": certification["status"],
+              "core_certification_scope": certification.get("scope"),
               "phase0_certification_passed": certification["status"] == "VERIFIED_FOR_THIS_ARTIFACT",
               "split_plan_sha256": split_plan["plan_sha256"],
               "primary_portfolio_candidate": backtest.get("primary_portfolio_candidate"),
               "portfolio_path_valid": bool((backtest.get("economic_backtest_validity") or {}).get("valid")),
               "portfolio_path_invalid_reasons": (backtest.get("economic_backtest_validity") or {}).get("invalid_reasons", []),
+              "selected_portfolio_valuation_certification": backtest.get("selected_portfolio_valuation_certification"),
           }
           (root / "track_b_v4_research_summary.json").write_text(
               json.dumps(summary, indent=2, sort_keys=True) + "\n",

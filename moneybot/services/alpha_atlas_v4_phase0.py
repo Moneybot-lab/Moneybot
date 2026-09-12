@@ -23,8 +23,8 @@ from moneybot.services.corporate_actions import canonical_splits, price_factor_b
 FEATURE_CONTRACT_VERSION = "alpha-atlas-v4-features.v2"
 FEATURE_REGISTRY_VERSION = "alpha-atlas-v4-feature-registry.v1"
 FILL_POLICY_VERSION = "alpha-atlas-v4-feature-fill-policy.v1"
-RECONSTRUCTION_VERSION = "alpha-atlas-v4-reconstructability.v1"
-TEMPORAL_CERTIFICATION_VERSION = "alpha-atlas-v4-temporal-safety-certification.v1"
+RECONSTRUCTION_VERSION = "alpha-atlas-v4-core-observation-reconstruction.v2"
+TEMPORAL_CERTIFICATION_VERSION = "alpha-atlas-v4-core-observation-certification.v2"
 RECONSTRUCTION_LINEAGE_VERSION = "alpha-atlas-v4-reconstruction-lineage.v1"
 VALUATION_PATH_POLICY_VERSION = "alpha-atlas-v4-daily-close-valuation.v1"
 
@@ -734,14 +734,21 @@ def verify_observation(
             failures.append("target_mismatch")
     except (KeyError, TypeError, ValueError, ZeroDivisionError):
         failures.append("missing_executable_label_lineage")
+    valuation_failures = _verify_valuation_path(
+        row,
+        lineage=lineage,
+        loaded=loaded,
+        bundle_mode=bundle_mode,
+        tolerance=tolerance,
+    )
+    shared_valuation_integrity = {
+        "missing_or_malformed_valuation_action_evidence",
+        "malformed_valuation_action_evidence",
+        "malformed_valuation_action_identity",
+        "valuation_action_security_mismatch",
+    }
     failures.extend(
-        _verify_valuation_path(
-            row,
-            lineage=lineage,
-            loaded=loaded,
-            bundle_mode=bundle_mode,
-            tolerance=tolerance,
-        )
+        reason for reason in valuation_failures if reason in shared_valuation_integrity
     )
     action_source = lineage.get("corporate_action_source") or {}
     action_relative = str(action_source.get("path") or "")
@@ -837,20 +844,40 @@ def verify_observation(
         "corporate_action_manifest_sha256"
     ):
         failures.append("corporate_action_lineage_mismatch")
+    # Post-entry daily marks are not model inputs or label/execution evidence.
+    # Resolution failures confined to valuation references belong to the
+    # selected-portfolio scope; source-object/manifest failures remain core.
+    valuation_resolution_failures = [
+        reason
+        for reason in failures
+        if reason.startswith(
+            (
+                "missing_selected_source_row:valuation:",
+                "selected_source_row_hash_mismatch:valuation:",
+                "invalid_semantic_availability:valuation:",
+                "missing_source_timestamp:valuation",
+            )
+        )
+    ]
+    failures = [
+        reason for reason in failures if reason not in valuation_resolution_failures
+    ]
+    valuation_failures = sorted(set(valuation_failures + valuation_resolution_failures))
     status = "RECONSTRUCTABLE" if not failures else "NOT_RECONSTRUCTABLE"
     valuation_required = bool(
         row.get("valuation_path_policy_version") is not None
         or row.get("valuation_path") is not None
         or (bundle_mode and "valuation_row_ids" in lineage)
     )
-    valuation_failures = sorted(
-        {reason for reason in failures if "valuation" in reason}
-    )
     return {
         "canonical_observation_id": row.get("canonical_observation_id"),
         "status": status,
         "failures": sorted(set(failures)),
         "valuation_certification": {
+            "scope": "OBSERVATION_VALUATION_DIAGNOSTIC_ONLY",
+            "status": "VERIFIED"
+            if valuation_required and not valuation_failures
+            else "INCOMPLETE",
             "required": valuation_required,
             "policy_version": row.get("valuation_path_policy_version"),
             "path_sessions": len(row.get("valuation_path") or []),
@@ -1207,6 +1234,7 @@ def build_temporal_safety_certification(
     )
     return {
         "schema_version": TEMPORAL_CERTIFICATION_VERSION,
+        "scope": "FULL_OBSERVATION_FEATURE_LABEL_TIMING",
         "status": (
             "VERIFIED_FOR_THIS_ARTIFACT"
             if verified
@@ -1240,6 +1268,8 @@ def validate_temporal_safety_certification(
 ) -> None:
     if certification.get("schema_version") != TEMPORAL_CERTIFICATION_VERSION:
         raise ValueError("unsupported temporal-safety certification")
+    if certification.get("scope") != "FULL_OBSERVATION_FEATURE_LABEL_TIMING":
+        raise ValueError("wrong certification scope for core observation evidence")
     if certification.get("status") != "VERIFIED_FOR_THIS_ARTIFACT":
         raise ValueError("artifact lacks full temporal-safety certification")
     if certification.get("artifact_sha256") != sha256_file(artifact_path):
