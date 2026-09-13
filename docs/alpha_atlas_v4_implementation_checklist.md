@@ -44,3 +44,32 @@
 - [ ] Phase 1 exit gate complete.
 
 No full historical backfill is authorized by this checklist update.
+
+## Track B certification and diagnostics handoff
+
+- [x] Certification separation and hosted portfolio accounting are the completed engineering baseline (hosted runs `34675971440-1` and `34689216730-1` are reproducibility checks, not independent performance samples).
+- [x] Development-only signal-coverage, probability-calibration, and bounded threshold-sensitivity diagnostics implemented and locally fixture-verified.
+- [ ] Real-data development diagnostic execution completed (intentionally not run by this change).
+- [ ] Model improvement and promotion readiness demonstrated.
+
+The diagnostic command consumes the frozen plan, certified canonical input,
+frozen challenger manifest, and the existing chronological walk-forward observer
+capture. It performs no fitting, provider access, candidate selection, portfolio
+valuation filtering, or final-holdout backtest:
+
+```bash
+python scripts/generate_alpha_atlas_v4_development_diagnostics.py \
+  --canonical-input data/track_b/canonical_observations.jsonl \
+  --split-plan data/track_b/alpha_atlas_v4_temporal_split_plan.json \
+  --manifest data/track_b/next_generation/next_generation_challenger_manifest.json \
+  --oof-predictions data/track_b/development_walk_forward_predictions.json \
+  --output-dir data/track_b/development_diagnostics \
+  --baseline-sha 1f8f46db584dff0881273bdeae1c56c1a8a016c5
+```
+
+The observer capture must use the `records` emitted by
+`train_challenger_suite(..., walk_forward_observer=...)`; the generator fails
+closed unless its complete candidate roster and every fold's train/validation
+membership exactly match the frozen manifest. Ranking-lane scores remain ranking
+scores rather than buy probabilities. Safety remains `research_only=true`,
+`automatic_promotion=false`, and `ready_for_live_routing=false`.

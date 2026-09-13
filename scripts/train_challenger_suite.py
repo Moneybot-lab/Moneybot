@@ -522,6 +522,9 @@ def _apply_walk_forward_metrics(
             model_type = challenger.get("model_type")
             spec = challenger.get("spec", {})
             learned_state: dict[str, Any]
+            score_semantics = "probability"
+            abstained_mask = np.zeros(len(fold_test), dtype=bool)
+            risk_rejected_mask = np.zeros(len(fold_test), dtype=bool)
             if model_type == "logistic_regression":
                 artifact = _train_logistic_recipe(fold_train, y_train, feature_columns, return_col, spec)
                 scores = predict_proba(artifact, X_test)
@@ -560,7 +563,8 @@ def _apply_walk_forward_metrics(
                     spec,
                     horizon_days=horizon_days,
                 )
-                scores, _, preds = _two_stage_scores(decision_model, risk_model, fold_test, float(spec["risk_threshold"]))
+                scores, risk_scores, preds = _two_stage_scores(decision_model, risk_model, fold_test, float(spec["risk_threshold"]))
+                risk_rejected_mask = (scores >= decision_model.decision_threshold) & (risk_scores > float(spec["risk_threshold"]))
                 learned_state = {"decision_model": decision_model.to_dict(), "risk_model": risk_model.to_dict()}
             elif model_type == "hard_example_linear":
                 artifact, _, _ = _train_hard_example_recipe(fold_train, target_col, feature_columns, return_col, spec)
@@ -572,10 +576,11 @@ def _apply_walk_forward_metrics(
                 scores = predict_proba(artifact, fold_test[artifact.feature_columns].to_numpy(dtype=float))
                 preds = (scores >= artifact.decision_threshold).astype(int)
                 learned_state = {"model": artifact.to_dict()}
+                score_semantics = "ranking_score_not_buy_probability"
             elif model_type == "abstention_linear":
                 artifact, _, _ = _train_calibrated_linear_recipe(fold_train, target_col, feature_columns, return_col, spec, horizon_days=horizon_days)
                 scores = predict_proba(artifact, fold_test[artifact.feature_columns].to_numpy(dtype=float))
-                preds, _ = _abstention_predictions(scores, artifact.decision_threshold, spec["abstention"])
+                preds, abstained_mask = _abstention_predictions(scores, artifact.decision_threshold, spec["abstention"])
                 learned_state = {"model": artifact.to_dict(), "abstention": spec["abstention"]}
             elif model_type == "decision_stump":
                 feature = str(spec.get("feature", ""))
@@ -586,6 +591,7 @@ def _apply_walk_forward_metrics(
                 scores = fold_test[feature].to_numpy(dtype=float)
                 preds = _stump_predictions(scores, threshold, direction)
                 learned_state = {"feature": feature, "threshold": threshold, "direction": direction}
+                score_semantics = "raw_feature_ranking_score"
             elif model_type == "baseline_classifier":
                 majority_class = int(float(y_train.mean()) >= 0.5)
                 if challenger.get("model_version") == "challenger-baseline-always-up-v1":
@@ -614,6 +620,38 @@ def _apply_walk_forward_metrics(
                         "learned_state": learned_state,
                         "scores": scores.tolist(),
                         "predictions": preds.tolist(),
+                        "decision_threshold": float(
+                            learned_state.get("threshold", spec.get("decision_threshold", spec.get("threshold", 0.5)))
+                        ),
+                        "score_semantics": score_semantics,
+                        "target_definition": target_metadata(),
+                        "training_prevalence": float(y_train.mean()) if len(y_train) else None,
+                        "effective_training_weight": {
+                            "policy": spec.get("sample_weight_policy", "uniform"),
+                            "training_observation_count": int(len(y_train)),
+                            "numeric_weight_sum": None,
+                            "note": "policy provenance retained; numeric sum unavailable from this observer",
+                        },
+                        "calibration_audit": {
+                            "policy": spec.get("calibration_policy", "none"),
+                            "validation_labels_used_to_fit_calibrator": False,
+                            "supports_unweighted_probability": spec.get("sample_weight_policy") in (None, "uniform", "none"),
+                        },
+                        "records": [
+                            {
+                                "id": str(row.get("canonical_observation_id", index)),
+                                "security": str(row.get("symbol", "unknown")),
+                                "session": str(row.get("event_date", "unknown")),
+                                "economic_unit": str(row.get("canonical_observation_id", index)),
+                                "label": int(y_test[position]),
+                                "score": float(scores[position]),
+                                "return": (float(fold_returns[position]) if fold_returns is not None and np.isfinite(fold_returns[position]) else None),
+                                "abstained": bool(abstained_mask[position]),
+                                "risk_rejected": bool(risk_rejected_mask[position]),
+                                "rule_rejected": False,
+                            }
+                            for position, (index, row) in enumerate(fold_test.iterrows())
+                        ],
                         "metrics": metrics,
                     }
                 )
