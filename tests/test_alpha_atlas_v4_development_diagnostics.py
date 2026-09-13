@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 
 import pytest
 
 from moneybot.services import alpha_atlas_v4_development_diagnostics as diagnostics
+from moneybot.services.alpha_atlas_v4_temporal_split import file_sha256, plan_v4_temporal_split
+from scripts.train_challenger_suite import (
+    capture_v4_development_walk_forward_predictions,
+    train_challenger_suite,
+)
+from tests.test_alpha_atlas_v4_holdout_isolation import _fixture_rows, _write_jsonl
 
 
 def test_calibration_fixture_matches_independent_calculation():
@@ -69,3 +76,67 @@ def test_generation_enforces_development_membership_provenance_and_reconciliatio
     with pytest.raises(diagnostics.DevelopmentDiagnosticError):
         diagnostics.generate_development_diagnostics(canonical_input=canonical, split_plan_path=plan_path,
             manifest_path=manifest_path, predictions_path=predictions, output_dir=tmp_path / "bad", baseline_sha="abc")
+
+
+def test_real_capture_runner_covers_frozen_candidates_and_folds_without_holdout(tmp_path):
+    rows = _fixture_rows()
+    input_path = tmp_path / "canonical.jsonl"
+    _write_jsonl(input_path, rows)
+    split = plan_v4_temporal_split(
+        rows, input_sha256=file_sha256(input_path), min_observations=40
+    ).plan
+    split_path = tmp_path / "split.json"
+    split_path.write_text(json.dumps(split))
+    original_observer: list[dict] = []
+    manifest = train_challenger_suite(
+        input_path,
+        tmp_path / "suite",
+        min_rows=40,
+        split_plan_path=split_path,
+        walk_forward_observer=original_observer.append,
+    )
+    manifest_path = tmp_path / "suite/challenger_suite_manifest.json"
+    learned_artifacts_before = {
+        item["model_version"]: json.loads(item_path.read_text())
+        for item in manifest["challengers"]
+        if (item_path := Path(item["model_path"]))
+    }
+    capture, provenance = capture_v4_development_walk_forward_predictions(
+        input_path, split_path, manifest_path
+    )
+    expected_pairs = {
+        (item["model_version"], int(fold["fold_index"]))
+        for item in manifest["challengers"]
+        for fold in manifest["walk_forward_windows"]
+        if fold["usable"]
+    }
+    assert {(item["model_version"], item["fold_index"]) for item in capture} == expected_pairs
+    holdout_ids = set(split["test_canonical_observation_ids"])
+    assert not holdout_ids & {
+        record["id"] for item in capture for record in item["records"]
+    }
+    assert provenance["candidate_fold_capture_count"] == len(expected_pairs)
+    assert provenance["final_holdout_overlap_count"] == 0
+    assert provenance["final_holdout_evaluated"] is False
+    assert capture == original_observer
+    assert learned_artifacts_before == {
+        item["model_version"]: json.loads(Path(item["model_path"]).read_text())
+        for item in manifest["challengers"]
+    }
+
+    predictions_path = tmp_path / "development_walk_forward_predictions.json"
+    predictions_path.write_text(json.dumps(capture))
+    outputs = diagnostics.generate_development_diagnostics(
+        canonical_input=input_path,
+        split_plan_path=split_path,
+        manifest_path=manifest_path,
+        predictions_path=predictions_path,
+        output_dir=tmp_path / "reports",
+        baseline_sha="fixture",
+    )
+    assert set(outputs) == {
+        "development_signal_coverage_report.json",
+        "development_calibration_report.json",
+        "development_threshold_sensitivity_report.json",
+        "development_diagnostics_summary.md",
+    }

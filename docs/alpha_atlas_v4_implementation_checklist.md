@@ -49,7 +49,8 @@ No full historical backfill is authorized by this checklist update.
 
 - [x] Certification separation and hosted portfolio accounting are the completed engineering baseline (hosted runs `34675971440-1` and `34689216730-1` are reproducibility checks, not independent performance samples).
 - [x] Development-only signal-coverage, probability-calibration, and bounded threshold-sensitivity diagnostics implemented and locally fixture-verified.
-- [ ] Real-data development diagnostic execution completed (intentionally not run by this change).
+- [x] Bounded development-only frozen-fold OOF capture and capture-to-report workflow implemented and fixture-tested.
+- [ ] Hosted real-data development diagnostic execution completed (intentionally not dispatched by this change).
 - [ ] Model improvement and promotion readiness demonstrated.
 
 The diagnostic command consumes the frozen plan, certified canonical input,
@@ -73,3 +74,21 @@ closed unless its complete candidate roster and every fold's train/validation
 membership exactly match the frozen manifest. Ranking-lane scores remain ranking
 scores rather than buy probabilities. Safety remains `research_only=true`,
 `automatic_promotion=false`, and `ready_for_live_routing=false`.
+
+If a compatible capture is not already present, generate it without invoking the
+full challenger orchestration or its final-holdout scoring:
+
+```bash
+python scripts/capture_alpha_atlas_v4_development_oof.py \
+  --canonical-input data/track_b/runs/RUN-ATTEMPT/flat_feature_store/all.jsonl \
+  --split-plan data/track_b/runs/RUN-ATTEMPT/challenger_suite/challenger_split_plan.json \
+  --manifest data/track_b/runs/RUN-ATTEMPT/challenger_suite/challenger_suite_manifest.json \
+  --output data/track_b/runs/RUN-ATTEMPT/development_walk_forward_predictions.json \
+  --provenance-output data/track_b/runs/RUN-ATTEMPT/development_oof_capture_provenance.json
+```
+
+The manual **V4 Development Diagnostics** workflow accepts a successful source
+Track B run ID, verifies the downloaded artifact hashes, reuses a compatible
+capture or performs only this bounded development-fold refit, and uploads one
+`v4-development-diagnostics-<source-run-id>` artifact. Its existence is an
+implementation capability, not evidence that hosted real-data diagnostics ran.

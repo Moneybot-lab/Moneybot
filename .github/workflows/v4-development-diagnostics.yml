@@ -1,0 +1,159 @@
+name: V4 Development Diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_track_b_run_id:
+        description: "Successful Track B Offline Challenger workflow run ID"
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  DIAGNOSTIC_ROOT: v4-development-diagnostics
+
+jobs:
+  development-diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout diagnostic implementation
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download successful Track B artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: track-b-offline-output
+          path: source-track-b-artifact
+          run-id: ${{ inputs.source_track_b_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve and verify frozen source inputs
+        run: |
+          set -euo pipefail
+          mkdir -p "$DIAGNOSTIC_ROOT/reports" "$DIAGNOSTIC_ROOT/evidence"
+          find_one() {
+            mapfile -t matches < <(find source-track-b-artifact -type f -path "$1" | sort)
+            test "${#matches[@]}" -eq 1 || { echo "Expected exactly one $1, found ${#matches[@]}"; return 1; }
+            printf '%s' "${matches[0]}"
+          }
+          export CANONICAL_INPUT="$(find_one '*/flat_feature_store/all.jsonl')"
+          export SPLIT_PLAN="$(find_one '*/challenger_suite/challenger_split_plan.json')"
+          export CHALLENGER_MANIFEST="$(find_one '*/challenger_suite/challenger_suite_manifest.json')"
+          printf 'CANONICAL_INPUT=%s\nSPLIT_PLAN=%s\nCHALLENGER_MANIFEST=%s\n' \
+            "$CANONICAL_INPUT" "$SPLIT_PLAN" "$CHALLENGER_MANIFEST" >> "$GITHUB_ENV"
+          capture_matches="$(find source-track-b-artifact -type f -name development_walk_forward_predictions.json | sort)"
+          if test -n "$capture_matches" && test "$(printf '%s\n' "$capture_matches" | wc -l)" -eq 1; then
+            export OOF_CAPTURE="$capture_matches"
+          else
+            export OOF_CAPTURE="$DIAGNOSTIC_ROOT/evidence/development_walk_forward_predictions.json"
+          fi
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          from moneybot.services.alpha_atlas_v4_temporal_split import validate_split_plan
+          plan = json.loads(Path(os.environ["SPLIT_PLAN"]).read_text())
+          development, holdout = validate_split_plan(plan, input_path=Path(os.environ["CANONICAL_INPUT"]))
+          manifest = json.loads(Path(os.environ["CHALLENGER_MANIFEST"]).read_text())
+          policy = manifest.get("temporal_validation_policy") or {}
+          assert policy.get("split_plan_sha256") == plan["plan_sha256"]
+          assert policy.get("split_input_sha256") == plan["input_sha256"]
+          assert development and holdout and not development & holdout
+          PY
+          if test -n "$capture_matches" && python scripts/generate_alpha_atlas_v4_development_diagnostics.py \
+              --canonical-input "$CANONICAL_INPUT" --split-plan "$SPLIT_PLAN" \
+              --manifest "$CHALLENGER_MANIFEST" --oof-predictions "$OOF_CAPTURE" \
+              --output-dir /tmp/v4-capture-validation --baseline-sha validation-only >/dev/null; then
+            reuse=true
+          else
+            reuse=false
+            export OOF_CAPTURE="$DIAGNOSTIC_ROOT/evidence/development_walk_forward_predictions.json"
+          fi
+          printf 'OOF_CAPTURE=%s\nREUSE_CAPTURE=%s\n' "$OOF_CAPTURE" "$reuse" >> "$GITHUB_ENV"
+
+      - name: Capture frozen development folds only when required
+        if: env.REUSE_CAPTURE != 'true'
+        run: |
+          python scripts/capture_alpha_atlas_v4_development_oof.py \
+            --canonical-input "$CANONICAL_INPUT" \
+            --split-plan "$SPLIT_PLAN" \
+            --manifest "$CHALLENGER_MANIFEST" \
+            --output "$OOF_CAPTURE" \
+            --provenance-output "$DIAGNOSTIC_ROOT/evidence/development_oof_capture_provenance.json"
+
+      - name: Record reused-capture and workflow provenance
+        run: |
+          destination="$DIAGNOSTIC_ROOT/evidence/development_walk_forward_predictions.json"
+          if test "$OOF_CAPTURE" != "$destination"; then cp "$OOF_CAPTURE" "$destination"; fi
+          python - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          root = Path(os.environ["DIAGNOSTIC_ROOT"])
+          capture = root / "evidence/development_walk_forward_predictions.json"
+          payload = {
+              "schema_version": "alpha-atlas-v4-development-diagnostic-workflow-provenance.v1",
+              "workflow_name": "V4 Development Diagnostics",
+              "source_track_b_run_id": os.environ["SOURCE_RUN_ID"],
+              "diagnostic_workflow_run": f'{os.environ["GITHUB_RUN_ID"]}-{os.environ["GITHUB_RUN_ATTEMPT"]}',
+              "diagnostic_code_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "capture_reused": os.environ["REUSE_CAPTURE"] == "true",
+              "capture_sha256": hashlib.sha256(capture.read_bytes()).hexdigest(),
+              "final_holdout_backtest_invoked": False,
+              "provider_download_invoked": False,
+          }
+          (root / "evidence/workflow_provenance.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+          PY
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_track_b_run_id }}
+
+      - name: Generate development diagnostic reports
+        run: |
+          python scripts/generate_alpha_atlas_v4_development_diagnostics.py \
+            --canonical-input "$CANONICAL_INPUT" \
+            --split-plan "$SPLIT_PLAN" \
+            --manifest "$CHALLENGER_MANIFEST" \
+            --oof-predictions "$DIAGNOSTIC_ROOT/evidence/development_walk_forward_predictions.json" \
+            --output-dir "$DIAGNOSTIC_ROOT/reports" \
+            --baseline-sha "$(git rev-parse HEAD)"
+
+      - name: Write failure diagnostics
+        if: failure()
+        run: |
+          mkdir -p "$DIAGNOSTIC_ROOT/evidence"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path(os.environ["DIAGNOSTIC_ROOT"], "evidence/failure_diagnostics.json").write_text(json.dumps({
+              "schema_version": "alpha-atlas-v4-development-diagnostic-failure.v1",
+              "source_track_b_run_id": os.environ["SOURCE_RUN_ID"],
+              "workflow_run": f'{os.environ["GITHUB_RUN_ID"]}-{os.environ["GITHUB_RUN_ATTEMPT"]}',
+              "status": "failed",
+              "final_holdout_backtest_invoked": False,
+              "provider_download_invoked": False,
+          }, indent=2, sort_keys=True) + "\n")
+          PY
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_track_b_run_id }}
+
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4-development-diagnostics-${{ inputs.source_track_b_run_id }}
+          path: ${{ env.DIAGNOSTIC_ROOT }}/**
+          if-no-files-found: error
+          retention-days: 30

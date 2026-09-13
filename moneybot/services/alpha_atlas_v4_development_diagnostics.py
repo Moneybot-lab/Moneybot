@@ -38,6 +38,15 @@ def _load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _fold_membership(fold: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Read persisted manifest membership (and legacy in-memory observer keys)."""
+    train = fold.get("train_canonical_observation_ids", fold.get("train_ids", []))
+    validation = fold.get(
+        "validation_canonical_observation_ids", fold.get("validation_ids", [])
+    )
+    return list(map(str, train)), list(map(str, validation))
+
+
 def _quantiles(values: list[float]) -> dict[str, float] | None:
     if not values:
         return None
@@ -132,7 +141,8 @@ def generate_development_diagnostics(*, canonical_input: Path, split_plan_path: 
             raise DevelopmentDiagnosticError("prediction_references_unknown_or_unusable_fold")
         train_ids = set(map(str, item["train_ids"]))
         validation_ids = list(map(str, item["validation_ids"]))
-        if train_ids != set(map(str, fold["train_ids"])) or set(validation_ids) != set(map(str, fold["validation_ids"])):
+        planned_train, planned_validation = _fold_membership(fold)
+        if train_ids != set(planned_train) or set(validation_ids) != set(planned_validation):
             raise DevelopmentDiagnosticError("prediction_fold_provenance_mismatch")
         if train_ids & set(validation_ids) or not (train_ids | set(validation_ids)) <= development_ids:
             raise DevelopmentDiagnosticError("nondevelopment_or_in_sample_prediction")
