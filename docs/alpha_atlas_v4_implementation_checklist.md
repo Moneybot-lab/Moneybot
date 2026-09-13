@@ -50,7 +50,10 @@ No full historical backfill is authorized by this checklist update.
 - [x] Certification separation and hosted portfolio accounting are the completed engineering baseline (hosted runs `34675971440-1` and `34689216730-1` are reproducibility checks, not independent performance samples).
 - [x] Development-only signal-coverage, probability-calibration, and bounded threshold-sensitivity diagnostics implemented and locally fixture-verified.
 - [x] Bounded development-only frozen-fold OOF capture and capture-to-report workflow implemented and fixture-tested.
-- [ ] Hosted real-data development diagnostic execution completed (intentionally not dispatched by this change).
+- [x] Hosted development capture and basic diagnostic execution completed (`34769717178-1`, source Track B run `34689216730`).
+- [x] Development-only concentration and score-stability analysis implemented and fixture-tested.
+- [ ] Development-only concentration and score-stability analysis executed on the hosted artifact.
+- [ ] Next controlled experiment executed (one objective-weighting ablation is proposed only).
 - [ ] Model improvement and promotion readiness demonstrated.
 
 The diagnostic command consumes the frozen plan, certified canonical input,
@@ -90,5 +93,31 @@ python scripts/capture_alpha_atlas_v4_development_oof.py \
 The manual **V4 Development Diagnostics** workflow accepts a successful source
 Track B run ID, verifies the downloaded artifact hashes, reuses a compatible
 capture or performs only this bounded development-fold refit, and uploads one
-`v4-development-diagnostics-<source-run-id>` artifact. Its existence is an
-implementation capability, not evidence that hosted real-data diagnostics ran.
+`v4-development-diagnostics-<source-run-id>` artifact. The recorded hosted run
+establishes capture/basic-report execution, not concentration-analysis execution.
+
+Concentration and score-stability reports consume the downloaded diagnostic ZIP
+directly; this command cannot fit models, regenerate predictions, evaluate the
+holdout, or access a provider:
+
+```bash
+python scripts/analyze_alpha_atlas_v4_development_concentration.py \
+  --artifact v4-development-diagnostics-34689216730.zip \
+  --output-dir data/track_b/development_concentration \
+  --expected-capture-sha256 454febde2e14ca8a916222d86a6872db1c5e790a29429f2db6393d828e87e434 \
+  --expected-input-sha256 506073994052be852a5a00fc38e239b85e72a50494c3559640ea980fb6a52d9e \
+  --expected-split-plan-sha256 bd60055adc6cb1b3f8b143c6c61031bced01c9151fcb3b67c33f75430106e8e8 \
+  --expected-diagnostic-code-sha 5d360cdbda802ae8527b35fe59f75920b8c827c8 \
+  --expected-workflow-run 34769717178-1 \
+  --expected-source-run 34689216730
+```
+
+The three reporting views retain every canonical observation: equal observation
+weight, equal total weight per symbol/original-event-date group, and equal total
+weight per original event date. They are descriptive reporting estimands only.
+The observer field named `session` contains the unmodified source `event_date`;
+it is not silently shifted or asserted to be an exchange session. The proposed
+next experiment is one pre-registered development-only current-versus-uniform
+objective-weight ablation with features, folds, recipe family, purge, and embargo
+held fixed. It is not implemented here, and holdout evaluation/promotion remain
+unchanged.
