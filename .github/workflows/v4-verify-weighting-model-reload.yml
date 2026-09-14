@@ -30,7 +30,7 @@ jobs:
             ("34769717178","V4 Development Diagnostics",1,"v4-development-diagnostics-34689216730"),
             ("34796621288","V4 Register Weighting Experiment",1,"v4-weighting-registration-34796621288-1"),
             ("34797622678","V4 Execute Weighting Experiment",1,"v4-weighting-execution-34797622678-1"),
-            ("34872687197","V4 Verify Weighting Model Reload",1,"v4-weighting-model-reload-34872687197-1"))
+            ("34876711068","V4 Verify Weighting Model Reload",1,"v4-weighting-model-reload-34876711068-1"))
           repo=os.environ['GITHUB_REPOSITORY']
           for run_id,name,attempt,artifact in expected:
             run=json.loads(subprocess.check_output(['gh','api',f'repos/{repo}/actions/runs/{run_id}'],text=True))
@@ -47,7 +47,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with: {name: v4-weighting-registration-34796621288-1, run-id: 34796621288, path: source-registration, github-token: "${{ github.token }}"}
       - uses: actions/download-artifact@v4
-        with: {name: v4-weighting-model-reload-34872687197-1, run-id: 34872687197, path: source-reload, github-token: "${{ github.token }}"}
+        with: {name: v4-weighting-model-reload-34876711068-1, run-id: 34876711068, path: source-reload, github-token: "${{ github.token }}"}
       - name: Validate frozen sources and persist fill-policy evidence
         run: |
           set -euo pipefail
