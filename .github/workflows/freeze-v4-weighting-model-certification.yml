@@ -1,0 +1,97 @@
+name: Freeze V4 Weighting Model Certification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: freeze-v4-weighting-model-certification-2026-09-14
+  cancel-in-progress: false
+
+jobs:
+  freeze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: v4-weighting-model-certification-2026-09-14
+      RELEASE_TITLE: V4 Weighting Model Independent Certification — Frozen Evidence
+      SOURCE_RUN_ID: "34906607045"
+      SOURCE_ARTIFACT: v4-weighting-model-reload-34906607045-1
+      FREEZE_DIR: v4-weighting-certification-freeze
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify exact immutable source
+        run: |
+          set -euo pipefail
+          mkdir -p "$FREEZE_DIR/extracted"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > "$FREEZE_DIR/source_run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts" > "$FREEZE_DIR/source_artifacts.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ['FREEZE_DIR'])
+          run=json.loads((root/'source_run.json').read_text())
+          listing=json.loads((root/'source_artifacts.json').read_text())
+          if run.get('name')!='V4 Verify Weighting Model Reload' or run.get('conclusion')!='success' or int(run.get('run_attempt',0))!=1:
+              raise SystemExit('FROZEN_SOURCE_RUN_MISMATCH')
+          matches=[item for item in listing.get('artifacts',[]) if item.get('name')==os.environ['SOURCE_ARTIFACT'] and not item.get('expired')]
+          if len(matches)!=1: raise SystemExit(f'FROZEN_SOURCE_ARTIFACT_COUNT:{len(matches)}')
+          (root/'source_artifact.json').write_text(json.dumps(matches[0],indent=2,sort_keys=True)+'\n')
+          with Path(os.environ['GITHUB_ENV']).open('a') as env:
+              env.write(f"SOURCE_ARTIFACT_ID={matches[0]['id']}\nSOURCE_HEAD_SHA={run['head_sha']}\n")
+          PY
+
+      - name: Download original artifact ZIP byte-for-byte
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT_ID/zip" > "$FREEZE_DIR/$SOURCE_ARTIFACT.zip"
+          test -s "$FREEZE_DIR/$SOURCE_ARTIFACT.zip"
+
+      - name: Validate certification and build freeze manifest
+        run: |
+          set -euo pipefail
+          python scripts/build_v4_weighting_certification_freeze.py \
+            --run-json "$FREEZE_DIR/source_run.json" \
+            --artifact-json "$FREEZE_DIR/source_artifact.json" \
+            --source-zip "$FREEZE_DIR/$SOURCE_ARTIFACT.zip" \
+            --manifest "$FREEZE_DIR/v4_weighting_model_certification_manifest.json" \
+            --checksums "$FREEZE_DIR/SHA256SUMS" \
+            --extracted-dir "$FREEZE_DIR/extracted"
+
+      - name: Create immutable tag and GitHub Release
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1 || git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "Release or tag already exists; refusing to overwrite immutable freeze" >&2
+            exit 1
+          fi
+          gh release create "$TAG" --target "$SOURCE_HEAD_SHA" --title "$RELEASE_TITLE" \
+            --notes "Immutable byte-for-byte archive of the accepted V4 weighting-model independent certification from V4 Verify Weighting Model Reload run 34906607045, attempt 1. No model computation was performed by this archival workflow." \
+            "$FREEZE_DIR/$SOURCE_ARTIFACT.zip" \
+            "$FREEZE_DIR/v4_weighting_model_certification_manifest.json" \
+            "$FREEZE_DIR/SHA256SUMS" \
+            "$FREEZE_DIR/extracted/weighting_model_reload_verification.json" \
+            "$FREEZE_DIR/extracted/weighting_model_fill_policy_verification.json" \
+            "$FREEZE_DIR/extracted/sources.json"
+
+      - name: Retain sanitized failure diagnostics
+        if: failure()
+        run: |
+          mkdir -p "$FREEZE_DIR"
+          printf '{"status":"FREEZE_FAILED","source_run_id":34906607045,"source_attempt":1,"model_computation_performed":false}\n' > "$FREEZE_DIR/failure.json"
+
+      - name: Upload workflow audit bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4-weighting-certification-freeze-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.FREEZE_DIR }}/v4_weighting_model_certification_manifest.json
+            ${{ env.FREEZE_DIR }}/SHA256SUMS
+            ${{ env.FREEZE_DIR }}/failure.json
+          if-no-files-found: warn

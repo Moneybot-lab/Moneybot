@@ -201,3 +201,19 @@ affected rows/cells, feature-specific values, matrix hashes, training-only
 provenance, and corrected-state before/after hashes. The existing manual reload
 workflow now consumes the already successful reload artifact and generates only
 `weighting_model_fill_policy_verification.json`; it does not rerun replay or fit.
+
+## Permanent weighting-model certification freeze
+
+- [x] The one-time archival workflow is implemented and locally fixture-tested.
+- [ ] The permanent tag, release, and release assets have been created by the
+  manual hosted workflow.
+
+**Freeze V4 Weighting Model Certification** is fixed to successful source run
+`34906607045`, attempt `1`, and artifact
+`v4-weighting-model-reload-34906607045-1`. It validates that exact source,
+downloads its original ZIP without extracting or repackaging it, hashes it,
+creates an audit manifest, and targets tag
+`v4-weighting-model-certification-2026-09-14` at the source run's `head_sha`.
+The release attaches the unchanged ZIP, manifest, checksums, and small extracted
+review copies. It performs no model computation, refitting, holdout access, or
+promotion, and it refuses to replace an existing tag or release.
