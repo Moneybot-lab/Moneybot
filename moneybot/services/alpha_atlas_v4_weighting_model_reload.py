@@ -10,7 +10,9 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
+from moneybot.services.alpha_atlas_v4_phase0 import apply_feature_fill_policy
 from moneybot.services.deterministic_model import load_artifact, predict_proba
 
 SCHEMA = "alpha-atlas-v4-weighting-model-reload-verification.v1"
@@ -27,11 +29,13 @@ def _sha_bytes(payload: Any) -> str:
 
 
 def repair_and_verify(*, execution_predictions: Path, paired_comparison: Path,
-                      registration_path: Path, feature_store: Path, output_dir: Path,
+                      registration_path: Path, diagnostic_capture: Path,
+                      feature_store: Path, output_dir: Path,
                       execution_code_sha: str) -> dict[str, Any]:
     predictions = json.loads(execution_predictions.read_text())
     original_predictions = copy.deepcopy(predictions)
     registration = json.loads(registration_path.read_text())
+    capture = json.loads(diagnostic_capture.read_text())
     authoritative = list(registration["feature_columns"])
     if len(authoritative) != 43 or len(authoritative) != len(set(authoritative)):
         raise ModelReloadError("authoritative_feature_mapping_invalid")
@@ -47,11 +51,25 @@ def repair_and_verify(*, execution_predictions: Path, paired_comparison: Path,
                 raise ModelReloadError("duplicate_canonical_input_id")
             rows[identifier] = row
     reports, corrected = [], {"schema_version": "alpha-atlas-v4-weighting-model-state-metadata-repair.v1", "arms": {}}
+    captured_folds = {
+        int(item["fold_index"]): item
+        for item in capture
+        if item.get("model_version") == "challenger-big-loss-avoider-v1"
+    }
+    if set(captured_folds) != {1, 2, 3}:
+        raise ModelReloadError("selected_candidate_fill_policy_capture_incomplete")
     for arm, folds in predictions["arms"].items():
         corrected["arms"][arm] = []
         for fold in folds:
             index = int(fold["fold_index"])
             records, state = fold["records"], fold["model_state"]
+            registered_fold = next(item for item in registration["folds"] if int(item["fold_index"]) == index)
+            captured_fold = captured_folds[index]
+            if (set(captured_fold["train_ids"]) != set(registered_fold["train_ids"])
+                    or set(captured_fold["validation_ids"]) != set(registered_fold["validation_ids"])
+                    or [record["id"] for record in records] != [record["id"] for record in captured_fold["records"]]
+                    or captured_fold.get("fill_policy") is None):
+                raise ModelReloadError("captured_fill_policy_provenance_mismatch")
             if len(records) != EXPECTED_COUNTS[index] or len({record["id"] for record in records}) != len(records):
                 raise ModelReloadError("validation_count_or_id_integrity_mismatch")
             dimensions = {name: len(state[name]) for name in ("feature_columns", "weights", "means", "stds")}
@@ -79,13 +97,20 @@ def repair_and_verify(*, execution_predictions: Path, paired_comparison: Path,
                 "fixed_tolerance": TOLERANCE, "threshold": float(repaired["decision_threshold"]),
                 "calibration_slope": float(repaired.get("calibration_slope", 1)),
                 "calibration_intercept": float(repaired.get("calibration_intercept", 0))}
-            if missing_ids or missing_values:
+            if missing_ids:
                 result.update({"replay_status": "BLOCKED_MISSING_PERSISTED_FOLD_FILL_POLICY",
-                    "failure_reason": f"missing_ids={len(missing_ids)}, validation_rows_requiring_unpersisted_fill={missing_values}",
+                    "failure_reason": f"missing_ids={len(missing_ids)}",
                     "maximum_absolute_score_difference": None, "scores_outside_tolerance": None,
                     "decision_mismatch_count": None})
             else:
-                matrix = np.asarray([[float(rows[record["id"]][feature]) for feature in authoritative] for record in records])
+                validation = pd.DataFrame([rows[record["id"]] for record in records])
+                if missing_values:
+                    validation = apply_feature_fill_policy(
+                        validation,
+                        captured_fold["fill_policy"],
+                        expected_feature_contract_version="alpha-atlas-v4-features.v2",
+                    )
+                matrix = validation[authoritative].to_numpy(dtype=float)
                 with TemporaryDirectory() as temporary:
                     path = Path(temporary) / "model.json"
                     path.write_text(json.dumps(repaired))
@@ -104,14 +129,18 @@ def repair_and_verify(*, execution_predictions: Path, paired_comparison: Path,
     paired = json.loads(paired_comparison.read_text())
     if not math.isclose(float(paired["primary_aggregate_equal_fold_mean"]), 0.006319421301219023, abs_tol=1e-15):
         raise ModelReloadError("original_paired_result_mismatch")
+    all_replays_verified = all(item["replay_status"] == "VERIFIED" for item in reports)
     report = {"schema_version": SCHEMA, "execution_code_sha": execution_code_sha,
         "registration_sha256": registration["registration_sha256"], "authoritative_mapping_evidence":
         "registration feature_columns and execution source matrix train[features]/validation[features] use identical order",
-        "root_cause": "train_logistic_baseline serialized legacy FEATURE_COLUMNS metadata instead of caller matrix names",
-        "classification": "A_correct_numerical_fitting_and_prediction_incorrect_saved_metadata",
+        "metadata_correction_status": "MAPPING_CORRECTION_PROVEN_FROM_REGISTRATION_AND_SOURCE_PATH",
+        "prediction_reproducibility_status": "VERIFIED" if all_replays_verified else "UNRESOLVED",
+        "classification": ("A_correct_numerical_fitting_and_prediction_incorrect_saved_metadata"
+                           if all_replays_verified else "INSUFFICIENT_REPLAY_EVIDENCE_TO_CONFIRM_METADATA_ONLY"),
         "original_primary_uniform_minus_current": float(paired["primary_aggregate_equal_fold_mean"]),
+        "saved_result_arithmetic_status": "VERIFIED_AGGREGATE_UNCHANGED",
         "original_result_preserved": True, "models": reports,
-        "all_replays_verified": all(item["replay_status"] == "VERIFIED" for item in reports),
+        "all_replays_verified": all_replays_verified,
         "final_holdout_accessed": False, "models_fitted": False,
         "automatic_promotion": False, "ready_for_live_routing": False}
     output_dir.mkdir(parents=True, exist_ok=True)

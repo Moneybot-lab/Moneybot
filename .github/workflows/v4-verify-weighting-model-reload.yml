@@ -67,7 +67,7 @@ jobs:
           import json,shlex
           from pathlib import Path
           s=json.load(open('v4-weighting-model-reload/evidence/sources.json'))
-          names={'FEATURE_STORE':s['feature_store'],'REGISTRATION':s['registration']}
+          names={'FEATURE_STORE':s['feature_store'],'REGISTRATION':s['registration'],'DIAGNOSTIC_CAPTURE':s['capture']}
           for key,name in names.items(): print(f'{key}={shlex.quote(name)}')
           for key,name in {'PREDICTIONS':'weighting_experiment_predictions.json','PAIRED':'weighting_experiment_paired_comparison.json'}.items():
             paths=list(Path('source-execution').rglob(name))
@@ -77,7 +77,8 @@ jobs:
           )"
           python scripts/verify_alpha_atlas_v4_weighting_model_reload.py \
             --predictions "$PREDICTIONS" --paired-comparison "$PAIRED" \
-            --registration "$REGISTRATION" --feature-store "$FEATURE_STORE" \
+            --registration "$REGISTRATION" --diagnostic-capture "$DIAGNOSTIC_CAPTURE" \
+            --feature-store "$FEATURE_STORE" \
             --output-dir "$OUTPUT_ROOT/report" \
             --execution-code-sha aad503b0520c80dca35bb593edac2001b1be0c85
       - name: Write sanitized failure diagnostics

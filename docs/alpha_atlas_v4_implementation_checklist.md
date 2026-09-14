@@ -63,6 +63,8 @@ No full historical backfill is authorized by this checklist update.
 - [x] Saved weighting-model feature metadata defect identified as legacy 10-name metadata attached to 43-dimensional fitted state.
 - [x] Metadata-only repair and reload verification implemented and fixture-tested.
 - [ ] Six-model real-artifact reload verification completed (manual verification workflow pending).
+- [x] Reload verifier repaired to reuse the exact diagnostic capture's persisted fold-local fill policies after registration/candidate/fold/ID checks.
+- [ ] Source verification `34872687197-1` blocker resolved in a new hosted verification run.
 - [ ] Model improvement and promotion readiness demonstrated.
 
 The diagnostic command consumes the frozen plan, certified canonical input,
@@ -184,3 +186,7 @@ registered result are unchanged. **V4 Verify Weighting Model Reload** downloads
 the exact reviewed execution and sources, creates metadata-only corrected copies,
 and replays without fitting. It fails closed if the original fold-local fill state
 is needed but unavailable, and never accesses final-holdout rows.
+The verifier now separates feature-metadata correction, prediction replay, and
+saved-result arithmetic. It may classify the defect as metadata-only only after
+all six reloaded score vectors pass the fixed tolerance; otherwise replay remains
+explicitly unresolved.

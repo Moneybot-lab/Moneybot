@@ -50,3 +50,10 @@ default in `feature_columns`. The experiment boundary now writes the authoritati
 registered names and validates reload dimensions. The original predictions and
 result remain unchanged; hosted replay is pending the manual **V4 Verify Weighting
 Model Reload** workflow.
+
+The follow-up to verification run `34872687197-1` handles the case where replay
+needs fold-local fill policies already persisted in the original diagnostic capture. The verifier
+now consumes those policies only after exact candidate, registration fold, and
+validation-ID equivalence checks; it never recomputes fill values. Metadata repair,
+prediction reproducibility, and saved-result arithmetic are reported separately,
+and “metadata-only” is confirmed only after every replay succeeds.
