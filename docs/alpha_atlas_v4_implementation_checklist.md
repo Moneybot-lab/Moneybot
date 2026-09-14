@@ -65,6 +65,8 @@ No full historical backfill is authorized by this checklist update.
 - [ ] Six-model real-artifact reload verification completed (manual verification workflow pending).
 - [x] Reload verifier repaired to reuse the exact diagnostic capture's persisted fold-local fill policies after registration/candidate/fold/ID checks.
 - [ ] Source verification `34872687197-1` blocker resolved in a new hosted verification run.
+- [x] Fold fill-policy evidence generator implemented and fixture-tested without fitting or holdout access.
+- [ ] Hosted `weighting_model_fill_policy_verification.json` generated and independently reviewed.
 - [ ] Model improvement and promotion readiness demonstrated.
 
 The diagnostic command consumes the frozen plan, certified canonical input,
@@ -190,3 +192,12 @@ The verifier now separates feature-metadata correction, prediction replay, and
 saved-result arithmetic. It may classify the defect as metadata-only only after
 all six reloaded score vectors pass the fixed tolerance; otherwise replay remains
 explicitly unresolved.
+
+The evidence-only fill-policy certification records the persisted per-fold
+policies used by the successful replay: coercion to numeric, replacement of
+`+/-inf` with missing, feature-specific training-fold medians (or zero only when
+the training fold has no finite value), applied before model scaling. It records
+affected rows/cells, feature-specific values, matrix hashes, training-only
+provenance, and corrected-state before/after hashes. The existing manual reload
+workflow now consumes the already successful reload artifact and generates only
+`weighting_model_fill_policy_verification.json`; it does not rerun replay or fit.
