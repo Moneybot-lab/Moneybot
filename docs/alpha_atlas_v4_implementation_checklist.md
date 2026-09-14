@@ -58,6 +58,7 @@ No full historical backfill is authorized by this checklist update.
 - [x] Weighting-comparison runner implemented and deterministic-fixture verified.
 - [x] Manual **V4 Register Weighting Experiment** workflow implemented and locally tested.
 - [ ] Hosted artifact-bound weighting registration completed.
+- [x] Manual **V4 Execute Weighting Experiment** workflow implemented and locally tested against deterministic workflow contracts.
 - [ ] Real-data weighting experiment executed.
 - [ ] Model improvement and promotion readiness demonstrated.
 
@@ -161,3 +162,13 @@ Register Weighting Experiment → Run workflow**, leaving the reviewed defaults
 `source_diagnostics_run_id=34769717178` unchanged. Download
 `v4-weighting-registration-<registration-run-id>-<run-attempt>` and review the
 registration before separately authorizing any experiment execution.
+
+After the reviewed registration artifact exists, **V4 Execute Weighting
+Experiment** is the only hosted execution entry point for this registration. It
+has no dataset or hash inputs: this version is fixed to registration run
+`34796621288-1`, canonical registration hash
+`4112f445d8ef079550f02185e4592c05aff9c0321ee4bfa615b632360af4c5c3`,
+Track B run `34689216730`, and diagnostics run `34769717178-1`. It runs only the
+existing `execute` subcommand and uploads
+`v4-weighting-execution-<workflow-run-id>-<run-attempt>`. It never creates or
+amends a registration and does not evaluate the final holdout.

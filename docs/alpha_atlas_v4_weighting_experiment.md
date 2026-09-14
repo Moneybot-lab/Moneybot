@@ -33,3 +33,11 @@ artifact-bound registration. It retrieves the exact reviewed Track B and
 development-diagnostic runs, requires diagnostic attempt `34769717178-1`, and
 uploads the small registration/evidence bundle. It never invokes the `execute`
 subcommand.
+
+The manual **V4 Execute Weighting Experiment** workflow is separately bound to
+the reviewed registration from run `34796621288-1` with canonical registration
+hash `4112f445d8ef079550f02185e4592c05aff9c0321ee4bfa615b632360af4c5c3`.
+It downloads exactly that registration and the already reviewed source artifacts,
+revalidates their lineage, and invokes only `execute`. Execution is serialized;
+it neither registers, reruns Track B, regenerates predictions, nor evaluates the
+final holdout.
