@@ -52,8 +52,11 @@ No full historical backfill is authorized by this checklist update.
 - [x] Bounded development-only frozen-fold OOF capture and capture-to-report workflow implemented and fixture-tested.
 - [x] Hosted development capture and basic diagnostic execution completed (`34769717178-1`, source Track B run `34689216730`).
 - [x] Development-only concentration and score-stability analysis implemented and fixture-tested.
-- [ ] Development-only concentration and score-stability analysis executed on the hosted artifact.
-- [ ] Next controlled experiment executed (one objective-weighting ablation is proposed only).
+- [x] Development-only concentration and score-stability analysis completed locally in the prior review.
+- [x] Two-arm current-versus-uniform weighting comparison protocol pre-registered in code and documentation.
+- [ ] Immutable artifact-bound registration JSON materialized (pending the certified input, manifest, plan, and capture files).
+- [x] Weighting-comparison runner implemented and deterministic-fixture verified.
+- [ ] Real-data weighting experiment executed.
 - [ ] Model improvement and promotion readiness demonstrated.
 
 The diagnostic command consumes the frozen plan, certified canonical input,
@@ -121,3 +124,31 @@ next experiment is one pre-registered development-only current-versus-uniform
 objective-weight ablation with features, folds, recipe family, purge, and embargo
 held fixed. It is not implemented here, and holdout evaluation/promotion remain
 unchanged.
+
+## Registered development-only weighting comparison
+
+The only experiment is `alpha-atlas-v4-big-loss-weight-ablation.v1` for the
+frozen `challenger-big-loss-avoider-v1`. First materialize its immutable
+artifact-bound registration—before execution—using the certified source files:
+
+```bash
+python scripts/run_alpha_atlas_v4_weighting_experiment.py register \
+  --input <flat_feature_store/all.jsonl> \
+  --split-plan <challenger_split_plan.json> \
+  --manifest <challenger_suite_manifest.json> \
+  --capture <development_walk_forward_predictions.json> \
+  --registration weighting_experiment_registration.json \
+  --expected-input-hash 506073994052be852a5a00fc38e239b85e72a50494c3559640ea980fb6a52d9e \
+  --expected-plan-hash bd60055adc6cb1b3f8b143c6c61031bced01c9151fcb3b67c33f75430106e8e8 \
+  --expected-manifest-hash <SHA256_FROM_VERIFIED_SOURCE_ARTIFACT> \
+  --expected-capture-hash 454febde2e14ca8a916222d86a6872db1c5e790a29429f2db6393d828e87e434 \
+  --original-capture-code-sha 5d360cdbda802ae8527b35fe59f75920b8c827c8
+```
+
+Review and commit/archive that generated JSON and readable `.md` companion,
+then use the same arguments with mode `execute` plus
+`--output-dir <development-weighting-output>`. Execution rejects any registration
+or artifact drift. The primary paired difference is symbol/date-balanced Brier
+loss, uniform minus current, with an equal-fold mean; favorable descriptive
+evidence requires a negative mean and improvement in at least two of exactly
+three folds. No outcome can select or promote an arm or alter threshold 0.60.
