@@ -1,0 +1,183 @@
+name: V4 Register Weighting Experiment
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_track_b_run_id:
+        description: "Successful Track B Offline Challenger run ID"
+        required: true
+        default: "34689216730"
+        type: string
+      source_diagnostics_run_id:
+        description: "Successful V4 Development Diagnostics run ID (attempt 1)"
+        required: true
+        default: "34769717178"
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  register:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TRACK_RUN_ID: ${{ inputs.source_track_b_run_id }}
+      DIAGNOSTICS_RUN_ID: ${{ inputs.source_diagnostics_run_id }}
+      OUTPUT_ROOT: v4-weighting-registration
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout selected workflow revision
+        uses: actions/checkout@v4
+
+      - name: Record registration code SHA
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_ROOT/evidence" "$OUTPUT_ROOT/registration"
+          git rev-parse HEAD | tee "$OUTPUT_ROOT/evidence/registration_code_sha.txt"
+
+      - name: Validate explicit source run identities
+        run: |
+          set -euo pipefail
+          [[ "$TRACK_RUN_ID" =~ ^[0-9]+$ ]] || { echo "Track B run ID must be numeric"; exit 2; }
+          [[ "$DIAGNOSTICS_RUN_ID" =~ ^[0-9]+$ ]] || { echo "Diagnostics run ID must be numeric"; exit 2; }
+          test "$TRACK_RUN_ID" = "34689216730" || { echo "Track B run differs from registered source"; exit 2; }
+          test "$DIAGNOSTICS_RUN_ID" = "34769717178" || { echo "Diagnostics run differs from registered source"; exit 2; }
+          track_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TRACK_RUN_ID")"
+          diagnostics_json="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$DIAGNOSTICS_RUN_ID")"
+          track_artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TRACK_RUN_ID/artifacts")"
+          diagnostics_artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$DIAGNOSTICS_RUN_ID/artifacts")"
+          TRACK_JSON="$track_json" DIAGNOSTICS_JSON="$diagnostics_json" TRACK_ARTIFACTS="$track_artifacts" DIAGNOSTIC_ARTIFACTS="$diagnostics_artifacts" python - <<'PY'
+          import json, os
+          track = json.loads(os.environ["TRACK_JSON"])
+          diagnostic = json.loads(os.environ["DIAGNOSTICS_JSON"])
+          if track.get("name") != "Track B Offline Challenger" or track.get("conclusion") != "success":
+              raise SystemExit("registered Track B source workflow is not successful")
+          if diagnostic.get("name") != "V4 Development Diagnostics" or diagnostic.get("conclusion") != "success":
+              raise SystemExit("registered diagnostics source workflow is not successful")
+          if int(diagnostic.get("run_attempt", 0)) != 1:
+              raise SystemExit("diagnostics source must be run attempt 1")
+          for payload, name in ((json.loads(os.environ["TRACK_ARTIFACTS"]), "track-b-offline-output"),
+                                (json.loads(os.environ["DIAGNOSTIC_ARTIFACTS"]), "v4-development-diagnostics-34689216730")):
+              matches=[item for item in payload.get("artifacts",[]) if item.get("name")==name and not item.get("expired")]
+              if len(matches) != 1:
+                  raise SystemExit(f"expected exactly one non-expired {name} artifact; found {len(matches)}")
+          PY
+
+      - name: Download exact Track B artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: track-b-offline-output
+          run-id: ${{ inputs.source_track_b_run_id }}
+          path: source-track-b
+          github-token: ${{ github.token }}
+
+      - name: Download exact development diagnostics artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: v4-development-diagnostics-34689216730
+          run-id: ${{ inputs.source_diagnostics_run_id }}
+          path: source-diagnostics
+          github-token: ${{ github.token }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install repository dependencies
+        run: pip install -r requirements.txt
+
+      - name: Resolve and verify frozen evidence
+        run: |
+          set -euo pipefail
+          python scripts/validate_v4_weighting_registration_sources.py \
+            --track-root source-track-b \
+            --diagnostics-root source-diagnostics \
+            --output "$OUTPUT_ROOT/evidence/verified_sources.json"
+
+      - name: Register weighting experiment only
+        run: |
+          set -euo pipefail
+          eval "$(python - <<'PY'
+          import json, shlex
+          p=json.load(open('v4-weighting-registration/evidence/verified_sources.json'))
+          for key in ('feature_store','split_plan','manifest','capture','manifest_sha256'):
+              print(f"{key.upper()}={shlex.quote(str(p[key]))}")
+          PY
+          )"
+          python scripts/run_alpha_atlas_v4_weighting_experiment.py register \
+            --input "$FEATURE_STORE" --split-plan "$SPLIT_PLAN" \
+            --manifest "$MANIFEST" --capture "$CAPTURE" \
+            --registration "$OUTPUT_ROOT/registration/weighting_experiment_registration.json" \
+            --expected-input-hash 506073994052be852a5a00fc38e239b85e72a50494c3559640ea980fb6a52d9e \
+            --expected-plan-hash bd60055adc6cb1b3f8b143c6c61031bced01c9151fcb3b67c33f75430106e8e8 \
+            --expected-manifest-hash "$MANIFEST_SHA256" \
+            --expected-capture-hash 454febde2e14ca8a916222d86a6872db1c5e790a29429f2db6393d828e87e434 \
+            --original-capture-code-sha 5d360cdbda802ae8527b35fe59f75920b8c827c8 \
+            --source-run 34689216730 \
+            | tee "$OUTPUT_ROOT/evidence/registration_hash.txt"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from moneybot.services.alpha_atlas_v4_weighting_experiment import validate_registration
+          path=Path('v4-weighting-registration/registration/weighting_experiment_registration.json')
+          registration=json.loads(path.read_text())
+          validate_registration(registration)
+          assert registration['experiment_id']=='alpha-atlas-v4-big-loss-weight-ablation.v1'
+          assert registration['selected_candidate']=='challenger-big-loss-avoider-v1'
+          assert set(registration['arms'])=={'current_weights','uniform_weights'}
+          assert len(registration['folds'])==3
+          assert float(registration['candidate_spec']['threshold'])==0.60
+          assert registration['automatic_promotion'] is False
+          assert registration['ready_for_live_routing'] is False
+          PY
+
+      - name: Write workflow execution provenance
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ['OUTPUT_ROOT'])
+          sources=json.loads((root/'evidence/verified_sources.json').read_text())
+          registration=json.loads((root/'registration/weighting_experiment_registration.json').read_text())
+          payload={"schema_version":"alpha-atlas-v4-weighting-registration-workflow.v1",
+            "status":"REGISTERED", "registration_code_sha":(root/'evidence/registration_code_sha.txt').read_text().strip(),
+            "workflow_run":f"{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}",
+            "source_track_b_run_id":os.environ['TRACK_RUN_ID'], "source_diagnostics_run":"34769717178-1",
+            "source_artifacts":["track-b-offline-output","v4-development-diagnostics-34689216730"],
+            "verified_source_hashes":{key:sources[key] for key in ('input_sha256','split_plan_sha256','manifest_sha256','capture_sha256')},
+            "registration_sha256":registration['registration_sha256'], "experiment_executed":False,
+            "automatic_promotion":False, "ready_for_live_routing":False}
+          (root/'evidence/workflow_execution_provenance.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Retain sanitized failure diagnostics
+        if: failure()
+        run: |
+          rm -rf "$OUTPUT_ROOT/registration"
+          mkdir -p "$OUTPUT_ROOT/evidence"
+          printf '{"status":"REGISTRATION_FAILED","experiment_executed":false,"automatic_promotion":false,"ready_for_live_routing":false,"source_track_b_run_id":"%s","source_diagnostics_run":"%s-1"}\n' \
+            "$TRACK_RUN_ID" "$DIAGNOSTICS_RUN_ID" > "$OUTPUT_ROOT/evidence/failure_diagnostics.json"
+
+      - name: Write job summary
+        if: always()
+        run: |
+          if test -s "$OUTPUT_ROOT/registration/weighting_experiment_registration.json"; then
+            hash="$(python -c 'import json; print(json.load(open("v4-weighting-registration/registration/weighting_experiment_registration.json"))["registration_sha256"])')"
+            status="Registration succeeded; hash: $hash"
+          else
+            status="Registration blocked; review failure_diagnostics.json and the failed step"
+          fi
+          printf '## V4 weighting registration\n\n- %s\n- Track B source: `%s`\n- Diagnostics source: `%s-1`\n- `experiment_executed=false`\n- `automatic_promotion=false`\n- `ready_for_live_routing=false`\n\n**Download and review the registration before authorizing execution.**\n' \
+            "$status" "$TRACK_RUN_ID" "$DIAGNOSTICS_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload registration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4-weighting-registration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: v4-weighting-registration/**
+          if-no-files-found: error
+          retention-days: 30
