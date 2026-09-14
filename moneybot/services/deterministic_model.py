@@ -371,6 +371,7 @@ def classify(artifact: BaselineModelArtifact, rows: np.ndarray) -> np.ndarray:
 
 
 def save_artifact(artifact: BaselineModelArtifact, output_path: str | Path) -> None:
+    validate_artifact_dimensions(artifact)
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(artifact.to_dict(), indent=2), encoding="utf-8")
@@ -378,7 +379,7 @@ def save_artifact(artifact: BaselineModelArtifact, output_path: str | Path) -> N
 
 def load_artifact(path: str | Path) -> BaselineModelArtifact:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    return BaselineModelArtifact(
+    artifact = BaselineModelArtifact(
         version=str(payload["version"]),
         feature_columns=list(payload["feature_columns"]),
         means=[float(v) for v in payload["means"]],
@@ -411,6 +412,28 @@ def load_artifact(path: str | Path) -> BaselineModelArtifact:
             else None
         ),
     )
+    validate_artifact_dimensions(artifact)
+    return artifact
+
+
+def validate_artifact_dimensions(artifact: BaselineModelArtifact) -> None:
+    """Reject ambiguous feature mappings and inconsistent learned-state vectors."""
+    names = list(artifact.feature_columns)
+    if not names or len(names) != len(set(names)):
+        raise ValueError("artifact feature_columns must be nonempty and unique")
+    expected = len(names)
+    dimensions = {
+        "means": len(artifact.means),
+        "stds": len(artifact.stds),
+        "weights": len(artifact.weights),
+    }
+    if any(value != expected for value in dimensions.values()):
+        raise ValueError(
+            f"artifact feature/scaler/coefficient dimension mismatch: features={expected}, {dimensions}"
+        )
+    for name, values in (("clip_lower", artifact.clip_lower), ("clip_upper", artifact.clip_upper)):
+        if values is not None and len(values) != expected:
+            raise ValueError(f"artifact {name} dimension mismatch")
 
 
 def chronological_split(
