@@ -1,0 +1,171 @@
+name: V4 Execute Weighting Experiment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: v4-weighting-experiment-alpha-atlas-v4-big-loss-weight-ablation-v1
+  cancel-in-progress: false
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OUTPUT_ROOT: v4-weighting-execution
+      TRACK_RUN_ID: "34689216730"
+      DIAGNOSTICS_RUN_ID: "34769717178"
+      REGISTRATION_RUN_ID: "34796621288"
+    steps:
+      - name: Checkout execution revision
+        uses: actions/checkout@v4
+
+      - name: Record execution code SHA
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_ROOT/evidence" "$OUTPUT_ROOT/results"
+          git rev-parse HEAD | tee "$OUTPUT_ROOT/evidence/execution_code_sha.txt"
+
+      - name: Verify exact successful source runs and artifacts
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, subprocess
+          expected = (
+              ("34689216730", "Track B Offline Challenger", 1, "track-b-offline-output"),
+              ("34769717178", "V4 Development Diagnostics", 1, "v4-development-diagnostics-34689216730"),
+              ("34796621288", "V4 Register Weighting Experiment", 1, "v4-weighting-registration-34796621288-1"),
+          )
+          repository = os.environ["GITHUB_REPOSITORY"]
+          for run_id, workflow, attempt, artifact_name in expected:
+              if not run_id.isdigit():
+                  raise SystemExit("fixed source run ID is not numeric")
+              run = json.loads(subprocess.check_output(["gh", "api", f"repos/{repository}/actions/runs/{run_id}"], text=True))
+              if run.get("name") != workflow or run.get("conclusion") != "success" or int(run.get("run_attempt", 0)) != attempt:
+                  raise SystemExit(f"reviewed source run mismatch: {run_id}")
+              payload = json.loads(subprocess.check_output(["gh", "api", f"repos/{repository}/actions/runs/{run_id}/artifacts"], text=True))
+              matches = [item for item in payload.get("artifacts", []) if item.get("name") == artifact_name and not item.get("expired")]
+              if len(matches) != 1:
+                  raise SystemExit(f"expected exactly one non-expired {artifact_name}; found {len(matches)}")
+          PY
+
+      - name: Download exact Track B artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: track-b-offline-output
+          run-id: 34689216730
+          path: source-track-b
+          github-token: ${{ github.token }}
+
+      - name: Download exact development diagnostics artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: v4-development-diagnostics-34689216730
+          run-id: 34769717178
+          path: source-diagnostics
+          github-token: ${{ github.token }}
+
+      - name: Download exact reviewed registration artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: v4-weighting-registration-34796621288-1
+          run-id: 34796621288
+          path: source-registration
+          github-token: ${{ github.token }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install repository dependencies
+        run: pip install -r requirements.txt
+
+      - name: Validate reviewed registration and frozen evidence
+        run: |
+          set -euo pipefail
+          python scripts/validate_v4_weighting_execution_sources.py \
+            --track-root source-track-b --diagnostics-root source-diagnostics \
+            --registration-root source-registration \
+            --output "$OUTPUT_ROOT/evidence/verified_execution_sources.json"
+
+      - name: Execute registered development experiment only
+        run: |
+          set -euo pipefail
+          eval "$(python - <<'PY'
+          import json, shlex
+          p=json.load(open('v4-weighting-execution/evidence/verified_execution_sources.json'))
+          for key in ('feature_store','split_plan','manifest','capture','registration'):
+              print(f"{key.upper()}={shlex.quote(str(p[key]))}")
+          PY
+          )"
+          python scripts/run_alpha_atlas_v4_weighting_experiment.py execute \
+            --input "$FEATURE_STORE" --split-plan "$SPLIT_PLAN" \
+            --manifest "$MANIFEST" --capture "$CAPTURE" \
+            --registration "$REGISTRATION" --output-dir "$OUTPUT_ROOT/results" \
+            --expected-input-hash 506073994052be852a5a00fc38e239b85e72a50494c3559640ea980fb6a52d9e \
+            --expected-plan-hash bd60055adc6cb1b3f8b143c6c61031bced01c9151fcb3b67c33f75430106e8e8 \
+            --expected-manifest-hash ea4e55f9faa848219945d7e03c92c7a541645cd4d6df8aa3cfbd0d1334872f15 \
+            --expected-capture-hash 454febde2e14ca8a916222d86a6872db1c5e790a29429f2db6393d828e87e434 \
+            --original-capture-code-sha 5d360cdbda802ae8527b35fe59f75920b8c827c8 \
+            --source-run 34689216730
+
+      - name: Write execution workflow provenance
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ['OUTPUT_ROOT'])
+          verified=json.loads((root/'evidence/verified_execution_sources.json').read_text())
+          report=json.loads((root/'results/weighting_experiment_paired_comparison.json').read_text())
+          payload={"schema_version":"alpha-atlas-v4-weighting-execution-workflow.v1",
+            "status":"EXECUTED_DEVELOPMENT_ONLY", "workflow_run":f"{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}",
+            "execution_code_sha":(root/'evidence/execution_code_sha.txt').read_text().strip(),
+            "registration_sha256":verified['registration_sha256'], "registration_code_sha":verified['registration_code_sha'],
+            "original_capture_code_sha":verified['diagnostic_code_sha'],
+            "source_runs":{"track_b":"34689216730","diagnostics":"34769717178-1","registration":"34796621288-1"},
+            "verified_source_hashes":{key:verified[key] for key in ('input_sha256','split_plan_sha256','manifest_sha256','capture_sha256')},
+            "registered_interpretation":report['registered_interpretation'], "final_holdout_evaluated":False,
+            "automatic_promotion":False,"ready_for_live_routing":False}
+          (root/'evidence/workflow_execution_provenance.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
+          PY
+
+      - name: Retain sanitized failure diagnostics
+        if: failure()
+        run: |
+          rm -rf "$OUTPUT_ROOT/results"
+          mkdir -p "$OUTPUT_ROOT/evidence"
+          printf '{"status":"EXECUTION_FAILED","registration_sha256":"4112f445d8ef079550f02185e4592c05aff9c0321ee4bfa615b632360af4c5c3","final_holdout_evaluated":false,"automatic_promotion":false,"ready_for_live_routing":false}\n' \
+            > "$OUTPUT_ROOT/evidence/failure_diagnostics.json"
+
+      - name: Write job summary
+        if: always()
+        run: |
+          if test -s "$OUTPUT_ROOT/results/weighting_experiment_paired_comparison.json"; then
+            python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          p=json.load(open('v4-weighting-execution/results/weighting_experiment_paired_comparison.json'))
+          print('## V4 registered weighting experiment\n')
+          print(f"- Status: development-only execution completed")
+          print(f"- Registration: `4112f445d8ef079550f02185e4592c05aff9c0321ee4bfa615b632360af4c5c3`")
+          print(f"- Registered interpretation: `{p['registered_interpretation']}`")
+          print(f"- Primary uniform-minus-current aggregate: `{p['primary_aggregate_equal_fold_mean']}`")
+          print('- `final_holdout_evaluated=false`\n- `automatic_promotion=false`\n- `ready_for_live_routing=false`')
+          PY
+          else
+            printf '## V4 registered weighting experiment\n\n- Execution failed; review failure diagnostics.\n- `final_holdout_evaluated=false`\n- `automatic_promotion=false`\n- `ready_for_live_routing=false`\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload bounded execution evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4-weighting-execution-${{ github.run_id }}-${{ github.run_attempt }}
+          path: v4-weighting-execution/**
+          if-no-files-found: error
+          retention-days: 30
