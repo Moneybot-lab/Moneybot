@@ -27,3 +27,9 @@ It records verified input, plan, manifest, capture, recipe, feature, target, and
 exact fold-ID hashes. The repository cannot truthfully commit that final JSON
 until the frozen manifest/input/capture files are supplied; the registration
 command fails rather than inventing those values.
+
+The manual **V4 Register Weighting Experiment** workflow performs only that
+artifact-bound registration. It retrieves the exact reviewed Track B and
+development-diagnostic runs, requires diagnostic attempt `34769717178-1`, and
+uploads the small registration/evidence bundle. It never invokes the `execute`
+subcommand.

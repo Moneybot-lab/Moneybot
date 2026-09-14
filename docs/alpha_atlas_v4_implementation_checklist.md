@@ -56,6 +56,8 @@ No full historical backfill is authorized by this checklist update.
 - [x] Two-arm current-versus-uniform weighting comparison protocol pre-registered in code and documentation.
 - [ ] Immutable artifact-bound registration JSON materialized (pending the certified input, manifest, plan, and capture files).
 - [x] Weighting-comparison runner implemented and deterministic-fixture verified.
+- [x] Manual **V4 Register Weighting Experiment** workflow implemented and locally tested.
+- [ ] Hosted artifact-bound weighting registration completed.
 - [ ] Real-data weighting experiment executed.
 - [ ] Model improvement and promotion readiness demonstrated.
 
@@ -152,3 +154,10 @@ or artifact drift. The primary paired difference is symbol/date-balanced Brier
 loss, uniform minus current, with an equal-fold mean; favorable descriptive
 evidence requires a negative mean and improvement in at least two of exactly
 three folds. No outcome can select or promote an arm or alter threshold 0.60.
+
+To materialize the hosted registration after merge: **GitHub → Actions → V4
+Register Weighting Experiment → Run workflow**, leaving the reviewed defaults
+`source_track_b_run_id=34689216730` and
+`source_diagnostics_run_id=34769717178` unchanged. Download
+`v4-weighting-registration-<registration-run-id>-<run-attempt>` and review the
+registration before separately authorizing any experiment execution.
