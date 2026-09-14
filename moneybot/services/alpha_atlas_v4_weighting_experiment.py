@@ -138,6 +138,10 @@ def execute(registration: dict[str, Any], input_path: Path, plan_path: Path,
             model = train_logistic_baseline(train[features].to_numpy(dtype=float), labels,
                 learning_rate=float(spec["lr"]), l2=float(spec["l2"]), decision_threshold=float(spec["threshold"]),
                 epochs=int(spec["epochs"]), sample_weight=arm_weights)
+            # train_logistic_baseline retains its legacy ten-feature default
+            # metadata even when called with a wider explicit matrix. The actual
+            # fitted and scored matrix order is the frozen registration order.
+            model.feature_columns = list(features)
             scores = predict_proba(model, validation[features].to_numpy(dtype=float))
             if not np.isfinite(scores).all():
                 raise WeightingExperimentError("invalid_arm_scores")

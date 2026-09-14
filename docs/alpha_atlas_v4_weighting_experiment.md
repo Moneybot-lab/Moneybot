@@ -41,3 +41,12 @@ It downloads exactly that registration and the already reviewed source artifacts
 revalidates their lineage, and invokes only `execute`. Execution is serialized;
 it neither registers, reruns Track B, regenerates predictions, nor evaluates the
 final holdout.
+
+Execution `34797622678-1` produced an unfavorable registered comparison
+(`uniform-current=+0.006319421301219023`; one fold improved). Its six serialized
+states exposed a metadata-only defect: the actual matrices used the registration's
+43 ordered features, while `train_logistic_baseline` retained its legacy ten-name
+default in `feature_columns`. The experiment boundary now writes the authoritative
+registered names and validates reload dimensions. The original predictions and
+result remain unchanged; hosted replay is pending the manual **V4 Verify Weighting
+Model Reload** workflow.

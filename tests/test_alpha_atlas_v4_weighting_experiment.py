@@ -39,9 +39,14 @@ def test_registered_two_arm_execution_reproduces_baseline_and_preserves_artifact
     artifacts_before = {item["model_version"]: Path(item["model_path"]).read_bytes() for item in manifest["challengers"]}
     outputs = execute(registration, input_path, plan_path, manifest_path, capture_path, tmp_path / "out", code_sha="fixture")
     comparison = json.loads(outputs["weighting_experiment_paired_comparison.json"].read_text())
+    predictions = json.loads(outputs["weighting_experiment_predictions.json"].read_text())
     weights = json.loads(outputs["weighting_experiment_effective_weights.json"].read_text())["folds"]
     assert len(comparison["folds"]) == 3
     assert comparison["promotion_or_threshold_change_allowed"] is False
+    for folds in predictions["arms"].values():
+        for fold in folds:
+            assert fold["model_state"]["feature_columns"] == manifest["feature_columns"]
+            assert len(fold["model_state"]["feature_columns"]) == len(fold["model_state"]["weights"])
     for fold in {item["fold_index"] for item in weights}:
         current = next(item for item in weights if item["fold_index"] == fold and item["arm"] == "current_weights")
         uniform = next(item for item in weights if item["fold_index"] == fold and item["arm"] == "uniform_weights")

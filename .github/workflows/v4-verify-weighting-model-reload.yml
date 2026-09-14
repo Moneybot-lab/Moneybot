@@ -1,0 +1,94 @@
+name: V4 Verify Weighting Model Reload
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OUTPUT_ROOT: v4-weighting-model-reload
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Verify exact successful source runs
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, subprocess
+          expected=(("34689216730","Track B Offline Challenger",1,"track-b-offline-output"),
+            ("34769717178","V4 Development Diagnostics",1,"v4-development-diagnostics-34689216730"),
+            ("34796621288","V4 Register Weighting Experiment",1,"v4-weighting-registration-34796621288-1"),
+            ("34797622678","V4 Execute Weighting Experiment",1,"v4-weighting-execution-34797622678-1"))
+          repo=os.environ['GITHUB_REPOSITORY']
+          for run_id,name,attempt,artifact in expected:
+            run=json.loads(subprocess.check_output(['gh','api',f'repos/{repo}/actions/runs/{run_id}'],text=True))
+            arts=json.loads(subprocess.check_output(['gh','api',f'repos/{repo}/actions/runs/{run_id}/artifacts'],text=True))
+            if run.get('name')!=name or run.get('conclusion')!='success' or int(run.get('run_attempt',0))!=attempt:
+              raise SystemExit(f'source run mismatch: {run_id}')
+            matches=[a for a in arts.get('artifacts',[]) if a.get('name')==artifact and not a.get('expired')]
+            if len(matches)!=1: raise SystemExit(f'exactly one non-expired artifact required: {artifact}')
+          PY
+      - uses: actions/download-artifact@v4
+        with: {name: track-b-offline-output, run-id: 34689216730, path: source-track-b, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with: {name: v4-development-diagnostics-34689216730, run-id: 34769717178, path: source-diagnostics, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with: {name: v4-weighting-registration-34796621288-1, run-id: 34796621288, path: source-registration, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with: {name: v4-weighting-execution-34797622678-1, run-id: 34797622678, path: source-execution, github-token: "${{ github.token }}"}
+      - name: Validate frozen sources and replay
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_ROOT/evidence" "$OUTPUT_ROOT/report"
+          python scripts/validate_v4_weighting_execution_sources.py --track-root source-track-b \
+            --diagnostics-root source-diagnostics --registration-root source-registration \
+            --output "$OUTPUT_ROOT/evidence/sources.json"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          matches=lambda root,name:list(Path(root).rglob(name))
+          execution=matches('source-execution','workflow_execution_provenance.json')
+          if len(execution)!=1: raise SystemExit('ambiguous execution provenance')
+          p=json.loads(execution[0].read_text())
+          if p.get('workflow_run')!='34797622678-1' or p.get('execution_code_sha')!='aad503b0520c80dca35bb593edac2001b1be0c85' or p.get('registration_sha256')!='4112f445d8ef079550f02185e4592c05aff9c0321ee4bfa615b632360af4c5c3':
+            raise SystemExit('execution provenance mismatch')
+          PY
+          eval "$(python - <<'PY'
+          import json,shlex
+          from pathlib import Path
+          s=json.load(open('v4-weighting-model-reload/evidence/sources.json'))
+          names={'FEATURE_STORE':s['feature_store'],'REGISTRATION':s['registration']}
+          for key,name in names.items(): print(f'{key}={shlex.quote(name)}')
+          for key,name in {'PREDICTIONS':'weighting_experiment_predictions.json','PAIRED':'weighting_experiment_paired_comparison.json'}.items():
+            paths=list(Path('source-execution').rglob(name))
+            if len(paths)!=1: raise SystemExit(f'ambiguous {name}')
+            print(f'{key}={shlex.quote(str(paths[0]))}')
+          PY
+          )"
+          python scripts/verify_alpha_atlas_v4_weighting_model_reload.py \
+            --predictions "$PREDICTIONS" --paired-comparison "$PAIRED" \
+            --registration "$REGISTRATION" --feature-store "$FEATURE_STORE" \
+            --output-dir "$OUTPUT_ROOT/report" \
+            --execution-code-sha aad503b0520c80dca35bb593edac2001b1be0c85
+      - name: Write sanitized failure diagnostics
+        if: failure()
+        run: |
+          mkdir -p "$OUTPUT_ROOT/evidence"
+          printf '{"status":"RELOAD_VERIFICATION_FAILED_OR_BLOCKED","models_fitted":false,"final_holdout_accessed":false}\n' > "$OUTPUT_ROOT/evidence/failure.json"
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4-weighting-model-reload-${{ github.run_id }}-${{ github.run_attempt }}
+          path: v4-weighting-model-reload/**
+          if-no-files-found: error

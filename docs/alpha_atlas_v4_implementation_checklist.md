@@ -59,7 +59,10 @@ No full historical backfill is authorized by this checklist update.
 - [x] Manual **V4 Register Weighting Experiment** workflow implemented and locally tested.
 - [ ] Hosted artifact-bound weighting registration completed.
 - [x] Manual **V4 Execute Weighting Experiment** workflow implemented and locally tested against deterministic workflow contracts.
-- [ ] Real-data weighting experiment executed.
+- [x] Registered weighting experiment executed (`34797622678-1`); registered uniform-minus-current endpoint was unfavorable (`+0.006319421301219023`, one of three folds improved).
+- [x] Saved weighting-model feature metadata defect identified as legacy 10-name metadata attached to 43-dimensional fitted state.
+- [x] Metadata-only repair and reload verification implemented and fixture-tested.
+- [ ] Six-model real-artifact reload verification completed (manual verification workflow pending).
 - [ ] Model improvement and promotion readiness demonstrated.
 
 The diagnostic command consumes the frozen plan, certified canonical input,
@@ -172,3 +175,12 @@ Track B run `34689216730`, and diagnostics run `34769717178-1`. It runs only the
 existing `execute` subcommand and uploads
 `v4-weighting-execution-<workflow-run-id>-<run-attempt>`. It never creates or
 amends a registration and does not evaluate the final holdout.
+
+The numerical experiment path selected the registered 43 columns explicitly for
+both training and validation, but the shared fitter returned its legacy ten-name
+default metadata. Future experiment states now replace that metadata with the
+exact registered order before serialization; learned numbers and the unfavorable
+registered result are unchanged. **V4 Verify Weighting Model Reload** downloads
+the exact reviewed execution and sources, creates metadata-only corrected copies,
+and replays without fitting. It fails closed if the original fold-local fill state
+is needed but unavailable, and never accesses final-holdout rows.
