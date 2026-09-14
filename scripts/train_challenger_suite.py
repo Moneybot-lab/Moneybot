@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import sys
@@ -522,6 +523,9 @@ def _apply_walk_forward_metrics(
             model_type = challenger.get("model_type")
             spec = challenger.get("spec", {})
             learned_state: dict[str, Any]
+            score_semantics = "probability"
+            abstained_mask = np.zeros(len(fold_test), dtype=bool)
+            risk_rejected_mask = np.zeros(len(fold_test), dtype=bool)
             if model_type == "logistic_regression":
                 artifact = _train_logistic_recipe(fold_train, y_train, feature_columns, return_col, spec)
                 scores = predict_proba(artifact, X_test)
@@ -560,7 +564,8 @@ def _apply_walk_forward_metrics(
                     spec,
                     horizon_days=horizon_days,
                 )
-                scores, _, preds = _two_stage_scores(decision_model, risk_model, fold_test, float(spec["risk_threshold"]))
+                scores, risk_scores, preds = _two_stage_scores(decision_model, risk_model, fold_test, float(spec["risk_threshold"]))
+                risk_rejected_mask = (scores >= decision_model.decision_threshold) & (risk_scores > float(spec["risk_threshold"]))
                 learned_state = {"decision_model": decision_model.to_dict(), "risk_model": risk_model.to_dict()}
             elif model_type == "hard_example_linear":
                 artifact, _, _ = _train_hard_example_recipe(fold_train, target_col, feature_columns, return_col, spec)
@@ -572,10 +577,11 @@ def _apply_walk_forward_metrics(
                 scores = predict_proba(artifact, fold_test[artifact.feature_columns].to_numpy(dtype=float))
                 preds = (scores >= artifact.decision_threshold).astype(int)
                 learned_state = {"model": artifact.to_dict()}
+                score_semantics = "ranking_score_not_buy_probability"
             elif model_type == "abstention_linear":
                 artifact, _, _ = _train_calibrated_linear_recipe(fold_train, target_col, feature_columns, return_col, spec, horizon_days=horizon_days)
                 scores = predict_proba(artifact, fold_test[artifact.feature_columns].to_numpy(dtype=float))
-                preds, _ = _abstention_predictions(scores, artifact.decision_threshold, spec["abstention"])
+                preds, abstained_mask = _abstention_predictions(scores, artifact.decision_threshold, spec["abstention"])
                 learned_state = {"model": artifact.to_dict(), "abstention": spec["abstention"]}
             elif model_type == "decision_stump":
                 feature = str(spec.get("feature", ""))
@@ -586,6 +592,7 @@ def _apply_walk_forward_metrics(
                 scores = fold_test[feature].to_numpy(dtype=float)
                 preds = _stump_predictions(scores, threshold, direction)
                 learned_state = {"feature": feature, "threshold": threshold, "direction": direction}
+                score_semantics = "raw_feature_ranking_score"
             elif model_type == "baseline_classifier":
                 majority_class = int(float(y_train.mean()) >= 0.5)
                 if challenger.get("model_version") == "challenger-baseline-always-up-v1":
@@ -614,6 +621,38 @@ def _apply_walk_forward_metrics(
                         "learned_state": learned_state,
                         "scores": scores.tolist(),
                         "predictions": preds.tolist(),
+                        "decision_threshold": float(
+                            learned_state.get("threshold", spec.get("decision_threshold", spec.get("threshold", 0.5)))
+                        ),
+                        "score_semantics": score_semantics,
+                        "target_definition": target_metadata(),
+                        "training_prevalence": float(y_train.mean()) if len(y_train) else None,
+                        "effective_training_weight": {
+                            "policy": spec.get("sample_weight_policy", "uniform"),
+                            "training_observation_count": int(len(y_train)),
+                            "numeric_weight_sum": None,
+                            "note": "policy provenance retained; numeric sum unavailable from this observer",
+                        },
+                        "calibration_audit": {
+                            "policy": spec.get("calibration_policy", "none"),
+                            "validation_labels_used_to_fit_calibrator": False,
+                            "supports_unweighted_probability": spec.get("sample_weight_policy") in (None, "uniform", "none"),
+                        },
+                        "records": [
+                            {
+                                "id": str(row.get("canonical_observation_id", index)),
+                                "security": str(row.get("symbol", "unknown")),
+                                "session": str(row.get("event_date", "unknown")),
+                                "economic_unit": str(row.get("canonical_observation_id", index)),
+                                "label": int(y_test[position]),
+                                "score": float(scores[position]),
+                                "return": (float(fold_returns[position]) if fold_returns is not None and np.isfinite(fold_returns[position]) else None),
+                                "abstained": bool(abstained_mask[position]),
+                                "risk_rejected": bool(risk_rejected_mask[position]),
+                                "rule_rejected": False,
+                            }
+                            for position, (index, row) in enumerate(fold_test.iterrows())
+                        ],
                         "metrics": metrics,
                     }
                 )
@@ -2773,6 +2812,114 @@ def _add_baseline_challengers(challengers: list[dict[str, Any]], *, output_dir: 
         metrics = summarize_binary_predictions(y_test, preds)
         metrics.update(_ranking_metrics(preds.astype(float), y_test, test_returns))
         challengers.append({"model_version": model_version, "model_type": "baseline_classifier", "model_path": str(model_path), "metrics": metrics, "spec": spec, "lineage": lineage})
+
+
+def capture_v4_development_walk_forward_predictions(
+    input_path: Path,
+    split_plan_path: Path,
+    manifest_path: Path,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Refit only frozen development folds and capture their OOF predictions.
+
+    Unlike ``train_challenger_suite``, this path never constructs or scores the
+    final-holdout frame. Candidate dictionaries are copied because the metric
+    helper annotates its input after fitting each frozen recipe.
+    """
+    frozen_plan = json.loads(split_plan_path.read_text(encoding="utf-8"))
+    development_ids, final_holdout_ids = validate_split_plan(
+        frozen_plan, input_path=input_path
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    temporal_policy = manifest.get("temporal_validation_policy") or {}
+    if temporal_policy.get("split_plan_sha256") != frozen_plan.get("plan_sha256"):
+        raise ValueError("manifest_split_plan_hash_mismatch")
+    if temporal_policy.get("split_input_sha256") != frozen_plan.get("input_sha256"):
+        raise ValueError("manifest_split_input_hash_mismatch")
+    all_rows = _load_jsonl(input_path)
+    if "canonical_observation_id" not in all_rows:
+        raise ValueError("V4 capture input lacks canonical observation IDs")
+    input_ids = all_rows["canonical_observation_id"].astype(str)
+    # This is the critical isolation boundary: holdout rows are discarded before
+    # feature preparation, target selection, fitting, or prediction.
+    development = all_rows.loc[input_ids.isin(development_ids)].copy()
+    if set(development["canonical_observation_id"].astype(str)) != development_ids:
+        raise ValueError("development_id_missing_from_capture_input")
+    if set(development["canonical_observation_id"].astype(str)) & final_holdout_ids:
+        raise ValueError("final_holdout_entered_capture_frame")
+    development = _chronologically_order_rows(_prepare_frame(development))
+    target_col = str(manifest.get("target_column") or _target(development, HORIZON_DAYS))
+    development[target_col] = pd.to_numeric(development[target_col], errors="coerce")
+    if development[target_col].isna().any():
+        raise ValueError("development_target_missing_during_capture")
+    feature_columns = [str(value) for value in manifest.get("feature_columns") or []]
+    if not feature_columns or any(column not in development for column in feature_columns):
+        raise ValueError("manifest_feature_columns_missing_from_capture_input")
+    folds = copy.deepcopy(manifest.get("walk_forward_windows") or [])
+    for fold in folds:
+        fold["train_ids"] = list(
+            fold.get("train_canonical_observation_ids", fold.get("train_ids", []))
+        )
+        fold["validation_ids"] = list(
+            fold.get(
+                "validation_canonical_observation_ids",
+                fold.get("validation_ids", []),
+            )
+        )
+    challengers = copy.deepcopy(manifest.get("challengers") or [])
+    if not folds or not challengers:
+        raise ValueError("manifest_missing_frozen_folds_or_candidates")
+    allowed = set(development["canonical_observation_id"].astype(str))
+    for fold in folds:
+        if (set(map(str, fold.get("train_ids") or [])) | set(map(str, fold.get("validation_ids") or []))) - allowed:
+            raise ValueError("frozen_fold_contains_nondevelopment_id")
+    observer: list[dict[str, Any]] = []
+    horizon_days = int((manifest.get("temporal_validation_policy") or {}).get("label_horizon_days", HORIZON_DAYS))
+    _apply_walk_forward_metrics(
+        challengers,
+        clean=development,
+        folds=folds,
+        feature_columns=feature_columns,
+        target_col=target_col,
+        return_col=_return_column(development, horizon_days),
+        horizon_days=horizon_days,
+        fit_source=development,
+        fit_observer=observer.append,
+    )
+    expected = {
+        (str(candidate["model_version"]), int(fold["fold_index"]))
+        for candidate in challengers
+        for fold in folds
+        if fold.get("usable")
+    }
+    actual = {(str(item["model_version"]), int(item["fold_index"])) for item in observer}
+    if actual != expected or len(observer) != len(expected):
+        raise ValueError("incomplete_candidate_fold_capture")
+    observed_ids = {
+        str(record["id"]) for item in observer for record in item.get("records", [])
+    }
+    if not observed_ids <= development_ids or observed_ids & final_holdout_ids:
+        raise ValueError("capture_contains_final_holdout_or_unknown_id")
+    provenance = {
+        "schema_version": "alpha-atlas-v4-development-oof-capture-provenance.v1",
+        "mode": "development_only_frozen_fold_refit",
+        "canonical_input_sha256": frozen_plan["input_sha256"],
+        "split_plan_sha256": frozen_plan["plan_sha256"],
+        "manifest_path": str(manifest_path),
+        "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+        "candidate_count": len(challengers),
+        "usable_fold_count": sum(bool(fold.get("usable")) for fold in folds),
+        "candidate_fold_capture_count": len(observer),
+        "development_id_count": len(development_ids),
+        "captured_validation_id_count": len(observed_ids),
+        "final_holdout_overlap_count": 0,
+        "final_holdout_evaluated": False,
+        "provider_access_performed": False,
+        "recipes_and_rankings_frozen": True,
+        "research_only": True,
+        "automatic_promotion": False,
+        "ready_for_live_routing": False,
+    }
+    return observer, provenance
 
 
 def train_challenger_suite(input_path: Path, output_dir: Path, *, train_ratio: float = 0.8, horizon_days: int = 5, min_rows: int = 200, split_plan_path: Path | None = None, walk_forward_observer: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
