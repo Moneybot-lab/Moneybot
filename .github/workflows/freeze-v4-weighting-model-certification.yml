@@ -19,71 +19,99 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: v4-weighting-model-certification-2026-09-14
       RELEASE_TITLE: V4 Weighting Model Independent Certification — Frozen Evidence
-      SOURCE_RUN_ID: "34906607045"
-      SOURCE_ARTIFACT: v4-weighting-model-reload-34906607045-1
+      RELOAD_RUN_ID: "34876711068"
+      RELOAD_ARTIFACT: v4-weighting-model-reload-34876711068-1
+      FILL_RUN_ID: "34906607045"
+      FILL_ARTIFACT: v4-weighting-model-reload-34906607045-1
       FREEZE_DIR: v4-weighting-certification-freeze
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify exact immutable source
+      - name: Verify both exact immutable sources
         run: |
           set -euo pipefail
           mkdir -p "$FREEZE_DIR/extracted"
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > "$FREEZE_DIR/source_run.json"
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts" > "$FREEZE_DIR/source_artifacts.json"
           python - <<'PY'
-          import json, os
+          import json, os, subprocess
           from pathlib import Path
           root=Path(os.environ['FREEZE_DIR'])
-          run=json.loads((root/'source_run.json').read_text())
-          listing=json.loads((root/'source_artifacts.json').read_text())
-          if run.get('name')!='V4 Verify Weighting Model Reload' or run.get('conclusion')!='success' or int(run.get('run_attempt',0))!=1:
-              raise SystemExit('FROZEN_SOURCE_RUN_MISMATCH')
-          matches=[item for item in listing.get('artifacts',[]) if item.get('name')==os.environ['SOURCE_ARTIFACT'] and not item.get('expired')]
-          if len(matches)!=1: raise SystemExit(f'FROZEN_SOURCE_ARTIFACT_COUNT:{len(matches)}')
-          (root/'source_artifact.json').write_text(json.dumps(matches[0],indent=2,sort_keys=True)+'\n')
+          sources=(('RELOAD',os.environ['RELOAD_RUN_ID'],os.environ['RELOAD_ARTIFACT']),
+                   ('FILL',os.environ['FILL_RUN_ID'],os.environ['FILL_ARTIFACT']))
+          repo=os.environ['GITHUB_REPOSITORY']
           with Path(os.environ['GITHUB_ENV']).open('a') as env:
-              env.write(f"SOURCE_ARTIFACT_ID={matches[0]['id']}\nSOURCE_HEAD_SHA={run['head_sha']}\n")
+            for label,run_id,artifact_name in sources:
+              run=json.loads(subprocess.check_output(['gh','api',f'repos/{repo}/actions/runs/{run_id}'],text=True))
+              listing=json.loads(subprocess.check_output(['gh','api','--method','GET',f'repos/{repo}/actions/runs/{run_id}/artifacts','-f','per_page=100'],text=True))
+              if str(run.get('id'))!=run_id or run.get('name')!='V4 Verify Weighting Model Reload' or not run.get('head_sha'):
+                raise SystemExit(f'{label}_SOURCE_RUN_MISMATCH')
+              if run.get('conclusion')!='success' or int(run.get('run_attempt',0))!=1:
+                raise SystemExit(f'{label}_SOURCE_NOT_SUCCESSFUL')
+              named=[item for item in listing.get('artifacts',[]) if item.get('name')==artifact_name]
+              if not named: raise SystemExit(f'{label}_SOURCE_ARTIFACT_MISSING')
+              if len(named)!=1: raise SystemExit(f'{label}_SOURCE_ARTIFACT_AMBIGUOUS')
+              if named[0].get('expired'): raise SystemExit(f'{label}_SOURCE_ARTIFACT_EXPIRED')
+              (root/f'{label.lower()}_run.json').write_text(json.dumps(run,indent=2,sort_keys=True)+'\n')
+              (root/f'{label.lower()}_artifact.json').write_text(json.dumps(named[0],indent=2,sort_keys=True)+'\n')
+              env.write(f'{label}_ARTIFACT_ID={named[0]["id"]}\n{label}_HEAD_SHA={run["head_sha"]}\n')
           PY
 
-      - name: Download original artifact ZIP byte-for-byte
+      - name: Download both original artifact ZIPs byte-for-byte
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT_ID/zip" > "$FREEZE_DIR/$SOURCE_ARTIFACT.zip"
-          test -s "$FREEZE_DIR/$SOURCE_ARTIFACT.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$RELOAD_ARTIFACT_ID/zip" > "$FREEZE_DIR/$RELOAD_ARTIFACT.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$FILL_ARTIFACT_ID/zip" > "$FREEZE_DIR/$FILL_ARTIFACT.zip"
+          test -s "$FREEZE_DIR/$RELOAD_ARTIFACT.zip" && test -s "$FREEZE_DIR/$FILL_ARTIFACT.zip"
 
-      - name: Validate certification and build freeze manifest
+      - name: Validate composite certification and build freeze manifest
         run: |
           set -euo pipefail
           python scripts/build_v4_weighting_certification_freeze.py \
-            --run-json "$FREEZE_DIR/source_run.json" \
-            --artifact-json "$FREEZE_DIR/source_artifact.json" \
-            --source-zip "$FREEZE_DIR/$SOURCE_ARTIFACT.zip" \
-            --manifest "$FREEZE_DIR/v4_weighting_model_certification_manifest.json" \
-            --checksums "$FREEZE_DIR/SHA256SUMS" \
-            --extracted-dir "$FREEZE_DIR/extracted"
+            --reload-run "$FREEZE_DIR/reload_run.json" --reload-artifact "$FREEZE_DIR/reload_artifact.json" \
+            --reload-zip "$FREEZE_DIR/$RELOAD_ARTIFACT.zip" \
+            --fill-run "$FREEZE_DIR/fill_run.json" --fill-artifact "$FREEZE_DIR/fill_artifact.json" \
+            --fill-zip "$FREEZE_DIR/$FILL_ARTIFACT.zip" \
+            --manifest "$FREEZE_DIR/V4_WEIGHTING_MODEL_CERTIFICATION_MANIFEST.json" \
+            --checksums "$FREEZE_DIR/SHA256SUMS.txt" --extracted-dir "$FREEZE_DIR/extracted"
 
-      - name: Create immutable tag and GitHub Release
+      - name: Create or verify immutable tag and GitHub Release
         run: |
           set -euo pipefail
-          if gh release view "$TAG" >/dev/null 2>&1 || git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "Release or tag already exists; refusing to overwrite immutable freeze" >&2
-            exit 1
+          assets=("$FREEZE_DIR/$RELOAD_ARTIFACT.zip" "$FREEZE_DIR/$FILL_ARTIFACT.zip"
+            "$FREEZE_DIR/V4_WEIGHTING_MODEL_CERTIFICATION_MANIFEST.json" "$FREEZE_DIR/SHA256SUMS.txt"
+            "$FREEZE_DIR/extracted/weighting_model_reload_verification.json"
+            "$FREEZE_DIR/extracted/corrected_weighting_model_states.json"
+            "$FREEZE_DIR/extracted/weighting_model_fill_policy_verification.json"
+            "$FREEZE_DIR/extracted/reload_sources.json" "$FREEZE_DIR/extracted/fill_policy_sources.json")
+          remote_sha="$(git ls-remote origin "refs/tags/$TAG^{}" | cut -f1)"
+          test -n "$remote_sha" || remote_sha="$(git ls-remote origin "refs/tags/$TAG" | cut -f1)"
+          if [[ -n "$remote_sha" && "$remote_sha" != "$FILL_HEAD_SHA" ]]; then
+            echo CERTIFICATION_TAG_SHA_MISMATCH >&2; exit 1
           fi
-          gh release create "$TAG" --target "$SOURCE_HEAD_SHA" --title "$RELEASE_TITLE" \
-            --notes "Immutable byte-for-byte archive of the accepted V4 weighting-model independent certification from V4 Verify Weighting Model Reload run 34906607045, attempt 1. No model computation was performed by this archival workflow." \
-            "$FREEZE_DIR/$SOURCE_ARTIFACT.zip" \
-            "$FREEZE_DIR/v4_weighting_model_certification_manifest.json" \
-            "$FREEZE_DIR/SHA256SUMS" \
-            "$FREEZE_DIR/extracted/weighting_model_reload_verification.json" \
-            "$FREEZE_DIR/extracted/weighting_model_fill_policy_verification.json" \
-            "$FREEZE_DIR/extracted/sources.json"
+          if [[ -n "$remote_sha" ]]; then
+            mkdir -p "$FREEZE_DIR/existing"
+            release="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG")" || { echo EXISTING_FROZEN_EVIDENCE_MISMATCH >&2; exit 1; }
+            mapfile -t asset_lines < <(python -c 'import json,sys; [print(str(x["id"])+"\t"+x["name"]) for x in json.load(sys.stdin)["assets"]]' <<<"$release")
+            [[ ${#asset_lines[@]} == ${#assets[@]} ]] || { echo EXISTING_FROZEN_EVIDENCE_MISMATCH >&2; exit 1; }
+            for expected in "${assets[@]}"; do
+              name="$(basename "$expected")"; matches=()
+              for line in "${asset_lines[@]}"; do [[ "${line#*$'\t'}" == "$name" ]] && matches+=("${line%%$'\t'*}"); done
+              [[ ${#matches[@]} == 1 ]] || { echo EXISTING_FROZEN_EVIDENCE_MISMATCH >&2; exit 1; }
+              gh api -H 'Accept: application/octet-stream' "repos/$GITHUB_REPOSITORY/releases/assets/${matches[0]}" > "$FREEZE_DIR/existing/$name"
+              cmp --silent "$expected" "$FREEZE_DIR/existing/$name" || { echo EXISTING_FROZEN_EVIDENCE_MISMATCH >&2; exit 1; }
+            done
+            echo CERTIFICATION_ALREADY_FROZEN_AND_VERIFIED
+          else
+            gh release view "$TAG" >/dev/null 2>&1 && { echo EXISTING_FROZEN_EVIDENCE_MISMATCH >&2; exit 1; }
+            gh release create "$TAG" --target "$FILL_HEAD_SHA" --title "$RELEASE_TITLE" \
+              --notes "Immutable composite archive of accepted reload run 34876711068-1 and final fill-policy certification run 34906607045-1. No certification evidence or model output was regenerated." \
+              "${assets[@]}"
+          fi
 
       - name: Retain sanitized failure diagnostics
         if: failure()
         run: |
           mkdir -p "$FREEZE_DIR"
-          printf '{"status":"FREEZE_FAILED","source_run_id":34906607045,"source_attempt":1,"model_computation_performed":false}\n' > "$FREEZE_DIR/failure.json"
+          printf '{"status":"FREEZE_FAILED","source_run_ids":[34876711068,34906607045],"model_computation_performed":false}\n' > "$FREEZE_DIR/failure.json"
 
       - name: Upload workflow audit bundle
         if: always()
@@ -91,7 +119,7 @@ jobs:
         with:
           name: v4-weighting-certification-freeze-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ env.FREEZE_DIR }}/v4_weighting_model_certification_manifest.json
-            ${{ env.FREEZE_DIR }}/SHA256SUMS
+            ${{ env.FREEZE_DIR }}/V4_WEIGHTING_MODEL_CERTIFICATION_MANIFEST.json
+            ${{ env.FREEZE_DIR }}/SHA256SUMS.txt
             ${{ env.FREEZE_DIR }}/failure.json
           if-no-files-found: warn

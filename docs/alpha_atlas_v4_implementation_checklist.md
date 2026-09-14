@@ -208,12 +208,13 @@ workflow now consumes the already successful reload artifact and generates only
 - [ ] The permanent tag, release, and release assets have been created by the
   manual hosted workflow.
 
-**Freeze V4 Weighting Model Certification** is fixed to successful source run
-`34906607045`, attempt `1`, and artifact
-`v4-weighting-model-reload-34906607045-1`. It validates that exact source,
-downloads its original ZIP without extracting or repackaging it, hashes it,
-creates an audit manifest, and targets tag
+**Freeze V4 Weighting Model Certification** is fixed to the two accepted source
+artifacts: reload/corrected-state run `34876711068-1` and fill-policy run
+`34906607045-1`. It validates both exact sources, downloads both original ZIPs
+without repackaging them, hashes them into a composite audit manifest, and targets tag
 `v4-weighting-model-certification-2026-09-14` at the source run's `head_sha`.
-The release attaches the unchanged ZIP, manifest, checksums, and small extracted
-review copies. It performs no model computation, refitting, holdout access, or
-promotion, and it refuses to replace an existing tag or release.
+The tag target is specifically the final fill-policy run's `head_sha`. The release
+attaches both unchanged ZIPs, the manifest, checksums, and byte-identical reviewer
+copies. A rerun verifies an existing freeze byte-for-byte rather than overwriting
+it. The workflow performs no model computation, refitting, holdout access, or
+promotion.
