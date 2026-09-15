@@ -72,13 +72,17 @@ def verify(root: Path, source: dict[str, Any]) -> dict[str, Any]:
     temporal = _load(paths["temporal_safety_certification.json"])
     summary = _load(paths["track_b_v4_research_summary.json"])
 
-    valuation_rows = [r.get("valuation_certification") or {} for r in phase0.get("results", []) if (r.get("valuation_certification") or {}).get("required")]
-    if not (phase0.get("status") == "RECONSTRUCTABLE" and phase0.get("failure_count") == 0 and temporal.get("status") == "VERIFIED_FOR_THIS_ARTIFACT"):
+    phase0_results = phase0.get("results") or []
+    core_verified = (
+        phase0.get("status") == "RECONSTRUCTABLE"
+        and phase0.get("failure_count") == 0
+        and phase0.get("reconstructable_rows") == phase0.get("rows_checked")
+        and phase0.get("rows_checked") == phase0.get("rows_total")
+        and len(phase0_results) == phase0.get("rows_checked")
+        and temporal.get("status") == "VERIFIED_FOR_THIS_ARTIFACT"
+    )
+    if not core_verified:
         failures.append("PHASE0_VALUATION_NOT_VERIFIED")
-    if any(v.get("path_sessions") != v.get("resolved_source_sessions") for v in valuation_rows):
-        failures.append("VALUATION_SOURCE_COUNT_MISMATCH")
-    if any(v.get("independent_adjustments_verified") is not True for v in valuation_rows):
-        failures.append("INDEPENDENT_ADJUSTMENT_NOT_VERIFIED")
     candidate = backtest.get("primary_portfolio_candidate")
     candidate_values = {ledger.get("candidate_id"), equity.get("candidate_id"), certificate.get("candidate_id"), summary.get("primary_portfolio_candidate")}
     if not candidate or candidate_values != {candidate}:
@@ -86,6 +90,82 @@ def verify(root: Path, source: dict[str, Any]) -> dict[str, Any]:
 
     events = ledger.get("events") or []
     evidence = {x.get("canonical_observation_id"): x for x in valuation.get("evidence") or []}
+    evidence.pop(None, None)
+    entry_ids = {
+        str(event.get("canonical_observation_id"))
+        for event in events
+        if event.get("event") == "entry_fill"
+    }
+    selected_ids = set(evidence)
+    if not selected_ids or entry_ids != selected_ids:
+        failures.append("SELECTED_PORTFOLIO_VALUATION_INCOMPLETE")
+
+    phase0_by_id = {
+        str(row.get("canonical_observation_id")): row
+        for row in phase0_results
+        if row.get("canonical_observation_id")
+    }
+    diagnostic_failures = []
+    for row in phase0_results:
+        valuation_result = row.get("valuation_certification") or {}
+        if valuation_result.get("status") == "VERIFIED" and not valuation_result.get("failures"):
+            continue
+        diagnostic_failures.append({
+            "canonical_observation_id": row.get("canonical_observation_id"),
+            "point_in_time_security_id": row.get("point_in_time_symbol_id") or row.get("security_id"),
+            "scope": valuation_result.get("scope"),
+            "status": valuation_result.get("status"),
+            "failures": valuation_result.get("failures") or [],
+            "path_sessions": valuation_result.get("path_sessions"),
+            "resolved_source_sessions": valuation_result.get("resolved_source_sessions"),
+        })
+    diagnostic_failure_ids = {
+        str(row["canonical_observation_id"])
+        for row in diagnostic_failures
+        if row.get("canonical_observation_id")
+    }
+    selected_verified = 0
+    selected_incomplete = []
+    selected_count_mismatches = []
+    selected_adjustment_failures = []
+    for observation_id in sorted(selected_ids):
+        row = phase0_by_id.get(observation_id)
+        valuation_result = (row or {}).get("valuation_certification") or {}
+        issues = []
+        if row is None:
+            issues.append("missing_phase0_evidence")
+        if valuation_result.get("required") is not True:
+            issues.append("valuation_not_required")
+        if valuation_result.get("status") != "VERIFIED":
+            issues.append("valuation_not_verified")
+        if valuation_result.get("path_sessions") != valuation_result.get("resolved_source_sessions"):
+            issues.append("valuation_source_count_mismatch")
+            selected_count_mismatches.append(observation_id)
+        if valuation_result.get("independent_adjustments_verified") is not True:
+            issues.append("independent_adjustment_not_verified")
+            selected_adjustment_failures.append(observation_id)
+        if valuation_result.get("failures"):
+            issues.append("valuation_failures_present")
+        if issues:
+            selected_incomplete.append({"canonical_observation_id": observation_id, "failures": issues})
+        else:
+            selected_verified += 1
+    selected_intersection = selected_ids & diagnostic_failure_ids
+    if selected_count_mismatches:
+        failures.append("VALUATION_SOURCE_COUNT_MISMATCH")
+    if selected_adjustment_failures or selected_intersection:
+        failures.append("INDEPENDENT_ADJUSTMENT_NOT_VERIFIED")
+    if selected_incomplete:
+        failures.append("SELECTED_PORTFOLIO_VALUATION_INCOMPLETE")
+    certificate_verified = (
+        certificate.get("status") == "VERIFIED"
+        and certificate.get("scope") == "SELECTED_PORTFOLIO_ACTUAL_HOLDINGS"
+        and certificate.get("all_required_holding_marks_verified") is True
+        and certificate.get("candidate_id") == candidate
+        and not certificate.get("invalid_reasons")
+    )
+    if not certificate_verified:
+        failures.append("SELECTED_PORTFOLIO_VALUATION_INCOMPLETE")
     seen: set[tuple[str, str]] = set()
     positions: dict[str, dict[str, Any]] = {}
     duplicate = 0
@@ -194,7 +274,41 @@ def verify(root: Path, source: dict[str, Any]) -> dict[str, Any]:
         "other_rejection_reasons": {k: v for k, v in rejection_reasons.items() if k not in ("insufficient_cash", "maximum_positions_reached")},
     }
     result = _result(identity, actual_hashes, failures)
-    result.update({"phase0": {"rows": phase0.get("rows_checked"), "valuation_required_rows": len(valuation_rows)}, "candidate_id": candidate, "ledger_summary": counts, "equity_reconciliation": {"sessions": len(rows), "reconciled_sessions": len(rows) - mismatches, "mismatched_sessions": mismatches, "maximum_absolute_difference": maximum, "tolerance": TOLERANCE, "first_mismatch": first_mismatch}, "drawdown_reconstruction": expected_drawdown, "economic_gates_preserved": "ECONOMIC_GATE_STATUS_MISSING" not in failures, "automatic_promotion": summary.get("automatic_promotion"), "ready_for_live_routing": summary.get("ready_for_live_routing")})
+    result.update({
+        "phase0": {
+            "core_status": phase0.get("status"),
+            "rows_total": phase0.get("rows_total"),
+            "rows_checked": phase0.get("rows_checked"),
+            "reconstructable_rows": phase0.get("reconstructable_rows"),
+            "core_failure_count": phase0.get("failure_count"),
+            "valuation_diagnostic_failure_count": phase0.get("valuation_diagnostic_failure_count"),
+            "valuation_diagnostic_failure_reasons": phase0.get("valuation_diagnostic_failure_reasons") or {},
+        },
+        "non_portfolio_valuation_diagnostics": {
+            "count": len(diagnostic_failures),
+            "portfolio_intersection_count": len(selected_intersection),
+            "failures": diagnostic_failures,
+        },
+        "valuation_scope_verification": {
+            "phase0_core_reconstruction_verified": core_verified,
+            "full_universe_diagnostic_rows": len(phase0_results),
+            "full_universe_diagnostic_failures": len(diagnostic_failures),
+            "selected_portfolio_required_observations": len(selected_ids),
+            "selected_portfolio_verified_observations": selected_verified,
+            "selected_portfolio_incomplete_observations": len(selected_incomplete),
+            "diagnostic_failure_selected_portfolio_intersection": len(selected_intersection),
+            "selected_portfolio_independent_adjustments_verified": not selected_adjustment_failures and not selected_intersection,
+            "selected_portfolio_certification_verified": certificate_verified,
+            "selected_portfolio_incomplete_details": selected_incomplete,
+        },
+        "candidate_id": candidate,
+        "ledger_summary": counts,
+        "equity_reconciliation": {"sessions": len(rows), "reconciled_sessions": len(rows) - mismatches, "mismatched_sessions": mismatches, "maximum_absolute_difference": maximum, "tolerance": TOLERANCE, "first_mismatch": first_mismatch},
+        "drawdown_reconstruction": expected_drawdown,
+        "economic_gates_preserved": "ECONOMIC_GATE_STATUS_MISSING" not in failures,
+        "automatic_promotion": summary.get("automatic_promotion"),
+        "ready_for_live_routing": summary.get("ready_for_live_routing"),
+    })
     return result
 
 

@@ -255,13 +255,15 @@ promotion.
 
 ## Hosted Portfolio Verification
 
-**HOSTED_PORTFOLIO_VERIFICATION: IN PROGRESS — HOSTED RUN REQUIRED**
+**HOSTED_PORTFOLIO_VERIFICATION: IN PROGRESS — HOSTED REVERIFICATION REQUIRED**
 
-The next audit item is evidence collection and independent verification of one
-exact **Track B Offline Challenger** GitHub Actions run. Local portfolio tests and
-the earlier `34675971440-1` / `34689216730-1` engineering reproducibility runs do
-not close this item: they predate the current independent hosted verifier and do
-not contain its exact run-bound source manifest and result.
+The exact source is **Track B Offline Challenger** run `35002276286`, attempt `1`,
+head SHA `7da77897e10f228d2b60bedfbeb3c983836de5c6`, artifact
+`track-b-offline-output`. Its core Phase 0 reconstruction passed all 34,446 rows,
+while four non-portfolio `OBSERVATION_VALUATION_DIAGNOSTIC_ONLY` rows remain
+visibly incomplete. None intersects the 25 actual selected holdings; all 25
+selected holding valuations independently verified. The failed job result was a
+verifier scoping defect, not a selected-portfolio valuation failure.
 
 The canonical `challenger_suite/portfolio_path/` output currently contains six
 files (the five portfolio path/accounting payloads plus the separately added
@@ -279,9 +281,8 @@ head SHA and SHA-256, and fails closed on source, valuation, candidate, ledger,
 equity, cost, drawdown, economic-gate, promotion, or routing discrepancies. It is
 evidence-only and cannot fit, predict, repair artifacts, promote, or route.
 
-Next action: merge the commit containing this verifier and workflow integration
-to the hosted branch, then manually choose **GitHub → Actions → Track B Offline
-Challenger → Run workflow** using the normal reviewed Track B inputs. Review the
-uploaded `track-b-offline-output` from that exact run and do not close this item
-unless `v4_hosted_portfolio_verification.json` reports `VERIFIED` with the exact
-hosted identity and hashes.
+Next action: merge the corrected verifier, then manually choose **GitHub → Actions
+→ V4 Verify Hosted Portfolio Evidence → Run workflow**. This evidence-only job is
+fixed to run `35002276286-1` and does not rerun Track B. Do not close this item
+until its uploaded `v4-hosted-portfolio-verification-<run-id>-<attempt>` reports
+`VERIFIED`; record that verifier run identity and all final hashes here first.
