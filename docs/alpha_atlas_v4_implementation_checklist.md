@@ -62,11 +62,11 @@ No full historical backfill is authorized by this checklist update.
 - [x] Registered weighting experiment executed (`34797622678-1`); registered uniform-minus-current endpoint was unfavorable (`+0.006319421301219023`, one of three folds improved).
 - [x] Saved weighting-model feature metadata defect identified as legacy 10-name metadata attached to 43-dimensional fitted state.
 - [x] Metadata-only repair and reload verification implemented and fixture-tested.
-- [ ] Six-model real-artifact reload verification completed (manual verification workflow pending).
+- [x] Six-model real-artifact reload verification completed and permanently frozen.
 - [x] Reload verifier repaired to reuse the exact diagnostic capture's persisted fold-local fill policies after registration/candidate/fold/ID checks.
-- [ ] Source verification `34872687197-1` blocker resolved in a new hosted verification run.
+- [x] Source verification `34872687197-1` blocker resolved by accepted hosted sources `34876711068-1` and `34906607045-1`.
 - [x] Fold fill-policy evidence generator implemented and fixture-tested without fitting or holdout access.
-- [ ] Hosted `weighting_model_fill_policy_verification.json` generated and independently reviewed.
+- [x] Hosted `weighting_model_fill_policy_verification.json` generated, independently reviewed, and permanently frozen.
 - [ ] Model improvement and promotion readiness demonstrated.
 
 The diagnostic command consumes the frozen plan, certified canonical input,
@@ -205,8 +205,42 @@ workflow now consumes the already successful reload artifact and generates only
 ## Permanent weighting-model certification freeze
 
 - [x] The one-time archival workflow is implemented and locally fixture-tested.
-- [ ] The permanent tag, release, and release assets have been created by the
-  manual hosted workflow.
+- [x] The permanent tag, release, and release assets were created by the manual
+  hosted workflow.
+
+**INDEPENDENT_WEIGHTING_MODEL_CERTIFICATION: CLOSED / VERIFIED / FROZEN**
+
+Immutable release identity:
+
+- Tag: `v4-weighting-model-certification-2026-09-14`.
+- Release: **V4 Weighting Model Independent Certification — Frozen Evidence**.
+- Final fill-policy source: **V4 Verify Weighting Model Reload**, run
+  `34906607045`, attempt `1`, head SHA
+  `e2ef0ad0adfb270fea3446e10d54b44bacb524e8`.
+- Earlier reload/corrected-state source: **V4 Verify Weighting Model Reload**,
+  run `34876711068`, attempt `1`, head SHA
+  `38731eabaf2d179c8e3347769eda949ff678cd41`.
+- Original `v4-weighting-model-reload-34876711068-1.zip` SHA-256:
+  `63fdf075318d6d81c88ff43769c9699d464316b7c8dd546f4fb7b0c84bb8cdbf`.
+- Original `v4-weighting-model-reload-34906607045-1.zip` SHA-256:
+  `e63d7ed2c57c7b03045ed27d5254001cd6d48d79fbe8701f292d808fc19be00d`.
+- `corrected_weighting_model_states.json` SHA-256:
+  `f5d7e92e510a5d154a2e0b47ae1c36f317991624af3b9adda0b73bea78cb3b9a`.
+- Freeze manifest SHA-256:
+  `112885d5878caa861f770683d54d201e45e22466951a2fbb4bec7f436cc25adb`.
+
+The immutable release assets are `corrected_weighting_model_states.json`,
+`fill_policy_sources.json`, `reload_sources.json`, `SHA256SUMS.txt`, both original
+run ZIPs named above, `V4_WEIGHTING_MODEL_CERTIFICATION_MANIFEST.json`,
+`weighting_model_fill_policy_verification.json`, and
+`weighting_model_reload_verification.json`. They prove all six arm/fold replays,
+with zero missing or duplicate prediction IDs, zero decision mismatches, and zero
+scores outside tolerance; establish the authoritative 43-feature order; and show
+that corrected states remained immutable. They independently prove the fold fill
+policy, training-fold-only fill statistics, and exact reconstructed validation
+execution matrices. No model refit, prediction/score/decision change, final
+holdout access, automatic promotion, or live routing occurred. This certification
+must not be reopened or its release assets altered.
 
 **Freeze V4 Weighting Model Certification** is fixed to the two accepted source
 artifacts: reload/corrected-state run `34876711068-1` and fill-policy run
@@ -218,3 +252,37 @@ attaches both unchanged ZIPs, the manifest, checksums, and byte-identical review
 copies. A rerun verifies an existing freeze byte-for-byte rather than overwriting
 it. The workflow performs no model computation, refitting, holdout access, or
 promotion.
+
+## Hosted Portfolio Verification
+
+**HOSTED_PORTFOLIO_VERIFICATION: IN PROGRESS — HOSTED REVERIFICATION REQUIRED**
+
+The exact source is **Track B Offline Challenger** run `35002276286`, attempt `1`,
+head SHA `7da77897e10f228d2b60bedfbeb3c983836de5c6`, artifact
+`track-b-offline-output`. Its core Phase 0 reconstruction passed all 34,446 rows,
+while four non-portfolio `OBSERVATION_VALUATION_DIAGNOSTIC_ONLY` rows remain
+visibly incomplete. None intersects the 25 actual selected holdings; all 25
+selected holding valuations independently verified. The failed job result was a
+verifier scoping defect, not a selected-portfolio valuation failure.
+
+The canonical `challenger_suite/portfolio_path/` output currently contains six
+files (the five portfolio path/accounting payloads plus the separately added
+selected-portfolio valuation certificate): `execution_policy.json`,
+`execution_ledger.json`, `daily_portfolio_equity.json`,
+`valuation_evidence_manifest.json`, `portfolio_metrics.json`, and
+`selected_portfolio_valuation_certification.json`. The Phase 0 valuation output is
+`phase0/reconstructability_report.json`, bound by
+`phase0/temporal_safety_certification.json`.
+
+The workflow now runs `scripts/verify_v4_hosted_portfolio.py` only after completed
+hosted artifacts exist. It emits `v4_hosted_portfolio_source_manifest.json` and
+`v4_hosted_portfolio_verification.json`, binds all inputs to workflow/run/attempt/
+head SHA and SHA-256, and fails closed on source, valuation, candidate, ledger,
+equity, cost, drawdown, economic-gate, promotion, or routing discrepancies. It is
+evidence-only and cannot fit, predict, repair artifacts, promote, or route.
+
+Next action: merge the corrected verifier, then manually choose **GitHub → Actions
+→ V4 Verify Hosted Portfolio Evidence → Run workflow**. This evidence-only job is
+fixed to run `35002276286-1` and does not rerun Track B. Do not close this item
+until its uploaded `v4-hosted-portfolio-verification-<run-id>-<attempt>` reports
+`VERIFIED`; record that verifier run identity and all final hashes here first.
