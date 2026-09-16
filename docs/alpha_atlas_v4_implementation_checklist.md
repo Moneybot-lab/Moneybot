@@ -255,15 +255,36 @@ promotion.
 
 ## Hosted Portfolio Verification
 
-**HOSTED_PORTFOLIO_VERIFICATION: IN PROGRESS — HOSTED REVERIFICATION REQUIRED**
+**HOSTED_PORTFOLIO_VERIFICATION: CLOSED / VERIFIED / FROZEN**
 
 The exact source is **Track B Offline Challenger** run `35002276286`, attempt `1`,
 head SHA `7da77897e10f228d2b60bedfbeb3c983836de5c6`, artifact
-`track-b-offline-output`. Its core Phase 0 reconstruction passed all 34,446 rows,
+`track-b-offline-output`, downloaded ZIP SHA-256
+`e7039b26a535e9399540b4a9e1033c85811091afc4a889efe77232c5287fc7f3`.
+That historical job correctly remains recorded as **failed**: its first-version
+verifier incorrectly scoped unrelated diagnostic rows as portfolio holdings. The
+artifacts—not the failed conclusion—were subsequently accepted by **V4 Verify
+Hosted Portfolio Evidence** run `35040195995-1`, head SHA
+`3fac3df92c0bcfe5966f27481cc15c518aa3eb86`, artifact
+`v4-hosted-portfolio-verification-35040195995-1` (ZIP SHA-256
+`0132182c58fb48082897f27e7c517a796fc51e0af330527662930050047e3abd`).
+The accepted `VERIFIED` result has no failures; its JSON SHA-256 is
+`bdb57d0f692c7f32fd3a14b5de288a8c113a2294087a5cd35dcfb446ec80c693`,
+source-manifest SHA-256 is
+`c8fbe9b0760e4caf515d203bc05f7433879fe895c4fcc9de3fa91d8d5e682279`,
+and source-checksum file SHA-256 is
+`e4e2cf402c287ae9799a4fd5c14649986b0670f1a1d9962d284cd963a4f19ac6`.
+
+Its core Phase 0 reconstruction passed all 34,446 rows,
 while four non-portfolio `OBSERVATION_VALUATION_DIAGNOSTIC_ONLY` rows remain
 visibly incomplete. None intersects the 25 actual selected holdings; all 25
-selected holding valuations independently verified. The failed job result was a
-verifier scoping defect, not a selected-portfolio valuation failure.
+selected holding valuations independently verified. Candidate
+`challenger-stump-05-sma-50-v1` produced 1,919 orders, 50 fills, 1,894 explicit
+rejections, 25 unique securities, and zero duplicate violations. All 28 equity
+sessions reconciled exactly (maximum difference `0.0`, tolerance `1e-6`); maximum
+drawdown `-0.06326763145155956` ran from `2026-08-14` to `2026-09-01` without
+recovery. Economic gates remained separate, no model fitting or holdout access
+occurred in verification, and promotion and live routing remained disabled.
 
 The canonical `challenger_suite/portfolio_path/` output currently contains six
 files (the five portfolio path/accounting payloads plus the separately added
@@ -281,8 +302,19 @@ head SHA and SHA-256, and fails closed on source, valuation, candidate, ledger,
 equity, cost, drawdown, economic-gate, promotion, or routing discrepancies. It is
 evidence-only and cannot fit, predict, repair artifacts, promote, or route.
 
-Next action: merge the corrected verifier, then manually choose **GitHub → Actions
-→ V4 Verify Hosted Portfolio Evidence → Run workflow**. This evidence-only job is
-fixed to run `35002276286-1` and does not rerun Track B. Do not close this item
-until its uploaded `v4-hosted-portfolio-verification-<run-id>-<attempt>` reports
-`VERIFIED`; record that verifier run identity and all final hashes here first.
+The permanent archive is assigned tag
+`v4-hosted-portfolio-verification-2026-09-15` and release **V4 Hosted Portfolio
+Verification — Frozen Evidence**, targeting the exact verifier-run head SHA. The
+manual **Freeze V4 Hosted Portfolio Verification** workflow creates or verifies
+that immutable release without regenerating evidence and never moves a conflicting
+tag or overwrites conflicting assets.
+
+## Next ordered open audit item
+
+The first unresolved item still ordered by this authoritative checklist is
+**Delisted-security coverage demonstrated** in Phase 1, not Hosted V4 Holdout
+Isolation Verification. Do not skip or reorder it. Hosted holdout-isolation remains
+implemented and locally verified in
+`tests/test_alpha_atlas_v4_holdout_isolation.py`, but its hosted verification must
+not be started as the next checklist item until the earlier ordered Phase 1 items
+are resolved or the checklist is explicitly reordered by an authorized review.
