@@ -1,0 +1,67 @@
+name: Alpha Atlas V4 Delisted Coverage Verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      research_start:
+        description: "Intended research interval start (YYYY-MM-DD)"
+        required: true
+        default: "2018-01-01"
+      research_end:
+        description: "Intended research interval end (YYYY-MM-DD)"
+        required: true
+        default: "2026-09-15"
+      max_pages:
+        description: "Inactive-listing pages, maximum 50"
+        required: true
+        default: "20"
+      max_probes:
+        description: "Deterministic confirmed-delisting probes, 3-25"
+        required: true
+        default: "12"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alpha-atlas-v4-delisted-coverage-verification
+  cancel-in-progress: false
+
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  REPORT_DIR: artifacts/alpha-atlas-v4-delisted-coverage-verification
+
+jobs:
+  bounded-live-read-only-verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Verify real delisted-security access
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$REPORT_DIR"
+          python scripts/verify_alpha_atlas_v4_delisted_coverage.py \
+            --output-dir "$REPORT_DIR" \
+            --research-start '${{ inputs.research_start }}' \
+            --research-end '${{ inputs.research_end }}' \
+            --max-pages '${{ inputs.max_pages }}' \
+            --max-probes '${{ inputs.max_probes }}'
+      - name: Publish sanitized summary
+        if: always()
+        run: |
+          test ! -s "$REPORT_DIR/alpha_atlas_v4_delisted_coverage_verification.md" || cat "$REPORT_DIR/alpha_atlas_v4_delisted_coverage_verification.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha-atlas-v4-delisted-coverage-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.REPORT_DIR }}/**
+          if-no-files-found: error

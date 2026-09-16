@@ -28,7 +28,7 @@
 - [x] Representative active, TWTR inactive, split, SPY, sector ETF, regular-session, and early-close access demonstrated.
 - [x] Live evidence propagation repaired and cross-artifact consistency validated.
 - [x] Manual bounded coverage-discovery tooling and workflow added.
-- [ ] Delisted-security coverage demonstrated.
+- [ ] **DELISTED_SECURITY_AVAILABILITY: IN PROGRESS — HOSTED LIVE RUN REQUIRED.**
 - [ ] Effective-dated ticker-change and permanent identity chain demonstrated.
 - [x] Survivorship protection fails closed and forbids projecting current tickers backward.
 - [x] Point-in-time reference checks reject current-state metadata.
@@ -44,6 +44,33 @@
 - [ ] Phase 1 exit gate complete.
 
 No full historical backfill is authorized by this checklist update.
+
+### Delisted-security availability closure criteria
+
+The original requirement is not satisfied by `active=false`, a missing bar, or
+the existing `STATIC_ONLY` reports. Closure requires a real, read-only Massive
+run which completely paginates the existing `market=stocks`, `type=CS`,
+`active=false` discovery query; separately counts records with an explicit
+provider `delisted_utc` field and other inactive listings; and successfully
+retrieves point-in-time reference data plus historical aggregate bars for a
+deterministic, date-spanning sample of at least three confirmed delistings. The
+run must preserve sanitized request provenance and response hashes and must have
+no failed selected probe. This closes only demonstrated historical-data
+availability for confirmed delisted securities.
+
+It does **not** establish complete historical-universe coverage, effective-dated
+identity/ticker-event chains, or terminal-price/delisting valuation treatment.
+Those remain separate open checklist items below. The previously reported 6,629
+records are inactive listings, not 6,629 proven delistings, and must be reconciled
+against the newly paginated population rather than assumed correct.
+
+The manual **Alpha Atlas V4 Delisted Coverage Verification** workflow performs
+this bounded live check using the existing `MASSIVE_API_KEY`, inputs
+`research_start=2018-01-01`, `research_end=2026-09-15`, `max_pages=20`, and
+`max_probes=12`. It uploads
+`alpha_atlas_v4_delisted_coverage_verification-<run-id>-<attempt>` even on
+failure. No live run is recorded yet, so this item remains open; workflow code or
+fixture tests are not provider evidence.
 
 ## Track B certification and diagnostics handoff
 
@@ -313,7 +340,8 @@ tag or overwrites conflicting assets.
 
 The first unresolved item still ordered by this authoritative checklist is
 **Delisted-security coverage demonstrated** in Phase 1, not Hosted V4 Holdout
-Isolation Verification. Do not skip or reorder it. Hosted holdout-isolation remains
+Isolation Verification. Its bounded verifier is now ready, but requires the live
+manual run described above. Do not skip or reorder it. Hosted holdout-isolation remains
 implemented and locally verified in
 `tests/test_alpha_atlas_v4_holdout_isolation.py`, but its hosted verification must
 not be started as the next checklist item until the earlier ordered Phase 1 items
