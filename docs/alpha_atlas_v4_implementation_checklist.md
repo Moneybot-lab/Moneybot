@@ -69,8 +69,25 @@ this bounded live check using the existing `MASSIVE_API_KEY`, inputs
 `research_start=2018-01-01`, `research_end=2026-09-15`, `max_pages=20`, and
 `max_probes=12`. It uploads
 `alpha_atlas_v4_delisted_coverage_verification-<run-id>-<attempt>` even on
-failure. No live run is recorded yet, so this item remains open; workflow code or
+failure. No successful live run is recorded yet, so this item remains open; workflow code or
 fixture tests are not provider evidence.
+
+Hosted run `35123217191-1` at commit
+`fd517cf5b752df85ed981d980ac6f832be64c904` is retained as failed evidence:
+pagination completed in seven pages with 6,607 inactive listings, but only 10 of
+12 probes returned bars. AGU and HLS ended on `2018-01-02`; clipping their query
+to `research_start=2018-01-01` produced a holiday-only one-day window. The
+corrected verifier uses XNYS sessions, preserves both as explicit follow-ups, and
+permits at most ten sessions/21 calendar days before the research start solely to
+test availability. Such bars are labeled outside-interval and cannot establish
+in-interval coverage or authorize backfill. A new hosted run is required.
+
+The provider `delisted_utc` field is recorded as an **ended ticker listing**, not
+proof of company or security termination. Shared CIK, composite FIGI, or share-
+class FIGI values create typed investigation candidates only; issuer CIK reuse is
+never treated as a verified same-security ticker chain. The 6,607-versus-6,629
+population discrepancy remains unresolved because the earlier response snapshot
+is unavailable for identity-level reconciliation.
 
 ## Track B certification and diagnostics handoff
 

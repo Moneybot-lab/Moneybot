@@ -21,6 +21,7 @@ on:
         default: "12"
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -42,6 +43,24 @@ jobs:
           python-version: "3.11"
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Preserve exact failed-run probe evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$REPORT_DIR/prior"
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/35123217191")
+          test "$(jq -r .name <<<"$run")" = "Alpha Atlas V4 Delisted Coverage Verification"
+          test "$(jq -r .run_attempt <<<"$run")" = "1"
+          test "$(jq -r .head_sha <<<"$run")" = "fd517cf5b752df85ed981d980ac6f832be64c904"
+          artifacts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/35123217191/artifacts?per_page=100")
+          matches=$(jq '[.artifacts[] | select(.name == "alpha-atlas-v4-delisted-coverage-verification-35123217191-1" and .expired == false)]' <<<"$artifacts")
+          test "$(jq length <<<"$matches")" = 1
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$(jq -r '.[0].id' <<<"$matches")/zip" > "$REPORT_DIR/prior-run.zip"
+          unzip -q "$REPORT_DIR/prior-run.zip" -d "$REPORT_DIR/prior"
+          prior=$(find "$REPORT_DIR/prior" -name alpha_atlas_v4_delisted_coverage_verification.json -type f -print -quit)
+          test -n "$prior"
+          cp "$prior" "$REPORT_DIR/prior_run_35123217191_verification.json"
       - name: Verify real delisted-security access
         env:
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
@@ -53,7 +72,8 @@ jobs:
             --research-start '${{ inputs.research_start }}' \
             --research-end '${{ inputs.research_end }}' \
             --max-pages '${{ inputs.max_pages }}' \
-            --max-probes '${{ inputs.max_probes }}'
+            --max-probes '${{ inputs.max_probes }}' \
+            --prior-report "$REPORT_DIR/prior_run_35123217191_verification.json"
       - name: Publish sanitized summary
         if: always()
         run: |
