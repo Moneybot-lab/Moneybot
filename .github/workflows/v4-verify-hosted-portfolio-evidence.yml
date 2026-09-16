@@ -1,0 +1,69 @@
+name: V4 Verify Hosted Portfolio Evidence
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  SOURCE_RUN_ID: "35002276286"
+  SOURCE_RUN_ATTEMPT: "1"
+  SOURCE_HEAD_SHA: 7da77897e10f228d2b60bedfbeb3c983836de5c6
+  SOURCE_WORKFLOW: Track B Offline Challenger
+  SOURCE_ARTIFACT: track-b-offline-output
+
+jobs:
+  verify-existing-evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout verifier
+        uses: actions/checkout@v4
+
+      - name: Download exact immutable Track B artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p source-artifact verification-output
+          run_json=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID") || {
+            printf '%s\n' '{"status":"HOSTED_SOURCE_ARTIFACT_UNAVAILABLE"}' > verification-output/v4_hosted_portfolio_verification.json
+            exit 2
+          }
+          test "$(jq -r .name <<<"$run_json")" = "$SOURCE_WORKFLOW"
+          test "$(jq -r .run_attempt <<<"$run_json")" = "$SOURCE_RUN_ATTEMPT"
+          test "$(jq -r .head_sha <<<"$run_json")" = "$SOURCE_HEAD_SHA"
+          artifacts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts?per_page=100")
+          matches=$(jq --arg name "$SOURCE_ARTIFACT" '[.artifacts[] | select(.name == $name and .expired == false)]' <<<"$artifacts")
+          test "$(jq length <<<"$matches")" = 1 || {
+            printf '%s\n' '{"status":"HOSTED_SOURCE_ARTIFACT_UNAVAILABLE"}' > verification-output/v4_hosted_portfolio_verification.json
+            exit 2
+          }
+          artifact_id=$(jq -r '.[0].id' <<<"$matches")
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > source-artifact.zip
+          unzip -q source-artifact.zip -d source-artifact
+
+      - name: Verify existing hosted portfolio evidence only
+        run: |
+          set -euo pipefail
+          manifest=$(find source-artifact -name v4_hosted_portfolio_source_manifest.json -type f -print -quit)
+          test -n "$manifest" || {
+            printf '%s\n' '{"status":"HOSTED_SOURCE_ARTIFACT_UNAVAILABLE"}' > verification-output/v4_hosted_portfolio_verification.json
+            exit 2
+          }
+          run_root=$(dirname "$manifest")
+          python3 scripts/verify_v4_hosted_portfolio.py \
+            --run-root "$run_root" \
+            --source-manifest "$manifest" \
+            --output verification-output/v4_hosted_portfolio_verification.json
+          cp "$manifest" verification-output/v4_hosted_portfolio_source_manifest.json
+          sha256sum source-artifact.zip > verification-output/source_artifact_SHA256SUMS.txt
+
+      - name: Upload hosted portfolio verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4-hosted-portfolio-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: verification-output/**
+          if-no-files-found: error

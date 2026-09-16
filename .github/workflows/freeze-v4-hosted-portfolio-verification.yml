@@ -1,0 +1,114 @@
+name: Freeze V4 Hosted Portfolio Verification
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: freeze-v4-hosted-portfolio-verification-2026-09-15
+  cancel-in-progress: false
+
+jobs:
+  freeze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: v4-hosted-portfolio-verification-2026-09-15
+      RELEASE_TITLE: V4 Hosted Portfolio Verification — Frozen Evidence
+      TRACK_B_RUN_ID: "35002276286"
+      TRACK_B_ARTIFACT: track-b-offline-output
+      VERIFY_RUN_ID: "35040195995"
+      VERIFY_ARTIFACT: v4-hosted-portfolio-verification-35040195995-1
+      FREEZE_DIR: v4-hosted-portfolio-freeze
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bind exact source runs and artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p "$FREEZE_DIR/extracted"
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          root=Path(os.environ["FREEZE_DIR"]); repo=os.environ["GITHUB_REPOSITORY"]
+          specs=(("track_b",os.environ["TRACK_B_RUN_ID"],"Track B Offline Challenger",os.environ["TRACK_B_ARTIFACT"],"7da77897e10f228d2b60bedfbeb3c983836de5c6",False),
+                 ("verifier",os.environ["VERIFY_RUN_ID"],"V4 Verify Hosted Portfolio Evidence",os.environ["VERIFY_ARTIFACT"],None,True))
+          with Path(os.environ["GITHUB_ENV"]).open("a") as env:
+            for label,run_id,workflow,artifact_name,head,require_success in specs:
+              run=json.loads(subprocess.check_output(["gh","api",f"repos/{repo}/actions/runs/{run_id}"],text=True))
+              listing=json.loads(subprocess.check_output(["gh","api",f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100"],text=True))
+              if str(run.get("id"))!=run_id or run.get("name")!=workflow or int(run.get("run_attempt",0))!=1 or not run.get("head_sha"):
+                raise SystemExit("SOURCE_RUN_MISMATCH")
+              if head and run["head_sha"]!=head: raise SystemExit("SOURCE_RUN_MISMATCH")
+              if require_success and run.get("conclusion")!="success": raise SystemExit("VERIFIER_SOURCE_NOT_SUCCESSFUL")
+              if not require_success and run.get("conclusion")!="failure": raise SystemExit("TRACK_B_HISTORICAL_CONCLUSION_MISMATCH")
+              matches=[x for x in listing.get("artifacts",[]) if x.get("name")==artifact_name and not x.get("expired")]
+              if len(matches)!=1: raise SystemExit("SOURCE_ARTIFACT_UNAVAILABLE")
+              (root/f"{label}_run.json").write_text(json.dumps(run,indent=2,sort_keys=True)+"\n")
+              (root/f"{label}_artifact.json").write_text(json.dumps(matches[0],indent=2,sort_keys=True)+"\n")
+              env.write(f"{label.upper()}_ARTIFACT_ID={matches[0]['id']}\n{label.upper()}_HEAD_SHA={run['head_sha']}\n")
+          PY
+
+      - name: Download canonical source archives byte-for-byte
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$TRACK_B_ARTIFACT_ID/zip" > "$FREEZE_DIR/$TRACK_B_ARTIFACT.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$VERIFIER_ARTIFACT_ID/zip" > "$FREEZE_DIR/$VERIFY_ARTIFACT.zip"
+          echo 'e7039b26a535e9399540b4a9e1033c85811091afc4a889efe77232c5287fc7f3  '"$FREEZE_DIR/$TRACK_B_ARTIFACT.zip" | sha256sum --check
+          echo '0132182c58fb48082897f27e7c517a796fc51e0af330527662930050047e3abd  '"$FREEZE_DIR/$VERIFY_ARTIFACT.zip" | sha256sum --check
+
+      - name: Validate accepted evidence and build immutable manifest
+        run: |
+          python scripts/build_v4_hosted_portfolio_verification_freeze.py \
+            --track-b-run "$FREEZE_DIR/track_b_run.json" --track-b-artifact "$FREEZE_DIR/track_b_artifact.json" --track-b-zip "$FREEZE_DIR/$TRACK_B_ARTIFACT.zip" \
+            --verifier-run "$FREEZE_DIR/verifier_run.json" --verifier-artifact "$FREEZE_DIR/verifier_artifact.json" --verifier-zip "$FREEZE_DIR/$VERIFY_ARTIFACT.zip" \
+            --manifest "$FREEZE_DIR/V4_HOSTED_PORTFOLIO_VERIFICATION_MANIFEST.json" --checksums "$FREEZE_DIR/SHA256SUMS.txt" --extracted-dir "$FREEZE_DIR/extracted"
+
+      - name: Create or verify immutable tag and release
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(find "$FREEZE_DIR/extracted" -maxdepth 1 -type f -print | sort)
+          assets+=("$FREEZE_DIR/$TRACK_B_ARTIFACT.zip" "$FREEZE_DIR/$VERIFY_ARTIFACT.zip" "$FREEZE_DIR/V4_HOSTED_PORTFOLIO_VERIFICATION_MANIFEST.json" "$FREEZE_DIR/SHA256SUMS.txt")
+          remote_sha="$(git ls-remote origin "refs/tags/$TAG^{}" | cut -f1)"
+          test -n "$remote_sha" || remote_sha="$(git ls-remote origin "refs/tags/$TAG" | cut -f1)"
+          if [[ -n "$remote_sha" && "$remote_sha" != "$VERIFIER_HEAD_SHA" ]]; then echo EXISTING_HOSTED_PORTFOLIO_FREEZE_MISMATCH >&2; exit 1; fi
+          if [[ -n "$remote_sha" ]]; then
+            mkdir -p "$FREEZE_DIR/existing"
+            release="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG")" || { echo EXISTING_HOSTED_PORTFOLIO_FREEZE_MISMATCH >&2; exit 1; }
+            mapfile -t listed < <(jq -r '.assets[] | [.id,.name] | @tsv' <<<"$release")
+            [[ ${#listed[@]} == ${#assets[@]} ]] || { echo EXISTING_HOSTED_PORTFOLIO_FREEZE_MISMATCH >&2; exit 1; }
+            for expected in "${assets[@]}"; do
+              name="$(basename "$expected")"; matches=()
+              for item in "${listed[@]}"; do [[ "${item#*$'\t'}" == "$name" ]] && matches+=("${item%%$'\t'*}"); done
+              [[ ${#matches[@]} == 1 ]] || { echo EXISTING_HOSTED_PORTFOLIO_FREEZE_MISMATCH >&2; exit 1; }
+              gh api -H 'Accept: application/octet-stream' "repos/$GITHUB_REPOSITORY/releases/assets/${matches[0]}" > "$FREEZE_DIR/existing/$name"
+              cmp --silent "$expected" "$FREEZE_DIR/existing/$name" || { echo EXISTING_HOSTED_PORTFOLIO_FREEZE_MISMATCH >&2; exit 1; }
+            done
+            echo HOSTED_PORTFOLIO_VERIFICATION_ALREADY_FROZEN
+          else
+            gh release view "$TAG" >/dev/null 2>&1 && { echo EXISTING_HOSTED_PORTFOLIO_FREEZE_MISMATCH >&2; exit 1; }
+            gh release create "$TAG" --target "$VERIFIER_HEAD_SHA" --title "$RELEASE_TITLE" \
+              --notes "Immutable evidence archive for Track B run 35002276286-1 and independent hosted portfolio verification run 35040195995-1. The historical Track B conclusion remains failure; no evidence was regenerated." \
+              "${assets[@]}" || { echo HOSTED_PORTFOLIO_SOURCE_ARCHIVE_NOT_FROZEN >&2; exit 1; }
+          fi
+
+      - name: Retain failure diagnostics
+        if: failure()
+        run: |
+          mkdir -p "$FREEZE_DIR"
+          printf '{"status":"FREEZE_FAILED","source_run_ids":[35002276286,35040195995],"evidence_regenerated":false,"model_computation_performed":false}\n' > "$FREEZE_DIR/failure.json"
+
+      - name: Upload archival audit bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4-hosted-portfolio-freeze-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.FREEZE_DIR }}/V4_HOSTED_PORTFOLIO_VERIFICATION_MANIFEST.json
+            ${{ env.FREEZE_DIR }}/SHA256SUMS.txt
+            ${{ env.FREEZE_DIR }}/failure.json
+          if-no-files-found: warn
