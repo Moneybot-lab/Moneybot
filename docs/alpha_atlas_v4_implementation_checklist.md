@@ -291,6 +291,17 @@ required by the workflow. All three price gaps, terminal valuation, full histori
 coverage, and population reconciliation remain open pending the derived hosted
 result.
 
+The first **Evaluate KAII Trade Conditions** job failed before evaluation because
+the workflow set up Python 3.11 but omitted the repository dependency installation;
+the evaluator's existing bounded-request helper import reaches the Phase 0 module
+and therefore the pinned `numpy==2.4.3` dependency. The workflow now follows the
+repository-supported `pip install -r requirements.txt` pattern rather than adding
+an unpinned package or chasing transitive imports individually. It separately
+publishes source-validation status and evaluation status, preserves evaluator
+stdout/stderr and traceback on failure, and leaves the job failed when evaluation
+does not complete. No KAII evidence conclusion or checklist closure is attributed
+to that dependency-failed run.
+
 ## Track B certification and diagnostics handoff
 
 - [x] Certification separation and hosted portfolio accounting are the completed engineering baseline (hosted runs `34675971440-1` and `34689216730-1` are reproducibility checks, not independent performance samples).

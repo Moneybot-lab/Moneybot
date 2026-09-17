@@ -19,6 +19,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Install repository dependencies
+        run: pip install -r requirements.txt
       - name: Retrieve and validate pinned source evidence
         env:
           GH_TOKEN: ${{ github.token }}
@@ -37,13 +39,53 @@ jobs:
             --expected-artifact-name alpha-atlas-v4-historical-coverage-diagnostics-35233428008-1 \
             --expected-artifact-digest sha256:082092918781f45dc61b57b12128903b9b4e0837ee86f391336bc5d72f6f3786 \
             --skip-summary-rendering
+      - name: Publish source retrieval status
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path("artifacts/kaii-trade-condition-evaluation/source/reports/inspection_manifest.json").read_text())
+          print("# KAII evidence evaluation status\n")
+          print("- Source evidence retrieved and validated: `true`.")
+          print(f"- Source run / attempt: `{manifest['source']['run_id']}` / `{manifest['source']['run_attempt']}`.")
+          print(f"- Source artifact digest: `{manifest['source']['artifact_digest']}`.")
+          print(f"- Source diagnostic JSON SHA-256: `{manifest['report_sha256']['alpha_atlas_v4_historical_coverage_diagnostics.json']}`.")
+          print("- Evaluation completed: `not attempted yet`.")
+          print("- Additional live queries: `not attempted yet`.\n")
+          PY
       - name: Derive condition findings and query only missing February scope
         env:
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
         run: |
+          set +e
+          mkdir -p "$OUTPUT_DIR/derived"
           python scripts/evaluate_kaii_trade_conditions.py \
             --source-report "$OUTPUT_DIR/source/reports/alpha_atlas_v4_historical_coverage_diagnostics.json" \
-            --output-dir "$OUTPUT_DIR/derived"
+            --output-dir "$OUTPUT_DIR/derived" \
+            > >(tee "$OUTPUT_DIR/derived/evaluator.stdout.log") \
+            2> >(tee "$OUTPUT_DIR/derived/evaluator.stderr.log" >&2)
+          evaluation_rc=$?
+          set -e
+          if [ "$evaluation_rc" -eq 0 ]; then
+            cat > "$OUTPUT_DIR/derived/evaluation_status.md" <<'EOF'
+          ## Evaluation execution
+
+          - Evaluation completed: `true`.
+          - Additional live-query status: recorded per date in the derived JSON and Markdown.
+          - Source findings were inputs; they are not presented as newly executed findings.
+          EOF
+          else
+            cat > "$OUTPUT_DIR/derived/evaluation_status.md" <<EOF
+          ## Evaluation execution
+
+          - Evaluation completed: `false`.
+          - Evaluator exit code: `$evaluation_rc`.
+          - Additional live-query status: `unknown/not established because evaluation did not complete`.
+          - No copied source finding is labeled as a newly derived result.
+          - Review `evaluator.stderr.log` for the preserved traceback.
+          EOF
+            exit "$evaluation_rc"
+          fi
           sha256sum "$OUTPUT_DIR/source/reports/alpha_atlas_v4_historical_coverage_diagnostics.json" \
             "$OUTPUT_DIR/derived/kaii_trade_condition_evaluation.json" \
             "$OUTPUT_DIR/derived/kaii_trade_condition_evaluation.md" > "$OUTPUT_DIR/derived/SHA256SUMS.txt"
@@ -63,7 +105,9 @@ jobs:
           PY
       - name: Publish readable findings
         if: always()
-        run: test ! -s "$OUTPUT_DIR/derived/kaii_trade_condition_evaluation.md" || cat "$OUTPUT_DIR/derived/kaii_trade_condition_evaluation.md" >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          test ! -s "$OUTPUT_DIR/derived/evaluation_status.md" || cat "$OUTPUT_DIR/derived/evaluation_status.md" >> "$GITHUB_STEP_SUMMARY"
+          test ! -s "$OUTPUT_DIR/derived/kaii_trade_condition_evaluation.md" || cat "$OUTPUT_DIR/derived/kaii_trade_condition_evaluation.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Publish literal JSON
         if: always()
         run: test ! -s "$OUTPUT_DIR/derived/json_summary.md" || cat "$OUTPUT_DIR/derived/json_summary.md" >> "$GITHUB_STEP_SUMMARY"

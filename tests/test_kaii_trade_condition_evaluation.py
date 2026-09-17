@@ -93,3 +93,6 @@ def test_manual_workflow_is_pinned_and_does_not_rerun_identity_diagnostics():
     assert "35233428008" in text and "10502208555" in text
     assert "MASSIVE_API_KEY" in text and "diagnose_alpha_atlas_v4_historical_coverage.py" not in text
     assert "actions: read" in text and "contents: read" in text
+    assert "pip install -r requirements.txt" in text
+    assert "evaluator.stderr.log" in text and "Evaluation completed" in text
+    assert "unknown/not established because evaluation did not complete" in text
