@@ -53,6 +53,20 @@ jobs:
             --output-dir "$REPORT_DIR" \
             --prior-report "$REPORT_DIR/source/alpha_atlas_v4_delisted_coverage_verification.json" \
             --derive-summary-only
+      - name: Preserve failed diagnostic context
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/35174216390")
+          test "$(jq -r .name <<<"$run")" = "Alpha Atlas V4 Historical Coverage Diagnostics"
+          test "$(jq -r .run_attempt <<<"$run")" = "1"
+          test "$(jq -r .head_sha <<<"$run")" = "b736f2cb387525175eb57141f0170e2c919cb6c6"
+          artifacts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/35174216390/artifacts?per_page=100")
+          matches=$(jq '[.artifacts[] | select(.name == "alpha-atlas-v4-historical-coverage-diagnostics-35174216390-1" and .expired == false)]' <<<"$artifacts")
+          test "$(jq length <<<"$matches")" = 1
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$(jq -r '.[0].id' <<<"$matches")/zip" > "$REPORT_DIR/source/failed-diagnostic-artifact.zip"
+          sha256sum "$REPORT_DIR/source/failed-diagnostic-artifact.zip" >> "$REPORT_DIR/source/SHA256SUMS.txt"
       - name: Run targeted daily-price and identity diagnostics
         env:
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}

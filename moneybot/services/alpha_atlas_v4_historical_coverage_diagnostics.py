@@ -13,6 +13,18 @@ from moneybot.services.market_data_providers import ExchangeCalendar
 GAP_TICKERS = ("GSS", "SWCH", "KAII", "MGI")
 
 
+def _request_failure(exc: ValueError, provenance: list[dict[str, Any]]) -> dict[str, Any]:
+    last = provenance[-1] if provenance else {}
+    return {
+        "reason_code": str(exc).split(":", 1)[0],
+        "reason": str(exc),
+        "http_status": last.get("status"),
+        "request_url": last.get("url"),
+        "response_sha256": last.get("response_sha256"),
+        "response_bytes": last.get("response_bytes"),
+    }
+
+
 def _date_from_ms(value: Any) -> str | None:
     try:
         return datetime.fromtimestamp(float(value) / 1000, timezone.utc).date().isoformat()
@@ -39,7 +51,20 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
         window = original.get("price_window") or {}
         start, end = window.get("from"), window.get("to")
         url = f"https://api.massive.com/v2/aggs/ticker/{urllib.parse.quote(ticker, safe='')}/range/1/day/{start}/{end}?adjusted=true&sort=asc&limit=50000"
-        bars = _request(fetcher, api_key, url, provenance).get("results") or []
+        try:
+            bars = _request(fetcher, api_key, url, provenance).get("results") or []
+        except ValueError as exc:
+            gap_results.append({
+                "ticker": ticker,
+                "requested_window": {"from": start, "to": end},
+                "status": "REQUEST_FAILED",
+                "reason_codes": ["DAILY_PRICE_REQUEST_FAILED"],
+                "request_failure": _request_failure(exc, provenance),
+                "missing_sessions": [], "duplicate_sessions": [],
+                "out_of_window_sessions": [],
+                "missing_session_investigations": [],
+            })
+            continue
         observed = [_date_from_ms(row.get("t")) for row in bars]
         valid_observed = [value for value in observed if value]
         expected = []
@@ -54,15 +79,24 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
         investigations = []
         for session in missing:
             ref_url = f"https://api.massive.com/v3/reference/tickers/{urllib.parse.quote(ticker, safe='')}?date={session}"
-            reference = _request(fetcher, api_key, ref_url, provenance).get("results") or {}
-            present = isinstance(reference, dict) and str(reference.get("ticker") or "") == ticker
-            investigations.append({
-                "session": session,
-                "reference_present": present,
-                "classification": "REFERENCE_PRESENT_NO_EVENT_EVIDENCE" if present else "REFERENCE_NOT_RETURNED",
-                "terminal_value_inferred": False,
-                "evidence_needed": "dated exchange-status/corporate-action evidence explaining the absent bar",
-            })
+            try:
+                reference = _request(fetcher, api_key, ref_url, provenance).get("results") or {}
+                present = isinstance(reference, dict) and str(reference.get("ticker") or "") == ticker
+                investigations.append({
+                    "session": session,
+                    "reference_present": present,
+                    "classification": "REFERENCE_PRESENT_NO_EVENT_EVIDENCE" if present else "REFERENCE_NOT_RETURNED",
+                    "terminal_value_inferred": False,
+                    "evidence_needed": "dated exchange-status/corporate-action evidence explaining the absent bar",
+                })
+            except ValueError as exc:
+                investigations.append({
+                    "session": session, "reference_present": False,
+                    "classification": "REFERENCE_REQUEST_FAILED",
+                    "request_failure": _request_failure(exc, provenance),
+                    "terminal_value_inferred": False,
+                    "evidence_needed": "successful date-specific reference and event evidence",
+                })
         gap_results.append({
             "ticker": ticker, "requested_window": {"from": start, "to": end},
             "expected_eligible_sessions": len(expected), "bars_returned": len(bars),
@@ -81,16 +115,32 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
             as_of = ((probe.get("price_window") or {}).get("to")
                      or (source.get("research_interval") or {}).get("end"))
             ref_url = f"https://api.massive.com/v3/reference/tickers/{urllib.parse.quote(str(ticker), safe='')}?date={as_of}"
-            reference = _request(fetcher, api_key, ref_url, provenance).get("results") or {}
-            ticker_evidence.append({"ticker": ticker, "as_of": as_of,
-                                    "reference_returned": isinstance(reference, dict) and bool(reference),
-                                    "share_class_figi": reference.get("share_class_figi") if isinstance(reference, dict) else None,
-                                    "composite_figi": reference.get("composite_figi") if isinstance(reference, dict) else None,
-                                    "cik": reference.get("cik") if isinstance(reference, dict) else None})
+            try:
+                reference = _request(fetcher, api_key, ref_url, provenance).get("results") or {}
+                ticker_evidence.append({"ticker": ticker, "as_of": as_of,
+                                        "reference_returned": isinstance(reference, dict) and bool(reference),
+                                        "share_class_figi": reference.get("share_class_figi") if isinstance(reference, dict) else None,
+                                        "composite_figi": reference.get("composite_figi") if isinstance(reference, dict) else None,
+                                        "cik": reference.get("cik") if isinstance(reference, dict) else None})
+            except ValueError as exc:
+                ticker_evidence.append({"ticker": ticker, "as_of": as_of,
+                                        "reference_returned": False,
+                                        "request_failure": _request_failure(exc, provenance)})
         identity_results.append({**group, "dated_reference_evidence": ticker_evidence,
                                  "status": "AMBIGUOUS_NO_EFFECTIVE_DATED_EVENT_EVIDENCE",
                                  "verified_ticker_chain": False})
     unresolved = [item for item in gap_results if item["status"] != "COMPLETE"]
+    request_failures = [item for item in gap_results if item["status"] == "REQUEST_FAILED"]
+    identity_request_failures = [
+        item for group in identity_results
+        for item in group["dated_reference_evidence"]
+        if item.get("request_failure")
+    ]
+    missing_reference_request_failures = [
+        investigation for item in gap_results
+        for investigation in item.get("missing_session_investigations", [])
+        if investigation.get("request_failure")
+    ]
     return {
         "schema_version": "alpha-atlas-v4-historical-coverage-diagnostics.v1",
         "generated_at_utc": generated_at, "repository_commit": repository_commit,
@@ -108,12 +158,13 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
         "terminal_valuation": {"status": "NOT_ESTABLISHED", "zero_recovery_assumed": False,
                                "forward_fill_used": False, "securities_substituted": False},
         "sanitized_request_provenance": provenance,
-        "status": "VERIFIED_DIAGNOSTIC_EXECUTION" if not any(item["status"] == "SOURCE_PROBE_MISSING" for item in gap_results) else "BLOCKED",
+        "status": "VERIFIED_DIAGNOSTIC_EXECUTION" if not request_failures and not identity_request_failures and not missing_reference_request_failures and not any(item["status"] == "SOURCE_PROBE_MISSING" for item in gap_results) else "BLOCKED",
         "unresolved_reason_codes": sorted({code for item in unresolved for code in item.get("reason_codes", [])}
                                           | {"EFFECTIVE_DATED_IDENTITY_CHAIN_UNVERIFIED",
                                              "UNRESOLVED_EARLIER_SNAPSHOT_UNAVAILABLE",
                                              "HISTORICAL_UNIVERSE_COMPLETENESS_UNVERIFIED",
                                              "TERMINAL_VALUATION_UNVERIFIED"}),
+        "request_failure_count": len(request_failures) + len(identity_request_failures) + len(missing_reference_request_failures),
         "research_only": True, "full_backfill_authorized": False,
         "automatic_promotion": False, "ready_for_live_routing": False,
     }

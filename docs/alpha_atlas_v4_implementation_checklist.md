@@ -116,6 +116,17 @@ comparison. Until its hosted evidence is reviewed, daily-price completeness,
 effective-dated identities, terminal valuation, historical-universe completeness,
 and `UNRESOLVED_EARLIER_SNAPSHOT_UNAVAILABLE` remain open.
 
+Diagnostic run `35174216390-1` at commit
+`b736f2cb387525175eb57141f0170e2c919cb6c6` remains `BLOCKED`. Its first targeted
+provider request returned HTTP 404, and the initial diagnostic implementation let
+that per-case error abort the complete report; the outer wrapper then omitted the
+already validated source-report hash and request provenance. This was not a new
+inactive-ticker discovery failure—the workflow had already retrieved, validated,
+hashed, and summarized source run `35125664186-1`. The repaired diagnostic records
+the sanitized failing URL, HTTP status, response hash/size, and ticker while
+continuing the other bounded cases; any request failure still leaves the run
+`BLOCKED`. The exact failed-run artifact is retained in the next audit bundle.
+
 ## Track B certification and diagnostics handoff
 
 - [x] Certification separation and hosted portfolio accounting are the completed engineering baseline (hosted runs `34675971440-1` and `34689216730-1` are reproducibility checks, not independent performance samples).

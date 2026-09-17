@@ -78,11 +78,33 @@ def test_identity_diagnostic_retains_typed_identifier_without_claiming_chain():
     assert identity["status"] == "AMBIGUOUS_NO_EFFECTIVE_DATED_EVENT_EVIDENCE"
 
 
+def test_targeted_404_is_preserved_with_url_and_does_not_erase_other_cases():
+    source = {"status": "VERIFIED", "probes": [{"ticker": ticker, "price_window": {"from": "2026-01-02", "to": "2026-01-08"}} for ticker in ("GSS", "SWCH", "KAII", "MGI")],
+              "identity_investigation_candidates": [], "population": {"inactive_listings": 6607},
+              "pagination": {"complete": True}, "research_interval": {"end": "2026-09-15"}}
+    def fetch(_method, url, _headers, _timeout):
+        if "/ticker/GSS/" in url:
+            return DiscoveryResponse(404, b'{"error":"not found"}', {})
+        return DiscoveryResponse(200, json.dumps({"results": [{"t": _ms(day)} for day in ("2026-01-02", "2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08")]}).encode(), {})
+    report = diagnose_historical_coverage(source, api_key="secret", repository_commit="a" * 40, generated_at="now", fetcher=fetch)
+    by_ticker = {item["ticker"]: item for item in report["daily_price_gap_diagnostics"]}
+    assert report["status"] == "BLOCKED"
+    assert report["request_failure_count"] == 1
+    assert by_ticker["GSS"]["status"] == "REQUEST_FAILED"
+    failure = by_ticker["GSS"]["request_failure"]
+    assert failure["http_status"] == 404
+    assert failure["request_url"].startswith("https://api.massive.com/v2/aggs/ticker/GSS/")
+    assert failure["response_sha256"]
+    assert by_ticker["SWCH"]["status"] == "COMPLETE"
+    assert len(report["sanitized_request_provenance"]) == 4
+
+
 def test_diagnostic_workflow_is_exact_bounded_manual_and_always_uploads():
     text = Path(".github/workflows/alpha-atlas-v4-historical-coverage-diagnostics.yml").read_text()
     assert text.startswith("name: Alpha Atlas V4 Historical Coverage Diagnostics\n")
     assert "workflow_dispatch:" in text and "schedule:" not in text and "push:" not in text
     assert "35125664186" in text and "205529d612c1ac2a3497a07f5cb6151d2eef62f4" in text
+    assert "35174216390" in text and "b736f2cb387525175eb57141f0170e2c919cb6c6" in text
     assert "--derive-summary-only" in text
     assert text.count("if: always()") == 2
     for forbidden in ("train_challenger", "backtest", "promote", "deploy", "ingest_massive"):

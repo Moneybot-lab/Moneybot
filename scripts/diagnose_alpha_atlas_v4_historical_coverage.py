@@ -22,15 +22,17 @@ def main() -> int:
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args(); args.output_dir.mkdir(parents=True, exist_ok=True)
     source = json.loads(args.source_report.read_text())
+    source_sha256 = hashlib.sha256(args.source_report.read_bytes()).hexdigest()
     commit = os.getenv("GITHUB_SHA") or subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     try:
         report = diagnose_historical_coverage(source, api_key=os.getenv("MASSIVE_API_KEY", ""), repository_commit=commit,
                                                generated_at=datetime.now(timezone.utc).isoformat())
-        report["source_report_sha256"] = hashlib.sha256(args.source_report.read_bytes()).hexdigest()
+        report["source_report_sha256"] = source_sha256
     except Exception as exc:
         reason = str(exc) or type(exc).__name__
         report = {"schema_version": "alpha-atlas-v4-historical-coverage-diagnostics.v1", "status": "BLOCKED",
                   "reason_code": reason.split(":", 1)[0], "reason": reason, "repository_commit": commit,
+                  "source_report_sha256": source_sha256,
                   "research_only": True, "full_backfill_authorized": False,
                   "automatic_promotion": False, "ready_for_live_routing": False}
     target = args.output_dir / "alpha_atlas_v4_historical_coverage_diagnostics.json"
