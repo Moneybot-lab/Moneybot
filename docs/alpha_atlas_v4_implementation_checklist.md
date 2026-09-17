@@ -127,6 +127,43 @@ the sanitized failing URL, HTTP status, response hash/size, and ticker while
 continuing the other bounded cases; any request failure still leaves the run
 `BLOCKED`. The exact failed-run artifact is retained in the next audit bundle.
 
+Diagnostic run `35176245513-1` at execution commit
+`79b51d02e454dac6dae1c3660d7ddd8761bbab79` confirmed the request-isolation
+repair and all six date-specific references, but exposed an identity-date defect.
+All 20 historical-identity requests (BWINA, BWINB, PTVCA, PTVCB, KHD, MFCB,
+MIL, TRY, TRY.B, FITBM, FITBO, HUB.A, HUB.B, ANDV, TSO, TSOw, FRM, XNR, KV.A,
+and KV.B) incorrectly inherited `research_end=2026-09-15` and returned HTTP 404.
+Those failures are preserved; they are not evidence that records for long-ended
+tickers are unavailable. The corrected diagnostic first requests listing metadata,
+selects the final exchange session inside each ticker's `list_date`/`delisted_utc`
+interval, and emits `HISTORICAL_IDENTITY_DATE_UNRESOLVED` without making a dated
+reference request when that interval cannot be established. Identifier types stay
+typed; CIK reuse cannot verify continuity and classes, units, and warrants are not
+collapsed.
+
+The same run confirmed the exact aggregate gaps and successful point-in-time
+references: GSS `2022-01-28`, SWCH `2022-12-06`, KAII `2023-01-19`,
+`2023-02-17`, and `2023-02-24`, and MGI `2023-06-01`. Bounded primary-source
+review now explains GSS by the effective acquisition and SWCH/MGI by documented
+pre-open merger halts. These are nontrading explanations, not retrieved prices or
+terminal-value policy. KAII remained the separately registered Class A share
+ticker until the documented KAII/QDRO change at the `2023-02-27` market open;
+no primary event found explains its three missing aggregates, so those sessions
+remain `TRADING_ELIGIBLE_GAP_UNRESOLVED` pending venue trade/quote or halt records.
+Publication and effective dates, source URLs, conclusions, and whether evidence
+was available at decision time are emitted per case.
+
+The manual **Alpha Atlas V4 Historical Coverage Diagnostics** workflow now
+automatically downloads the exact unchanged `35176245513-1` artifact, validates
+the accepted source report against SHA-256
+`896a61604ae6fc8ba16821c0bf4d609b0e48efe275bd066318acc243351d0d7d`,
+and always uploads `alpha-atlas-v4-historical-coverage-diagnostics-<run-id>-<attempt>`.
+Dispatch it with no inputs. The next exact evidence action is to obtain Nasdaq
+trade/quote or halt records for KAII on the three dates above. Historical-universe
+completeness, terminal valuation, effective-dated transition verification, and the
+6,607-versus-6,629 population reconciliation remain blocked. The earlier 6,629
+snapshot has not been located and is not reconstructed.
+
 ## Track B certification and diagnostics handoff
 
 - [x] Certification separation and hosted portfolio accounting are the completed engineering baseline (hosted runs `34675971440-1` and `34689216730-1` are reproducibility checks, not independent performance samples).
