@@ -57,17 +57,36 @@ def main() -> int:
                 lines.append(f"| ↳ source | published `{finding.get('publication_date')}` | effective `{finding.get('event_effective_date')}` | {finding['source_url']} | decision-time available `{finding.get('available_at_original_decision_time')}` | |")
     lines += ["", "## Historical identity investigations", "",
               "The failed run's 20 date=`2026-09-15` HTTP 404 requests are preserved in its original artifact and summarized below; a 2026 response is not availability evidence for an ended ticker.", "",
-              "| Identifier type | Ticker | Selected date | Basis/result | Original failure |",
-              "|---|---|---|---|---|"]
+              "| Identifier type | Ticker | Candidate / returned date | Attempts | Relevance / result | Original failure |",
+              "|---|---|---|---:|---|---|"]
     for group in report.get("identity_diagnostics", []):
         for finding in group.get("dated_reference_evidence", []):
-            lines.append(f"| `{group.get('identifier_type')}` | `{finding.get('ticker')}` | `{finding.get('query_date')}` | `{finding.get('date_selection_basis')}` / `{finding.get('status')}` | `2026-09-15 HTTP 404` |")
+            lines.append(f"| `{group.get('identifier_type')}` | `{finding.get('ticker')}` | `{finding.get('query_date')}` / `{finding.get('historical_reference_date')}` | {len(finding.get('reference_attempts', []))} | `{finding.get('research_relevance')}` / `{finding.get('status')}` | `2026-09-15 HTTP 404` |")
     lines += ["", "Identifier types remain separate. CIK, composite FIGI, and share-class FIGI matches are investigation candidates, not proof of same-security continuity; share classes, units, and warrants are not collapsed.", "",
+              "## Dated transition investigations", "",
+              "| Old → new | Security class | Exchange | Reference dates | Effective / published | Result | Evidence |",
+              "|---|---|---|---|---|---|---|"]
+    for transition in report.get("transition_diagnostics", []):
+        lines.append(
+            f"| `{transition['old_ticker']}` → `{transition['new_ticker']}` | {transition['security_class']} | "
+            f"{transition['exchange']} | `{transition['old_date']}` / `{transition['new_date']}` | "
+            f"`{transition['event_effective_date']}` / `{transition['source_publication_date']}` | "
+            f"`{transition['result']}` | {transition['primary_evidence']} "
+            f"[primary source]({transition['source_url']}) |")
+    lines += ["", "A transition is verified only when the class-specific primary filing and both exact dated provider references agree. An ended listing is not company or security termination.", "",
               "## Request failures and remaining blockers", "",
               f"- Request failures in this execution: `{report.get('request_failure_count')}`.",
               f"- Unresolved: `{', '.join(report.get('unresolved_reason_codes') or [report.get('reason_code', '')])}`.",
               "- Exact next evidence: obtain venue trade/quote or halt records for KAII on 2023-01-19, 2023-02-17, and 2023-02-24, then separately validate terminal payment timing before any valuation rule.", ""]
     (args.output_dir / "alpha_atlas_v4_historical_coverage_diagnostics.md").write_text("\n".join(lines))
+    report_text = target.read_text()
+    run = maximum = 0
+    for character in report_text:
+        run = run + 1 if character == "`" else 0
+        maximum = max(maximum, run)
+    fence = "`" * max(3, maximum + 1)
+    literal = f"# Historical coverage diagnostic JSON (literal text)\n\n{fence}json\n{report_text}{fence}\n"
+    (args.output_dir / "alpha_atlas_v4_historical_coverage_diagnostics_json_summary.md").write_text(literal)
     print(json.dumps({"status": report["status"], "unresolved": report.get("unresolved_reason_codes") or [report.get("reason_code")]}, sort_keys=True))
     return 0 if report["status"] == "VERIFIED_DIAGNOSTIC_EXECUTION" else 2
 

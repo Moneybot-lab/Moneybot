@@ -86,6 +86,22 @@ jobs:
           test "$(jq length <<<"$matches")" = 1
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$(jq -r '.[0].id' <<<"$matches")/zip" > "$REPORT_DIR/source/failed-diagnostic-35176245513-1.zip"
           sha256sum "$REPORT_DIR/source/failed-diagnostic-35176245513-1.zip" >> "$REPORT_DIR/source/SHA256SUMS.txt"
+      - name: Preserve and validate run 35178703375 evidence unchanged
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$REPORT_DIR/source/run-35178703375"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/35178703375" > "$REPORT_DIR/source/run-35178703375/run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/35178703375/artifacts?per_page=100" > "$REPORT_DIR/source/run-35178703375/artifacts.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/10479149714/zip" > "$REPORT_DIR/source/run-35178703375/original.zip"
+          python scripts/inspect_historical_coverage_evidence.py \
+            --run-metadata "$REPORT_DIR/source/run-35178703375/run.json" \
+            --artifact-metadata "$REPORT_DIR/source/run-35178703375/artifacts.json" \
+            --archive "$REPORT_DIR/source/run-35178703375/original.zip" \
+            --output-dir "$REPORT_DIR/source/run-35178703375/reports"
+          echo '78ee7d3afe8434ff952b46b2899d529c37d4864cfe3f30ada61467bd48fb7081  '"$REPORT_DIR/source/run-35178703375/reports/alpha_atlas_v4_historical_coverage_diagnostics.json" | sha256sum --check
       - name: Run targeted daily-price and identity diagnostics
         if: always()
         env:
@@ -97,6 +113,9 @@ jobs:
       - name: Publish summary
         if: always()
         run: test ! -s "$REPORT_DIR/alpha_atlas_v4_historical_coverage_diagnostics.md" || cat "$REPORT_DIR/alpha_atlas_v4_historical_coverage_diagnostics.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish diagnostic JSON as literal text
+        if: always()
+        run: test ! -s "$REPORT_DIR/alpha_atlas_v4_historical_coverage_diagnostics_json_summary.md" || cat "$REPORT_DIR/alpha_atlas_v4_historical_coverage_diagnostics_json_summary.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Upload evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4

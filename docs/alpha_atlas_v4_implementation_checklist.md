@@ -164,6 +164,37 @@ completeness, terminal valuation, effective-dated transition verification, and t
 6,607-versus-6,629 population reconciliation remain blocked. The earlier 6,629
 snapshot has not been located and is not reconstructed.
 
+Evidence extraction run `35180206136` preserved the top-level JSON from
+diagnostic run `35178703375-1` (commit
+`0dc495973f7b2bb2892c6e78ae0d933d475fe80d`) with SHA-256
+`78ee7d3afe8434ff952b46b2899d529c37d4864cfe3f30ada61467bd48fb7081`.
+That evidence corrects the prior progress description: all 20 identity records
+had `list_date=null`, a populated `delisted_utc`, `query_date=null`, and
+`reference_request_issued=false`. Zero request failures therefore established
+diagnostic execution only; it verified no historical identity transition.
+
+The focused repair now treats the timezone-normalized ended-listing timestamp as
+a bounded investigation anchor when `list_date` is absent. It attempts no more
+than five preceding exchange sessions per preserved identity record and retains
+every unsuccessful response and response hash. It also performs exact before/after
+dated-reference checks for the class-specific BWINA→PTVCA and BWINB→PTVCB mappings
+documented in the issuer's August 1, 2018 Form 8-K, plus separate KAII→QDRO,
+KAIIU→QDROU, and KAIIW→QDROW checks around the February 27, 2023 effective time.
+The primary filings make these defensible transition cases, but the transitions
+remain unverified until a hosted run returns and validates both dated references.
+FITBM/FITBO `type=CS` versus preferred/depositary-share descriptions is now an
+explicit metadata conflict, not accepted identity evidence. Older cases remain in
+the output as possible pre-research predecessor links and are not counted as
+verified or silently discarded.
+
+The workflow preserves run `35178703375-1` unchanged, validates the extracted
+JSON hash above, and publishes both the readable report and literal diagnostic
+JSON to GitHub step summaries. Bounded availability remains closed. KAII's three
+missing-price dates, terminal valuation, historical-universe completeness,
+population reconciliation, and any transition lacking both dated responses remain
+open. The next action is **GitHub → Actions → Alpha Atlas V4 Historical Coverage
+Diagnostics → Run workflow** with no inputs.
+
 ## Track B certification and diagnostics handoff
 
 - [x] Certification separation and hosted portfolio accounting are the completed engineering baseline (hosted runs `34675971440-1` and `34689216730-1` are reproducibility checks, not independent performance samples).

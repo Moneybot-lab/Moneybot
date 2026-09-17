@@ -11,6 +11,75 @@ from moneybot.services.alpha_atlas_v4_phase1_discovery import _urllib_fetch
 from moneybot.services.market_data_providers import ExchangeCalendar
 
 GAP_TICKERS = ("GSS", "SWCH", "KAII", "MGI")
+IDENTITY_LOOKBACK_SESSIONS = 5
+MAX_IDENTITY_RECORDS = 32
+
+TRANSITION_CASES = (
+    {"old_ticker": "BWINA", "new_ticker": "PTVCA", "security_class": "Class A common stock",
+     "exchange": "Nasdaq", "old_date": "2018-07-31", "new_date": "2018-08-01",
+     "event_effective_date": "2018-08-01", "source_publication_date": "2018-08-01",
+     "source_url": "https://www.sec.gov/Archives/edgar/data/9346/000000934618000071/form8k.htm",
+     "primary_evidence": "The issuer's Form 8-K states that Class A common stock ceased BWINA and began PTVCA on August 1, 2018."},
+    {"old_ticker": "BWINB", "new_ticker": "PTVCB", "security_class": "Class B common stock",
+     "exchange": "Nasdaq", "old_date": "2018-07-31", "new_date": "2018-08-01",
+     "event_effective_date": "2018-08-01", "source_publication_date": "2018-08-01",
+     "source_url": "https://www.sec.gov/Archives/edgar/data/9346/000000934618000071/form8k.htm",
+     "primary_evidence": "The issuer's Form 8-K states that Class B common stock ceased BWINB and began PTVCB on August 1, 2018."},
+    {"old_ticker": "KAII", "new_ticker": "QDRO", "security_class": "Class A ordinary shares",
+     "exchange": "Nasdaq", "old_date": "2023-02-24", "new_date": "2023-02-27",
+     "event_effective_date": "2023-02-27", "source_publication_date": "2023-02-24",
+     "source_url": "https://www.sec.gov/Archives/edgar/data/1825962/000121390023014342/ea174191-8k_quadroacq1.htm",
+     "primary_evidence": "The issuer's Form 8-K maps Class A ordinary shares from KAII to QDRO at the February 27, 2023 market open."},
+    {"old_ticker": "KAIIU", "new_ticker": "QDROU", "security_class": "units",
+     "exchange": "Nasdaq", "old_date": "2023-02-24", "new_date": "2023-02-27",
+     "event_effective_date": "2023-02-27", "source_publication_date": "2023-02-24",
+     "source_url": "https://www.sec.gov/Archives/edgar/data/1825962/000121390023014342/ea174191-8k_quadroacq1.htm",
+     "primary_evidence": "The issuer's Form 8-K separately maps units from KAIIU to QDROU at the February 27, 2023 market open."},
+    {"old_ticker": "KAIIW", "new_ticker": "QDROW", "security_class": "redeemable warrants",
+     "exchange": "Nasdaq", "old_date": "2023-02-24", "new_date": "2023-02-27",
+     "event_effective_date": "2023-02-27", "source_publication_date": "2023-02-24",
+     "source_url": "https://www.sec.gov/Archives/edgar/data/1825962/000121390023014342/ea174191-8k_quadroacq1.htm",
+     "primary_evidence": "The issuer's Form 8-K separately maps warrants from KAIIW to QDROW at the February 27, 2023 market open."},
+)
+
+# Primary-source research is deliberately checked in rather than inferred from a
+# missing aggregate.  publication_date is also retained so later users cannot
+# accidentally turn retrospective knowledge into point-in-time knowledge.
+GAP_EVIDENCE: dict[tuple[str, str], dict[str, Any]] = {
+    ("GSS", "2022-01-28"): {
+        "classification": "EXPLAINED_NONTRADING_AFTER_ACQUISITION",
+        "source_url": "https://gse.com.gh/wp-content/uploads/2022/01/PR-014-GSR-Chifeng-Jilong-Gold-Completes-the-Acquisition-of-Golden-Star-Resources.pdf",
+        "source_type": "issuer_release_hosted_by_exchange", "publication_date": "2022-01-28",
+        "event_effective_date": "2022-01-28",
+        "evidence": "Golden Star announced completion of the plan of arrangement on January 28; each share was acquired for US$3.91 and delisting was to follow.",
+        "available_at_original_decision_time": False,
+        "conclusion": "The effective acquisition explains why GSS was not trading on this otherwise eligible session; it does not supply a January 28 price or independently settle payment timing.",
+    },
+    ("SWCH", "2022-12-06"): {
+        "classification": "EXPLAINED_NONTRADING_MERGER_OPEN_HALT",
+        "source_url": "https://www.sec.gov/Archives/edgar/data/1710583/000119312522298966/d356989d8k.htm",
+        "source_type": "sec_form_8_k", "publication_date": "2022-12-06", "event_effective_date": "2022-12-06",
+        "evidence": "The filed 8-K says the merger completed and NYSE trading was requested halted before the December 6 open; shares converted to the right to receive $34.25 cash.",
+        "available_at_original_decision_time": False,
+        "conclusion": "The pre-open halt explains the absent daily bar. The contractual merger consideration is not treated here as a retrieved price or as verified portfolio proceeds timing.",
+    },
+    ("MGI", "2023-06-01"): {
+        "classification": "EXPLAINED_NONTRADING_MERGER_OPEN_HALT",
+        "source_url": "https://www.sec.gov/Archives/edgar/data/1273931/000119312523158474/d493619d8k.htm",
+        "source_type": "sec_form_8_k", "publication_date": "2023-06-01", "event_effective_date": "2023-06-01",
+        "evidence": "MoneyGram reported merger completion and requested Nasdaq halt trading before the June 1 open and suspend trading effective at the close.",
+        "available_at_original_decision_time": False,
+        "conclusion": "The pre-open halt explains the absent daily bar, but neither creates a June 1 market price nor establishes terminal valuation cash timing.",
+    },
+}
+
+KAII_EVIDENCE = {
+    "classification": "TRADING_ELIGIBLE_GAP_UNRESOLVED",
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1825962/000121390023014342/ea174191-8k_quadroacq1.htm",
+    "source_type": "sec_form_8_k", "publication_date": "2023-02-24", "event_effective_date": "2023-02-27",
+    "evidence": "The filing keeps Class A shares, units, and warrants distinct and says KAII, KAIIU, and KAIIW changed to QDRO, QDROU, and QDROW at the February 27 market open.",
+    "conclusion": "KAII remained the Class A share ticker on the cited session. No primary event evidence found in this bounded review explains the absent aggregate; no-trade, halt, and provider omission remain unproven alternatives.",
+}
 
 # Primary-source research is deliberately checked in rather than inferred from a
 # missing aggregate.  publication_date is also retained so later users cannot
@@ -93,6 +162,75 @@ def _historical_identity_date(row: dict[str, Any], research_start: str, research
     return sessions[-1].isoformat(), "LAST_EXCHANGE_SESSION_BEFORE_PROVIDER_LISTING_END"
 
 
+def _ended_date(value: Any) -> date | None:
+    """Normalize an ended-listing timestamp to its UTC calendar date."""
+    if not value:
+        return None
+    text = str(value).strip()
+    try:
+        if len(text) == 10:
+            return date.fromisoformat(text)
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return None
+        return parsed.astimezone(timezone.utc).date()
+    except ValueError:
+        return None
+
+
+def _identity_candidate_dates(row: dict[str, Any], research_start: str, research_end: str,
+                              calendar: ExchangeCalendar) -> tuple[list[str], str]:
+    """Return a fixed lookback ending before the UTC ended-listing date."""
+    ended = _ended_date(row.get("delisted_utc"))
+    if ended is None:
+        return [], "HISTORICAL_IDENTITY_END_DATE_UNRESOLVED"
+    research_first, research_last = date.fromisoformat(research_start), date.fromisoformat(research_end)
+    cursor = min(ended - timedelta(days=1), research_last)
+    listed = row.get("list_date")
+    lower = research_first
+    if listed:
+        try:
+            lower = max(lower, date.fromisoformat(str(listed)[:10]))
+        except ValueError:
+            return [], "HISTORICAL_IDENTITY_LIST_DATE_INVALID"
+    sessions: list[str] = []
+    while cursor >= lower and len(sessions) < IDENTITY_LOOKBACK_SESSIONS:
+        if calendar.is_trading_day(cursor):
+            sessions.append(cursor.isoformat())
+        cursor -= timedelta(days=1)
+    if not sessions:
+        return [], "HISTORICAL_IDENTITY_DATE_UNRESOLVED"
+    basis = ("ENDED_TIMESTAMP_BOUNDED_PRECEDING_SESSIONS_WITHOUT_LIST_DATE"
+             if not listed else "LISTING_INTERVAL_BOUNDED_PRECEDING_SESSIONS")
+    return sessions, basis
+
+
+def _reference_attempt(ticker: str, as_of: str, *, api_key: str, fetcher: Callable,
+                       provenance: list[dict[str, Any]]) -> dict[str, Any]:
+    url = f"https://api.massive.com/v3/reference/tickers/{urllib.parse.quote(ticker, safe='')}?date={as_of}"
+    try:
+        reference = _request(fetcher, api_key, url, provenance).get("results") or {}
+        returned = isinstance(reference, dict) and str(reference.get("ticker") or "") == ticker
+        return {"date": as_of, "request_succeeded": True, "exact_ticker_returned": returned,
+                "response_metadata": {key: reference.get(key) for key in
+                    ("ticker", "name", "type", "market", "primary_exchange", "share_class_figi", "composite_figi", "cik")}
+                    if isinstance(reference, dict) else {},
+                "request_provenance": dict(provenance[-1])}
+    except ValueError as exc:
+        return {"date": as_of, "request_succeeded": False, "exact_ticker_returned": False,
+                "request_failure": _request_failure(exc, provenance),
+                "request_provenance": dict(provenance[-1]) if provenance else {}}
+
+
+def _security_type_conflict(row: dict[str, Any]) -> dict[str, Any] | None:
+    description = " ".join(str(row.get(key) or "") for key in ("name", "description")).lower()
+    if str(row.get("type") or "").upper() == "CS" and any(term in description for term in ("preferred", "depositary")):
+        return {"status": "CONFLICTING_SECURITY_TYPE_METADATA", "provider_type": row.get("type"),
+                "description": row.get("name") or row.get("description"),
+                "conclusion": "Neither the CS code nor the preferred/depositary description is accepted as conclusive identity evidence."}
+    return None
+
+
 def _gap_evidence(ticker: str, session: str) -> dict[str, Any]:
     evidence = GAP_EVIDENCE.get((ticker, session))
     if evidence:
@@ -164,10 +302,13 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
                             + (["OUT_OF_WINDOW_PRICE_EVIDENCE"] if outside else [])})
 
     research = source.get("research_interval") or {}; research_start = research.get("start", "2018-01-01")
-    research_end = research.get("end", "2026-09-15"); identity_results = []
-    for group in (source.get("identity_investigation_candidates") or [])[:8]:
+    research_end = research.get("end", "2026-09-15"); identity_results = []; identity_record_count = 0
+    for group in (source.get("identity_investigation_candidates") or []):
         ticker_evidence = []
-        for ticker in (group.get("tickers") or [])[:4]:
+        for ticker in (group.get("tickers") or []):
+            identity_record_count += 1
+            if identity_record_count > MAX_IDENTITY_RECORDS:
+                raise ValueError("IDENTITY_INVESTIGATION_RECORD_LIMIT_EXCEEDED")
             ticker = str(ticker); listing_rows: list[dict[str, Any]] = []
             try:
                 results = _request(fetcher, api_key, _listing_query_url(ticker), provenance).get("results") or []
@@ -179,40 +320,77 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
                                         "request_failure": _request_failure(exc, provenance)})
                 continue
             row = listing_rows[0] if len(listing_rows) == 1 else {}
-            as_of, basis = _historical_identity_date(row, research_start, research_end, calendar)
+            candidate_dates, basis = _identity_candidate_dates(row, research_start, research_end, calendar)
+            ended = _ended_date(row.get("delisted_utc"))
+            relevance = ("ENDED_WITHIN_RESEARCH_INTERVAL" if ended and research_start <= ended.isoformat() <= research_end
+                         else "PRE_RESEARCH_PREDECESSOR_CANDIDATE" if ended and ended.isoformat() < research_start
+                         else "ENDED_DATE_RELEVANCE_UNRESOLVED")
+            predecessor_need = ("DIRECT_RESEARCH_INTERVAL_CASE" if relevance == "ENDED_WITHIN_RESEARCH_INTERVAL" else
+                                "NOT_REQUIRED_UNLESS_CHAIN_CROSSES_RESEARCH_BOUNDARY" if relevance == "PRE_RESEARCH_PREDECESSOR_CANDIDATE" else
+                                "UNRESOLVED")
             item = {"ticker": ticker, "listing_metadata": {k: row.get(k) for k in
-                    ("ticker", "name", "type", "market", "primary_exchange", "list_date", "delisted_utc",
-                     "share_class_figi", "composite_figi", "cik")}, "query_date": as_of,
-                    "date_selection_basis": basis,
+                    ("ticker", "name", "description", "type", "market", "primary_exchange", "list_date", "delisted_utc",
+                     "share_class_figi", "composite_figi", "cik")},
+                    "candidate_dates": candidate_dates, "query_date": candidate_dates[0] if candidate_dates else None,
+                    "date_selection_basis": basis, "research_relevance": relevance,
+                    "predecessor_link_necessity": predecessor_need,
+                    "security_type_investigation": _security_type_conflict(row),
                     "original_failed_request": {"date": research_end, "http_status": 404,
                                                 "source_run_id": 35176245513}}
-            if not as_of:
-                ticker_evidence.append({**item, "status": "HISTORICAL_IDENTITY_DATE_UNRESOLVED",
+            if not candidate_dates:
+                ticker_evidence.append({**item, "status": basis,
                                         "reference_request_issued": False})
                 continue
-            ref_url = f"https://api.massive.com/v3/reference/tickers/{urllib.parse.quote(ticker, safe='')}?date={as_of}"
-            try:
-                reference = _request(fetcher, api_key, ref_url, provenance).get("results") or {}
-                ticker_evidence.append({**item, "status": "DATED_REFERENCE_RETURNED" if reference else "DATED_REFERENCE_NOT_RETURNED",
-                                        "reference_request_issued": True, "reference_returned": bool(reference),
-                                        "identifiers": {k: reference.get(k) for k in ("share_class_figi", "composite_figi", "cik")} if isinstance(reference, dict) else {}})
-            except ValueError as exc:
-                ticker_evidence.append({**item, "status": "DATED_REFERENCE_REQUEST_FAILED", "reference_request_issued": True,
-                                        "request_failure": _request_failure(exc, provenance)})
+            attempts = []
+            for candidate in candidate_dates:
+                attempt = _reference_attempt(ticker, candidate, api_key=api_key, fetcher=fetcher, provenance=provenance)
+                attempts.append(attempt)
+                if attempt["exact_ticker_returned"]:
+                    break
+            success = next((attempt for attempt in attempts if attempt["exact_ticker_returned"]), None)
+            ticker_evidence.append({**item, "status": "HISTORICAL_REFERENCE_CANDIDATE_FOUND" if success else
+                                    "HISTORICAL_IDENTITY_REFERENCE_UNRESOLVED",
+                                    "reference_request_issued": True, "reference_attempts": attempts,
+                                    "historical_reference_date": success.get("date") if success else None,
+                                    "identifiers": (success.get("response_metadata") or {}) if success else {},
+                                    "candidate_is_trading_proof": False})
         identity_results.append({"identifier_type": group.get("identifier_type"),
                                  "identifier_value": group.get("identifier_value"), "tickers": group.get("tickers"),
                                  "identifier_matching_is_transition_proof": False,
                                  "dated_reference_evidence": ticker_evidence,
                                  "status": "INVESTIGATED_NOT_VERIFIED", "verified_ticker_chain": False})
 
+    transition_results = []
+    for case in TRANSITION_CASES:
+        old = _reference_attempt(case["old_ticker"], case["old_date"], api_key=api_key,
+                                 fetcher=fetcher, provenance=provenance)
+        new = _reference_attempt(case["new_ticker"], case["new_date"], api_key=api_key,
+                                 fetcher=fetcher, provenance=provenance)
+        references_confirmed = old["exact_ticker_returned"] and new["exact_ticker_returned"]
+        result = "VERIFIED" if references_confirmed else "UNRESOLVED_REFERENCE_EVIDENCE"
+        transition_results.append({**case, "old_reference": old, "new_reference": new,
+                                   "result": result, "same_security_continuity": result == "VERIFIED",
+                                   "verification_basis": "explicit class-specific primary filing plus both dated provider references",
+                                   "shared_cik_alone_used": False, "retrospective_reconstruction": True,
+                                   "available_at_original_decision_time": case["source_publication_date"] < case["event_effective_date"]})
+
     request_failures = [x for x in gap_results if x["status"] == "REQUEST_FAILED"]
     gap_ref_failures = [i for x in gap_results for i in x.get("missing_session_investigations", []) if i.get("request_failure")]
-    identity_failures = [i for x in identity_results for i in x["dated_reference_evidence"] if i.get("request_failure")]
+    identity_failures = ([item for x in identity_results for item in x["dated_reference_evidence"]
+                          if item.get("request_failure")]
+                         + [attempt for x in identity_results for item in x["dated_reference_evidence"]
+                            for attempt in item.get("reference_attempts", []) if not attempt["request_succeeded"]])
+    transition_request_failures = [attempt for item in transition_results for attempt in
+                                   (item["old_reference"], item["new_reference"]) if not attempt["request_succeeded"]]
     unresolved_codes = {code for item in gap_results for code in item.get("reason_codes", [])}
     unresolved_codes |= {"EFFECTIVE_DATED_IDENTITY_CHAIN_UNVERIFIED", "UNRESOLVED_EARLIER_SNAPSHOT_UNAVAILABLE",
                          "HISTORICAL_UNIVERSE_COMPLETENESS_UNVERIFIED", "TERMINAL_VALUATION_UNVERIFIED"}
-    if any(i.get("status") == "HISTORICAL_IDENTITY_DATE_UNRESOLVED" for x in identity_results for i in x["dated_reference_evidence"]):
+    if any(i.get("status") in {"HISTORICAL_IDENTITY_DATE_UNRESOLVED", "HISTORICAL_IDENTITY_END_DATE_UNRESOLVED",
+                               "HISTORICAL_IDENTITY_LIST_DATE_INVALID"}
+           for x in identity_results for i in x["dated_reference_evidence"]):
         unresolved_codes.add("HISTORICAL_IDENTITY_DATE_UNRESOLVED")
+    if any(item["result"] != "VERIFIED" for item in transition_results):
+        unresolved_codes.add("EFFECTIVE_DATED_IDENTITY_TRANSITION_REFERENCE_UNRESOLVED")
     return {
         "schema_version": "alpha-atlas-v4-historical-coverage-diagnostics.v2", "generated_at_utc": generated_at,
         "repository_commit": repository_commit,
@@ -224,7 +402,19 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
         "failed_diagnostic_source": {"run_id": 35176245513, "run_attempt": 1,
                                      "head_sha": "79b51d02e454dac6dae1c3660d7ddd8761bbab79",
                                      "preserved_unsupported_identity_requests": 20, "date": "2026-09-15", "http_status": 404},
+        "prior_diagnostic_source": {"run_id": 35178703375, "run_attempt": 1,
+                                    "head_sha": "0dc495973f7b2bb2892c6e78ae0d933d475fe80d",
+                                    "report_sha256": "78ee7d3afe8434ff952b46b2899d529c37d4864cfe3f30ada61467bd48fb7081",
+                                    "identity_records": 20, "historical_reference_requests": 0,
+                                    "finding": "HISTORICAL_IDENTITY_DATE_UNRESOLVED"},
         "daily_price_gap_diagnostics": gap_results, "identity_diagnostics": identity_results,
+        "transition_diagnostics": transition_results,
+        "identity_request_summary": {
+            "generic_historical_reference_requests": sum(len(item.get("reference_attempts", [])) for group in identity_results for item in group["dated_reference_evidence"]),
+            "transition_historical_reference_requests": len(transition_results) * 2,
+            "transition_cases_verified": sum(item["result"] == "VERIFIED" for item in transition_results),
+            "transition_cases_total": len(transition_results),
+        },
         "population_reconciliation": {"current_inactive_count": (source.get("population") or {}).get("inactive_listings"),
                                       "prior_reported_count": 6629, "status": "UNRESOLVED_EARLIER_SNAPSHOT_UNAVAILABLE"},
         "universe_completeness": {"current_query_pagination_complete": (source.get("pagination") or {}).get("complete"),
@@ -233,9 +423,9 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
         "terminal_valuation": {"status": "NOT_ESTABLISHED", "zero_recovery_assumed": False,
                                "forward_fill_used": False, "securities_substituted": False},
         "sanitized_request_provenance": provenance,
-        "status": "BLOCKED" if request_failures or gap_ref_failures or identity_failures else "VERIFIED_DIAGNOSTIC_EXECUTION",
+        "status": "BLOCKED" if request_failures or gap_ref_failures or identity_failures or transition_request_failures else "VERIFIED_DIAGNOSTIC_EXECUTION",
         "unresolved_reason_codes": sorted(unresolved_codes),
-        "request_failure_count": len(request_failures) + len(gap_ref_failures) + len(identity_failures),
+        "request_failure_count": len(request_failures) + len(gap_ref_failures) + len(identity_failures) + len(transition_request_failures),
         "research_only": True, "full_backfill_authorized": False, "automatic_promotion": False,
         "ready_for_live_routing": False,
     }

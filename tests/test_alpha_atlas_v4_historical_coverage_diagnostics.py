@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from moneybot.services.alpha_atlas_v4_historical_coverage_diagnostics import (
-    _historical_identity_date, diagnose_historical_coverage,
+    IDENTITY_LOOKBACK_SESSIONS, _historical_identity_date, _identity_candidate_dates,
+    diagnose_historical_coverage,
 )
 from moneybot.services.market_data_providers import ExchangeCalendar
 from moneybot.services.alpha_atlas_v4_phase1_discovery import DiscoveryResponse
@@ -113,9 +114,73 @@ def test_identity_without_dates_does_not_issue_unsupported_reference_request():
     report = diagnose_historical_coverage(source, api_key="secret", repository_commit="a" * 40,
                                            generated_at="now", fetcher=fetch)
     finding = report["identity_diagnostics"][0]["dated_reference_evidence"][0]
-    assert finding["status"] == "HISTORICAL_IDENTITY_DATE_UNRESOLVED"
+    assert finding["status"] == "HISTORICAL_IDENTITY_END_DATE_UNRESOLVED"
     assert finding["reference_request_issued"] is False
     assert not any("/reference/tickers/OLD?date=" in url for url in urls)
+
+
+def test_missing_list_date_uses_utc_ended_timestamp_and_bounded_sessions():
+    dates, basis = _identity_candidate_dates(
+        {"list_date": None, "delisted_utc": "2018-08-01T01:00:00+02:00"},
+        "2018-01-01", "2026-09-15", ExchangeCalendar(),
+    )
+    # The timestamp is still July 31 in UTC, so the first preceding Nasdaq/NYSE
+    # session is July 30 rather than July 31.
+    assert dates[0] == "2018-07-30"
+    assert len(dates) == IDENTITY_LOOKBACK_SESSIONS
+    assert basis == "ENDED_TIMESTAMP_BOUNDED_PRECEDING_SESSIONS_WITHOUT_LIST_DATE"
+
+
+def test_missing_list_date_executes_reference_and_preserves_bounded_failures():
+    source = {"status": "VERIFIED", "probes": [],
+              "identity_investigation_candidates": [{"identifier_type": "cik", "identifier_value": "1", "tickers": ["OLD"]}],
+              "population": {"inactive_listings": 6607}, "pagination": {"complete": True},
+              "research_interval": {"start": "2018-01-01", "end": "2026-09-15"}}
+    def fetch(_method, url, _headers, _timeout):
+        if "/reference/tickers?" in url:
+            return DiscoveryResponse(200, json.dumps({"results": [{"ticker": "OLD", "list_date": None,
+                "delisted_utc": "2020-01-10T00:00:00Z"}]}).encode(), {})
+        ticker = url.split("/tickers/")[1].split("?")[0]
+        if ticker == "OLD":
+            return DiscoveryResponse(200, b'{"results":{}}', {})
+        return DiscoveryResponse(200, json.dumps({"results": {"ticker": ticker}}).encode(), {})
+    report = diagnose_historical_coverage(source, api_key="secret", repository_commit="a" * 40,
+                                           generated_at="now", fetcher=fetch)
+    finding = report["identity_diagnostics"][0]["dated_reference_evidence"][0]
+    assert finding["reference_request_issued"] is True
+    assert finding["status"] == "HISTORICAL_IDENTITY_REFERENCE_UNRESOLVED"
+    assert len(finding["reference_attempts"]) == IDENTITY_LOOKBACK_SESSIONS
+    assert all(attempt["request_succeeded"] and not attempt["exact_ticker_returned"]
+               for attempt in finding["reference_attempts"])
+
+
+def test_class_specific_transitions_and_conflicting_type_metadata_stay_separate():
+    source = {"status": "VERIFIED", "probes": [],
+              "identity_investigation_candidates": [{"identifier_type": "cik", "identifier_value": "2",
+                                                       "tickers": ["FITBM", "FITBO"]}],
+              "population": {"inactive_listings": 6607}, "pagination": {"complete": True},
+              "research_interval": {"start": "2018-01-01", "end": "2026-09-15"}}
+    def fetch(_method, url, _headers, _timeout):
+        if "/reference/tickers?" in url:
+            ticker = url.split("ticker=")[1].split("&")[0]
+            return DiscoveryResponse(200, json.dumps({"results": [{"ticker": ticker, "type": "CS",
+                "name": "Depositary shares representing preferred stock", "list_date": None,
+                "delisted_utc": "2020-01-10T00:00:00Z"}]}).encode(), {})
+        ticker = url.split("/tickers/")[1].split("?")[0]
+        return DiscoveryResponse(200, json.dumps({"results": {"ticker": ticker, "type": "CS",
+            "share_class_figi": f"CLASS-{ticker}", "cik": "shared"}}).encode(), {})
+    report = diagnose_historical_coverage(source, api_key="secret", repository_commit="a" * 40,
+                                           generated_at="now", fetcher=fetch)
+    records = report["identity_diagnostics"][0]["dated_reference_evidence"]
+    assert {row["ticker"] for row in records} == {"FITBM", "FITBO"}
+    assert all(row["security_type_investigation"]["status"] == "CONFLICTING_SECURITY_TYPE_METADATA" for row in records)
+    transitions = {(row["old_ticker"], row["new_ticker"]): row for row in report["transition_diagnostics"]}
+    assert transitions[("BWINA", "PTVCA")]["security_class"] == "Class A common stock"
+    assert transitions[("BWINB", "PTVCB")]["security_class"] == "Class B common stock"
+    assert transitions[("KAII", "QDRO")]["security_class"] == "Class A ordinary shares"
+    assert transitions[("KAIIU", "QDROU")]["security_class"] == "units"
+    assert transitions[("KAIIW", "QDROW")]["security_class"] == "redeemable warrants"
+    assert all(row["result"] == "VERIFIED" and not row["shared_cik_alone_used"] for row in transitions.values())
 
 
 def test_exact_gap_evidence_keeps_price_trading_and_valuation_separate():
@@ -165,7 +230,7 @@ def test_targeted_404_is_preserved_with_url_and_does_not_erase_other_cases():
     assert failure["request_url"].startswith("https://api.massive.com/v2/aggs/ticker/GSS/")
     assert failure["response_sha256"]
     assert by_ticker["SWCH"]["status"] == "COMPLETE"
-    assert len(report["sanitized_request_provenance"]) == 4
+    assert len(report["sanitized_request_provenance"]) == 14
 
 
 def test_diagnostic_workflow_is_exact_bounded_manual_and_always_uploads():
@@ -175,7 +240,10 @@ def test_diagnostic_workflow_is_exact_bounded_manual_and_always_uploads():
     assert "35125664186" in text and "205529d612c1ac2a3497a07f5cb6151d2eef62f4" in text
     assert "35174216390" in text and "b736f2cb387525175eb57141f0170e2c919cb6c6" in text
     assert "--derive-summary-only" in text
-    assert text.count("if: always()") == 5
+    assert text.count("if: always()") == 7
+    assert "Publish diagnostic JSON as literal text" in text
+    assert "35178703375" in text and "0dc495973f7b2bb2892c6e78ae0d933d475fe80d" in Path("scripts/inspect_historical_coverage_evidence.py").read_text()
+    assert "78ee7d3afe8434ff952b46b2899d529c37d4864cfe3f30ada61467bd48fb7081" in text
     assert "35176245513" in text and "79b51d02e454dac6dae1c3660d7ddd8761bbab79" in text
     assert "896a61604ae6fc8ba16821c0bf4d609b0e48efe275bd066318acc243351d0d7d" in text
     for forbidden in ("train_challenger", "backtest", "promote", "deploy", "ingest_massive"):
