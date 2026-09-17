@@ -1,0 +1,86 @@
+name: Alpha Atlas V4 Historical Coverage Diagnostics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  PYTHONPATH: ${{ github.workspace }}
+  REPORT_DIR: artifacts/alpha-atlas-v4-historical-coverage-diagnostics
+  SOURCE_RUN_ID: "35125664186"
+  SOURCE_ARTIFACT: alpha-atlas-v4-delisted-coverage-verification-35125664186-1
+
+jobs:
+  bounded-read-only-diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Retrieve and validate exact successful availability evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$REPORT_DIR/source"
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID")
+          test "$(jq -r .name <<<"$run")" = "Alpha Atlas V4 Delisted Coverage Verification"
+          test "$(jq -r .run_attempt <<<"$run")" = "1"
+          test "$(jq -r .head_sha <<<"$run")" = "205529d612c1ac2a3497a07f5cb6151d2eef62f4"
+          test "$(jq -r .conclusion <<<"$run")" = "success"
+          printf '%s\n' "$run" | jq -S . > "$REPORT_DIR/source/source_run_metadata.json"
+          artifacts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts?per_page=100")
+          matches=$(jq --arg name "$SOURCE_ARTIFACT" '[.artifacts[] | select(.name == $name and .expired == false)]' <<<"$artifacts")
+          test "$(jq length <<<"$matches")" = 1
+          printf '%s\n' "$matches" | jq -S . > "$REPORT_DIR/source/source_artifact_metadata.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$(jq -r '.[0].id' <<<"$matches")/zip" > "$REPORT_DIR/source/github-artifact.zip"
+          unzip -q "$REPORT_DIR/source/github-artifact.zip" -d "$REPORT_DIR/source/extracted"
+          source_report=$(find "$REPORT_DIR/source/extracted" -name alpha_atlas_v4_delisted_coverage_verification.json -type f -print -quit)
+          test -n "$source_report"
+          cp "$source_report" "$REPORT_DIR/source/alpha_atlas_v4_delisted_coverage_verification.json"
+          jq -e '.status == "VERIFIED" and (.acceptance_criteria | to_entries | all(.value == true)) and .research_only == true and .automatic_promotion == false and .ready_for_live_routing == false and .full_backfill_authorized == false' "$source_report" >/dev/null
+          sha256sum "$REPORT_DIR/source/github-artifact.zip" "$REPORT_DIR/source/alpha_atlas_v4_delisted_coverage_verification.json" > "$REPORT_DIR/source/SHA256SUMS.txt"
+      - name: Derive corrected non-live summary
+        run: |
+          python scripts/verify_alpha_atlas_v4_delisted_coverage.py \
+            --output-dir "$REPORT_DIR" \
+            --prior-report "$REPORT_DIR/source/alpha_atlas_v4_delisted_coverage_verification.json" \
+            --derive-summary-only
+      - name: Preserve failed diagnostic context
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/35174216390")
+          test "$(jq -r .name <<<"$run")" = "Alpha Atlas V4 Historical Coverage Diagnostics"
+          test "$(jq -r .run_attempt <<<"$run")" = "1"
+          test "$(jq -r .head_sha <<<"$run")" = "b736f2cb387525175eb57141f0170e2c919cb6c6"
+          artifacts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/35174216390/artifacts?per_page=100")
+          matches=$(jq '[.artifacts[] | select(.name == "alpha-atlas-v4-historical-coverage-diagnostics-35174216390-1" and .expired == false)]' <<<"$artifacts")
+          test "$(jq length <<<"$matches")" = 1
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$(jq -r '.[0].id' <<<"$matches")/zip" > "$REPORT_DIR/source/failed-diagnostic-artifact.zip"
+          sha256sum "$REPORT_DIR/source/failed-diagnostic-artifact.zip" >> "$REPORT_DIR/source/SHA256SUMS.txt"
+      - name: Run targeted daily-price and identity diagnostics
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: |
+          python scripts/diagnose_alpha_atlas_v4_historical_coverage.py \
+            --source-report "$REPORT_DIR/source/alpha_atlas_v4_delisted_coverage_verification.json" \
+            --output-dir "$REPORT_DIR"
+      - name: Publish summary
+        if: always()
+        run: test ! -s "$REPORT_DIR/alpha_atlas_v4_historical_coverage_diagnostics.md" || cat "$REPORT_DIR/alpha_atlas_v4_historical_coverage_diagnostics.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha-atlas-v4-historical-coverage-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.REPORT_DIR }}/**
+          if-no-files-found: error
