@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+import pytest
 
 import moneybot.services.alpha_atlas_v4_historical_coverage_diagnostics as diagnostics
 from moneybot.services.alpha_atlas_v4_historical_coverage_diagnostics import (
     IDENTITY_LOOKBACK_SESSIONS, _historical_identity_date, _identity_candidate_dates,
-    _fetch_listing_metadata, diagnose_historical_coverage,
+    _fetch_listing_metadata, classify_decision_time_availability,
+    classify_kaii_gap_evidence, diagnose_historical_coverage,
 )
 from moneybot.services.market_data_providers import ExchangeCalendar
 from moneybot.services.alpha_atlas_v4_phase1_discovery import DiscoveryResponse
@@ -256,6 +258,44 @@ def test_target_limit_exhaustion_preserves_partial_results(monkeypatch):
                                          "observed": 2, "exhausted": True}
 
 
+def test_decision_time_availability_requires_precise_timestamps():
+    unknown = classify_decision_time_availability(
+        source_acceptance_at="2023-02-24T16:15:38-05:00", decision_at=None, feature_cutoff_at=None)
+    assert unknown["status"] == "UNVERIFIED/UNKNOWN"
+    assert unknown["available_at_original_decision_time"] is None
+    assert unknown["feature_use_authorized"] is False
+    available = classify_decision_time_availability(
+        source_acceptance_at="2023-02-24T16:15:38-05:00",
+        feature_cutoff_at="2023-02-27T14:29:59.123456+00:00",
+        decision_at="2023-02-27T14:30:00.123456+00:00")
+    assert available["status"] == "VERIFIED_AVAILABLE"
+    assert available["feature_use_authorized"] is True
+    unavailable = classify_decision_time_availability(
+        source_acceptance_at="2023-02-24T16:15:38-05:00",
+        feature_cutoff_at="2023-02-24T20:00:00.000001+00:00",
+        decision_at="2023-02-24T20:00:01.000001+00:00")
+    assert unavailable["status"] == "VERIFIED_UNAVAILABLE"
+    assert unavailable["feature_use_authorized"] is False
+    with pytest.raises(ValueError, match="DECISION_TIME_TIMEZONE_REQUIRED"):
+        classify_decision_time_availability(source_acceptance_at="2023-02-24T16:15:38-05:00",
+                                            feature_cutoff_at="2023-02-24T20:00:00",
+                                            decision_at="2023-02-24T20:00:01")
+
+
+@pytest.mark.parametrize("statuses,expected", [
+    (("DATA_RETURNED", "EMPTY_RESPONSE", "EMPTY_RESPONSE", "EMPTY_RESPONSE"), "DAILY_BAR_RECOVERED_DIAGNOSTIC_ONLY"),
+    (("EMPTY_RESPONSE", "DATA_RETURNED", "EMPTY_RESPONSE", "EMPTY_RESPONSE"), "INTRADAY_DATA_PRESENT_DAILY_AGGREGATE_MISSING"),
+    (("EMPTY_RESPONSE", "EMPTY_RESPONSE", "DATA_RETURNED", "EMPTY_RESPONSE"), "TRADES_PRESENT_AGGREGATE_CONSTRUCTION_UNVERIFIED"),
+    (("EMPTY_RESPONSE", "EMPTY_RESPONSE", "EMPTY_RESPONSE", "DATA_RETURNED"), "QUOTES_PRESENT_NO_TRADE_OR_AGGREGATE_EVIDENCE"),
+    (("EMPTY_RESPONSE", "EMPTY_RESPONSE", "ENTITLEMENT_DENIED", "ENTITLEMENT_DENIED"), "PROVIDER_ENTITLEMENT_LIMITED_UNRESOLVED"),
+    (("EMPTY_RESPONSE", "EMPTY_RESPONSE", "EMPTY_RESPONSE", "EMPTY_RESPONSE"), "PROVIDER_EMPTY_RESPONSES_VENUE_TRADING_UNVERIFIED"),
+])
+def test_kaii_gap_classification_separates_evidence_types(statuses, expected):
+    values = [{"status": status} for status in statuses]
+    assert classify_kaii_gap_evidence(daily=values[0], intraday=values[1],
+                                      trades=values[2], quotes=values[3]) == expected
+
+
 def test_exact_gap_evidence_keeps_price_trading_and_valuation_separate():
     windows = {"GSS": ("2022-01-27", "2022-01-28"), "SWCH": ("2022-12-05", "2022-12-06"),
                "KAII": ("2023-01-19", "2023-02-24"), "MGI": ("2023-05-31", "2023-06-01")}
@@ -313,7 +353,8 @@ def test_diagnostic_workflow_is_exact_bounded_manual_and_always_uploads():
     assert "35125664186" in text and "205529d612c1ac2a3497a07f5cb6151d2eef62f4" in text
     assert "35174216390" in text and "b736f2cb387525175eb57141f0170e2c919cb6c6" in text
     assert "--derive-summary-only" in text
-    assert text.count("if: always()") == 8
+    assert text.count("if: always()") == 9
+    assert "35183625727" in text and "5dcd7d8c99cbbc652f637dbb6b35dabcd62c66d9" in text
     assert "Publish diagnostic JSON as literal text" in text
     assert "35178703375" in text and "0dc495973f7b2bb2892c6e78ae0d933d475fe80d" in Path("scripts/inspect_historical_coverage_evidence.py").read_text()
     assert "78ee7d3afe8434ff952b46b2899d529c37d4864cfe3f30ada61467bd48fb7081" in text

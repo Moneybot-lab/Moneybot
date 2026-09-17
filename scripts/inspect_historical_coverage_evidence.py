@@ -185,12 +185,27 @@ def build_outputs(run: dict, artifact: dict, archive_path: Path, output_dir: Pat
 
 
 def main() -> int:
+    global RUN_ID, RUN_ATTEMPT, HEAD_SHA, CONCLUSION, ARTIFACT_ID, ARTIFACT_NAME, ARTIFACT_DIGEST
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-metadata", type=Path, required=True)
     parser.add_argument("--artifact-metadata", type=Path, required=True)
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--expected-run-id", type=int)
+    parser.add_argument("--expected-run-attempt", type=int)
+    parser.add_argument("--expected-head-sha")
+    parser.add_argument("--expected-conclusion")
+    parser.add_argument("--expected-artifact-id", type=int)
+    parser.add_argument("--expected-artifact-name")
+    parser.add_argument("--expected-artifact-digest")
     args = parser.parse_args()
+    RUN_ID = args.expected_run_id or RUN_ID
+    RUN_ATTEMPT = args.expected_run_attempt or RUN_ATTEMPT
+    HEAD_SHA = args.expected_head_sha or HEAD_SHA
+    CONCLUSION = args.expected_conclusion or CONCLUSION
+    ARTIFACT_ID = args.expected_artifact_id or ARTIFACT_ID
+    ARTIFACT_NAME = args.expected_artifact_name or ARTIFACT_NAME
+    ARTIFACT_DIGEST = args.expected_artifact_digest or ARTIFACT_DIGEST
     run = json.loads(args.run_metadata.read_text())
     listing = json.loads(args.artifact_metadata.read_text())
     artifact = validate_source(run, listing)

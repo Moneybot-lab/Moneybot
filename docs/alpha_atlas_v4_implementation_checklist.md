@@ -221,6 +221,43 @@ exhaustion returns a partial `BLOCKED` report rather than throwing away evidence
 No hosted result exists yet for this repair; the verified bounded availability
 closure and all other open items above are unchanged.
 
+Hosted run `35183625727-1` at commit
+`5dcd7d8c99cbbc652f637dbb6b35dabcd62c66d9` completed the repaired bounded
+scope and verified five **retrospective, class-specific** ticker transitions:
+BWINA→PTVCA Class A and BWINB→PTVCB Class B effective `2018-08-01`, and
+KAII→QDRO Class A ordinary shares, KAIIU→QDROU units, and KAIIW→QDROW warrants
+effective `2023-02-27`. These results rely on the retained SEC filings and both
+dated provider references for each mapping. They do not merge the three KAII
+security types, prove every historical identity, or close broader historical-
+identity coverage. The original artifact
+`alpha-atlas-v4-historical-coverage-diagnostics-35183625727-1` is preserved
+unchanged; the workflow validates run/attempt/commit, artifact ID `10480794049`,
+and GitHub digest
+`sha256:2b42f9aa9fa0a62197b96220fe4d18148325c4adc3bbd628bf7224c6d8251ebf`,
+then records the exact extracted report SHA-256 in derived evidence.
+
+Decision-time availability is corrected separately. The Protective filing was
+SEC-accepted at `2018-08-01T16:14:57-04:00`, after the `09:30:00-04:00` effective
+market open; the Quadro filing was accepted at
+`2023-02-24T16:15:38-05:00`, before the `2023-02-27T09:30:00-05:00` effective
+market open. Those comparisons establish public knowability relative to the
+transition instants only. Run `35183625727-1` contains no exact `decision_at` or
+`feature_cutoff_at` for an affected model decision, so all five decision-time
+states are `UNVERIFIED/UNKNOWN`, the compatibility boolean is `null`, and feature
+use is unauthorized. Retrospective transition verification remains valid.
+
+KAII daily bars for `2023-01-19`, `2023-02-17`, and `2023-02-24` remain open.
+The next bounded hosted run will recheck the exact day plus adjacent daily controls,
+minute aggregates, trades, quotes, and trade-condition reference data using KAII
+Class A only. Per date it permits four endpoint queries and at most six paginated
+HTTP requests: one page per aggregate endpoint, two
+trade pages, two quote pages, and 5,000 records per endpoint; report samples are
+capped at 100 records while exact response hashes and counts are retained. An
+entitlement denial, request failure, empty response, quote-only result, and budget
+exhaustion remain distinct. No returned data replaces a bar or authorizes valuation.
+Universe completeness, terminal valuation, population reconciliation, and remaining
+identity coverage stay open.
+
 ## Track B certification and diagnostics handoff
 
 - [x] Certification separation and hosted portfolio accounting are the completed engineering baseline (hosted runs `34675971440-1` and `34689216730-1` are reproducibility checks, not independent performance samples).

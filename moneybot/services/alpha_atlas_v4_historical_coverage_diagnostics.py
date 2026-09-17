@@ -11,6 +11,23 @@ from moneybot.services.alpha_atlas_v4_phase1_discovery import _urllib_fetch
 from moneybot.services.market_data_providers import ExchangeCalendar
 
 GAP_TICKERS = ("GSS", "SWCH", "KAII", "MGI")
+KAII_GAP_DATES = ("2023-01-19", "2023-02-17", "2023-02-24")
+KAII_ENDPOINT_PAGE_LIMIT = 2
+KAII_ENDPOINT_RECORD_LIMIT = 5_000
+KAII_PRESERVED_RECORD_SAMPLE_LIMIT = 100
+MASSIVE_ENDPOINT_DOCUMENTATION = {
+    "aggregates": "https://massive.com/docs/rest/stocks/aggregates/custom-bars",
+    "trades": "https://massive.com/docs/rest/stocks/trades-quotes/trades",
+    "quotes": "https://massive.com/docs/rest/stocks/trades-quotes/quotes",
+    "conditions": "https://massive.com/docs/rest/stocks/market-operations/condition-codes",
+}
+MASSIVE_DOCUMENTATION_REVIEW = {
+    "reviewed_at_utc": "2026-09-17T00:00:00Z",
+    "timestamp_semantics": "Session bounds are sent as timezone-aware RFC 3339 UTC instants; aggregate t values are interpreted as Unix milliseconds.",
+    "pagination_semantics": "Only provider next_url is followed, within the explicit per-endpoint page and record budgets.",
+    "sale_condition_rule": "Trade condition metadata must be reviewed before aggregate eligibility is inferred; returned trades are not silently converted into a daily bar.",
+    "quote_rule": "A quote response is evidence of quoting only and does not establish an eligible trade.",
+}
 IDENTITY_LOOKBACK_SESSIONS = 5
 TARGET_IDENTITY_TICKERS = (
     "BWINA", "BWINB", "PTVCA", "PTVCB", "KHD", "MFCB", "MIL", "TRY", "TRY.B",
@@ -25,26 +42,31 @@ TRANSITION_CASES = (
     {"old_ticker": "BWINA", "new_ticker": "PTVCA", "security_class": "Class A common stock",
      "exchange": "Nasdaq", "old_date": "2018-07-31", "new_date": "2018-08-01",
      "event_effective_date": "2018-08-01", "source_publication_date": "2018-08-01",
+     "event_effective_at": "2018-08-01T09:30:00-04:00", "source_acceptance_at": "2018-08-01T16:14:57-04:00",
      "source_url": "https://www.sec.gov/Archives/edgar/data/9346/000000934618000071/form8k.htm",
      "primary_evidence": "The issuer's Form 8-K states that Class A common stock ceased BWINA and began PTVCA on August 1, 2018."},
     {"old_ticker": "BWINB", "new_ticker": "PTVCB", "security_class": "Class B common stock",
      "exchange": "Nasdaq", "old_date": "2018-07-31", "new_date": "2018-08-01",
      "event_effective_date": "2018-08-01", "source_publication_date": "2018-08-01",
+     "event_effective_at": "2018-08-01T09:30:00-04:00", "source_acceptance_at": "2018-08-01T16:14:57-04:00",
      "source_url": "https://www.sec.gov/Archives/edgar/data/9346/000000934618000071/form8k.htm",
      "primary_evidence": "The issuer's Form 8-K states that Class B common stock ceased BWINB and began PTVCB on August 1, 2018."},
     {"old_ticker": "KAII", "new_ticker": "QDRO", "security_class": "Class A ordinary shares",
      "exchange": "Nasdaq", "old_date": "2023-02-24", "new_date": "2023-02-27",
      "event_effective_date": "2023-02-27", "source_publication_date": "2023-02-24",
+     "event_effective_at": "2023-02-27T09:30:00-05:00", "source_acceptance_at": "2023-02-24T16:15:38-05:00",
      "source_url": "https://www.sec.gov/Archives/edgar/data/1825962/000121390023014342/ea174191-8k_quadroacq1.htm",
      "primary_evidence": "The issuer's Form 8-K maps Class A ordinary shares from KAII to QDRO at the February 27, 2023 market open."},
     {"old_ticker": "KAIIU", "new_ticker": "QDROU", "security_class": "units",
      "exchange": "Nasdaq", "old_date": "2023-02-24", "new_date": "2023-02-27",
      "event_effective_date": "2023-02-27", "source_publication_date": "2023-02-24",
+     "event_effective_at": "2023-02-27T09:30:00-05:00", "source_acceptance_at": "2023-02-24T16:15:38-05:00",
      "source_url": "https://www.sec.gov/Archives/edgar/data/1825962/000121390023014342/ea174191-8k_quadroacq1.htm",
      "primary_evidence": "The issuer's Form 8-K separately maps units from KAIIU to QDROU at the February 27, 2023 market open."},
     {"old_ticker": "KAIIW", "new_ticker": "QDROW", "security_class": "redeemable warrants",
      "exchange": "Nasdaq", "old_date": "2023-02-24", "new_date": "2023-02-27",
      "event_effective_date": "2023-02-27", "source_publication_date": "2023-02-24",
+     "event_effective_at": "2023-02-27T09:30:00-05:00", "source_acceptance_at": "2023-02-24T16:15:38-05:00",
      "source_url": "https://www.sec.gov/Archives/edgar/data/1825962/000121390023014342/ea174191-8k_quadroacq1.htm",
      "primary_evidence": "The issuer's Form 8-K separately maps warrants from KAIIW to QDROW at the February 27, 2023 market open."},
 )
@@ -232,6 +254,105 @@ def _reference_attempt(ticker: str, as_of: str, *, api_key: str, fetcher: Callab
                 "request_provenance": dict(provenance[-1]) if provenance else {}}
 
 
+def _bounded_collection(url: str, *, api_key: str, fetcher: Callable,
+                        provenance: list[dict[str, Any]], page_limit: int = KAII_ENDPOINT_PAGE_LIMIT,
+                        record_limit: int = KAII_ENDPOINT_RECORD_LIMIT) -> dict[str, Any]:
+    initial_url = url; pages = 0; records: list[dict[str, Any]] = []; provenance_start = len(provenance)
+    while url and pages < page_limit and len(records) < record_limit:
+        try:
+            payload = _request(fetcher, api_key, url, provenance)
+        except ValueError as exc:
+            failure = _request_failure(exc, provenance)
+            status = "ENTITLEMENT_DENIED" if failure.get("http_status") in {401, 403} else "REQUEST_FAILED"
+            return {"status": status, "records": records, "pages_requested": pages + 1,
+                    "pagination_complete": False, "request_failure": failure,
+                    "initial_request_url": initial_url, "page_limit": page_limit, "record_limit": record_limit,
+                    "request_provenance": provenance[provenance_start:]}
+        page = payload.get("results") or []
+        if not isinstance(page, list):
+            return {"status": "MALFORMED_RESPONSE", "records": records, "pages_requested": pages + 1,
+                    "pagination_complete": False, "initial_request_url": initial_url,
+                    "page_limit": page_limit, "record_limit": record_limit,
+                    "request_provenance": provenance[provenance_start:]}
+        pages += 1
+        remaining = record_limit - len(records)
+        records.extend(row for row in page[:remaining] if isinstance(row, dict))
+        url = payload.get("next_url")
+    exhausted = bool(url) or len(records) >= record_limit
+    preserved = records if len(records) <= KAII_PRESERVED_RECORD_SAMPLE_LIMIT else records[:50] + records[-50:]
+    return {"status": "BUDGET_EXHAUSTED" if exhausted else "DATA_RETURNED" if records else "EMPTY_RESPONSE",
+            "records": preserved, "records_observed": len(records),
+            "records_sampled": len(preserved), "records_truncated_in_report": len(records) > len(preserved),
+            "pages_requested": pages, "pagination_complete": not url,
+            "pagination_remaining": bool(url), "initial_request_url": initial_url,
+            "page_limit": page_limit, "record_limit": record_limit,
+            "request_provenance": provenance[provenance_start:]}
+
+
+def classify_kaii_gap_evidence(*, daily: dict[str, Any], intraday: dict[str, Any],
+                               trades: dict[str, Any], quotes: dict[str, Any]) -> str:
+    if daily.get("target_status", daily["status"]) == "DATA_RETURNED":
+        return "DAILY_BAR_RECOVERED_DIAGNOSTIC_ONLY"
+    if intraday["status"] == "DATA_RETURNED":
+        return "INTRADAY_DATA_PRESENT_DAILY_AGGREGATE_MISSING"
+    if trades["status"] == "DATA_RETURNED":
+        return "TRADES_PRESENT_AGGREGATE_CONSTRUCTION_UNVERIFIED"
+    if any(item["status"] == "BUDGET_EXHAUSTED" for item in (daily, intraday, trades, quotes)):
+        return "INVESTIGATION_BUDGET_EXHAUSTED"
+    if any(item["status"] == "REQUEST_FAILED" for item in (daily, intraday, trades, quotes)):
+        return "PROVIDER_REQUEST_FAILURE_UNRESOLVED"
+    if any(item["status"] == "ENTITLEMENT_DENIED" for item in (daily, intraday, trades, quotes)):
+        return "PROVIDER_ENTITLEMENT_LIMITED_UNRESOLVED"
+    if quotes["status"] == "DATA_RETURNED":
+        return "QUOTES_PRESENT_NO_TRADE_OR_AGGREGATE_EVIDENCE"
+    return "PROVIDER_EMPTY_RESPONSES_VENUE_TRADING_UNVERIFIED"
+
+
+def _investigate_kaii_gap(session: str, *, api_key: str, fetcher: Callable,
+                          provenance: list[dict[str, Any]], calendar: ExchangeCalendar) -> dict[str, Any]:
+    day = date.fromisoformat(session)
+    previous = calendar.previous_session(day)
+    following = day + timedelta(days=1)
+    while not calendar.is_trading_day(following):
+        following += timedelta(days=1)
+    control_from, control_to = previous.isoformat(), following.isoformat()
+    encoded = urllib.parse.quote("KAII", safe="")
+    daily_url = f"https://api.massive.com/v2/aggs/ticker/{encoded}/range/1/day/{control_from}/{control_to}?adjusted=true&sort=asc&limit={KAII_ENDPOINT_RECORD_LIMIT}"
+    minute_url = f"https://api.massive.com/v2/aggs/ticker/{encoded}/range/1/minute/{session}/{session}?adjusted=true&sort=asc&limit={KAII_ENDPOINT_RECORD_LIMIT}"
+    open_at = calendar.session_open(day).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    close_at = calendar.session_close(day).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    time_query = urllib.parse.urlencode({"timestamp.gte": open_at, "timestamp.lte": close_at,
+                                        "sort": "timestamp", "order": "asc", "limit": KAII_ENDPOINT_RECORD_LIMIT})
+    daily = _bounded_collection(daily_url, api_key=api_key, fetcher=fetcher, provenance=provenance, page_limit=1)
+    daily["target_records"] = [row for row in daily.get("records", []) if _date_from_ms(row.get("t")) == session]
+    daily["control_records"] = [row for row in daily.get("records", []) if _date_from_ms(row.get("t")) != session]
+    daily["target_status"] = "DATA_RETURNED" if daily["target_records"] else (
+        daily["status"] if daily["status"] not in {"DATA_RETURNED", "EMPTY_RESPONSE"} else "EMPTY_RESPONSE")
+    intraday = _bounded_collection(minute_url, api_key=api_key, fetcher=fetcher, provenance=provenance, page_limit=1)
+    trades = _bounded_collection(f"https://api.massive.com/v3/trades/KAII?{time_query}", api_key=api_key,
+                                 fetcher=fetcher, provenance=provenance)
+    quotes = _bounded_collection(f"https://api.massive.com/v3/quotes/KAII?{time_query}", api_key=api_key,
+                                 fetcher=fetcher, provenance=provenance)
+    classification = classify_kaii_gap_evidence(daily=daily, intraday=intraday, trades=trades, quotes=quotes)
+    return {"session": session, "security": "KAII Class A ordinary shares", "exchange": "Nasdaq",
+            "session_open_at": open_at, "session_close_at": close_at,
+            "adjacent_control_window": {"from": control_from, "to": control_to},
+            "daily": daily, "intraday": intraday, "trades": trades, "quotes": quotes,
+            "classification": classification, "quote_evidence_proves_trade": False,
+            "empty_trade_response_proves_venue_wide_no_trading": False,
+            "aggregate_sale_condition_assessment": "UNVERIFIED" if trades.get("records") else "NOT_APPLICABLE_WITHOUT_RETURNED_TRADES",
+            "halt_event_evidence": {"status": "NO_PRIMARY_HALT_EVIDENCE_FOUND_IN_BOUNDED_REVIEW",
+                                    "source_url": TRANSITION_CASES[2]["source_url"],
+                                    "explanation": "The February 24 filing documents the February 27 name change, not a halt on an earlier gap date."},
+            "price_availability": "DIAGNOSTIC_CANDIDATE_ONLY" if classification == "DAILY_BAR_RECOVERED_DIAGNOSTIC_ONLY" else "NOT_RETRIEVED",
+            "valuation_status": "UNVERIFIED_NO_VALUE_INFERRED", "replacement_authorized": False,
+            "budgets": {"endpoint_queries_per_date": 4, "maximum_http_requests_per_date": 6,
+                        "aggregate_pages": 1, "trade_pages": KAII_ENDPOINT_PAGE_LIMIT,
+                        "quote_pages": KAII_ENDPOINT_PAGE_LIMIT, "records_per_endpoint": KAII_ENDPOINT_RECORD_LIMIT},
+            "documentation": MASSIVE_ENDPOINT_DOCUMENTATION,
+            "documentation_review": MASSIVE_DOCUMENTATION_REVIEW}
+
+
 def _security_type_conflict(row: dict[str, Any]) -> dict[str, Any] | None:
     description = " ".join(str(row.get(key) or "") for key in ("name", "description")).lower()
     if str(row.get("type") or "").upper() == "CS" and any(term in description for term in ("preferred", "depositary")):
@@ -239,6 +360,33 @@ def _security_type_conflict(row: dict[str, Any]) -> dict[str, Any] | None:
                 "description": row.get("name") or row.get("description"),
                 "conclusion": "Neither the CS code nor the preferred/depositary description is accepted as conclusive identity evidence."}
     return None
+
+
+def classify_decision_time_availability(*, source_acceptance_at: str,
+                                        decision_at: str | None,
+                                        feature_cutoff_at: str | None) -> dict[str, Any]:
+    """Fail closed unless precise, timezone-aware decision and cutoff instants exist."""
+    source_at = datetime.fromisoformat(source_acceptance_at)
+    if source_at.tzinfo is None:
+        raise ValueError("SOURCE_ACCEPTANCE_TIMEZONE_REQUIRED")
+    base = {"source_acceptance_at": source_at.isoformat(), "decision_at": decision_at,
+            "feature_cutoff_at": feature_cutoff_at}
+    if not decision_at or not feature_cutoff_at:
+        return {**base, "status": "UNVERIFIED/UNKNOWN", "available_at_original_decision_time": None,
+                "feature_use_authorized": False,
+                "reason": "No exact decision_at and feature_cutoff_at were present in the transition evidence."}
+    try:
+        decision = datetime.fromisoformat(decision_at)
+        cutoff = datetime.fromisoformat(feature_cutoff_at)
+    except ValueError as exc:
+        raise ValueError("DECISION_TIME_INVALID") from exc
+    if decision.tzinfo is None or cutoff.tzinfo is None:
+        raise ValueError("DECISION_TIME_TIMEZONE_REQUIRED")
+    available = source_at <= cutoff <= decision
+    return {**base, "status": "VERIFIED_AVAILABLE" if available else "VERIFIED_UNAVAILABLE",
+            "available_at_original_decision_time": available,
+            "feature_use_authorized": available,
+            "reason": "SEC acceptance instant compared with the exact feature cutoff and decision instants."}
 
 
 def _gap_evidence(ticker: str, session: str) -> dict[str, Any]:
@@ -257,6 +405,8 @@ def _gap_evidence(ticker: str, session: str) -> dict[str, Any]:
 
 def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
                                  repository_commit: str, generated_at: str,
+                                 verified_transition_source: dict[str, Any] | None = None,
+                                 investigate_kaii_gaps: bool = False,
                                  fetcher: Callable = _urllib_fetch) -> dict[str, Any]:
     if source.get("status") != "VERIFIED":
         raise ValueError("SOURCE_AVAILABILITY_NOT_VERIFIED")
@@ -310,6 +460,24 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
                             "reason_codes": (["MISSING_DAILY_PRICE_EVIDENCE"] if missing else [])
                             + (["DUPLICATE_DAILY_PRICE_EVIDENCE"] if duplicates else [])
                             + (["OUT_OF_WINDOW_PRICE_EVIDENCE"] if outside else [])})
+
+    kaii_gap_investigations = [
+        _investigate_kaii_gap(session, api_key=api_key, fetcher=fetcher,
+                              provenance=provenance, calendar=calendar)
+        for session in KAII_GAP_DATES
+    ] if investigate_kaii_gaps else []
+    trade_conditions = _bounded_collection(
+        "https://api.massive.com/v3/reference/conditions?asset_class=stocks&data_type=trade&limit=1000",
+        api_key=api_key, fetcher=fetcher, provenance=provenance, page_limit=2, record_limit=2000) if investigate_kaii_gaps else {
+            "status": "NOT_REQUESTED", "records": [], "pages_requested": 0, "pagination_complete": False}
+    documented_condition_ids = {str(row.get("id")) for row in trade_conditions.get("records", []) if row.get("id") is not None}
+    for investigation in kaii_gap_investigations:
+        used = {str(value) for trade in investigation["trades"].get("records", [])
+                for value in (trade.get("conditions") or trade.get("c") or [])}
+        investigation["trade_condition_reference"] = {
+            "status": trade_conditions["status"], "condition_ids_observed": sorted(used),
+            "all_observed_conditions_documented": bool(used) and used <= documented_condition_ids,
+            "interpretation": "Documentation retrieval does not by itself prove aggregate eligibility; no reconstructed bar is authorized."}
 
     research = source.get("research_interval") or {}; research_start = research.get("start", "2018-01-01")
     research_end = research.get("end", "2026-09-15"); identity_results = []
@@ -429,17 +597,31 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
 
     transition_results = []
     for case in TRANSITION_CASES:
-        old = _reference_attempt(case["old_ticker"], case["old_date"], api_key=api_key,
-                                 fetcher=fetcher, provenance=provenance)
-        new = _reference_attempt(case["new_ticker"], case["new_date"], api_key=api_key,
-                                 fetcher=fetcher, provenance=provenance)
-        references_confirmed = old["exact_ticker_returned"] and new["exact_ticker_returned"]
-        result = "VERIFIED" if references_confirmed else "UNRESOLVED_REFERENCE_EVIDENCE"
+        prior = next((item for item in (verified_transition_source or {}).get("transition_diagnostics", [])
+                      if item.get("old_ticker") == case["old_ticker"] and item.get("new_ticker") == case["new_ticker"]), None)
+        if prior and prior.get("result") == "VERIFIED":
+            old, new, result = prior.get("old_reference") or {}, prior.get("new_reference") or {}, "VERIFIED"
+            evidence_origin = "PINNED_RUN_35183625727"
+        else:
+            old = _reference_attempt(case["old_ticker"], case["old_date"], api_key=api_key,
+                                     fetcher=fetcher, provenance=provenance)
+            new = _reference_attempt(case["new_ticker"], case["new_date"], api_key=api_key,
+                                     fetcher=fetcher, provenance=provenance)
+            result = "VERIFIED" if old["exact_ticker_returned"] and new["exact_ticker_returned"] else "UNRESOLVED_REFERENCE_EVIDENCE"
+            evidence_origin = "CURRENT_BOUNDED_EXECUTION"
+        public_before_effective = datetime.fromisoformat(case["source_acceptance_at"]) <= datetime.fromisoformat(case["event_effective_at"])
+        decision_availability = classify_decision_time_availability(
+            source_acceptance_at=case["source_acceptance_at"], decision_at=None, feature_cutoff_at=None)
         transition_results.append({**case, "old_reference": old, "new_reference": new,
                                    "result": result, "same_security_continuity": result == "VERIFIED",
                                    "verification_basis": "explicit class-specific primary filing plus both dated provider references",
                                    "shared_cik_alone_used": False, "retrospective_reconstruction": True,
-                                   "available_at_original_decision_time": case["source_publication_date"] < case["event_effective_date"]})
+                                   "evidence_origin": evidence_origin,
+                                   "public_knowability": {"status": "VERIFIED_AVAILABLE" if public_before_effective else "VERIFIED_UNAVAILABLE",
+                                                          "comparison_instant": case["event_effective_at"],
+                                                          "source_acceptance_at": case["source_acceptance_at"]},
+                                   "decision_time_availability": decision_availability,
+                                   "available_at_original_decision_time": decision_availability["available_at_original_decision_time"]})
 
     request_failures = [x for x in gap_results if x["status"] == "REQUEST_FAILED"]
     gap_ref_failures = [i for x in gap_results for i in x.get("missing_session_investigations", []) if i.get("request_failure")]
@@ -448,9 +630,19 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
                          + [attempt for x in identity_results for item in x["dated_reference_evidence"]
                             for attempt in item.get("reference_attempts", []) if not attempt["request_succeeded"]])
     transition_request_failures = [attempt for item in transition_results for attempt in
-                                   (item["old_reference"], item["new_reference"]) if not attempt["request_succeeded"]]
+                                   (item["old_reference"], item["new_reference"])
+                                   if attempt and attempt.get("request_succeeded") is False]
     identity_limit_failures = [item for group in identity_results for item in group["dated_reference_evidence"]
                                if item.get("status") == "LISTING_METADATA_LIMIT_EXHAUSTED"]
+    kaii_request_failures = [endpoint for item in kaii_gap_investigations
+                             for endpoint in (item["daily"], item["intraday"], item["trades"], item["quotes"])
+                             if endpoint["status"] == "REQUEST_FAILED"]
+    if trade_conditions["status"] == "REQUEST_FAILED":
+        kaii_request_failures.append(trade_conditions)
+    kaii_budget_failures = [item for item in kaii_gap_investigations
+                            if item["classification"] == "INVESTIGATION_BUDGET_EXHAUSTED"]
+    if trade_conditions["status"] == "BUDGET_EXHAUSTED":
+        kaii_budget_failures.append({"classification": "TRADE_CONDITION_BUDGET_EXHAUSTED"})
     unresolved_codes = {code for item in gap_results for code in item.get("reason_codes", [])}
     unresolved_codes |= {"EFFECTIVE_DATED_IDENTITY_CHAIN_UNVERIFIED", "UNRESOLVED_EARLIER_SNAPSHOT_UNAVAILABLE",
                          "HISTORICAL_UNIVERSE_COMPLETENESS_UNVERIFIED", "TERMINAL_VALUATION_UNVERIFIED"}
@@ -466,6 +658,10 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
         unresolved_codes.add("TARGET_IDENTITY_CASES_MISSING_FROM_SOURCE")
     if identity_limit_failures:
         unresolved_codes.add("LISTING_METADATA_LIMIT_EXHAUSTED")
+    if any(item["classification"] not in {"DAILY_BAR_RECOVERED_DIAGNOSTIC_ONLY"} for item in kaii_gap_investigations):
+        unresolved_codes.add("KAII_MISSING_DAILY_BARS_UNRESOLVED")
+    if kaii_budget_failures:
+        unresolved_codes.add("KAII_INVESTIGATION_BUDGET_EXHAUSTED")
     return {
         "schema_version": "alpha-atlas-v4-historical-coverage-diagnostics.v2", "generated_at_utc": generated_at,
         "repository_commit": repository_commit,
@@ -483,6 +679,8 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
                                     "identity_records": 20, "historical_reference_requests": 0,
                                     "finding": "HISTORICAL_IDENTITY_DATE_UNRESOLVED"},
         "daily_price_gap_diagnostics": gap_results, "identity_diagnostics": identity_results,
+        "kaii_gap_investigations": kaii_gap_investigations,
+        "trade_condition_reference": trade_conditions,
         "identity_investigation_scope": identity_scope,
         "transition_diagnostics": transition_results,
         "identity_request_summary": {
@@ -499,9 +697,9 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
         "terminal_valuation": {"status": "NOT_ESTABLISHED", "zero_recovery_assumed": False,
                                "forward_fill_used": False, "securities_substituted": False},
         "sanitized_request_provenance": provenance,
-        "status": "BLOCKED" if request_failures or gap_ref_failures or identity_failures or transition_request_failures or identity_limit_failures or limit_exhausted or missing_target_tickers else "VERIFIED_DIAGNOSTIC_EXECUTION",
+        "status": "BLOCKED" if request_failures or gap_ref_failures or identity_failures or transition_request_failures or identity_limit_failures or limit_exhausted or missing_target_tickers or kaii_request_failures or kaii_budget_failures else "VERIFIED_DIAGNOSTIC_EXECUTION",
         "unresolved_reason_codes": sorted(unresolved_codes),
-        "request_failure_count": len(request_failures) + len(gap_ref_failures) + len(identity_failures) + len(transition_request_failures),
+        "request_failure_count": len(request_failures) + len(gap_ref_failures) + len(identity_failures) + len(transition_request_failures) + len(kaii_request_failures),
         "research_only": True, "full_backfill_authorized": False, "automatic_promotion": False,
         "ready_for_live_routing": False,
     }
