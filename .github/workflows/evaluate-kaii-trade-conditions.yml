@@ -1,0 +1,76 @@
+name: Evaluate KAII Trade Conditions
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  OUTPUT_DIR: artifacts/kaii-trade-condition-evaluation
+
+jobs:
+  derive-and-fill-missing-scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Retrieve and validate pinned source evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR/source"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/35233428008" > "$OUTPUT_DIR/source/run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/35233428008/artifacts?per_page=100" > "$OUTPUT_DIR/source/artifacts.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/10502208555/zip" > "$OUTPUT_DIR/source/original.zip"
+          python scripts/inspect_historical_coverage_evidence.py \
+            --run-metadata "$OUTPUT_DIR/source/run.json" --artifact-metadata "$OUTPUT_DIR/source/artifacts.json" \
+            --archive "$OUTPUT_DIR/source/original.zip" --output-dir "$OUTPUT_DIR/source/reports" \
+            --expected-run-id 35233428008 --expected-run-attempt 1 \
+            --expected-head-sha bf2776e0943b3c0cd392015da4005391d30b15da \
+            --expected-conclusion success --expected-artifact-id 10502208555 \
+            --expected-artifact-name alpha-atlas-v4-historical-coverage-diagnostics-35233428008-1 \
+            --expected-artifact-digest sha256:082092918781f45dc61b57b12128903b9b4e0837ee86f391336bc5d72f6f3786 \
+            --skip-summary-rendering
+      - name: Derive condition findings and query only missing February scope
+        env:
+          MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
+        run: |
+          python scripts/evaluate_kaii_trade_conditions.py \
+            --source-report "$OUTPUT_DIR/source/reports/alpha_atlas_v4_historical_coverage_diagnostics.json" \
+            --output-dir "$OUTPUT_DIR/derived"
+          sha256sum "$OUTPUT_DIR/source/reports/alpha_atlas_v4_historical_coverage_diagnostics.json" \
+            "$OUTPUT_DIR/derived/kaii_trade_condition_evaluation.json" \
+            "$OUTPUT_DIR/derived/kaii_trade_condition_evaluation.md" > "$OUTPUT_DIR/derived/SHA256SUMS.txt"
+      - name: Prepare literal JSON summary
+        if: always()
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          source = Path("artifacts/kaii-trade-condition-evaluation/derived/kaii_trade_condition_evaluation.json")
+          if source.exists():
+              text = source.read_text(); longest = run = 0
+              for char in text:
+                  run = run + 1 if char == "`" else 0; longest = max(longest, run)
+              fence = "`" * max(3, longest + 1)
+              Path("artifacts/kaii-trade-condition-evaluation/derived/json_summary.md").write_text(
+                  f"# KAII derived JSON (literal text)\n\n{fence}json\n{text}{fence}\n")
+          PY
+      - name: Publish readable findings
+        if: always()
+        run: test ! -s "$OUTPUT_DIR/derived/kaii_trade_condition_evaluation.md" || cat "$OUTPUT_DIR/derived/kaii_trade_condition_evaluation.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish literal JSON
+        if: always()
+        run: test ! -s "$OUTPUT_DIR/derived/json_summary.md" || cat "$OUTPUT_DIR/derived/json_summary.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload source and derived evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaii-trade-condition-evaluation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.OUTPUT_DIR }}/**
+          if-no-files-found: error

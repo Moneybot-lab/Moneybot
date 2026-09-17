@@ -143,7 +143,8 @@ def _literal_fence(data: bytes, language: str, title: str) -> bytes:
     return result
 
 
-def build_outputs(run: dict, artifact: dict, archive_path: Path, output_dir: Path) -> dict:
+def build_outputs(run: dict, artifact: dict, archive_path: Path, output_dir: Path,
+                  *, render_report_summaries: bool = True) -> dict:
     digest = verify_archive_digest(archive_path)
     inventory, reports = inspect_archive(archive_path)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -171,10 +172,11 @@ def build_outputs(run: dict, artifact: dict, archive_path: Path, output_dir: Pat
     if len(inventory_summary) > MAX_SUMMARY_BYTES:
         _fail("STEP_SUMMARY_SIZE_LIMIT_EXCEEDED:inventory")
     (output_dir / "summary_inventory.md").write_bytes(inventory_summary)
-    (output_dir / "summary_report_json.md").write_bytes(
-        _literal_fence(reports[REPORT_NAMES[0]], "json", "Report 1 of 2 — diagnostic JSON (literal text)"))
-    (output_dir / "summary_report_markdown.md").write_bytes(
-        _literal_fence(reports[REPORT_NAMES[1]], "text", "Report 2 of 2 — diagnostic Markdown (literal text)"))
+    if render_report_summaries:
+        (output_dir / "summary_report_json.md").write_bytes(
+            _literal_fence(reports[REPORT_NAMES[0]], "json", "Report 1 of 2 — diagnostic JSON (literal text)"))
+        (output_dir / "summary_report_markdown.md").write_bytes(
+            _literal_fence(reports[REPORT_NAMES[1]], "text", "Report 2 of 2 — diagnostic Markdown (literal text)"))
     manifest = {"source": {"repository": REPOSITORY, "workflow": WORKFLOW, "run_id": RUN_ID,
                             "run_attempt": RUN_ATTEMPT, "head_sha": HEAD_SHA, "conclusion": CONCLUSION,
                             "artifact_id": ARTIFACT_ID, "artifact_name": ARTIFACT_NAME,
@@ -198,6 +200,7 @@ def main() -> int:
     parser.add_argument("--expected-artifact-id", type=int)
     parser.add_argument("--expected-artifact-name")
     parser.add_argument("--expected-artifact-digest")
+    parser.add_argument("--skip-summary-rendering", action="store_true")
     args = parser.parse_args()
     RUN_ID = args.expected_run_id or RUN_ID
     RUN_ATTEMPT = args.expected_run_attempt or RUN_ATTEMPT
@@ -209,7 +212,8 @@ def main() -> int:
     run = json.loads(args.run_metadata.read_text())
     listing = json.loads(args.artifact_metadata.read_text())
     artifact = validate_source(run, listing)
-    build_outputs(run, artifact, args.archive, args.output_dir)
+    build_outputs(run, artifact, args.archive, args.output_dir,
+                  render_report_summaries=not args.skip_summary_rendering)
     print(json.dumps({"status": "EVIDENCE_EXTRACTION_VERIFIED", "certification": False}, sort_keys=True))
     return 0
 

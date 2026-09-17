@@ -258,6 +258,39 @@ exhaustion remain distinct. No returned data replaces a bar or authorizes valuat
 Universe completeness, terminal valuation, population reconciliation, and remaining
 identity coverage stay open.
 
+Run `35233428008-1` is the pinned source for the next evidence-only KAII review.
+The manual **Evaluate KAII Trade Conditions** workflow validates its successful
+run metadata, commit `bf2776e0943b3c0cd392015da4005391d30b15da`, artifact ID
+`10502208555`, name
+`alpha-atlas-v4-historical-coverage-diagnostics-35233428008-1`, and GitHub digest
+`sha256:082092918781f45dc61b57b12128903b9b4e0837ee86f391336bc5d72f6f3786`.
+It preserves the original ZIP and exact top-level reports, records source and
+derived report hashes, and does not rerun identity diagnostics.
+
+For KAII `2023-01-19`, the derived evaluator treats the two saved size-one trades
+individually: conditions `[17,37,41]` and `[16]`. It uses each saved condition's
+separate consolidated and market-center open/close, high/low, and volume flags.
+Under current Massive documentation, a `NO` condition takes precedence over a
+permissive condition; an unknown rule fails closed. The evaluator may record the
+narrow explanation `NO_OHLC_ELIGIBLE_RECORDS_IN_RETRIEVED_REGULAR_SESSION_EVIDENCE_UNDER_CURRENT_RULES`
+only if both records are consolidated-OHLC-ineligible and the saved trade response
+is pagination-complete. Current condition metadata has no demonstrated 2023
+effective version, so historical applicability remains `UNVERIFIED/UNKNOWN`.
+Even that scoped explanation is not a retrieved price or valuation evidence.
+
+For `2023-02-17` and `2023-02-24`, saved complete regular-session empty trade
+responses plus quotes prove only what Massive returned inside those request bounds;
+quotes do not prove trades and empty responses do not prove venue-wide nontrading.
+The smallest non-duplicative query is one full Eastern calendar-day KAII Class A
+trade request per date, capped at two pages and 5,000 records. If those requests
+remain empty, the exact remaining evidence is authoritative SIP/venue coverage or
+provider clarification that the saved request hashes represent complete historical
+SIP trades (including late reports) and whether condition/correction processing
+excluded records from trades or aggregates. No provider contact or upgrade is
+required by the workflow. All three price gaps, terminal valuation, full historical
+coverage, and population reconciliation remain open pending the derived hosted
+result.
+
 ## Track B certification and diagnostics handoff
 
 - [x] Certification separation and hosted portfolio accounting are the completed engineering baseline (hosted runs `34675971440-1` and `34689216730-1` are reproducibility checks, not independent performance samples).
