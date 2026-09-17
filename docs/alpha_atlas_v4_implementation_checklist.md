@@ -28,7 +28,8 @@
 - [x] Representative active, TWTR inactive, split, SPY, sector ETF, regular-session, and early-close access demonstrated.
 - [x] Live evidence propagation repaired and cross-artifact consistency validated.
 - [x] Manual bounded coverage-discovery tooling and workflow added.
-- [ ] **DELISTED_SECURITY_AVAILABILITY: IN PROGRESS — HOSTED LIVE RUN REQUIRED.**
+- [x] **DELISTED_SECURITY_AVAILABILITY: CLOSED / VERIFIED — bounded historical access for provider-ended ticker listings.**
+- [ ] Historical-universe completeness for all securities eligible during the research interval demonstrated.
 - [ ] Effective-dated ticker-change and permanent identity chain demonstrated.
 - [x] Survivorship protection fails closed and forbids projecting current tickers backward.
 - [x] Point-in-time reference checks reject current-state metadata.
@@ -69,8 +70,7 @@ this bounded live check using the existing `MASSIVE_API_KEY`, inputs
 `research_start=2018-01-01`, `research_end=2026-09-15`, `max_pages=20`, and
 `max_probes=12`. It uploads
 `alpha_atlas_v4_delisted_coverage_verification-<run-id>-<attempt>` even on
-failure. No successful live run is recorded yet, so this item remains open; workflow code or
-fixture tests are not provider evidence.
+failure. Workflow code or fixture tests are not provider evidence.
 
 Hosted run `35123217191-1` at commit
 `fd517cf5b752df85ed981d980ac6f832be64c904` is retained as failed evidence:
@@ -88,6 +88,33 @@ class FIGI values create typed investigation candidates only; issuer CIK reuse i
 never treated as a verified same-security ticker chain. The 6,607-versus-6,629
 population discrepancy remains unresolved because the earlier response snapshot
 is unavailable for identity-level reconciliation.
+
+Hosted run `35125664186-1`, source commit
+`205529d612c1ac2a3497a07f5cb6151d2eef62f4`, artifact
+`alpha-atlas-v4-delisted-coverage-verification-35125664186-1`, closed the narrow
+availability subitem: status `VERIFIED`; all six criteria passed; 12/12
+representative probes and 2/2 AGU/HLS follow-ups verified across 12 distinct
+tickers; pagination completed in seven pages with 6,607 inactive listings; and
+no availability check failed. AGU and HLS each returned ten bars for
+`2017-12-15` through `2017-12-29`, explicitly outside the research interval.
+The evidence remained `research_only=true`, `automatic_promotion=false`,
+`ready_for_live_routing=false`, and `full_backfill_authorized=false`.
+
+This proves bounded historical access for provider-ended ticker listings only.
+It does not prove company/security termination, complete delisted-security or
+historical-universe coverage, complete daily-price histories, an effective-dated
+identity chain, or terminal valuation. The source report and original GitHub
+artifact archive are preserved unchanged; the manual **Alpha Atlas V4 Historical
+Coverage Diagnostics** workflow records their separate SHA-256 values and emits a
+derived corrected summary without live requests or source mutation. The original
+human summary's combined `14 / 12` display is superseded by derived counts:
+representative `12 / 12`, follow-ups `2 / 2`, distinct tickers `12`.
+
+The next bounded diagnostic targets the reported daily gaps for GSS, SWCH, KAII,
+and MGI, typed identity investigation candidates, and the unresolved population
+comparison. Until its hosted evidence is reviewed, daily-price completeness,
+effective-dated identities, terminal valuation, historical-universe completeness,
+and `UNRESOLVED_EARLIER_SNAPSHOT_UNAVAILABLE` remain open.
 
 ## Track B certification and diagnostics handoff
 
@@ -356,9 +383,10 @@ tag or overwrites conflicting assets.
 ## Next ordered open audit item
 
 The first unresolved item still ordered by this authoritative checklist is
-**Delisted-security coverage demonstrated** in Phase 1, not Hosted V4 Holdout
-Isolation Verification. Its bounded verifier is now ready, but requires the live
-manual run described above. Do not skip or reorder it. Hosted holdout-isolation remains
+**historical-universe completeness for all securities eligible during the research
+interval**, followed by effective-dated ticker identity—not Hosted V4 Holdout
+Isolation Verification. The bounded diagnostics workflow is ready, but requires
+the live manual run described above. Do not skip or reorder it. Hosted holdout-isolation remains
 implemented and locally verified in
 `tests/test_alpha_atlas_v4_holdout_isolation.py`, but its hosted verification must
 not be started as the next checklist item until the earlier ordered Phase 1 items

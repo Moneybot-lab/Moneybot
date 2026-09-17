@@ -21,8 +21,26 @@ from moneybot.services.alpha_atlas_v4_delisted_coverage import (  # noqa: E402
 )
 
 
+def derived_probe_summary(report: dict) -> dict:
+    representative = report.get("probes") or []
+    followups = report.get("follow_up_probes") or []
+    verified = lambda rows: sum(row.get("availability_verified") is True for row in rows)
+    tickers = {
+        str(row.get("ticker"))
+        for row in [*representative, *followups]
+        if row.get("ticker")
+    }
+    return {
+        "schema_version": "alpha-atlas-v4-delisted-availability-derived-summary.v1",
+        "representative_probes": {"verified": verified(representative), "total": len(representative)},
+        "prior_run_follow_ups": {"verified": verified(followups), "total": len(followups)},
+        "distinct_tickers": len(tickers),
+    }
+
+
 def _markdown(report: dict) -> str:
     population, outcomes, conclusions = (report.get(key) or {} for key in ("population", "outcome_counts", "conclusions"))
+    summary = derived_probe_summary(report)
     return "\n".join((
         "# Alpha Atlas V4 delisted-security availability verification", "",
         f"- Status: `{report.get('status')}`",
@@ -33,7 +51,9 @@ def _markdown(report: dict) -> str:
         f"- Previous 6,629 count matched: `{population.get('previous_count_matches')}`",
         f"- Count reconciliation: `{population.get('count_reconciliation')}`",
         f"- Pagination complete: `{(report.get('pagination') or {}).get('complete')}`",
-        f"- Probes retrieved: `{outcomes.get('historical_data_retrieved')}` / `{(report.get('probe_selection') or {}).get('selected')}`",
+        f"- Representative probes: `{summary['representative_probes']['verified']}` / `{summary['representative_probes']['total']}` verified",
+        f"- Prior-run follow-ups: `{summary['prior_run_follow_ups']['verified']}` / `{summary['prior_run_follow_ups']['total']}` verified",
+        f"- Distinct tickers: `{summary['distinct_tickers']}`",
         f"- Ended-listing historical availability: `{conclusions.get('historical_access_for_provider_ended_ticker_listings')}`",
         f"- Company/security termination established: `{conclusions.get('confirmed_company_or_security_termination')}`",
         f"- Complete historical universe: `{conclusions.get('complete_historical_universe')}`",
@@ -52,11 +72,28 @@ def main() -> int:
     parser.add_argument("--max-pages", type=int, default=20)
     parser.add_argument("--max-probes", type=int, default=12)
     parser.add_argument("--prior-report", type=Path)
+    parser.add_argument("--derive-summary-only", action="store_true")
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     generated = datetime.now(timezone.utc).isoformat()
     commit = os.getenv("GITHUB_SHA") or subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     prior = json.loads(args.prior_report.read_text()) if args.prior_report else None
+    if args.derive_summary_only:
+        if prior is None:
+            parser.error("--derive-summary-only requires --prior-report")
+        summary = derived_probe_summary(prior)
+        summary.update({
+            "source_report_sha256": hashlib.sha256(args.prior_report.read_bytes()).hexdigest(),
+            "source_workflow": "Alpha Atlas V4 Delisted Coverage Verification",
+            "source_run_id": 35125664186,
+            "source_run_attempt": 1,
+            "source_commit": "205529d612c1ac2a3497a07f5cb6151d2eef62f4",
+            "derived_at_utc": generated,
+            "live_requests_performed": False,
+        })
+        (args.output_dir / "alpha_atlas_v4_delisted_coverage_corrected_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+        print(json.dumps(summary, sort_keys=True))
+        return 0
     try:
         report = verify_delisted_availability(api_key=os.getenv("MASSIVE_API_KEY", ""), repository_commit=commit, generated_at=generated, research_start=args.research_start, research_end=args.research_end, max_pages=args.max_pages, max_probes=args.max_probes, prior_run_evidence=prior)
         if args.prior_report:
