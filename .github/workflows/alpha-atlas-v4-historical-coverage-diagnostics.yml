@@ -46,6 +46,7 @@ jobs:
           test -n "$source_report"
           cp "$source_report" "$REPORT_DIR/source/alpha_atlas_v4_delisted_coverage_verification.json"
           jq -e '.status == "VERIFIED" and (.acceptance_criteria | to_entries | all(.value == true)) and .research_only == true and .automatic_promotion == false and .ready_for_live_routing == false and .full_backfill_authorized == false' "$source_report" >/dev/null
+          echo '896a61604ae6fc8ba16821c0bf4d609b0e48efe275bd066318acc243351d0d7d  '"$REPORT_DIR/source/alpha_atlas_v4_delisted_coverage_verification.json" | sha256sum --check
           sha256sum "$REPORT_DIR/source/github-artifact.zip" "$REPORT_DIR/source/alpha_atlas_v4_delisted_coverage_verification.json" > "$REPORT_DIR/source/SHA256SUMS.txt"
       - name: Derive corrected non-live summary
         run: |
@@ -54,6 +55,7 @@ jobs:
             --prior-report "$REPORT_DIR/source/alpha_atlas_v4_delisted_coverage_verification.json" \
             --derive-summary-only
       - name: Preserve failed diagnostic context
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -67,7 +69,25 @@ jobs:
           test "$(jq length <<<"$matches")" = 1
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$(jq -r '.[0].id' <<<"$matches")/zip" > "$REPORT_DIR/source/failed-diagnostic-artifact.zip"
           sha256sum "$REPORT_DIR/source/failed-diagnostic-artifact.zip" >> "$REPORT_DIR/source/SHA256SUMS.txt"
+      - name: Preserve run 35176245513 findings unchanged
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/35176245513")
+          test "$(jq -r .name <<<"$run")" = "Alpha Atlas V4 Historical Coverage Diagnostics"
+          test "$(jq -r .run_attempt <<<"$run")" = "1"
+          test "$(jq -r .head_sha <<<"$run")" = "79b51d02e454dac6dae1c3660d7ddd8761bbab79"
+          mkdir -p "$REPORT_DIR/source"
+          printf '%s\n' "$run" | jq -S . > "$REPORT_DIR/source/run-35176245513-metadata.json"
+          artifacts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/35176245513/artifacts?per_page=100")
+          matches=$(jq '[.artifacts[] | select(.name == "alpha-atlas-v4-historical-coverage-diagnostics-35176245513-1" and .expired == false)]' <<<"$artifacts")
+          test "$(jq length <<<"$matches")" = 1
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$(jq -r '.[0].id' <<<"$matches")/zip" > "$REPORT_DIR/source/failed-diagnostic-35176245513-1.zip"
+          sha256sum "$REPORT_DIR/source/failed-diagnostic-35176245513-1.zip" >> "$REPORT_DIR/source/SHA256SUMS.txt"
       - name: Run targeted daily-price and identity diagnostics
+        if: always()
         env:
           MASSIVE_API_KEY: ${{ secrets.MASSIVE_API_KEY }}
         run: |

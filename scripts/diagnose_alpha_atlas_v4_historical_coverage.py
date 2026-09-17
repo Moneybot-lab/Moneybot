@@ -37,9 +37,36 @@ def main() -> int:
                   "automatic_promotion": False, "ready_for_live_routing": False}
     target = args.output_dir / "alpha_atlas_v4_historical_coverage_diagnostics.json"
     target.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
-    lines = ["# Alpha Atlas V4 historical coverage diagnostics", "", f"- Status: `{report['status']}`",
+    lines = ["# Alpha Atlas V4 historical coverage diagnostics", "", f"- Diagnostic execution: `{report['status']}`",
              f"- Source report SHA-256: `{report.get('source_report_sha256')}`",
-             f"- Unresolved: `{', '.join(report.get('unresolved_reason_codes') or [report.get('reason_code', '')])}`", ""]
+             "- Historical availability: `VERIFIED` in bounded run `35125664186-1` (12/12 representative, 2/2 follow-ups, 12 distinct tickers); not reopened.",
+             "- Historical-universe completeness: `NOT_ESTABLISHED_FOR_HISTORICAL_INTERVAL`.",
+             "- Population reconciliation: `UNRESOLVED_EARLIER_SNAPSHOT_UNAVAILABLE` (6,607 current versus 6,629 reported; prior snapshot unavailable).",
+             "- Terminal valuation: `NOT_ESTABLISHED`; no zero recovery, forward fill, substitution, or proceeds timing inferred.", "",
+             "## Missing-session investigations", "",
+             "| Ticker | Date | Reference | Trading/evidence finding | Price available | Next evidence |",
+             "|---|---|---:|---|---:|---|"]
+    for item in report.get("daily_price_gap_diagnostics", []):
+        for finding in item.get("missing_session_investigations", []):
+            evidence = finding.get("conclusion") or finding.get("evidence_needed") or finding.get("classification")
+            next_evidence = ("None for nontrading explanation; terminal cash timing remains separate."
+                             if str(finding.get("classification", "")).startswith("EXPLAINED_") else
+                             "Venue trade/quote or halt record distinguishing no trades from provider omission.")
+            lines.append(f"| `{item['ticker']}` | `{finding.get('session')}` | `{finding.get('reference_present')}` | {evidence} | `False` | {next_evidence} |")
+            if finding.get("source_url"):
+                lines.append(f"| ↳ source | published `{finding.get('publication_date')}` | effective `{finding.get('event_effective_date')}` | {finding['source_url']} | decision-time available `{finding.get('available_at_original_decision_time')}` | |")
+    lines += ["", "## Historical identity investigations", "",
+              "The failed run's 20 date=`2026-09-15` HTTP 404 requests are preserved in its original artifact and summarized below; a 2026 response is not availability evidence for an ended ticker.", "",
+              "| Identifier type | Ticker | Selected date | Basis/result | Original failure |",
+              "|---|---|---|---|---|"]
+    for group in report.get("identity_diagnostics", []):
+        for finding in group.get("dated_reference_evidence", []):
+            lines.append(f"| `{group.get('identifier_type')}` | `{finding.get('ticker')}` | `{finding.get('query_date')}` | `{finding.get('date_selection_basis')}` / `{finding.get('status')}` | `2026-09-15 HTTP 404` |")
+    lines += ["", "Identifier types remain separate. CIK, composite FIGI, and share-class FIGI matches are investigation candidates, not proof of same-security continuity; share classes, units, and warrants are not collapsed.", "",
+              "## Request failures and remaining blockers", "",
+              f"- Request failures in this execution: `{report.get('request_failure_count')}`.",
+              f"- Unresolved: `{', '.join(report.get('unresolved_reason_codes') or [report.get('reason_code', '')])}`.",
+              "- Exact next evidence: obtain venue trade/quote or halt records for KAII on 2023-01-19, 2023-02-17, and 2023-02-24, then separately validate terminal payment timing before any valuation rule.", ""]
     (args.output_dir / "alpha_atlas_v4_historical_coverage_diagnostics.md").write_text("\n".join(lines))
     print(json.dumps({"status": report["status"], "unresolved": report.get("unresolved_reason_codes") or [report.get("reason_code")]}, sort_keys=True))
     return 0 if report["status"] == "VERIFIED_DIAGNOSTIC_EXECUTION" else 2
