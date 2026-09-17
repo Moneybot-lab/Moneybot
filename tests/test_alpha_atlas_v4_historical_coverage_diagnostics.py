@@ -4,9 +4,10 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import moneybot.services.alpha_atlas_v4_historical_coverage_diagnostics as diagnostics
 from moneybot.services.alpha_atlas_v4_historical_coverage_diagnostics import (
     IDENTITY_LOOKBACK_SESSIONS, _historical_identity_date, _identity_candidate_dates,
-    diagnose_historical_coverage,
+    _fetch_listing_metadata, diagnose_historical_coverage,
 )
 from moneybot.services.market_data_providers import ExchangeCalendar
 from moneybot.services.alpha_atlas_v4_phase1_discovery import DiscoveryResponse
@@ -68,7 +69,7 @@ def test_gap_diagnostic_reports_exact_missing_duplicate_and_out_of_window_dates(
 
 def test_identity_diagnostic_retains_typed_identifier_without_claiming_chain():
     source = {"status": "VERIFIED", "probes": [{"ticker": ticker, "price_window": {"from": "2026-01-02", "to": "2026-01-08"}} for ticker in ("GSS", "SWCH", "KAII", "MGI")],
-              "identity_investigation_candidates": [{"identifier_type": "cik", "identifier_value": "1", "tickers": ["OLD", "NEW"], "verified_ticker_chain": False}],
+              "identity_investigation_candidates": [{"identifier_type": "cik", "identifier_value": "1", "tickers": ["BWINA", "BWINB"], "verified_ticker_chain": False}],
               "population": {"inactive_listings": 6607}, "pagination": {"complete": True}, "research_interval": {"end": "2026-09-15"}}
     def fetch(_method, url, _headers, _timeout):
         if "/v2/aggs/" in url:
@@ -86,7 +87,7 @@ def test_identity_diagnostic_retains_typed_identifier_without_claiming_chain():
     assert identity["status"] == "INVESTIGATED_NOT_VERIFIED"
     assert all(row["query_date"] == "2025-01-03" for row in identity["dated_reference_evidence"])
     assert all(row["query_date"] != "2026-09-15" for row in identity["dated_reference_evidence"])
-    assert {row["listing_metadata"]["share_class_figi"] for row in identity["dated_reference_evidence"]} == {"CLASS-OLD", "CLASS-NEW"}
+    assert {row["listing_metadata"]["share_class_figi"] for row in identity["dated_reference_evidence"]} == {"CLASS-BWINA", "CLASS-BWINB"}
 
 
 def test_historical_identity_date_uses_listing_interval_and_unresolved_metadata():
@@ -98,25 +99,25 @@ def test_historical_identity_date_uses_listing_interval_and_unresolved_metadata(
     assert selected == "2022-01-28"
     assert basis == "LAST_EXCHANGE_SESSION_BEFORE_PROVIDER_LISTING_END"
     assert _historical_identity_date(
-        {"ticker": "OLD"}, "2018-01-01", "2026-09-15", calendar,
+        {"ticker": "BWINA"}, "2018-01-01", "2026-09-15", calendar,
     ) == (None, "HISTORICAL_IDENTITY_DATE_UNRESOLVED")
 
 
 def test_identity_without_dates_does_not_issue_unsupported_reference_request():
     source = {"status": "VERIFIED", "probes": [],
-              "identity_investigation_candidates": [{"identifier_type": "cik", "identifier_value": "1", "tickers": ["OLD"]}],
+              "identity_investigation_candidates": [{"identifier_type": "cik", "identifier_value": "1", "tickers": ["BWINA"]}],
               "population": {"inactive_listings": 6607}, "pagination": {"complete": True},
               "research_interval": {"start": "2018-01-01", "end": "2026-09-15"}}
     urls = []
     def fetch(_method, url, _headers, _timeout):
         urls.append(url)
-        return DiscoveryResponse(200, json.dumps({"results": [{"ticker": "OLD"}]}).encode(), {})
+        return DiscoveryResponse(200, json.dumps({"results": [{"ticker": "BWINA"}]}).encode(), {})
     report = diagnose_historical_coverage(source, api_key="secret", repository_commit="a" * 40,
                                            generated_at="now", fetcher=fetch)
     finding = report["identity_diagnostics"][0]["dated_reference_evidence"][0]
     assert finding["status"] == "HISTORICAL_IDENTITY_END_DATE_UNRESOLVED"
     assert finding["reference_request_issued"] is False
-    assert not any("/reference/tickers/OLD?date=" in url for url in urls)
+    assert finding.get("reference_attempts") is None
 
 
 def test_missing_list_date_uses_utc_ended_timestamp_and_bounded_sessions():
@@ -133,15 +134,15 @@ def test_missing_list_date_uses_utc_ended_timestamp_and_bounded_sessions():
 
 def test_missing_list_date_executes_reference_and_preserves_bounded_failures():
     source = {"status": "VERIFIED", "probes": [],
-              "identity_investigation_candidates": [{"identifier_type": "cik", "identifier_value": "1", "tickers": ["OLD"]}],
+              "identity_investigation_candidates": [{"identifier_type": "cik", "identifier_value": "1", "tickers": ["BWINA"]}],
               "population": {"inactive_listings": 6607}, "pagination": {"complete": True},
               "research_interval": {"start": "2018-01-01", "end": "2026-09-15"}}
     def fetch(_method, url, _headers, _timeout):
         if "/reference/tickers?" in url:
-            return DiscoveryResponse(200, json.dumps({"results": [{"ticker": "OLD", "list_date": None,
+            return DiscoveryResponse(200, json.dumps({"results": [{"ticker": "BWINA", "list_date": None,
                 "delisted_utc": "2020-01-10T00:00:00Z"}]}).encode(), {})
         ticker = url.split("/tickers/")[1].split("?")[0]
-        if ticker == "OLD":
+        if ticker == "BWINA":
             return DiscoveryResponse(200, b'{"results":{}}', {})
         return DiscoveryResponse(200, json.dumps({"results": {"ticker": ticker}}).encode(), {})
     report = diagnose_historical_coverage(source, api_key="secret", repository_commit="a" * 40,
@@ -181,6 +182,78 @@ def test_class_specific_transitions_and_conflicting_type_metadata_stay_separate(
     assert transitions[("KAIIU", "QDROU")]["security_class"] == "units"
     assert transitions[("KAIIW", "QDROW")]["security_class"] == "redeemable warrants"
     assert all(row["result"] == "VERIFIED" and not row["shared_cik_alone_used"] for row in transitions.values())
+
+
+def test_explicit_twenty_case_scope_excludes_unrelated_source_candidates():
+    groups = [{"identifier_type": "cik", "identifier_value": str(i), "tickers": [ticker]}
+              for i, ticker in enumerate(diagnostics.TARGET_IDENTITY_TICKERS)]
+    groups += [{"identifier_type": "cik", "identifier_value": f"x{i}", "tickers": [f"UNRELATED{i}"]}
+               for i in range(40)]
+    source = {"status": "VERIFIED", "probes": [], "identity_investigation_candidates": groups,
+              "population": {"inactive_listings": 6607},
+              "pagination": {"complete": True, "pages": 7},
+              "research_interval": {"start": "2018-01-01", "end": "2026-09-15"}}
+    def fetch(_method, url, _headers, _timeout):
+        if "/reference/tickers?" in url:
+            ticker = url.split("ticker=")[1].split("&")[0]
+            return DiscoveryResponse(200, json.dumps({"results": [{"ticker": ticker, "list_date": None,
+                "delisted_utc": "2020-01-10T00:00:00Z"}]}).encode(), {})
+        ticker = url.split("/tickers/")[1].split("?")[0]
+        return DiscoveryResponse(200, json.dumps({"results": {"ticker": ticker}}).encode(), {})
+    report = diagnose_historical_coverage(source, api_key="secret", repository_commit="a" * 40,
+                                           generated_at="now", fetcher=fetch)
+    scope = report["identity_investigation_scope"]
+    assert scope["source_ticker_occurrences"] == 60
+    assert scope["target_unique_received"] == 20
+    assert scope["unrelated_ticker_occurrences_excluded"] == 40
+    assert scope["processing_limit"] == {"name": "target_identity_records", "configured": 20,
+                                         "observed": 20, "exhausted": False}
+    assert scope["completed_target_records"] == 20
+    assert scope["status"] == "COMPLETE_BOUNDED_SCOPE"
+    assert scope["missing_target_tickers"] == []
+
+
+def test_listing_metadata_pagination_completes_and_deduplicates():
+    urls = []
+    row = {"ticker": "BWINA", "delisted_utc": "2018-08-01"}
+    def fetch(_method, url, _headers, _timeout):
+        urls.append(url)
+        if len(urls) == 1:
+            return DiscoveryResponse(200, json.dumps({"results": [row, row],
+                "next_url": "https://api.massive.com/v3/reference/tickers?cursor=safe"}).encode(), {})
+        return DiscoveryResponse(200, json.dumps({"results": [row]}).encode(), {})
+    provenance = []
+    records, details = _fetch_listing_metadata("BWINA", api_key="secret", fetcher=fetch, provenance=provenance)
+    assert records == [row]
+    assert details["status"] == "COMPLETE"
+    assert details["pages_requested"] == 2
+    assert details["duplicate_records_ignored"] == 2
+    assert len(provenance) == 2
+
+
+def test_target_limit_exhaustion_preserves_partial_results(monkeypatch):
+    monkeypatch.setattr(diagnostics, "MAX_TARGET_IDENTITY_RECORDS", 1)
+    source = {"status": "VERIFIED", "probes": [],
+              "identity_investigation_candidates": [{"identifier_type": "cik", "identifier_value": "1",
+                                                       "tickers": ["BWINA", "BWINB"]}],
+              "population": {"inactive_listings": 6607}, "pagination": {"complete": True, "pages": 7},
+              "research_interval": {"start": "2018-01-01", "end": "2026-09-15"}}
+    def fetch(_method, url, _headers, _timeout):
+        if "/reference/tickers?" in url:
+            ticker = url.split("ticker=")[1].split("&")[0]
+            return DiscoveryResponse(200, json.dumps({"results": [{"ticker": ticker, "list_date": None,
+                "delisted_utc": "2018-08-01T00:00:00Z"}]}).encode(), {})
+        ticker = url.split("/tickers/")[1].split("?")[0]
+        return DiscoveryResponse(200, json.dumps({"results": {"ticker": ticker}}).encode(), {})
+    report = diagnose_historical_coverage(source, api_key="secret", repository_commit="a" * 40,
+                                           generated_at="now", fetcher=fetch)
+    scope = report["identity_investigation_scope"]
+    assert report["status"] == "BLOCKED"
+    assert "TARGET_IDENTITY_RECORD_LIMIT_EXHAUSTED" in report["unresolved_reason_codes"]
+    assert scope["completed_target_records"] == 1
+    assert scope["remaining_unprocessed_tickers"] == ["BWINB"]
+    assert scope["processing_limit"] == {"name": "target_identity_records", "configured": 1,
+                                         "observed": 2, "exhausted": True}
 
 
 def test_exact_gap_evidence_keeps_price_trading_and_valuation_separate():
@@ -240,10 +313,11 @@ def test_diagnostic_workflow_is_exact_bounded_manual_and_always_uploads():
     assert "35125664186" in text and "205529d612c1ac2a3497a07f5cb6151d2eef62f4" in text
     assert "35174216390" in text and "b736f2cb387525175eb57141f0170e2c919cb6c6" in text
     assert "--derive-summary-only" in text
-    assert text.count("if: always()") == 7
+    assert text.count("if: always()") == 8
     assert "Publish diagnostic JSON as literal text" in text
     assert "35178703375" in text and "0dc495973f7b2bb2892c6e78ae0d933d475fe80d" in Path("scripts/inspect_historical_coverage_evidence.py").read_text()
     assert "78ee7d3afe8434ff952b46b2899d529c37d4864cfe3f30ada61467bd48fb7081" in text
+    assert "35182066580" in text and "f106608775410c02a312ac01438d2ccabf5e6fbf" in text
     assert "35176245513" in text and "79b51d02e454dac6dae1c3660d7ddd8761bbab79" in text
     assert "896a61604ae6fc8ba16821c0bf4d609b0e48efe275bd066318acc243351d0d7d" in text
     for forbidden in ("train_challenger", "backtest", "promote", "deploy", "ingest_massive"):

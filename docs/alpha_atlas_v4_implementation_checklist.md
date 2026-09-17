@@ -195,6 +195,32 @@ population reconciliation, and any transition lacking both dated responses remai
 open. The next action is **GitHub → Actions → Alpha Atlas V4 Historical Coverage
 Diagnostics → Run workflow** with no inputs.
 
+Run `35182066580-1` at commit
+`f106608775410c02a312ac01438d2ccabf5e6fbf` failed with
+`IDENTITY_INVESTIGATION_RECORD_LIMIT_EXCEEDED`. The failure was in local
+candidate processing, not a provider request or pagination call: one global
+counter covered every ticker occurrence in every shared-identifier candidate
+group and raised as it encountered occurrence 33 against a configured limit of
+32, before issuing that ticker's listing-metadata request. The first 32 had been
+entered for processing, but the outer exception report discarded their partial
+results. The source remained the completely paginated seven-page, 6,607-record
+`market=stocks`, `type=CS`, `active=false` enumeration. Because the failed report
+did not record candidate-group or occurrence totals, the exact total above 32,
+duplicates, unrelated tickers, and remaining cases cannot be recovered from that
+artifact and are not guessed.
+
+The repaired scope is the explicit 20-ticker investigation list already preserved
+by the prior evidence. Its calculated caps are 20 target records, at most two
+narrow exact-ticker listing pages and 20 listing rows per ticker, at most five
+historical dates per target (100 attempts), and ten before/after transition
+requests. Exact duplicates are removed, unrelated source candidates are counted
+but excluded, and ambiguous metadata remains unresolved. Every new report records
+the source filters and pagination, received/unique/duplicate/unrelated counts,
+configured versus observed limits, completed records, and remaining cases. Limit
+exhaustion returns a partial `BLOCKED` report rather than throwing away evidence.
+No hosted result exists yet for this repair; the verified bounded availability
+closure and all other open items above are unchanged.
+
 ## Track B certification and diagnostics handoff
 
 - [x] Certification separation and hosted portfolio accounting are the completed engineering baseline (hosted runs `34675971440-1` and `34689216730-1` are reproducibility checks, not independent performance samples).

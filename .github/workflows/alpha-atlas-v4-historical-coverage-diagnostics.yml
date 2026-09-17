@@ -102,6 +102,24 @@ jobs:
             --archive "$REPORT_DIR/source/run-35178703375/original.zip" \
             --output-dir "$REPORT_DIR/source/run-35178703375/reports"
           echo '78ee7d3afe8434ff952b46b2899d529c37d4864cfe3f30ada61467bd48fb7081  '"$REPORT_DIR/source/run-35178703375/reports/alpha_atlas_v4_historical_coverage_diagnostics.json" | sha256sum --check
+      - name: Preserve failed run 35182066580 unchanged
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$REPORT_DIR/source/run-35182066580"
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/35182066580")
+          test "$(jq -r .name <<<"$run")" = "Alpha Atlas V4 Historical Coverage Diagnostics"
+          test "$(jq -r .run_attempt <<<"$run")" = "1"
+          test "$(jq -r .head_sha <<<"$run")" = "f106608775410c02a312ac01438d2ccabf5e6fbf"
+          test "$(jq -r .conclusion <<<"$run")" = "failure"
+          printf '%s\n' "$run" | jq -S . > "$REPORT_DIR/source/run-35182066580/run.json"
+          artifacts=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/35182066580/artifacts?per_page=100")
+          match=$(jq '[.artifacts[] | select(.id == 10480517507 and .name == "alpha-atlas-v4-historical-coverage-diagnostics-35182066580-1" and .expired == false and .digest == "sha256:386ae0ad9b8fe5d21fec654406d8dbc8dfc1b3a3c82343a9b7ad18afe90a4e4a")]' <<<"$artifacts")
+          test "$(jq length <<<"$match")" = 1
+          printf '%s\n' "$match" | jq -S . > "$REPORT_DIR/source/run-35182066580/artifact.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/10480517507/zip" > "$REPORT_DIR/source/run-35182066580/original.zip"
       - name: Run targeted daily-price and identity diagnostics
         if: always()
         env:

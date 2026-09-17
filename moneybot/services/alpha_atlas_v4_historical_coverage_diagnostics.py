@@ -12,7 +12,14 @@ from moneybot.services.market_data_providers import ExchangeCalendar
 
 GAP_TICKERS = ("GSS", "SWCH", "KAII", "MGI")
 IDENTITY_LOOKBACK_SESSIONS = 5
-MAX_IDENTITY_RECORDS = 32
+TARGET_IDENTITY_TICKERS = (
+    "BWINA", "BWINB", "PTVCA", "PTVCB", "KHD", "MFCB", "MIL", "TRY", "TRY.B",
+    "FITBM", "FITBO", "HUB.A", "HUB.B", "ANDV", "TSO", "TSOw", "FRM", "XNR",
+    "KV.A", "KV.B",
+)
+MAX_TARGET_IDENTITY_RECORDS = len(TARGET_IDENTITY_TICKERS)
+MAX_LISTING_METADATA_PAGES_PER_TICKER = 2
+MAX_LISTING_METADATA_RECORDS_PER_TICKER = 20
 
 TRANSITION_CASES = (
     {"old_ticker": "BWINA", "new_ticker": "PTVCA", "security_class": "Class A common stock",
@@ -81,45 +88,6 @@ KAII_EVIDENCE = {
     "conclusion": "KAII remained the Class A share ticker on the cited session. No primary event evidence found in this bounded review explains the absent aggregate; no-trade, halt, and provider omission remain unproven alternatives.",
 }
 
-# Primary-source research is deliberately checked in rather than inferred from a
-# missing aggregate.  publication_date is also retained so later users cannot
-# accidentally turn retrospective knowledge into point-in-time knowledge.
-GAP_EVIDENCE: dict[tuple[str, str], dict[str, Any]] = {
-    ("GSS", "2022-01-28"): {
-        "classification": "EXPLAINED_NONTRADING_AFTER_ACQUISITION",
-        "source_url": "https://gse.com.gh/wp-content/uploads/2022/01/PR-014-GSR-Chifeng-Jilong-Gold-Completes-the-Acquisition-of-Golden-Star-Resources.pdf",
-        "source_type": "issuer_release_hosted_by_exchange", "publication_date": "2022-01-28",
-        "event_effective_date": "2022-01-28",
-        "evidence": "Golden Star announced completion of the plan of arrangement on January 28; each share was acquired for US$3.91 and delisting was to follow.",
-        "available_at_original_decision_time": False,
-        "conclusion": "The effective acquisition explains why GSS was not trading on this otherwise eligible session; it does not supply a January 28 price or independently settle payment timing.",
-    },
-    ("SWCH", "2022-12-06"): {
-        "classification": "EXPLAINED_NONTRADING_MERGER_OPEN_HALT",
-        "source_url": "https://www.sec.gov/Archives/edgar/data/1710583/000119312522298966/d356989d8k.htm",
-        "source_type": "sec_form_8_k", "publication_date": "2022-12-06", "event_effective_date": "2022-12-06",
-        "evidence": "The filed 8-K says the merger completed and NYSE trading was requested halted before the December 6 open; shares converted to the right to receive $34.25 cash.",
-        "available_at_original_decision_time": False,
-        "conclusion": "The pre-open halt explains the absent daily bar. The contractual merger consideration is not treated here as a retrieved price or as verified portfolio proceeds timing.",
-    },
-    ("MGI", "2023-06-01"): {
-        "classification": "EXPLAINED_NONTRADING_MERGER_OPEN_HALT",
-        "source_url": "https://www.sec.gov/Archives/edgar/data/1273931/000119312523158474/d493619d8k.htm",
-        "source_type": "sec_form_8_k", "publication_date": "2023-06-01", "event_effective_date": "2023-06-01",
-        "evidence": "MoneyGram reported merger completion and requested Nasdaq halt trading before the June 1 open and suspend trading effective at the close.",
-        "available_at_original_decision_time": False,
-        "conclusion": "The pre-open halt explains the absent daily bar, but neither creates a June 1 market price nor establishes terminal valuation cash timing.",
-    },
-}
-
-KAII_EVIDENCE = {
-    "classification": "TRADING_ELIGIBLE_GAP_UNRESOLVED",
-    "source_url": "https://www.sec.gov/Archives/edgar/data/1825962/000121390023014342/ea174191-8k_quadroacq1.htm",
-    "source_type": "sec_form_8_k", "publication_date": "2023-02-24", "event_effective_date": "2023-02-27",
-    "evidence": "The filing keeps Class A shares, units, and warrants distinct and says KAII, KAIIU, and KAIIW changed to QDRO, QDROU, and QDROW at the February 27 market open.",
-    "conclusion": "KAII remained the Class A share ticker on the cited session. No primary event evidence found in this bounded review explains the absent aggregate; no-trade, halt, and provider omission remain unproven alternatives.",
-}
-
 
 def _request_failure(exc: ValueError, provenance: list[dict[str, Any]]) -> dict[str, Any]:
     last = provenance[-1] if provenance else {}
@@ -138,6 +106,48 @@ def _date_from_ms(value: Any) -> str | None:
 def _listing_query_url(ticker: str) -> str:
     return "https://api.massive.com/v3/reference/tickers?" + urllib.parse.urlencode(
         {"ticker": ticker, "market": "stocks", "active": "false", "limit": 10})
+
+
+def _fetch_listing_metadata(ticker: str, *, api_key: str, fetcher: Callable,
+                            provenance: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Fetch only one exact ticker with independent page and record budgets."""
+    initial_url = _listing_query_url(ticker)
+    url: str | None = initial_url
+    pages = 0
+    records: list[dict[str, Any]] = []
+    duplicate_records = 0
+    seen: set[str] = set()
+    while url and pages < MAX_LISTING_METADATA_PAGES_PER_TICKER:
+        payload = _request(fetcher, api_key, url, provenance)
+        page = payload.get("results") or []
+        if not isinstance(page, list) or not all(isinstance(row, dict) for row in page):
+            raise ValueError("LISTING_METADATA_MALFORMED_RESULTS")
+        pages += 1
+        for row in page:
+            if str(row.get("ticker") or "") != ticker:
+                continue
+            fingerprint = repr(sorted(row.items()))
+            if fingerprint in seen:
+                duplicate_records += 1
+                continue
+            seen.add(fingerprint)
+            records.append(row)
+            if len(records) > MAX_LISTING_METADATA_RECORDS_PER_TICKER:
+                return records, {"status": "LIMIT_EXHAUSTED", "limit_name": "listing_metadata_records_per_ticker",
+                                 "configured_limit": MAX_LISTING_METADATA_RECORDS_PER_TICKER,
+                                 "observed_count": len(records), "pages_requested": pages,
+                                 "pagination_remaining": bool(payload.get("next_url")),
+                                 "sanitized_query": initial_url, "affected_ticker": ticker,
+                                 "duplicate_records_ignored": duplicate_records}
+        url = payload.get("next_url")
+    status = "LIMIT_EXHAUSTED" if url else "COMPLETE"
+    diagnostics = {"status": status,
+                   "limit_name": "listing_metadata_pages_per_ticker" if url else None,
+                   "configured_limit": MAX_LISTING_METADATA_PAGES_PER_TICKER if url else None,
+                   "observed_count": len(records), "pages_requested": pages,
+                   "pagination_remaining": bool(url), "sanitized_query": initial_url,
+                   "affected_ticker": ticker, "duplicate_records_ignored": duplicate_records}
+    return records, diagnostics
 
 
 def _historical_identity_date(row: dict[str, Any], research_start: str, research_end: str,
@@ -302,24 +312,59 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
                             + (["OUT_OF_WINDOW_PRICE_EVIDENCE"] if outside else [])})
 
     research = source.get("research_interval") or {}; research_start = research.get("start", "2018-01-01")
-    research_end = research.get("end", "2026-09-15"); identity_results = []; identity_record_count = 0
-    for group in (source.get("identity_investigation_candidates") or []):
+    research_end = research.get("end", "2026-09-15"); identity_results = []
+    source_groups = source.get("identity_investigation_candidates") or []
+    target_set = set(TARGET_IDENTITY_TICKERS)
+    source_occurrences = [(group, str(ticker)) for group in source_groups for ticker in (group.get("tickers") or [])]
+    targeted_occurrences = [(group, ticker) for group, ticker in source_occurrences if ticker in target_set]
+    duplicate_target_occurrences = len(targeted_occurrences) - len({ticker for _, ticker in targeted_occurrences})
+    selected_groups = []
+    selected_tickers: set[str] = set()
+    for group in source_groups:
+        selected = []
+        for ticker_value in group.get("tickers") or []:
+            ticker = str(ticker_value)
+            if ticker in target_set and ticker not in selected_tickers:
+                selected.append(ticker); selected_tickers.add(ticker)
+        if selected:
+            selected_groups.append({**group, "tickers": selected})
+    planned_records = [(group, ticker) for group in selected_groups for ticker in group["tickers"]]
+    limit_exhausted = len(planned_records) > MAX_TARGET_IDENTITY_RECORDS
+    process_records = planned_records[:MAX_TARGET_IDENTITY_RECORDS]
+    remaining_records = [ticker for _, ticker in planned_records[MAX_TARGET_IDENTITY_RECORDS:]]
+    missing_target_tickers = sorted(target_set - selected_tickers)
+    by_group: dict[tuple[str, str], list[str]] = {}
+    group_values: dict[tuple[str, str], dict[str, Any]] = {}
+    for group, ticker in process_records:
+        key = (str(group.get("identifier_type")), str(group.get("identifier_value")))
+        by_group.setdefault(key, []).append(ticker); group_values[key] = group
+    for key, tickers in by_group.items():
+        group = group_values[key]
         ticker_evidence = []
-        for ticker in (group.get("tickers") or []):
-            identity_record_count += 1
-            if identity_record_count > MAX_IDENTITY_RECORDS:
-                raise ValueError("IDENTITY_INVESTIGATION_RECORD_LIMIT_EXCEEDED")
-            ticker = str(ticker); listing_rows: list[dict[str, Any]] = []
+        for ticker in tickers:
+            listing_rows: list[dict[str, Any]] = []
             try:
-                results = _request(fetcher, api_key, _listing_query_url(ticker), provenance).get("results") or []
-                listing_rows = [r for r in results if isinstance(r, dict) and str(r.get("ticker")) == ticker]
+                listing_rows, listing_diagnostics = _fetch_listing_metadata(
+                    ticker, api_key=api_key, fetcher=fetcher, provenance=provenance)
             except ValueError as exc:
                 ticker_evidence.append({"ticker": ticker, "status": "LISTING_METADATA_REQUEST_FAILED",
                                         "original_failed_request": {"date": research_end, "http_status": 404,
                                                                     "source_run_id": 35176245513},
                                         "request_failure": _request_failure(exc, provenance)})
                 continue
-            row = listing_rows[0] if len(listing_rows) == 1 else {}
+            if listing_diagnostics["status"] == "LIMIT_EXHAUSTED":
+                ticker_evidence.append({"ticker": ticker, "status": "LISTING_METADATA_LIMIT_EXHAUSTED",
+                                        "limit_diagnostics": listing_diagnostics,
+                                        "completed_listing_records": listing_rows,
+                                        "reference_request_issued": False})
+                continue
+            if len(listing_rows) != 1:
+                ticker_evidence.append({"ticker": ticker, "status": "LISTING_METADATA_MISSING_OR_AMBIGUOUS",
+                                        "listing_diagnostics": listing_diagnostics,
+                                        "completed_listing_records": listing_rows,
+                                        "reference_request_issued": False})
+                continue
+            row = listing_rows[0]
             candidate_dates, basis = _identity_candidate_dates(row, research_start, research_end, calendar)
             ended = _ended_date(row.get("delisted_utc"))
             relevance = ("ENDED_WITHIN_RESEARCH_INTERVAL" if ended and research_start <= ended.isoformat() <= research_end
@@ -355,10 +400,32 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
                                     "identifiers": (success.get("response_metadata") or {}) if success else {},
                                     "candidate_is_trading_proof": False})
         identity_results.append({"identifier_type": group.get("identifier_type"),
-                                 "identifier_value": group.get("identifier_value"), "tickers": group.get("tickers"),
+                                 "identifier_value": group.get("identifier_value"), "tickers": tickers,
                                  "identifier_matching_is_transition_proof": False,
                                  "dated_reference_evidence": ticker_evidence,
                                  "status": "INVESTIGATED_NOT_VERIFIED", "verified_ticker_chain": False})
+
+    identity_scope = {
+        "source_query": {"market": "stocks", "type": "CS", "active": False},
+        "source_pagination": source.get("pagination"),
+        "source_candidate_groups": len(source_groups),
+        "source_ticker_occurrences": len(source_occurrences),
+        "target_tickers_configured": len(TARGET_IDENTITY_TICKERS),
+        "target_occurrences_received": len(targeted_occurrences),
+        "target_unique_received": len(selected_tickers),
+        "duplicate_target_occurrences_ignored": duplicate_target_occurrences,
+        "unrelated_ticker_occurrences_excluded": len(source_occurrences) - len(targeted_occurrences),
+        "missing_target_tickers": missing_target_tickers,
+        "processing_limit": {"name": "target_identity_records", "configured": MAX_TARGET_IDENTITY_RECORDS,
+                             "observed": len(planned_records), "exhausted": limit_exhausted},
+        "completed_target_records": sum(len(group["dated_reference_evidence"]) for group in identity_results),
+        "remaining_unprocessed_tickers": remaining_records,
+        "listing_request_budget": {"maximum_requests": MAX_TARGET_IDENTITY_RECORDS * MAX_LISTING_METADATA_PAGES_PER_TICKER,
+                                   "pages_per_ticker": MAX_LISTING_METADATA_PAGES_PER_TICKER,
+                                   "records_per_ticker": MAX_LISTING_METADATA_RECORDS_PER_TICKER},
+        "historical_reference_attempt_budget": MAX_TARGET_IDENTITY_RECORDS * IDENTITY_LOOKBACK_SESSIONS,
+        "status": "BLOCKED_INCOMPLETE" if limit_exhausted or missing_target_tickers else "COMPLETE_BOUNDED_SCOPE",
+    }
 
     transition_results = []
     for case in TRANSITION_CASES:
@@ -382,6 +449,8 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
                             for attempt in item.get("reference_attempts", []) if not attempt["request_succeeded"]])
     transition_request_failures = [attempt for item in transition_results for attempt in
                                    (item["old_reference"], item["new_reference"]) if not attempt["request_succeeded"]]
+    identity_limit_failures = [item for group in identity_results for item in group["dated_reference_evidence"]
+                               if item.get("status") == "LISTING_METADATA_LIMIT_EXHAUSTED"]
     unresolved_codes = {code for item in gap_results for code in item.get("reason_codes", [])}
     unresolved_codes |= {"EFFECTIVE_DATED_IDENTITY_CHAIN_UNVERIFIED", "UNRESOLVED_EARLIER_SNAPSHOT_UNAVAILABLE",
                          "HISTORICAL_UNIVERSE_COMPLETENESS_UNVERIFIED", "TERMINAL_VALUATION_UNVERIFIED"}
@@ -391,6 +460,12 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
         unresolved_codes.add("HISTORICAL_IDENTITY_DATE_UNRESOLVED")
     if any(item["result"] != "VERIFIED" for item in transition_results):
         unresolved_codes.add("EFFECTIVE_DATED_IDENTITY_TRANSITION_REFERENCE_UNRESOLVED")
+    if limit_exhausted:
+        unresolved_codes.add("TARGET_IDENTITY_RECORD_LIMIT_EXHAUSTED")
+    if missing_target_tickers:
+        unresolved_codes.add("TARGET_IDENTITY_CASES_MISSING_FROM_SOURCE")
+    if identity_limit_failures:
+        unresolved_codes.add("LISTING_METADATA_LIMIT_EXHAUSTED")
     return {
         "schema_version": "alpha-atlas-v4-historical-coverage-diagnostics.v2", "generated_at_utc": generated_at,
         "repository_commit": repository_commit,
@@ -408,6 +483,7 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
                                     "identity_records": 20, "historical_reference_requests": 0,
                                     "finding": "HISTORICAL_IDENTITY_DATE_UNRESOLVED"},
         "daily_price_gap_diagnostics": gap_results, "identity_diagnostics": identity_results,
+        "identity_investigation_scope": identity_scope,
         "transition_diagnostics": transition_results,
         "identity_request_summary": {
             "generic_historical_reference_requests": sum(len(item.get("reference_attempts", [])) for group in identity_results for item in group["dated_reference_evidence"]),
@@ -423,7 +499,7 @@ def diagnose_historical_coverage(source: dict[str, Any], *, api_key: str,
         "terminal_valuation": {"status": "NOT_ESTABLISHED", "zero_recovery_assumed": False,
                                "forward_fill_used": False, "securities_substituted": False},
         "sanitized_request_provenance": provenance,
-        "status": "BLOCKED" if request_failures or gap_ref_failures or identity_failures or transition_request_failures else "VERIFIED_DIAGNOSTIC_EXECUTION",
+        "status": "BLOCKED" if request_failures or gap_ref_failures or identity_failures or transition_request_failures or identity_limit_failures or limit_exhausted or missing_target_tickers else "VERIFIED_DIAGNOSTIC_EXECUTION",
         "unresolved_reason_codes": sorted(unresolved_codes),
         "request_failure_count": len(request_failures) + len(gap_ref_failures) + len(identity_failures) + len(transition_request_failures),
         "research_only": True, "full_backfill_authorized": False, "automatic_promotion": False,

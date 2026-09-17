@@ -62,6 +62,17 @@ def main() -> int:
     for group in report.get("identity_diagnostics", []):
         for finding in group.get("dated_reference_evidence", []):
             lines.append(f"| `{group.get('identifier_type')}` | `{finding.get('ticker')}` | `{finding.get('query_date')}` / `{finding.get('historical_reference_date')}` | {len(finding.get('reference_attempts', []))} | `{finding.get('research_relevance')}` / `{finding.get('status')}` | `2026-09-15 HTTP 404` |")
+    scope = report.get("identity_investigation_scope") or {}
+    limit = scope.get("processing_limit") or {}
+    lines += ["", "### Identity scope and budgets", "",
+              f"- Source filter: `{scope.get('source_query')}`; pagination: `{scope.get('source_pagination')}`.",
+              f"- Source groups / ticker occurrences: `{scope.get('source_candidate_groups')}` / `{scope.get('source_ticker_occurrences')}`.",
+              f"- Target occurrences / unique / duplicates ignored: `{scope.get('target_occurrences_received')}` / `{scope.get('target_unique_received')}` / `{scope.get('duplicate_target_occurrences_ignored')}`.",
+              f"- Unrelated occurrences excluded by the explicit case list: `{scope.get('unrelated_ticker_occurrences_excluded')}`.",
+              f"- Record limit `{limit.get('name')}`: configured `{limit.get('configured')}`, observed `{limit.get('observed')}`, exhausted `{limit.get('exhausted')}`.",
+              f"- Completed / remaining: `{scope.get('completed_target_records')}` / `{scope.get('remaining_unprocessed_tickers')}`.",
+              f"- Listing request budget: `{scope.get('listing_request_budget')}`; historical-date attempt budget: `{scope.get('historical_reference_attempt_budget')}`.",
+              f"- Scope status: `{scope.get('status')}`."]
     lines += ["", "Identifier types remain separate. CIK, composite FIGI, and share-class FIGI matches are investigation candidates, not proof of same-security continuity; share classes, units, and warrants are not collapsed.", "",
               "## Dated transition investigations", "",
               "| Old → new | Security class | Exchange | Reference dates | Effective / published | Result | Evidence |",
