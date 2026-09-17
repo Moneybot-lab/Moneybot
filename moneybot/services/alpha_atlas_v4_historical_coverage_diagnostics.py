@@ -81,6 +81,45 @@ KAII_EVIDENCE = {
     "conclusion": "KAII remained the Class A share ticker on the cited session. No primary event evidence found in this bounded review explains the absent aggregate; no-trade, halt, and provider omission remain unproven alternatives.",
 }
 
+# Primary-source research is deliberately checked in rather than inferred from a
+# missing aggregate.  publication_date is also retained so later users cannot
+# accidentally turn retrospective knowledge into point-in-time knowledge.
+GAP_EVIDENCE: dict[tuple[str, str], dict[str, Any]] = {
+    ("GSS", "2022-01-28"): {
+        "classification": "EXPLAINED_NONTRADING_AFTER_ACQUISITION",
+        "source_url": "https://gse.com.gh/wp-content/uploads/2022/01/PR-014-GSR-Chifeng-Jilong-Gold-Completes-the-Acquisition-of-Golden-Star-Resources.pdf",
+        "source_type": "issuer_release_hosted_by_exchange", "publication_date": "2022-01-28",
+        "event_effective_date": "2022-01-28",
+        "evidence": "Golden Star announced completion of the plan of arrangement on January 28; each share was acquired for US$3.91 and delisting was to follow.",
+        "available_at_original_decision_time": False,
+        "conclusion": "The effective acquisition explains why GSS was not trading on this otherwise eligible session; it does not supply a January 28 price or independently settle payment timing.",
+    },
+    ("SWCH", "2022-12-06"): {
+        "classification": "EXPLAINED_NONTRADING_MERGER_OPEN_HALT",
+        "source_url": "https://www.sec.gov/Archives/edgar/data/1710583/000119312522298966/d356989d8k.htm",
+        "source_type": "sec_form_8_k", "publication_date": "2022-12-06", "event_effective_date": "2022-12-06",
+        "evidence": "The filed 8-K says the merger completed and NYSE trading was requested halted before the December 6 open; shares converted to the right to receive $34.25 cash.",
+        "available_at_original_decision_time": False,
+        "conclusion": "The pre-open halt explains the absent daily bar. The contractual merger consideration is not treated here as a retrieved price or as verified portfolio proceeds timing.",
+    },
+    ("MGI", "2023-06-01"): {
+        "classification": "EXPLAINED_NONTRADING_MERGER_OPEN_HALT",
+        "source_url": "https://www.sec.gov/Archives/edgar/data/1273931/000119312523158474/d493619d8k.htm",
+        "source_type": "sec_form_8_k", "publication_date": "2023-06-01", "event_effective_date": "2023-06-01",
+        "evidence": "MoneyGram reported merger completion and requested Nasdaq halt trading before the June 1 open and suspend trading effective at the close.",
+        "available_at_original_decision_time": False,
+        "conclusion": "The pre-open halt explains the absent daily bar, but neither creates a June 1 market price nor establishes terminal valuation cash timing.",
+    },
+}
+
+KAII_EVIDENCE = {
+    "classification": "TRADING_ELIGIBLE_GAP_UNRESOLVED",
+    "source_url": "https://www.sec.gov/Archives/edgar/data/1825962/000121390023014342/ea174191-8k_quadroacq1.htm",
+    "source_type": "sec_form_8_k", "publication_date": "2023-02-24", "event_effective_date": "2023-02-27",
+    "evidence": "The filing keeps Class A shares, units, and warrants distinct and says KAII, KAIIU, and KAIIW changed to QDRO, QDROU, and QDROW at the February 27 market open.",
+    "conclusion": "KAII remained the Class A share ticker on the cited session. No primary event evidence found in this bounded review explains the absent aggregate; no-trade, halt, and provider omission remain unproven alternatives.",
+}
+
 
 def _request_failure(exc: ValueError, provenance: list[dict[str, Any]]) -> dict[str, Any]:
     last = provenance[-1] if provenance else {}
