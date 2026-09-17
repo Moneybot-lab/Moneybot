@@ -127,6 +127,181 @@ the sanitized failing URL, HTTP status, response hash/size, and ticker while
 continuing the other bounded cases; any request failure still leaves the run
 `BLOCKED`. The exact failed-run artifact is retained in the next audit bundle.
 
+Diagnostic run `35176245513-1` at execution commit
+`79b51d02e454dac6dae1c3660d7ddd8761bbab79` confirmed the request-isolation
+repair and all six date-specific references, but exposed an identity-date defect.
+All 20 historical-identity requests (BWINA, BWINB, PTVCA, PTVCB, KHD, MFCB,
+MIL, TRY, TRY.B, FITBM, FITBO, HUB.A, HUB.B, ANDV, TSO, TSOw, FRM, XNR, KV.A,
+and KV.B) incorrectly inherited `research_end=2026-09-15` and returned HTTP 404.
+Those failures are preserved; they are not evidence that records for long-ended
+tickers are unavailable. The corrected diagnostic first requests listing metadata,
+selects the final exchange session inside each ticker's `list_date`/`delisted_utc`
+interval, and emits `HISTORICAL_IDENTITY_DATE_UNRESOLVED` without making a dated
+reference request when that interval cannot be established. Identifier types stay
+typed; CIK reuse cannot verify continuity and classes, units, and warrants are not
+collapsed.
+
+The same run confirmed the exact aggregate gaps and successful point-in-time
+references: GSS `2022-01-28`, SWCH `2022-12-06`, KAII `2023-01-19`,
+`2023-02-17`, and `2023-02-24`, and MGI `2023-06-01`. Bounded primary-source
+review now explains GSS by the effective acquisition and SWCH/MGI by documented
+pre-open merger halts. These are nontrading explanations, not retrieved prices or
+terminal-value policy. KAII remained the separately registered Class A share
+ticker until the documented KAII/QDRO change at the `2023-02-27` market open;
+no primary event found explains its three missing aggregates, so those sessions
+remain `TRADING_ELIGIBLE_GAP_UNRESOLVED` pending venue trade/quote or halt records.
+Publication and effective dates, source URLs, conclusions, and whether evidence
+was available at decision time are emitted per case.
+
+The manual **Alpha Atlas V4 Historical Coverage Diagnostics** workflow now
+automatically downloads the exact unchanged `35176245513-1` artifact, validates
+the accepted source report against SHA-256
+`896a61604ae6fc8ba16821c0bf4d609b0e48efe275bd066318acc243351d0d7d`,
+and always uploads `alpha-atlas-v4-historical-coverage-diagnostics-<run-id>-<attempt>`.
+Dispatch it with no inputs. The next exact evidence action is to obtain Nasdaq
+trade/quote or halt records for KAII on the three dates above. Historical-universe
+completeness, terminal valuation, effective-dated transition verification, and the
+6,607-versus-6,629 population reconciliation remain blocked. The earlier 6,629
+snapshot has not been located and is not reconstructed.
+
+Evidence extraction run `35180206136` preserved the top-level JSON from
+diagnostic run `35178703375-1` (commit
+`0dc495973f7b2bb2892c6e78ae0d933d475fe80d`) with SHA-256
+`78ee7d3afe8434ff952b46b2899d529c37d4864cfe3f30ada61467bd48fb7081`.
+That evidence corrects the prior progress description: all 20 identity records
+had `list_date=null`, a populated `delisted_utc`, `query_date=null`, and
+`reference_request_issued=false`. Zero request failures therefore established
+diagnostic execution only; it verified no historical identity transition.
+
+The focused repair now treats the timezone-normalized ended-listing timestamp as
+a bounded investigation anchor when `list_date` is absent. It attempts no more
+than five preceding exchange sessions per preserved identity record and retains
+every unsuccessful response and response hash. It also performs exact before/after
+dated-reference checks for the class-specific BWINA→PTVCA and BWINB→PTVCB mappings
+documented in the issuer's August 1, 2018 Form 8-K, plus separate KAII→QDRO,
+KAIIU→QDROU, and KAIIW→QDROW checks around the February 27, 2023 effective time.
+The primary filings make these defensible transition cases, but the transitions
+remain unverified until a hosted run returns and validates both dated references.
+FITBM/FITBO `type=CS` versus preferred/depositary-share descriptions is now an
+explicit metadata conflict, not accepted identity evidence. Older cases remain in
+the output as possible pre-research predecessor links and are not counted as
+verified or silently discarded.
+
+The workflow preserves run `35178703375-1` unchanged, validates the extracted
+JSON hash above, and publishes both the readable report and literal diagnostic
+JSON to GitHub step summaries. Bounded availability remains closed. KAII's three
+missing-price dates, terminal valuation, historical-universe completeness,
+population reconciliation, and any transition lacking both dated responses remain
+open. The next action is **GitHub → Actions → Alpha Atlas V4 Historical Coverage
+Diagnostics → Run workflow** with no inputs.
+
+Run `35182066580-1` at commit
+`f106608775410c02a312ac01438d2ccabf5e6fbf` failed with
+`IDENTITY_INVESTIGATION_RECORD_LIMIT_EXCEEDED`. The failure was in local
+candidate processing, not a provider request or pagination call: one global
+counter covered every ticker occurrence in every shared-identifier candidate
+group and raised as it encountered occurrence 33 against a configured limit of
+32, before issuing that ticker's listing-metadata request. The first 32 had been
+entered for processing, but the outer exception report discarded their partial
+results. The source remained the completely paginated seven-page, 6,607-record
+`market=stocks`, `type=CS`, `active=false` enumeration. Because the failed report
+did not record candidate-group or occurrence totals, the exact total above 32,
+duplicates, unrelated tickers, and remaining cases cannot be recovered from that
+artifact and are not guessed.
+
+The repaired scope is the explicit 20-ticker investigation list already preserved
+by the prior evidence. Its calculated caps are 20 target records, at most two
+narrow exact-ticker listing pages and 20 listing rows per ticker, at most five
+historical dates per target (100 attempts), and ten before/after transition
+requests. Exact duplicates are removed, unrelated source candidates are counted
+but excluded, and ambiguous metadata remains unresolved. Every new report records
+the source filters and pagination, received/unique/duplicate/unrelated counts,
+configured versus observed limits, completed records, and remaining cases. Limit
+exhaustion returns a partial `BLOCKED` report rather than throwing away evidence.
+No hosted result exists yet for this repair; the verified bounded availability
+closure and all other open items above are unchanged.
+
+Hosted run `35183625727-1` at commit
+`5dcd7d8c99cbbc652f637dbb6b35dabcd62c66d9` completed the repaired bounded
+scope and verified five **retrospective, class-specific** ticker transitions:
+BWINA→PTVCA Class A and BWINB→PTVCB Class B effective `2018-08-01`, and
+KAII→QDRO Class A ordinary shares, KAIIU→QDROU units, and KAIIW→QDROW warrants
+effective `2023-02-27`. These results rely on the retained SEC filings and both
+dated provider references for each mapping. They do not merge the three KAII
+security types, prove every historical identity, or close broader historical-
+identity coverage. The original artifact
+`alpha-atlas-v4-historical-coverage-diagnostics-35183625727-1` is preserved
+unchanged; the workflow validates run/attempt/commit, artifact ID `10480794049`,
+and GitHub digest
+`sha256:2b42f9aa9fa0a62197b96220fe4d18148325c4adc3bbd628bf7224c6d8251ebf`,
+then records the exact extracted report SHA-256 in derived evidence.
+
+Decision-time availability is corrected separately. The Protective filing was
+SEC-accepted at `2018-08-01T16:14:57-04:00`, after the `09:30:00-04:00` effective
+market open; the Quadro filing was accepted at
+`2023-02-24T16:15:38-05:00`, before the `2023-02-27T09:30:00-05:00` effective
+market open. Those comparisons establish public knowability relative to the
+transition instants only. Run `35183625727-1` contains no exact `decision_at` or
+`feature_cutoff_at` for an affected model decision, so all five decision-time
+states are `UNVERIFIED/UNKNOWN`, the compatibility boolean is `null`, and feature
+use is unauthorized. Retrospective transition verification remains valid.
+
+KAII daily bars for `2023-01-19`, `2023-02-17`, and `2023-02-24` remain open.
+The next bounded hosted run will recheck the exact day plus adjacent daily controls,
+minute aggregates, trades, quotes, and trade-condition reference data using KAII
+Class A only. Per date it permits four endpoint queries and at most six paginated
+HTTP requests: one page per aggregate endpoint, two
+trade pages, two quote pages, and 5,000 records per endpoint; report samples are
+capped at 100 records while exact response hashes and counts are retained. An
+entitlement denial, request failure, empty response, quote-only result, and budget
+exhaustion remain distinct. No returned data replaces a bar or authorizes valuation.
+Universe completeness, terminal valuation, population reconciliation, and remaining
+identity coverage stay open.
+
+Run `35233428008-1` is the pinned source for the next evidence-only KAII review.
+The manual **Evaluate KAII Trade Conditions** workflow validates its successful
+run metadata, commit `bf2776e0943b3c0cd392015da4005391d30b15da`, artifact ID
+`10502208555`, name
+`alpha-atlas-v4-historical-coverage-diagnostics-35233428008-1`, and GitHub digest
+`sha256:082092918781f45dc61b57b12128903b9b4e0837ee86f391336bc5d72f6f3786`.
+It preserves the original ZIP and exact top-level reports, records source and
+derived report hashes, and does not rerun identity diagnostics.
+
+For KAII `2023-01-19`, the derived evaluator treats the two saved size-one trades
+individually: conditions `[17,37,41]` and `[16]`. It uses each saved condition's
+separate consolidated and market-center open/close, high/low, and volume flags.
+Under current Massive documentation, a `NO` condition takes precedence over a
+permissive condition; an unknown rule fails closed. The evaluator may record the
+narrow explanation `NO_OHLC_ELIGIBLE_RECORDS_IN_RETRIEVED_REGULAR_SESSION_EVIDENCE_UNDER_CURRENT_RULES`
+only if both records are consolidated-OHLC-ineligible and the saved trade response
+is pagination-complete. Current condition metadata has no demonstrated 2023
+effective version, so historical applicability remains `UNVERIFIED/UNKNOWN`.
+Even that scoped explanation is not a retrieved price or valuation evidence.
+
+For `2023-02-17` and `2023-02-24`, saved complete regular-session empty trade
+responses plus quotes prove only what Massive returned inside those request bounds;
+quotes do not prove trades and empty responses do not prove venue-wide nontrading.
+The smallest non-duplicative query is one full Eastern calendar-day KAII Class A
+trade request per date, capped at two pages and 5,000 records. If those requests
+remain empty, the exact remaining evidence is authoritative SIP/venue coverage or
+provider clarification that the saved request hashes represent complete historical
+SIP trades (including late reports) and whether condition/correction processing
+excluded records from trades or aggregates. No provider contact or upgrade is
+required by the workflow. All three price gaps, terminal valuation, full historical
+coverage, and population reconciliation remain open pending the derived hosted
+result.
+
+The first **Evaluate KAII Trade Conditions** job failed before evaluation because
+the workflow set up Python 3.11 but omitted the repository dependency installation;
+the evaluator's existing bounded-request helper import reaches the Phase 0 module
+and therefore the pinned `numpy==2.4.3` dependency. The workflow now follows the
+repository-supported `pip install -r requirements.txt` pattern rather than adding
+an unpinned package or chasing transitive imports individually. It separately
+publishes source-validation status and evaluation status, preserves evaluator
+stdout/stderr and traceback on failure, and leaves the job failed when evaluation
+does not complete. No KAII evidence conclusion or checklist closure is attributed
+to that dependency-failed run.
+
 ## Track B certification and diagnostics handoff
 
 - [x] Certification separation and hosted portfolio accounting are the completed engineering baseline (hosted runs `34675971440-1` and `34689216730-1` are reproducibility checks, not independent performance samples).
