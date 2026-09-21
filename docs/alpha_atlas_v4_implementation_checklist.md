@@ -356,10 +356,10 @@ retrieved. This execution-path repair changes no evidence conclusion or open ite
 - [x] Development-only concentration and score-stability analysis implemented and fixture-tested.
 - [x] Development-only concentration and score-stability analysis completed locally in the prior review.
 - [x] Two-arm current-versus-uniform weighting comparison protocol pre-registered in code and documentation.
-- [ ] Immutable artifact-bound registration JSON materialized (pending the certified input, manifest, plan, and capture files).
+- [x] Immutable artifact-bound weighting registration materialized and reviewed (`34796621288-1`; canonical registration SHA-256 `4112f445d8ef079550f02185e4592c05aff9c0321ee4bfa615b632360af4c5c3`).
 - [x] Weighting-comparison runner implemented and deterministic-fixture verified.
 - [x] Manual **V4 Register Weighting Experiment** workflow implemented and locally tested.
-- [ ] Hosted artifact-bound weighting registration completed.
+- [x] Hosted artifact-bound weighting registration completed (`34796621288-1`).
 - [x] Manual **V4 Execute Weighting Experiment** workflow implemented and locally tested against deterministic workflow contracts.
 - [x] Registered weighting experiment executed (`34797622678-1`); registered uniform-minus-current endpoint was unfavorable (`+0.006319421301219023`, one of three folds improved).
 - [x] Saved weighting-model feature metadata defect identified as legacy 10-name metadata attached to 43-dimensional fitted state.
@@ -611,14 +611,151 @@ manual **Freeze V4 Hosted Portfolio Verification** workflow creates or verifies
 that immutable release without regenerating evidence and never moves a conflicting
 tag or overwrites conflicting assets.
 
-## Next ordered open audit item
+## Dependency review and reprioritized next work
 
-The first unresolved item still ordered by this authoritative checklist is
-**historical-universe completeness for all securities eligible during the research
-interval**, followed by effective-dated ticker identity—not Hosted V4 Holdout
-Isolation Verification. The bounded diagnostics workflow is ready, but requires
-the live manual run described above. Do not skip or reorder it. Hosted holdout-isolation remains
-implemented and locally verified in
-`tests/test_alpha_atlas_v4_holdout_isolation.py`, but its hosted verification must
-not be started as the next checklist item until the earlier ordered Phase 1 items
-are resolved or the checklist is explicitly reordered by an authorized review.
+This review changes **priority only**, not completion. It supersedes the former
+strict ordering that put every historical-coverage question before any further
+development measurement. The next comparison uses only already frozen development
+OOF observations and predictions; it is not a backfill, refit, holdout evaluation,
+or production test. Historical issues remain required before claims whose scope
+actually depends on them.
+
+### Evidence retained and evidence access boundary
+
+The following completed evidence remains closed within its stated scope:
+
+- bounded ended-listing availability from `35125664186-1` at
+  `205529d612c1ac2a3497a07f5cb6151d2eef62f4`: 12/12 representative probes,
+  2/2 follow-ups, and 12 distinct tickers; it is not complete historical coverage;
+- the independently frozen weighting-model reload/fill-policy certification and
+  its immutable release assets described above; and
+- hosted portfolio accounting/valuation verification `35040195995-1` for all 25
+  selected holdings, including costs, slippage, exact equity reconciliation, and
+  drawdown. This certifies that historical result's accounting, not predictive
+  advantage or promotion readiness.
+
+Repository reports inspected in this review include
+[`docs/reports/alpha_atlas_v4_phase1_readiness.json`](reports/alpha_atlas_v4_phase1_readiness.json),
+[`docs/reports/alpha_atlas_v4_phase1_terminal_price_discovery.json`](reports/alpha_atlas_v4_phase1_terminal_price_discovery.json),
+the canonical observation and execution contracts, and the implementation for
+development diagnostics, cohort economics, and portfolio reconstruction. Hosted
+ZIP contents not present in this checkout are prior reported evidence, not newly
+re-inspected bytes; their local absence is not evidence that a completed item
+failed.
+
+### Open-item priority and dependency matrix
+
+`DEFERRED_NONBLOCKING` means unresolved and unverified, never resolved. A deferred
+item immediately reactivates if the artifact-bound materiality scan described
+below finds that it intersects the next comparison.
+
+| Open item | Priority | Affected decision/result/reliability requirement | Evidence/dependency | Claim or experiment blocked | Smallest sufficient acceptance criterion | Next action/reactivation condition |
+|---|---|---|---|---|---|---|
+| Artifact-bound materiality and comparability registration for the next development comparison | **BLOCKING_NEXT_EXPERIMENT** | Which canonical rows, securities, dates, prediction semantics, costs, and baselines may be compared | Canonical key and one-observation weighting are fixed by [`alpha_atlas_v4_canonical_observation_contract.md`](alpha_atlas_v4_canonical_observation_contract.md); development diagnostics currently state execution evidence may be unavailable | Any new claim of predictive advantage, net economic advantage, stability, or calibration | Before metric computation, hash-bind the exact canonical input, split plan, manifest, and OOF capture; prove zero holdout overlap; inventory every row intersecting unresolved identities, KAII dates, FITBM/FITBO, missing exits, or unavailable valuation paths; pre-register baseline and metric semantics; fail rather than drop a row | Perform the single task specified below. If an affected row exists, stop and promote only that concrete dependency to a repair blocker |
+| Historical-universe completeness | **REQUIRED_BEFORE_BROADER_VALIDATION_OR_USE** | Universe membership, survivorship bias, denominator for stock-selection and historical claims | Phase 1 readiness is `BLOCKED_FULL_UNIVERSE_BACKFILL`; bounded availability proves access only | Full-universe backfill, broad historical-performance/generalization claims, and later training on a reconstructed universe | Effective-dated eligible population and exclusions reconcile for the claimed interval with no current-ticker projection or availability-based dropping | Resume before broader validation/backfill, or immediately if the materiality scan shows the next frozen input was constructed from the unresolved universe |
+| Effective-dated identity coverage beyond the five verified transitions | **REQUIRED_BEFORE_BROADER_VALIDATION_OR_USE** | Stable security identity, corporate actions, feature/label joins | Five retrospective transitions are scoped evidence; shared CIK is not continuity | Claims spanning unresolved aliases; any experiment containing one of those predecessor/successor securities | Dated, class-specific continuity/separation evidence for every identity actually consumed by the claim | First intersect the exact experiment rows; investigate only intersecting identities, preserving shares/units/warrants separately |
+| FITBM/FITBO `CS` versus preferred-depositary-share description conflict | **DEFERRED_NONBLOCKING** | Security-type eligibility and universe inclusion | Repository search finds these tickers only in historical-diagnostic/checklist logic; the hosted canonical input is not locally available for an independent membership check | Nothing yet; it blocks the next comparison only if either typed identity occurs in its exact input, eligible universe, or holdings | Artifact-bound count by ticker plus stable typed identifier equals zero; if nonzero, resolve type from effective-dated primary/provider evidence before computation | Include the exact membership count in the next registration; do not start a classification repair on zero intersection |
+| KAII `2023-01-19`, `2023-02-17`, and `2023-02-24` historical price/condition questions | **DEFERRED_NONBLOCKING** | Price availability and any return/valuation path crossing those sessions | Current-rule analysis is scoped; 2023 applicability remains unknown; February 24 full-day response is empty; Massive human support is pending | Any result that consumes a KAII price/valuation on an affected date | Human Massive response or authoritative historical rule/coverage evidence, plus a retrieved/certified price if valuation is required | Await the existing human-support inquiry; do not rerun or ask AI support. Reactivate only on response or exact-row intersection |
+| 6,607-versus-6,629 inactive-listing population reconciliation | **DEFERRED_NONBLOCKING** | Population completeness and provenance of the unavailable earlier snapshot | Earlier 6,629 snapshot is unavailable; 6,607 is the later paginated population | Reproduction/comparison of the earlier population and broad completeness certification | Locate the original immutable 6,629 snapshot and reconcile identities; no reconstruction from fresh queries | Retain as unavailable until that exact snapshot is found; do not repeat discovery queries to manufacture a comparison |
+| Common technically supported historical interval | **REQUIRED_BEFORE_BROADER_VALIDATION_OR_USE** | Valid common date range for features, context series, universe, and labels | Readiness report records `common_supported_interval=null` | Full backfill, retraining, and claims across a common historical interval | Intersection derived from complete required-source inventories with explicit family-specific gaps and no silent row loss | Defer execution until backfill/broader validation is authorized; reactivate if next frozen input falls outside already certified source bounds |
+| Terminal/missing-exit policy and incomplete terminal valuation | **REQUIRED_BEFORE_BROADER_VALIDATION_OR_USE** | Executable labels, realized proceeds, portfolio equity, and drawdown | Static terminal discovery has no approved final policy; hosted portfolio verification covers its 25 holdings only | Any broader portfolio result or training/evaluation row with an unresolved exit | Every selected/consumed row has verified executable exit/consideration and timing, or the predeclared experiment fails; never infer zero/stale proceeds or drop the row | Materiality-scan exact next rows. If zero intersections, broader policy stays open; if nonzero, stop before comparison and resolve those events |
+| Backfill feasibility from observed size/request/runtime samples | **REQUIRED_BEFORE_BROADER_VALIDATION_OR_USE** | Operational feasibility and boundedness of a future historical build | Representative access is not a full inventory or runtime estimate | Approval of a controlled full-universe backfill | Versioned object/request/byte/runtime estimate over the approved universe and interval with finite caps and failure behavior | Do only after universe, interval, identity, and terminal requirements are defined |
+| Controlled backfill approval | **DEFERRED_NONBLOCKING** | Authorization boundary | Checklist explicitly authorizes no backfill | Any backfill execution | Separate explicit approval identifying frozen plan, sources, interval, budgets, and outputs | Reactivate only after prerequisite evidence and an explicit user authorization |
+| Historical backfill execution | **DEFERRED_NONBLOCKING** | Data needed for later broad training/validation | Not authorized and prerequisites remain open | New broad-data training or historical certification | Approved plan completes with immutable provenance and no dropped observations | Only after controlled-backfill approval |
+| Challenger training authorization | **DEFERRED_NONBLOCKING** | Any refit/new model state | Existing next task is measurement of frozen development predictions, not fitting | Training, tuning, candidate selection | Separate explicit authorization after trustworthy baseline evidence and required data gates | Do not train in this review or the next evidence-only task |
+| Phase 1 exit gate | **REQUIRED_BEFORE_BROADER_VALIDATION_OR_USE** | Overall readiness for broader V4 validation/use | Depends on the preceding Phase 1 requirements | Holdout evaluation, promotion readiness, or production consideration | All required Phase 1 gates completed and evidence-bound review passes | Keep open; a development baseline comparison cannot close it |
+| Model improvement and promotion readiness | **REQUIRED_BEFORE_BROADER_VALIDATION_OR_USE** | Whether V4 has trustworthy advantage and may proceed toward holdout/promotion | Registered weighting ablation was unfavorable (`+0.006319421301219023`; one of three folds improved); portfolio accounting certification is not an advantage test | Holdout evaluation, automatic promotion, and live routing | Pre-registered development evidence supports advantage and stability; then separately satisfy Phase 1, holdout, economic, and routing gates | First run only the bounded frozen-OOF comparison below after its registration is reviewed |
+
+### Materiality conclusions for known historical issues
+
+- **FITBM/FITBO:** no repository-resident consumed dataset or evaluated-holding
+  evidence references either ticker outside the diagnostic/checklist code. Because
+  the hosted canonical bytes are absent locally, materiality is **unknown**, not
+  zero. The next registration must count ticker and typed-identifier intersections;
+  only a nonzero result warrants classification repair.
+- **KAII:** unresolved price dates and pending Massive human support are preserved.
+  They do not block a frozen-input experiment if the immutable scan proves no
+  affected row, price, or valuation path is consumed. No diagnostic rerun or second
+  inquiry is requested.
+- **Remaining identities and terminal valuation:** the correct unit of work is the
+  exact frozen experiment input/selection, not the whole historical discovery
+  population. Any intersection fails the comparison before metrics; zero
+  intersection defers, but does not close, broader coverage.
+- **Historical universe and point-in-time reference:** complete effective-dated
+  membership is mandatory for a new reconstructed-universe experiment. It is not
+  retroactively required to describe an already immutable canonical development
+  sample, provided that sample's limitations and selection provenance are reported
+  and no full-universe/generalization claim is made.
+
+### Exactly one recommended next task
+
+**Task: register and implement an evidence-only, development-OOF frozen-model
+baseline comparison; do not execute it until the registration and materiality
+report are reviewed.** This is the shortest valid route to determine whether the
+already frozen predictions show predictive advantage, instead of continuing
+nonmaterial historical edge-case work.
+
+Copy/paste-ready implementation brief:
+
+```text
+Implement “Alpha Atlas V4 Development OOF Baseline Comparison” as research-only,
+with no fitting, tuning, threshold selection, provider access, backfill, final-
+holdout access, promotion, or production routing.
+
+Inputs (exact immutable hosted sources already used by development diagnostics):
+- canonical observations from Track B run 34689216730, expected SHA-256
+  506073994052be852a5a00fc38e239b85e72a50494c3559640ea980fb6a52d9e;
+- chronological split plan SHA-256
+  bd60055adc6cb1b3f8b143c6c61031bced01c9151fcb3b67c33f75430106e8e8;
+- frozen challenger manifest from the same source artifact (record its exact hash;
+  fail if unavailable or mismatched);
+- development OOF capture from diagnostics run 34769717178-1, SHA-256
+  454febde2e14ca8a916222d86a6872db1c5e790a29429f2db6393d828e87e434.
+
+Interval:
+- derive and report the minimum/maximum feature-cutoff exchange dates and each
+  fold's validation dates from the immutable split plan/capture; do not type a
+  presumed interval or read final-holdout rows.
+
+Before metrics, emit an immutable registration plus materiality report that:
+- verifies all hashes, IDs, candidate/fold membership, purge/embargo, one-row-per-
+  canonical-ID accounting, and zero final-holdout overlap;
+- counts exact intersections with FITBM, FITBO, KAII on 2023-01-19/02-17/02-24,
+  every unresolved historical identity, and every missing/uncertified exit or
+  valuation path; never silently exclude a match; stop with BLOCKED if any match
+  affects a required metric;
+- records prediction semantics and uses calibration metrics only for candidates
+  explicitly certified as probabilities.
+
+Baselines and comparable assumptions:
+- probability lane: training-fold prevalence applied unchanged to that fold's
+  validation rows (Brier/log loss/calibration), versus frozen OOF probabilities;
+- ranking/selection: equal-score/equal-weight date-cohort universe and cash/no-
+  selection baselines, versus the frozen configured selection; no random baseline;
+- economics: reuse the frozen execution-cost policy when present. Report gross,
+  net after transaction costs/slippage, excess versus equal-weight date cohort,
+  turnover/coverage, and stock-selection precision/recall. If only endpoint returns
+  exist, label total return and drawdown NOT_EVALUABLE rather than manufacturing an
+  equity path. Use a certified existing valuation path only if already present.
+- report by fold and pooled descriptively, by time subperiod and available declared
+  market-regime field; do not infer regimes retrospectively if absent. Include
+  confidence calibration, decision coverage, abstention/risk/rule rejection, and
+  concentration.
+
+Pre-registered claim rule (development evidence only):
+- do not claim advantage unless the frozen model beats its appropriate simple
+  baseline on the primary metric in the aggregate and in at least 2 of exactly 3
+  chronological folds, while reporting all secondary metrics and any sign reversal;
+- never convert this result into holdout access, candidate selection, promotion, or
+  live advice. A completed report may conclude “no demonstrated advantage.”
+
+Outputs:
+- registration.json/.md, materiality_report.json/.md,
+  baseline_comparison.json/.md, per-fold rows, input manifest, and SHA256SUMS;
+- always-uploaded artifact and literal GitHub summary, with execution status
+  separate from evidence conclusion.
+```
+
+Until that task is separately authorized and its registration reviewed, the next
+experiment remains unexecuted. V4 stays research/shadow-only, the final holdout
+remains frozen, and automatic promotion/live routing remain disabled.
