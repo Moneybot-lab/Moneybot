@@ -36,7 +36,7 @@ def _one(root: Path, pattern: str) -> Path:
     return resolved
 
 
-def validate_sources(track_root: Path, diagnostics_root: Path) -> dict[str, object]:
+def validate_sources(track_root: Path, diagnostics_root: Path, *, validate_canonical_split_rows: bool = True) -> dict[str, object]:
     feature_store = _one(track_root, "flat_feature_store/all.jsonl")
     plan = _one(track_root, "challenger_split_plan.json")
     manifest = _one(track_root, "challenger_suite_manifest.json")
@@ -47,7 +47,10 @@ def validate_sources(track_root: Path, diagnostics_root: Path) -> dict[str, obje
     if _sha(feature_store) != EXPECTED_INPUT or _sha(capture) != EXPECTED_CAPTURE:
         raise ValueError("reviewed_input_or_capture_byte_hash_mismatch")
     plan_payload = json.loads(plan.read_text())
-    validate_split_plan(plan_payload, input_path=feature_store)
+    if validate_canonical_split_rows:
+        validate_split_plan(plan_payload, input_path=feature_store)
+    elif plan_payload.get("input_sha256") != EXPECTED_INPUT:
+        raise ValueError("reviewed_split_input_hash_mismatch")
     if plan_payload.get("plan_sha256") != EXPECTED_PLAN:
         raise ValueError("reviewed_canonical_split_plan_hash_mismatch")
     manifest_hash = _sha(manifest)
@@ -85,8 +88,11 @@ def main() -> None:
     parser.add_argument("--track-root", required=True, type=Path)
     parser.add_argument("--diagnostics-root", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--metadata-only", action="store_true",
+                        help="Validate hashes/metadata without decoding canonical holdout rows")
     args = parser.parse_args()
-    result = validate_sources(args.track_root, args.diagnostics_root)
+    result = validate_sources(args.track_root, args.diagnostics_root,
+                              validate_canonical_split_rows=not args.metadata_only)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
 
