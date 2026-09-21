@@ -787,3 +787,72 @@ Outputs:
 Until that task is separately authorized and its registration reviewed, the next
 experiment remains unexecuted. V4 stays research/shadow-only, the final holdout
 remains frozen, and automatic promotion/live routing remain disabled.
+
+### Frozen-input baseline registration implementation and evidence status
+
+- [x] Registration-only validator, materiality scanner, readable reports, checksum
+  manifest, and manual read-only workflow implemented and synthetic-failure tested.
+- [ ] **REAL ARTIFACT-BOUND REGISTRATION EVIDENCE: NOT YET EXECUTED.** Local GitHub
+  authentication is unavailable and the exact source artifacts are not present in
+  this checkout. Fixture results are not live evidence and do not mark the
+  registration ready.
+
+The implementation is `scripts/register_alpha_atlas_v4_baseline_comparison.py`,
+called only by manual workflow **V4 Register Development Baseline Comparison**.
+The workflow has no inputs, `actions: read`/`contents: read` permissions, installs
+`requirements.txt`, validates source metadata, downloads existing artifacts, and
+uploads partial reports even when evidence readiness is blocked. It never computes
+model-versus-baseline metrics.
+
+Pinned source identities for the hosted check are:
+
+- **Track B Offline Challenger** `34689216730-1`, commit
+  `1f8f46db584dff0881273bdeae1c56c1a8a016c5`, artifact ID `10296724235`,
+  `track-b-offline-output`, GitHub digest
+  `sha256:017cdd8a8b30917e6e2f958e3cba1ae99827e002434b97f9de40c2c4ab871ef9`;
+- **V4 Development Diagnostics** `34769717178-1`, commit
+  `5d360cdbda802ae8527b35fe59f75920b8c827c8`, artifact ID `10321991290`,
+  `v4-development-diagnostics-34689216730`, GitHub digest
+  `sha256:e341166155b819dd98e3c9a82c2be1d260ba549d637e5fb7ed1f086f21d5b4d4`.
+
+Repository expectations remain canonical input
+`506073994052be852a5a00fc38e239b85e72a50494c3559640ea980fb6a52d9e`,
+split-plan embedded content hash
+`bd60055adc6cb1b3f8b143c6c61031bced01c9151fcb3b67c33f75430106e8e8`,
+manifest byte hash
+`ea4e55f9faa848219945d7e03c92c7a541645cd4d6df8aa3cfbd0d1334872f15`,
+and OOF capture byte hash
+`454febde2e14ca8a916222d86a6872db1c5e790a29429f2db6393d828e87e434`.
+The hosted report must newly compute every consumed file's byte size/hash and label
+comparison to these independent repository expectations separately.
+
+The validator derives the interval and actual usable-fold count from source bytes;
+it does not assume three folds. It blocks the documented two-of-exactly-three rule
+if the observed count differs. It validates canonical IDs, candidate/fold pairs,
+OOF membership and record cardinality, labels/returns/security/session joins,
+threshold/target/horizon semantics, temporal purge and embargo metadata, and zero
+holdout-ID overlap while retaining only holdout IDs—not holdout row content.
+
+Materiality reports direct ticker/date and dependency-window intersections,
+missing prices, uncertified valuation paths, and typed-identifier evidence status.
+No affected row is removed. A direct unresolved intersection is `BLOCKED`; an
+unavailable typed-identity mapping is `UNKNOWN`, never zero. The KAII supplement's
+odd-lot finding is preserved, while its 52-quotes/no-trades date attribution and
+historical-2023 rule applicability remain unresolved.
+
+The frozen registration specifies training-fold prevalence, equal-weight eligible
+date-cohort, and zero-return/no-cost cash baselines; frozen timing, threshold,
+selection, abstention, weighting, and candidate semantics; endpoint gross/net,
+calibration, precision/recall, coverage, concentration, fold/time stability, null
+handling, and non-overlapping horizon-block uncertainty. Numeric costs may be used
+only when present in frozen policy evidence. Total return and drawdown remain
+`NOT_EVALUABLE` without certified portfolio paths/capital accounting, and
+endpoint returns may not be compounded into a portfolio curve. The predeclared
+advantage rule remains aggregate improvement plus improvement in at least two of
+exactly three folds, scoped only to a development screen. Prior development-result
+exposure and the unfavorable weighting ablation are disclosed.
+
+Smallest current blocker: run the manual workflow against the two authenticated,
+pinned artifacts. Even a successful execution may report evidence readiness
+`BLOCKED` or `UNKNOWN`; registration becomes ready only if the real integrity and
+materiality reports pass and the generated registration hash is reviewed.
