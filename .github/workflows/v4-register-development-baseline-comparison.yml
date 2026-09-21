@@ -28,11 +28,15 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/34689216730/artifacts" > "$OUTPUT_DIR/source/track-artifacts.json"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/34769717178" > "$OUTPUT_DIR/source/diagnostics-run.json"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/34769717178/artifacts" > "$OUTPUT_DIR/source/diagnostics-artifacts.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/35659754050" > "$OUTPUT_DIR/source/prior-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/35659754050/artifacts" > "$OUTPUT_DIR/source/prior-artifacts.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/35233428008" > "$OUTPUT_DIR/source/identity-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/35233428008/artifacts" > "$OUTPUT_DIR/source/identity-artifacts.json"
           python - <<'PY'
           import json, os
           from pathlib import Path
           root=Path(os.environ['OUTPUT_DIR'])/'source'
-          expected=[('track',34689216730,'Track B Offline Challenger','1f8f46db584dff0881273bdeae1c56c1a8a016c5',10296724235,'track-b-offline-output','sha256:017cdd8a8b30917e6e2f958e3cba1ae99827e002434b97f9de40c2c4ab871ef9'),('diagnostics',34769717178,'V4 Development Diagnostics','5d360cdbda802ae8527b35fe59f75920b8c827c8',10321991290,'v4-development-diagnostics-34689216730','sha256:e341166155b819dd98e3c9a82c2be1d260ba549d637e5fb7ed1f086f21d5b4d4')]
+          expected=[('track',34689216730,'Track B Offline Challenger','1f8f46db584dff0881273bdeae1c56c1a8a016c5',10296724235,'track-b-offline-output','sha256:017cdd8a8b30917e6e2f958e3cba1ae99827e002434b97f9de40c2c4ab871ef9'),('diagnostics',34769717178,'V4 Development Diagnostics','5d360cdbda802ae8527b35fe59f75920b8c827c8',10321991290,'v4-development-diagnostics-34689216730','sha256:e341166155b819dd98e3c9a82c2be1d260ba549d637e5fb7ed1f086f21d5b4d4'),('prior',35659754050,'V4 Register Development Baseline Comparison','c9993aaed0822d16215a7bb443e7923d839e0b00',10666961124,'v4-development-baseline-registration-35659754050-1','sha256:c88ce85414d1859ca01253ee9a3c1639eaf9bd03fbc3b6828c971578d62bb0a2'),('identity',35233428008,'Alpha Atlas V4 Historical Coverage Diagnostics','bf2776e0943b3c0cd392015da4005391d30b15da',10502208555,'alpha-atlas-v4-historical-coverage-diagnostics-35233428008-1','sha256:082092918781f45dc61b57b12128903b9b4e0837ee86f391336bc5d72f6f3786')]
           out={}
           for key,run_id,name,head,artifact_id,artifact_name,digest in expected:
               run=json.loads((root/f'{key}-run.json').read_text()); listing=json.loads((root/f'{key}-artifacts.json').read_text())
@@ -46,6 +50,10 @@ jobs:
         with: {name: track-b-offline-output, run-id: 34689216730, path: source-track-b, github-token: "${{ github.token }}"}
       - uses: actions/download-artifact@v4
         with: {name: v4-development-diagnostics-34689216730, run-id: 34769717178, path: source-diagnostics, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with: {name: v4-development-baseline-registration-35659754050-1, run-id: 35659754050, path: source-prior-registration, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with: {name: alpha-atlas-v4-historical-coverage-diagnostics-35233428008-1, run-id: 35233428008, path: source-identity-evidence, github-token: "${{ github.token }}"}
       - name: Resolve exact files and write provenance
         run: |
           python scripts/validate_v4_weighting_registration_sources.py --metadata-only --track-root source-track-b --diagnostics-root source-diagnostics --output "$OUTPUT_DIR/source/verified-files.json"
@@ -57,9 +65,14 @@ jobs:
           payload={role:{**meta['diagnostics' if role=='capture' else 'track']} for role in ('canonical','plan','manifest','capture')}
           for role,key,origin in (('temporal_certification','certification','track'),('diagnostics_workflow_provenance','workflow_provenance','diagnostics'),('capture_provenance','capture_provenance','diagnostics')):
               path=Path(files[key]); payload[role]={**meta[origin],'path':str(path),'bytes':path.stat().st_size,'sha256_computed':hashlib.sha256(path.read_bytes()).hexdigest(),'provenance_status':'NEWLY_COMPUTED; VALIDATED_BY_SOURCE_RESOLVER'}
-          payload['materiality_evidence']={'unresolved_identity_typed_identifier_map_status':'UNAVAILABLE_IN_FROZEN_COMPARISON_SOURCES'}
+          prior=list(Path('source-prior-registration').rglob('registration.json')); identity=list(Path('source-identity-evidence').rglob('alpha_atlas_v4_historical_coverage_diagnostics.json')); costs=list(Path('source-track-b').rglob('execution_policy.json'))
+          if len(prior)!=1 or len(identity)!=1 or len(costs)!=1: raise SystemExit(f'exact supplemental evidence missing/ambiguous: prior={len(prior)} identity={len(identity)} costs={len(costs)}')
+          prior_copy=root/'source/prior-registration.json'; identity_copy=root/'source/identity-evidence.json'; cost_copy=root/'source/other-scope-execution-policy.json'
+          prior_copy.write_bytes(prior[0].read_bytes()); identity_copy.write_bytes(identity[0].read_bytes()); cost_copy.write_bytes(costs[0].read_bytes())
+          payload['materiality_evidence']={'unresolved_identity_typed_identifier_map_status':'SUPPLIED_FOR_VALIDATOR','identity_evidence_path':str(identity_copy),'identity_evidence_sha256':hashlib.sha256(identity_copy.read_bytes()).hexdigest()}
           (root/'source/source-provenance.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
-          (root/'source/resolved-paths.env').write_text('\n'.join(f"{k.upper()}={files[k]}" for k in ('feature_store','split_plan','manifest','capture'))+'\n')
+          values={k:files[k] for k in ('feature_store','split_plan','manifest','capture')}; values.update(PRIOR_REGISTRATION=str(prior_copy),IDENTITY_EVIDENCE=str(identity_copy),COST_POLICY_EVIDENCE=str(cost_copy))
+          (root/'source/resolved-paths.env').write_text('\n'.join(f"{k.upper()}={v}" for k,v in values.items())+'\n')
           PY
       - name: Register and scan exact frozen inputs without comparison
         id: registration
@@ -67,6 +80,7 @@ jobs:
           set +e
           set -a; source "$OUTPUT_DIR/source/resolved-paths.env"; set +a
           python -m scripts.register_alpha_atlas_v4_baseline_comparison --canonical "$FEATURE_STORE" --plan "$SPLIT_PLAN" --manifest "$MANIFEST" --capture "$CAPTURE" --source-provenance "$OUTPUT_DIR/source/source-provenance.json" --output-dir "$OUTPUT_DIR/reports" \
+            --prior-registration "$PRIOR_REGISTRATION" --identity-evidence "$IDENTITY_EVIDENCE" --cost-policy-evidence "$COST_POLICY_EVIDENCE" \
             --expected-canonical-hash 506073994052be852a5a00fc38e239b85e72a50494c3559640ea980fb6a52d9e \
             --expected-plan-hash bd60055adc6cb1b3f8b143c6c61031bced01c9151fcb3b67c33f75430106e8e8 \
             --expected-manifest-hash ea4e55f9faa848219945d7e03c92c7a541645cd4d6df8aa3cfbd0d1334872f15 \

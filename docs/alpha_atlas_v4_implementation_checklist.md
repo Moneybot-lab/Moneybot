@@ -792,10 +792,14 @@ remains frozen, and automatic promotion/live routing remain disabled.
 
 - [x] Registration-only validator, materiality scanner, readable reports, checksum
   manifest, and manual read-only workflow implemented and synthetic-failure tested.
-- [ ] **REAL ARTIFACT-BOUND REGISTRATION EVIDENCE: NOT YET EXECUTED.** Local GitHub
-  authentication is unavailable and the exact source artifacts are not present in
-  this checkout. Fixture results are not live evidence and do not mark the
-  registration ready.
+- [x] First real artifact-bound registration executed as `35659754050-1`; its
+  evidence status is `REGISTERED_BLOCKED`, not ready.
+- [x] Narrow validator/reporting correction for that run's evidence gaps implemented
+  and synthetic-failure tested.
+- [ ] **CORRECTED REAL ARTIFACT-BOUND REGISTRATION EVIDENCE: NOT YET EXECUTED.**
+  Local GitHub authentication is unavailable and the exact source artifacts are not
+  present in this checkout. Fixture results are not live evidence and do not supply
+  corrected counts or a reviewed replacement registration hash.
 
 The implementation is `scripts/register_alpha_atlas_v4_baseline_comparison.py`,
 called only by manual workflow **V4 Register Development Baseline Comparison**.
@@ -852,7 +856,65 @@ advantage rule remains aggregate improvement plus improvement in at least two of
 exactly three folds, scoped only to a development screen. Prior development-result
 exposure and the unfavorable weighting ablation are disclosed.
 
-Smallest current blocker: run the manual workflow against the two authenticated,
-pinned artifacts. Even a successful execution may report evidence readiness
+Smallest current blocker: rerun the manual workflow against its authenticated,
+pinned saved artifacts. Even a successful execution may report evidence readiness
 `BLOCKED` or `UNKNOWN`; registration becomes ready only if the real integrity and
 materiality reports pass and the generated registration hash is reviewed.
+
+#### Run 35659754050-1 preservation and correction scope
+
+The original **V4 Register Development Baseline Comparison** run `35659754050-1`
+at commit `c9993aaed0822d16215a7bb443e7923d839e0b00` completed execution but correctly
+reported `REGISTERED_BLOCKED`. Its artifact
+`v4-development-baseline-registration-35659754050-1` is artifact ID `10666961124`,
+GitHub digest
+`sha256:c88ce85414d1859ca01253ee9a3c1639eaf9bd03fbc3b6828c971578d62bb0a2`,
+and its internal registration hash is
+`019fb1387941858c4588f19bb89b8acd34144487025f0233d6e20cb4bfafb107`.
+The corrected workflow downloads and preserves that exact `registration.json`,
+records its byte hash, and links it from—rather than overwriting it with—the new
+registration.
+
+The original report established 24,846 development rows, 41 candidates, three
+usable folds, 123 candidate/fold pairs, 421,193 OOF assignments, zero holdout
+overlap, and zero direct historical ticker/date intersections. Those are retained
+as prior-run findings pending corrected revalidation. It also reported typed
+identity `UNKNOWN`, all 24,846 rows missing entry/exit prices, no cost-policy
+versions, and zero affected rows in the short summary.
+
+The demonstrated reporting defects are narrow:
+
+- typed identity was forced to unavailable by workflow provenance instead of
+  inventorying canonical identifier fields and consuming the saved historical
+  diagnostic mappings;
+- price detection inspected only top-level `entry_price`/`exit_price` and ignored
+  the documented `reconstruction_lineage.execution.entry_price/exit_price` source;
+- frozen endpoint returns, raw execution prices, daily valuation paths, and
+  certification were not reported separately;
+- cost reporting looked only for a policy-version field and did not distinguish
+  missing components, explicit zero, numeric one-way components, or returns already
+  net of costs; and
+- the short summary displayed zero direct matches without surfacing the typed,
+  price, cost, and valuation evidence gaps.
+
+The corrected validator now emits an identifier-type coverage table for
+point-in-time symbol ID, share-class FIGI, composite FIGI, and CIK; consumes saved
+diagnostic mappings with source hashes; treats CIK only as an investigation flag;
+and separates confirmed share-class matches from temporally/share-class ambiguous
+composite matches. Missing mapping coverage remains `UNKNOWN` for the affected
+subset, not zero.
+
+Price reporting now resolves documented nested execution lineage and reports
+mutually exclusive `both_present`, `entry_only`, `exit_only`, `both_missing`,
+`invalid`, and `unresolved_join` counts with representative canonical-ID examples.
+It never reconstructs prices from returns. Return availability and gross/net status,
+cost component availability/applicability, explicit valuation-path inspection, and
+metric-family eligibility are separate report sections. Probability/classification,
+gross endpoint, net endpoint, and portfolio metrics each receive `EVALUABLE`,
+`NOT_EVALUABLE`, or `UNKNOWN` status and reason codes; zero direct intersections or
+zero detected uncertified paths cannot imply complete coverage or certification.
+
+No corrected real counts or new registration hash are claimed until the same manual
+workflow is rerun. It is now additionally pinned to and retrieves source diagnostic
+`35233428008-1` for typed mappings and prior registration `35659754050-1` for
+immutable provenance. Performance comparison execution remains pending review.

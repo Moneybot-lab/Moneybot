@@ -11,7 +11,7 @@ def _write(tmp_path: Path, *, symbol="AAPL", omit_typed=False):
           "event_date":day,"feature_cutoff_at":f"{day}T20:00:00+00:00","decision_at":f"{day}T20:01:00+00:00",
           "entry_at":f"{day}T20:02:00+00:00","label_start_at":f"{day}T20:02:00+00:00","exit_at":f"{day}T20:03:00+00:00",
           "entry_session_date":day,"exit_session_date":day,"entry_price":10,"exit_price":11,"valuation_certification":{"status":"VERIFIED"}}
-        if not omit_typed: row["point_in_time_symbol_id"]=f"figi-{i}"
+        if not omit_typed: row.update(point_in_time_symbol_id=f"pid-{i}",share_class_figi=f"share-{i}",composite_figi=f"composite-{i}",cik=f"cik-{i}")
         rows.append(row)
     canonical=tmp_path/'all.jsonl'; canonical.write_text(''.join(json.dumps(x)+'\n' for x in rows))
     folds=[]
@@ -79,8 +79,9 @@ def test_unavailable_typed_identity_is_unknown_not_zero(monkeypatch,tmp_path):
     paths=_write(tmp_path,omit_typed=True); paths[-2].pop('materiality_evidence')
     result,_=_run(monkeypatch,tmp_path,paths=paths)
     assert result['materiality']['status']=='UNKNOWN'
-    assert result['materiality']['typed_identifier_mapping_status']=='UNKNOWN_UNRESOLVED_CASE_TYPED_IDENTIFIER_MAP_UNAVAILABLE'
-    assert 'TYPED_IDENTITY_MATERIALITY_UNKNOWN' in result['split_integrity']['reason_codes']
+    assert result['materiality']['typed_identifier_mapping_status']=='PARTIAL_UNKNOWN'
+    assert result['split_integrity']['status']=='VERIFIED'
+    assert 'TYPED_IDENTITY_MATERIALITY_UNKNOWN' in result['readiness_reason_codes']
 
 def test_exact_module_entrypoint_generates_registration_only(tmp_path):
     canonical,plan,manifest,capture,source,expected=_write(tmp_path)
@@ -106,3 +107,70 @@ def test_manual_workflow_is_registration_only_and_pinned():
     assert 'python -m scripts.register_alpha_atlas_v4_baseline_comparison' in text
     assert '--metadata-only' in text and 'if: always()' in text
     assert 'train_challenger_suite' not in text and 'MASSIVE_API_KEY' not in text
+
+def test_nested_execution_prices_fix_false_all_row_missing(monkeypatch,tmp_path):
+    paths=_write(tmp_path); canonical,plan,manifest,capture,source,expected=paths
+    rows=[json.loads(x) for x in canonical.read_text().splitlines()]
+    for row in rows:
+        row.pop('entry_price'); row.pop('exit_price'); row['reconstruction_lineage']={'execution':{'entry_price':10,'exit_price':11,'entry_at':row['entry_at'],'exit_at':row['exit_at']}}
+    canonical.write_text(''.join(json.dumps(x)+'\n' for x in rows)); expected['canonical']=reg.sha(canonical); monkeypatch.setattr(reg,'EXPECTED',expected)
+    result=reg.register(canonical,plan,manifest,capture,source)
+    assert result['materiality']['price_evidence']['mutually_exclusive_counts']=={'both_present':6}
+
+def test_returns_present_without_prices_does_not_claim_price_evidence(monkeypatch,tmp_path):
+    paths=_write(tmp_path); canonical,plan,manifest,capture,source,expected=paths
+    rows=[json.loads(x) for x in canonical.read_text().splitlines()]
+    for row in rows: row.pop('entry_price'); row.pop('exit_price'); row['return_5d']=.01
+    canonical.write_text(''.join(json.dumps(x)+'\n' for x in rows)); expected['canonical']=reg.sha(canonical); monkeypatch.setattr(reg,'EXPECTED',expected)
+    result=reg.register(canonical,plan,manifest,capture,source); materiality=result['materiality']
+    assert materiality['price_evidence']['mutually_exclusive_counts']=={'both_missing':6}
+    assert materiality['return_evidence']['frozen_endpoint_return_present']==6
+    assert materiality['return_evidence']['return_semantics'].startswith('frozen endpoint return')
+
+def test_missing_costs_differ_from_explicit_zero_and_already_net(monkeypatch,tmp_path):
+    for mode in ('missing','zero','already_net'):
+        root=tmp_path/mode; root.mkdir(); paths=_write(root); canonical,plan,manifest,capture,source,expected=paths
+        rows=[json.loads(x) for x in canonical.read_text().splitlines()]
+        for row in rows:
+            row['return_5d']=.01
+            if mode=='zero': row['reconstruction_lineage']={'execution':{'transaction_cost_bps':0,'entry_slippage_bps':0,'exit_slippage_bps':0}}
+            if mode=='already_net': row['return_is_net']=True
+        canonical.write_text(''.join(json.dumps(x)+'\n' for x in rows)); expected['canonical']=reg.sha(canonical); monkeypatch.setattr(reg,'EXPECTED',expected)
+        result=reg.register(canonical,plan,manifest,capture,source); eligibility=result['metric_eligibility']['net_endpoint_economics']
+        if mode=='missing': assert eligibility['status']=='NOT_EVALUABLE' and 'APPLICABLE_NUMERIC_COST_POLICY_UNAVAILABLE' in eligibility['reason_codes']
+        elif mode=='zero': assert eligibility['status']=='EVALUABLE' and eligibility['cost_application']=='ZERO_ONLY_IF_EXPLICIT'
+        else: assert eligibility['status']=='EVALUABLE' and eligibility['cost_application']=='NO_ADDITIONAL_SUBTRACTION'
+
+def test_partial_identifier_coverage_and_summary_do_not_imply_zero_overall(monkeypatch,tmp_path):
+    paths=_write(tmp_path,omit_typed=True); canonical,plan,manifest,capture,source,expected=paths; source.pop('materiality_evidence'); monkeypatch.setattr(reg,'EXPECTED',expected)
+    result=reg.register(canonical,plan,manifest,capture,source)
+    assert result['materiality']['direct_historical_match_rows']==0
+    assert result['materiality']['status']=='UNKNOWN'
+    assert result['materiality']['identifier_coverage']['share_class_figi']['development_rows_missing']==6
+    assert result['status']=='REGISTERED_BLOCKED'
+
+def test_typed_mapping_match_without_dated_applicability_is_subset_unknown(monkeypatch,tmp_path):
+    paths=_write(tmp_path); canonical,plan,manifest,capture,source,expected=paths; monkeypatch.setattr(reg,'EXPECTED',expected)
+    identity=tmp_path/'identity.json'; identity.write_text(json.dumps({'records':[{'ticker':'BWINA','share_class_figi':'share-2'}]}))
+    result=reg.register(canonical,plan,manifest,capture,source,identity_evidence=identity)
+    assert result['materiality']['typed_identifier_mapping_status']=='UNKNOWN_AMBIGUOUS_TYPED_MATCHES'
+    assert [row['canonical_id'] for row in result['materiality']['ambiguous_typed_matches']]==['id2']
+    assert result['materiality']['unique_affected_rows']==0
+
+def test_prior_registration_is_preserved_and_correction_gets_new_hash(monkeypatch,tmp_path):
+    paths=_write(tmp_path); canonical,plan,manifest,capture,source,expected=paths; monkeypatch.setattr(reg,'EXPECTED',expected)
+    old_hash='019fb1387941858c4588f19bb89b8acd34144487025f0233d6e20cb4bfafb107'
+    prior=tmp_path/'registration.json'; prior.write_text(json.dumps({'registration_sha256':old_hash,'status':'REGISTERED_BLOCKED'}))
+    result=reg.register(canonical,plan,manifest,capture,source,prior_registration=prior)
+    assert result['prior_registration']['internal_hash_matches_expected'] is True
+    assert result['prior_registration']['internal_registration_sha256']==old_hash
+    assert result['registration_sha256']!=old_hash
+    assert result['correction_change_record']
+
+def test_other_scope_numeric_policy_is_recorded_but_not_borrowed(monkeypatch,tmp_path):
+    paths=_write(tmp_path); canonical,plan,manifest,capture,source,expected=paths; monkeypatch.setattr(reg,'EXPECTED',expected)
+    policy=tmp_path/'execution_policy.json'; policy.write_text(json.dumps({'policy_version':'portfolio-v1','transaction_cost_bps':5,'slippage_bps':5}))
+    result=reg.register(canonical,plan,manifest,capture,source,cost_policy_evidence=policy)
+    evidence=result['materiality']['cost_evidence']['other_saved_policy_evidence']
+    assert evidence['status']=='LOCATED_DIFFERENT_SCOPE' and evidence['applicable_to_development_oof'] is False
+    assert result['metric_eligibility']['net_endpoint_economics']['status']=='NOT_EVALUABLE'
