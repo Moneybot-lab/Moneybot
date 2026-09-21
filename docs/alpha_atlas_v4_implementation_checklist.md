@@ -337,6 +337,16 @@ remain unavailable as prices, historical rule applicability and valuation readin
 remain open, and terminal valuation, universe completeness, broader identity
 coverage, and population reconciliation are unchanged.
 
+The first **Record KAII Condition Findings** execution (`35552582183-1`) retrieved
+the pinned source successfully but failed before preparation because direct file
+execution set `sys.path[0]` to `scripts/`, so the namespace import
+`scripts.evaluate_kaii_trade_conditions` could not resolve from the repository
+root. The workflow now uses the repository-root module entry point
+`python -m scripts.prepare_kaii_support_inquiry`. A preparation failure is reported
+explicitly and cannot present preserved source evidence as a newly generated
+finding; the always-upload step continues to preserve whatever source material was
+retrieved. This execution-path repair changes no evidence conclusion or open item.
+
 ## Track B certification and diagnostics handoff
 
 - [x] Certification separation and hosted portfolio accounting are the completed engineering baseline (hosted runs `34675971440-1` and `34689216730-1` are reproducibility checks, not independent performance samples).

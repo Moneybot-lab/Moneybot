@@ -23,7 +23,8 @@ REPORT_MEMBERS = ("derived/kaii_trade_condition_evaluation.json",
                   "derived/kaii_trade_condition_evaluation.md")
 
 
-def extract_reports(run: dict, listing: dict, archive_path: Path, output_dir: Path) -> tuple[Path, Path]:
+def extract_reports(run: dict, listing: dict, archive_path: Path, output_dir: Path, *,
+                    expected_artifact_digest: str = EVALUATION_ARTIFACT_DIGEST) -> tuple[Path, Path]:
     expected = {"id": EVALUATION_RUN, "run_attempt": EVALUATION_ATTEMPT,
                 "head_sha": EVALUATION_HEAD_SHA, "conclusion": "success",
                 "name": "Evaluate KAII Trade Conditions"}
@@ -34,10 +35,10 @@ def extract_reports(run: dict, listing: dict, archive_path: Path, output_dir: Pa
     matches = [row for row in listing.get("artifacts", []) if row.get("id") == EVALUATION_ARTIFACT_ID]
     if len(matches) != 1 or matches[0].get("name") != EVALUATION_ARTIFACT:
         raise ValueError("EVALUATION_ARTIFACT_IDENTITY_MISMATCH")
-    if matches[0].get("expired") is not False or matches[0].get("digest") != EVALUATION_ARTIFACT_DIGEST:
+    if matches[0].get("expired") is not False or matches[0].get("digest") != expected_artifact_digest:
         raise ValueError("EVALUATION_ARTIFACT_STATE_OR_DIGEST_MISMATCH")
     digest = "sha256:" + hashlib.sha256(archive_path.read_bytes()).hexdigest()
-    if digest != EVALUATION_ARTIFACT_DIGEST:
+    if digest != expected_artifact_digest:
         raise ValueError("EVALUATION_ARCHIVE_DIGEST_MISMATCH")
     with zipfile.ZipFile(archive_path) as archive:
         members = archive.infolist()
@@ -120,6 +121,7 @@ def main() -> int:
     parser.add_argument("--run-metadata", type=Path)
     parser.add_argument("--artifact-metadata", type=Path)
     parser.add_argument("--archive", type=Path)
+    parser.add_argument("--expected-artifact-digest", default=EVALUATION_ARTIFACT_DIGEST)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     evaluation_json, evaluation_markdown = args.evaluation_json, args.evaluation_markdown
@@ -128,7 +130,8 @@ def main() -> int:
             parser.error("--archive requires --run-metadata and --artifact-metadata")
         evaluation_json, evaluation_markdown = extract_reports(
             json.loads(args.run_metadata.read_text()), json.loads(args.artifact_metadata.read_text()),
-            args.archive, args.output_dir / "preserved-reports")
+            args.archive, args.output_dir / "preserved-reports",
+            expected_artifact_digest=args.expected_artifact_digest)
     if not evaluation_json or not evaluation_markdown:
         parser.error("provide report paths or the validated artifact inputs")
     json_bytes = evaluation_json.read_bytes(); markdown_bytes = evaluation_markdown.read_bytes()

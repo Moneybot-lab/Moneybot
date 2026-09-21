@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
+import zipfile
 
 from moneybot.services.alpha_atlas_v4_phase1_discovery import DiscoveryResponse
 from scripts.evaluate_kaii_trade_conditions import _markdown, derive, evaluate_dimension, evaluate_trade
@@ -115,6 +120,41 @@ def test_support_packet_retains_source_hashes_and_provider_questions():
     assert "not alleging a provider error" in message
 
 
+def test_workflow_module_entrypoint_prepares_complete_packet_without_pythonpath(tmp_path):
+    report = derive(_source_fixture(), source_sha256="b" * 64)
+    original_json = (json.dumps(report, indent=2, sort_keys=True) + "\n").encode()
+    original_markdown = _markdown(report).encode()
+    archive = tmp_path / "source.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zipped:
+        zipped.writestr("derived/kaii_trade_condition_evaluation.json", original_json)
+        zipped.writestr("derived/kaii_trade_condition_evaluation.md", original_markdown)
+    digest = "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
+    run = {"id": 35255222521, "run_attempt": 1,
+           "head_sha": "bed6a95b0b4fafa9f8fd18a8c9e33346fc83fddc", "conclusion": "success",
+           "name": "Evaluate KAII Trade Conditions", "repository": {"full_name": "Moneybot-lab/Moneybot"}}
+    listing = {"artifacts": [{"id": 10511084736,
+        "name": "kaii-trade-condition-evaluation-35255222521-1",
+        "expired": False, "digest": digest}]}
+    run_path = tmp_path / "run.json"; run_path.write_text(json.dumps(run))
+    artifacts_path = tmp_path / "artifacts.json"; artifacts_path.write_text(json.dumps(listing))
+    output = tmp_path / "output"
+    env = os.environ.copy(); env.pop("PYTHONPATH", None)
+    completed = subprocess.run([
+        sys.executable, "-m", "scripts.prepare_kaii_support_inquiry",
+        "--run-metadata", str(run_path), "--artifact-metadata", str(artifacts_path),
+        "--archive", str(archive), "--expected-artifact-digest", digest,
+        "--output-dir", str(output),
+    ], cwd=Path(__file__).resolve().parents[1], env=env, text=True, capture_output=True)
+    assert completed.returncode == 0, completed.stderr
+    assert (output / "preserved-reports/kaii_trade_condition_evaluation.json").read_bytes() == original_json
+    assert (output / "preserved-reports/kaii_trade_condition_evaluation.md").read_bytes() == original_markdown
+    assert (output / "kaii_trade_condition_evaluation_corrected.md").is_file()
+    assert (output / "massive_support_inquiry.md").is_file()
+    evidence = json.loads((output / "massive_support_evidence.json").read_text())
+    assert evidence["source_evaluation"]["evaluation_json_sha256"] == hashlib.sha256(original_json).hexdigest()
+    assert not any("api.massive.com" in value for value in (completed.stdout, completed.stderr))
+
+
 def test_manual_workflow_is_pinned_and_does_not_rerun_identity_diagnostics():
     text = Path(".github/workflows/evaluate-kaii-trade-conditions.yml").read_text()
     assert text.startswith("name: Evaluate KAII Trade Conditions\n")
@@ -125,3 +165,6 @@ def test_manual_workflow_is_pinned_and_does_not_rerun_identity_diagnostics():
     assert "pip install -r requirements.txt" in text
     assert "evaluator.stderr.log" in text and "Evaluation completed" in text
     assert "unknown/not established because evaluation did not complete" in text
+    support_workflow = Path(".github/workflows/record-kaii-condition-findings.yml").read_text()
+    assert "python -m scripts.prepare_kaii_support_inquiry" in support_workflow
+    assert "KAII support-packet preparation failed" in support_workflow
