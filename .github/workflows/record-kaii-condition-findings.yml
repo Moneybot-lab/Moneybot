@@ -1,0 +1,53 @@
+name: Record KAII Condition Findings
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  render-preserved-evaluation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install repository dependencies
+        run: pip install -r requirements.txt
+      - name: Retrieve the pinned completed evaluation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/kaii-condition-findings/source
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/35255222521" > artifacts/kaii-condition-findings/source/run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/35255222521/artifacts?per_page=100" > artifacts/kaii-condition-findings/source/artifacts.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/10511084736/zip" > artifacts/kaii-condition-findings/source/original.zip
+      - name: Validate, preserve reports, and render corrected findings
+        run: |
+          python scripts/prepare_kaii_support_inquiry.py \
+            --run-metadata artifacts/kaii-condition-findings/source/run.json \
+            --artifact-metadata artifacts/kaii-condition-findings/source/artifacts.json \
+            --archive artifacts/kaii-condition-findings/source/original.zip \
+            --output-dir artifacts/kaii-condition-findings/derived
+          sha256sum artifacts/kaii-condition-findings/derived/preserved-reports/* \
+            artifacts/kaii-condition-findings/derived/*.{json,md} > artifacts/kaii-condition-findings/derived/SHA256SUMS.txt
+      - name: Publish corrected findings and support draft
+        run: |
+          cat artifacts/kaii-condition-findings/derived/kaii_trade_condition_evaluation_corrected.md >> "$GITHUB_STEP_SUMMARY"
+          printf '\n## Prepared Massive support inquiry\n\n```text\n' >> "$GITHUB_STEP_SUMMARY"
+          cat artifacts/kaii-condition-findings/derived/massive_support_inquiry.md >> "$GITHUB_STEP_SUMMARY"
+          printf '\n```\n\n## Exact hashes\n\n```text\n' >> "$GITHUB_STEP_SUMMARY"
+          cat artifacts/kaii-condition-findings/derived/SHA256SUMS.txt >> "$GITHUB_STEP_SUMMARY"
+          printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload preserved and derived evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kaii-condition-findings-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/kaii-condition-findings/**
+          if-no-files-found: error
