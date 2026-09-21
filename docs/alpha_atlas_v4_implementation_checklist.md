@@ -302,6 +302,41 @@ stdout/stderr and traceback on failure, and leaves the job failed when evaluatio
 does not complete. No KAII evidence conclusion or checklist closure is attributed
 to that dependency-failed run.
 
+The repaired **Evaluate KAII Trade Conditions** execution completed successfully
+as run `35255222521-1` at commit
+`bed6a95b0b4fafa9f8fd18a8c9e33346fc83fddc`. Its artifact is
+`kaii-trade-condition-evaluation-35255222521-1` (artifact ID `10511084736`, GitHub
+digest `sha256:cd734e934fea432c65f6dda64df40e82bbd4817bc37f1ab488ecfa269e5d68cb`).
+This evaluation run is distinct from source diagnostic run `35233428008-1`. The
+manual **Record KAII Condition Findings** workflow validates those exact identities,
+preserves the original archive and report bytes, and publishes exact SHA-256 hashes
+for `derived/kaii_trade_condition_evaluation.json` and `.md` before creating any
+derived correction.
+
+- [x] KAII `2023-01-19` condition analysis completed within the saved, complete
+  regular-session response: both size-one records are consolidated-OHLC-ineligible
+  under the evaluated current rules. `[17,37,41]` is restricted by the odd-lot
+  condition despite permissive co-conditions; `[16]` updates neither consolidated
+  OHLC nor volume under the saved rules. Historical 2023 applicability remains
+  `UNVERIFIED/UNKNOWN`, and this does not retrieve a price.
+- [x] KAII `2023-02-17` full-day bounded query analyzed: it returned two
+  extended-hours odd-lot records (2 shares at `$10.19`, 3 at `$10.20`) with
+  conditions `[14,12,37,41]`. Both are consolidated-OHLC-ineligible under current
+  rules, with volume evaluated separately. This is consistent with, but does not
+  certify, the absent bar; historical rule applicability remains open.
+- [ ] KAII `2023-02-24` price gap remains unresolved. The completed full-day query
+  returned zero records with pagination complete, but that does not prove venue-wide
+  zero trading or exclude retention, entitlement, correction, ticker-mapping, or
+  provider coverage limitations.
+
+The corrected summary is derived from the preserved evaluation JSON and does not
+repeat either full-day request. A factual Massive support draft and technical
+evidence attachment retain sanitized bounds, provenance, response hashes, and any
+provider request IDs actually present; absent IDs are not invented. The three gaps
+remain unavailable as prices, historical rule applicability and valuation readiness
+remain open, and terminal valuation, universe completeness, broader identity
+coverage, and population reconciliation are unchanged.
+
 ## Track B certification and diagnostics handoff
 
 - [x] Certification separation and hosted portfolio accounting are the completed engineering baseline (hosted runs `34675971440-1` and `34689216730-1` are reproducibility checks, not independent performance samples).

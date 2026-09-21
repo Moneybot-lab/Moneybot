@@ -4,7 +4,8 @@ import json
 from pathlib import Path
 
 from moneybot.services.alpha_atlas_v4_phase1_discovery import DiscoveryResponse
-from scripts.evaluate_kaii_trade_conditions import derive, evaluate_dimension, evaluate_trade
+from scripts.evaluate_kaii_trade_conditions import _markdown, derive, evaluate_dimension, evaluate_trade
+from scripts.prepare_kaii_support_inquiry import build_packet
 
 
 def _definition(code, name, consolidated, market_center):
@@ -84,6 +85,34 @@ def test_february_full_day_query_is_narrow_and_does_not_repeat_regular_session()
     assert all("/v3/trades/KAII" in url and "timestamp.lt" in url for url in urls)
     assert all(item["additional_query_result"]["status"] == "EMPTY_RESPONSE" for item in report["february_assessments"])
     assert all(item["provider_clarification_if_still_empty"]["needed"] for item in report["february_assessments"])
+
+
+def test_february_formatter_distinguishes_returned_trades_from_complete_empty_response():
+    responses = [
+        {"results": [{"id": "late-1", "conditions": [17, 37, 41], "price": 10.19, "size": 2},
+                     {"id": "late-2", "conditions": [17, 37, 41], "price": 10.20, "size": 3}]},
+        {"results": []},
+    ]
+    def fetch(_method, _url, _headers, _timeout):
+        return DiscoveryResponse(200, json.dumps(responses.pop(0)).encode(), {})
+    report = derive(_source_fixture(), source_sha256="b" * 64, api_key="secret", fetcher=fetch)
+    markdown = _markdown(report)
+    assert "2 records: 2 @ $10.19" in markdown
+    assert "Current-rule assessment" in markdown
+    assert "`EMPTY_RESPONSE`; pagination complete and zero records returned" in markdown
+    assert markdown.count("Historical 2023 rule applicability: `UNVERIFIED/UNKNOWN`") == 2
+    assert "Completed bounds" in markdown and "smallest additional query" not in markdown
+
+
+def test_support_packet_retains_source_hashes_and_provider_questions():
+    report = derive(_source_fixture(), source_sha256="b" * 64)
+    _corrected, evidence, message = build_packet(
+        report, evaluation_json_sha256="c" * 64, evaluation_markdown_sha256="d" * 64)
+    assert evidence["source_evaluation"]["evaluation_json_sha256"] == "c" * 64
+    assert evidence["security"]["historical_ticker"] == "KAII"
+    assert "complete supported SIP coverage" in message
+    assert "which timestamp controls filtering" in message
+    assert "not alleging a provider error" in message
 
 
 def test_manual_workflow_is_pinned_and_does_not_rerun_identity_diagnostics():

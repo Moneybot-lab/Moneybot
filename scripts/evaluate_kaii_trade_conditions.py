@@ -148,7 +148,7 @@ def derive(source: dict, *, source_sha256: str, api_key: str = "", fetcher=_urll
             "additional_query_result": additional,
             "additional_trade_condition_evaluation": additional_evaluated,
             "provider_clarification_if_still_empty": {
-                "needed": additional.get("status") in {"EMPTY_RESPONSE", "NOT_EXECUTED_NO_CREDENTIAL"},
+                "needed": additional.get("status") in {"DATA_RETURNED", "EMPTY_RESPONSE", "NOT_EXECUTED_NO_CREDENTIAL"},
                 "technical_question": "For the saved request hashes, does the historical trades entitlement provide complete SIP coverage for KAII over the full 2023 calendar date, including late reports, and were any trades excluded from this endpoint or daily aggregates by condition/correction processing?",
                 "sanitized_saved_request_provenance": saved["trades"].get("request_provenance")},
             "price_availability": "NOT_RETRIEVED", "valuation_readiness": "UNVERIFIED",
@@ -183,7 +183,25 @@ def _markdown(report: dict) -> str:
               "| Date | Saved proof | Full-day query | Result | Remaining evidence |", "|---|---|---|---|---|"]
     for item in report["february_assessments"]:
         q = item["smallest_additional_query"]
-        lines.append(f"| `{item['date']}` | {item['proves']} | `{q['timestamp_gte']}` to `{q['timestamp_lt']}`, {q['page_limit']} pages/{q['record_limit']} records | `{item['additional_query_result']['status']}` | {item['does_not_prove']} |")
+        result = item["additional_query_result"]
+        records = result.get("records") or []
+        evaluations = item.get("additional_trade_condition_evaluation") or []
+        if result.get("status") == "DATA_RETURNED":
+            prices = ", ".join(f"{row.get('size')} @ ${row.get('price')} conditions {row.get('conditions')}" for row in records)
+            current = "; ".join(
+                f"record {row.get('record_identifier')}: consolidated O/C {row['eligibility']['consolidated']['open_close']['status']}, H/L {row['eligibility']['consolidated']['high_low']['status']}, volume {row['eligibility']['consolidated']['volume']['status']}"
+                for row in evaluations)
+            outcome = f"`DATA_RETURNED` ({len(records)} records: {prices}). Current-rule assessment: {current}."
+            remaining = ("Confirm that the saved current condition rules and NO-precedence behavior govern Massive's "
+                         "historical aggregate reconstruction for 2023; returned records do not make a price available.")
+        elif result.get("status") == "EMPTY_RESPONSE" and result.get("pagination_complete") is True:
+            outcome = "`EMPTY_RESPONSE`; pagination complete and zero records returned."
+            remaining = ("Massive must confirm whether this is complete supported SIP coverage or reflects retention, "
+                         "entitlement, correction, ticker-mapping, or other coverage limitations.")
+        else:
+            outcome = f"`{result.get('status')}`; the full-day evidence is incomplete or was not executed."
+            remaining = item["does_not_prove"]
+        lines.append(f"| `{item['date']}` | {item['proves']} | Completed bounds: `{q['timestamp_gte']}` to `{q['timestamp_lt']}`, {q['page_limit']} pages/{q['record_limit']} records | {outcome} Historical 2023 rule applicability: `UNVERIFIED/UNKNOWN`. | {remaining} |")
     lines += ["", "An explained absent aggregate is not a retrieved price and does not establish valuation readiness. No replacement data is produced.", ""]
     return "\n".join(lines)
 
