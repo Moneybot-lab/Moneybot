@@ -270,8 +270,14 @@ derived report hashes, and does not rerun identity diagnostics.
 For KAII `2023-01-19`, the derived evaluator treats the two saved size-one trades
 individually: conditions `[17,37,41]` and `[16]`. It uses each saved condition's
 separate consolidated and market-center open/close, high/low, and volume flags.
-Under current Massive documentation, a `NO` condition takes precedence over a
-permissive condition; an unknown rule fails closed. The evaluator may record the
+Massive human support has now confirmed that a restrictive condition takes
+precedence over permissive co-conditions and that any odd-lot trade is excluded
+from aggregation. The `[17,37,41]` record is therefore excluded under that
+confirmed combination rule because condition 37 is odd lot. Support also confirms
+that condition 41 updates price and volume, correcting the earlier AI-support
+statement; condition 41 alone does not explain the absent bar. The separate `[16]`
+record's interpretation remains attributed only to the saved condition table, not
+independently verified by the correspondence. The evaluator may record the
 narrow explanation `NO_OHLC_ELIGIBLE_RECORDS_IN_RETRIEVED_REGULAR_SESSION_EVIDENCE_UNDER_CURRENT_RULES`
 only if both records are consolidated-OHLC-ineligible and the saved trade response
 is pagination-complete. Current condition metadata has no demonstrated 2023
@@ -315,19 +321,39 @@ derived correction.
 
 - [x] KAII `2023-01-19` condition analysis completed within the saved, complete
   regular-session response: both size-one records are consolidated-OHLC-ineligible
-  under the evaluated current rules. `[17,37,41]` is restricted by the odd-lot
-  condition despite permissive co-conditions; `[16]` updates neither consolidated
-  OHLC nor volume under the saved rules. Historical 2023 applicability remains
-  `UNVERIFIED/UNKNOWN`, and this does not retrieve a price.
+  under the evaluated current rules. Massive human support confirms that
+  `[17,37,41]` is excluded by odd-lot condition 37 despite permissive
+  co-conditions and that condition 41 updates price and volume. `[16]` updates
+  neither consolidated OHLC nor volume under the saved condition table; support
+  did not separately verify condition 16. Historical 2023 applicability remains
+  `UNVERIFIED/UNKNOWN`, the scope remains the saved regular-session response, and
+  this does not retrieve a price.
 - [x] KAII `2023-02-17` full-day bounded query analyzed: it returned two
   extended-hours odd-lot records (2 shares at `$10.19`, 3 at `$10.20`) with
-  conditions `[14,12,37,41]`. Both are consolidated-OHLC-ineligible under current
-  rules, with volume evaluated separately. This is consistent with, but does not
-  certify, the absent bar; historical rule applicability remains open.
+  conditions `[14,12,37,41]`. Human support's confirmed combination rule excludes
+  both because each contains odd-lot condition 37, regardless of permissive
+  co-conditions. This is consistent with, but does not certify, the absent bar;
+  historical rule applicability remains open.
 - [ ] KAII `2023-02-24` price gap remains unresolved. The completed full-day query
   returned zero records with pagination complete, but that does not prove venue-wide
   zero trading or exclude retention, entitlement, correction, ticker-mapping, or
-  provider coverage limitations.
+  provider coverage limitations. Human support separately reports a full-day KAII
+  query with 52 quotes and no trades, but the preserved correspondence does not name
+  a date, so its status is `DATE_ATTRIBUTION_UNCONFIRMED` and it is not attributed
+  to February 24.
+
+Human response received; scoped findings recorded in
+[`alpha_atlas_v4_kaii_massive_human_support_supplement.json`](reports/alpha_atlas_v4_kaii_massive_human_support_supplement.json)
+and its readable companion. The correspondence is preserved verbatim as
+user-supplied evidence attributed to Massive human support; response timestamp,
+agent, and ticket ID remain unknown. New-evidence hashes are recorded in
+[`alpha_atlas_v4_kaii_massive_human_support_supplement.SHA256SUMS`](reports/alpha_atlas_v4_kaii_massive_human_support_supplement.SHA256SUMS).
+The supplement links to, but does not modify, the original diagnostic/evaluation
+reports or their hashes. Support confirms the mixed-condition/odd-lot rule, but
+does not explicitly version it or establish historical applicability to the
+currently served 2023 aggregates. Provider testimony remains distinct from saved
+API responses and supplies no query bounds, timezone, entitlement, pagination,
+response hash, or venue-completeness proof.
 
 The corrected summary is derived from the preserved evaluation JSON and does not
 repeat either full-day request. A factual Massive support draft and technical
@@ -655,7 +681,7 @@ below finds that it intersects the next comparison.
 | Historical-universe completeness | **REQUIRED_BEFORE_BROADER_VALIDATION_OR_USE** | Universe membership, survivorship bias, denominator for stock-selection and historical claims | Phase 1 readiness is `BLOCKED_FULL_UNIVERSE_BACKFILL`; bounded availability proves access only | Full-universe backfill, broad historical-performance/generalization claims, and later training on a reconstructed universe | Effective-dated eligible population and exclusions reconcile for the claimed interval with no current-ticker projection or availability-based dropping | Resume before broader validation/backfill, or immediately if the materiality scan shows the next frozen input was constructed from the unresolved universe |
 | Effective-dated identity coverage beyond the five verified transitions | **REQUIRED_BEFORE_BROADER_VALIDATION_OR_USE** | Stable security identity, corporate actions, feature/label joins | Five retrospective transitions are scoped evidence; shared CIK is not continuity | Claims spanning unresolved aliases; any experiment containing one of those predecessor/successor securities | Dated, class-specific continuity/separation evidence for every identity actually consumed by the claim | First intersect the exact experiment rows; investigate only intersecting identities, preserving shares/units/warrants separately |
 | FITBM/FITBO `CS` versus preferred-depositary-share description conflict | **DEFERRED_NONBLOCKING** | Security-type eligibility and universe inclusion | Repository search finds these tickers only in historical-diagnostic/checklist logic; the hosted canonical input is not locally available for an independent membership check | Nothing yet; it blocks the next comparison only if either typed identity occurs in its exact input, eligible universe, or holdings | Artifact-bound count by ticker plus stable typed identifier equals zero; if nonzero, resolve type from effective-dated primary/provider evidence before computation | Include the exact membership count in the next registration; do not start a classification repair on zero intersection |
-| KAII `2023-01-19`, `2023-02-17`, and `2023-02-24` historical price/condition questions | **DEFERRED_NONBLOCKING** | Price availability and any return/valuation path crossing those sessions | Current-rule analysis is scoped; 2023 applicability remains unknown; February 24 full-day response is empty; Massive human support is pending | Any result that consumes a KAII price/valuation on an affected date | Human Massive response or authoritative historical rule/coverage evidence, plus a retrieved/certified price if valuation is required | Await the existing human-support inquiry; do not rerun or ask AI support. Reactivate only on response or exact-row intersection |
+| KAII `2023-01-19`, `2023-02-17`, and `2023-02-24` historical price/condition questions | **DEFERRED_NONBLOCKING** | Price availability and any return/valuation path crossing those sessions | Human response received; scoped findings recorded. Restrictive/odd-lot precedence is confirmed, while historical 2023 applicability remains unknown; February 24's saved full-day response is empty and the support-reported 52 quotes/no trades has `DATE_ATTRIBUTION_UNCONFIRMED` | Any result that consumes a KAII price/valuation on an affected date | Authoritative historical-applicability evidence and, where valuation is required, a retrieved/certified price; date-specific attribution is also required before applying the 52-quote testimony to February 24 | Do not rerun or send another inquiry. Reactivate on clarifying human evidence or exact frozen-input intersection |
 | 6,607-versus-6,629 inactive-listing population reconciliation | **DEFERRED_NONBLOCKING** | Population completeness and provenance of the unavailable earlier snapshot | Earlier 6,629 snapshot is unavailable; 6,607 is the later paginated population | Reproduction/comparison of the earlier population and broad completeness certification | Locate the original immutable 6,629 snapshot and reconcile identities; no reconstruction from fresh queries | Retain as unavailable until that exact snapshot is found; do not repeat discovery queries to manufacture a comparison |
 | Common technically supported historical interval | **REQUIRED_BEFORE_BROADER_VALIDATION_OR_USE** | Valid common date range for features, context series, universe, and labels | Readiness report records `common_supported_interval=null` | Full backfill, retraining, and claims across a common historical interval | Intersection derived from complete required-source inventories with explicit family-specific gaps and no silent row loss | Defer execution until backfill/broader validation is authorized; reactivate if next frozen input falls outside already certified source bounds |
 | Terminal/missing-exit policy and incomplete terminal valuation | **REQUIRED_BEFORE_BROADER_VALIDATION_OR_USE** | Executable labels, realized proceeds, portfolio equity, and drawdown | Static terminal discovery has no approved final policy; hosted portfolio verification covers its 25 holdings only | Any broader portfolio result or training/evaluation row with an unresolved exit | Every selected/consumed row has verified executable exit/consideration and timing, or the predeclared experiment fails; never infer zero/stale proceeds or drop the row | Materiality-scan exact next rows. If zero intersections, broader policy stays open; if nonzero, stop before comparison and resolve those events |
@@ -673,10 +699,12 @@ below finds that it intersects the next comparison.
   the hosted canonical bytes are absent locally, materiality is **unknown**, not
   zero. The next registration must count ticker and typed-identifier intersections;
   only a nonzero result warrants classification repair.
-- **KAII:** unresolved price dates and pending Massive human support are preserved.
-  They do not block a frozen-input experiment if the immutable scan proves no
-  affected row, price, or valuation path is consumed. No diagnostic rerun or second
-  inquiry is requested.
+- **KAII:** human response received; scoped findings recorded. Odd-lot precedence
+  is confirmed, but historical 2023 applicability remains unverified and the
+  support-reported 52 quotes/no trades cannot be assigned to February 24 from the
+  response text. The unresolved dates do not block a frozen-input experiment if
+  the immutable scan proves no affected row, price, or valuation path is consumed.
+  No diagnostic rerun or second inquiry is requested.
 - **Remaining identities and terminal valuation:** the correct unit of work is the
   exact frozen experiment input/selection, not the whole historical discovery
   population. Any intersection fails the comparison before metrics; zero
