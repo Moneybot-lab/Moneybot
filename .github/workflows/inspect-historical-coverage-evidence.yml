@@ -1,0 +1,60 @@
+name: Inspect Historical Coverage Evidence
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  SOURCE_REPOSITORY: Moneybot-lab/Moneybot
+  SOURCE_RUN_ID: "35178703375"
+  SOURCE_ARTIFACT_ID: "10479149714"
+  OUTPUT_DIR: evidence/historical-coverage-35178703375-1
+
+jobs:
+  inspect-existing-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Retrieve pinned metadata and existing artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR"
+          headers=(
+            -H "Authorization: Bearer $GH_TOKEN"
+            -H "Accept: application/vnd.github+json"
+            -H "X-GitHub-Api-Version: 2022-11-28"
+          )
+          curl --fail-with-body --silent --show-error --location "${headers[@]}" \
+            "https://api.github.com/repos/$SOURCE_REPOSITORY/actions/runs/$SOURCE_RUN_ID" \
+            > "$OUTPUT_DIR/source_run_metadata.json"
+          curl --fail-with-body --silent --show-error --location "${headers[@]}" \
+            "https://api.github.com/repos/$SOURCE_REPOSITORY/actions/runs/$SOURCE_RUN_ID/artifacts?per_page=100" \
+            > "$OUTPUT_DIR/source_artifact_metadata.json"
+          curl --fail-with-body --silent --show-error --location "${headers[@]}" \
+            "https://api.github.com/repos/$SOURCE_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT_ID/zip" \
+            > "$OUTPUT_DIR/source_artifact.zip"
+
+      - name: Validate and inspect without bulk extraction
+        run: |
+          set -euo pipefail
+          python scripts/inspect_historical_coverage_evidence.py \
+            --run-metadata "$OUTPUT_DIR/source_run_metadata.json" \
+            --artifact-metadata "$OUTPUT_DIR/source_artifact_metadata.json" \
+            --archive "$OUTPUT_DIR/source_artifact.zip" \
+            --output-dir "$OUTPUT_DIR/reports"
+
+      - name: Publish validation and archive inventory
+        run: cat "$OUTPUT_DIR/reports/summary_inventory.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish report 1 of 2 as literal JSON
+        run: cat "$OUTPUT_DIR/reports/summary_report_json.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish report 2 of 2 as literal Markdown
+        run: cat "$OUTPUT_DIR/reports/summary_report_markdown.md" >> "$GITHUB_STEP_SUMMARY"
