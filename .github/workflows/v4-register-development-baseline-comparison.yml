@@ -1,0 +1,111 @@
+name: V4 Register Development Baseline Comparison
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  register-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      OUTPUT_DIR: artifacts/v4-development-baseline-registration
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install repository dependencies
+        run: pip install -r requirements.txt
+      - name: Validate pinned source metadata
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR/source"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/34689216730" > "$OUTPUT_DIR/source/track-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/34689216730/artifacts" > "$OUTPUT_DIR/source/track-artifacts.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/34769717178" > "$OUTPUT_DIR/source/diagnostics-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/34769717178/artifacts" > "$OUTPUT_DIR/source/diagnostics-artifacts.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/35659754050" > "$OUTPUT_DIR/source/prior-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/35659754050/artifacts" > "$OUTPUT_DIR/source/prior-artifacts.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/35233428008" > "$OUTPUT_DIR/source/identity-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/35233428008/artifacts" > "$OUTPUT_DIR/source/identity-artifacts.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ['OUTPUT_DIR'])/'source'
+          expected=[('track',34689216730,'Track B Offline Challenger','1f8f46db584dff0881273bdeae1c56c1a8a016c5',10296724235,'track-b-offline-output','sha256:017cdd8a8b30917e6e2f958e3cba1ae99827e002434b97f9de40c2c4ab871ef9'),('diagnostics',34769717178,'V4 Development Diagnostics','5d360cdbda802ae8527b35fe59f75920b8c827c8',10321991290,'v4-development-diagnostics-34689216730','sha256:e341166155b819dd98e3c9a82c2be1d260ba549d637e5fb7ed1f086f21d5b4d4'),('prior',35659754050,'V4 Register Development Baseline Comparison','c9993aaed0822d16215a7bb443e7923d839e0b00',10666961124,'v4-development-baseline-registration-35659754050-1','sha256:c88ce85414d1859ca01253ee9a3c1639eaf9bd03fbc3b6828c971578d62bb0a2'),('identity',35233428008,'Alpha Atlas V4 Historical Coverage Diagnostics','bf2776e0943b3c0cd392015da4005391d30b15da',10502208555,'alpha-atlas-v4-historical-coverage-diagnostics-35233428008-1','sha256:082092918781f45dc61b57b12128903b9b4e0837ee86f391336bc5d72f6f3786')]
+          out={}
+          for key,run_id,name,head,artifact_id,artifact_name,digest in expected:
+              run=json.loads((root/f'{key}-run.json').read_text()); listing=json.loads((root/f'{key}-artifacts.json').read_text())
+              if (run.get('id'),run.get('name'),run.get('run_attempt'),run.get('head_sha'),run.get('conclusion')) != (run_id,name,1,head,'success'): raise SystemExit(f'{key} run metadata mismatch')
+              matches=[x for x in listing.get('artifacts',[]) if x.get('id')==artifact_id]
+              if len(matches)!=1 or matches[0].get('name')!=artifact_name or matches[0].get('expired') is not False or matches[0].get('digest')!=digest: raise SystemExit(f'{key} artifact metadata mismatch')
+              out[key]={'source_run':run_id,'source_attempt':1,'source_head_sha':head,'artifact_id':artifact_id,'artifact_name':artifact_name,'artifact_digest':digest}
+          (root/'validated-metadata.json').write_text(json.dumps(out,indent=2,sort_keys=True)+'\n')
+          PY
+      - uses: actions/download-artifact@v4
+        with: {name: track-b-offline-output, run-id: 34689216730, path: source-track-b, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with: {name: v4-development-diagnostics-34689216730, run-id: 34769717178, path: source-diagnostics, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with: {name: v4-development-baseline-registration-35659754050-1, run-id: 35659754050, path: source-prior-registration, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with: {name: alpha-atlas-v4-historical-coverage-diagnostics-35233428008-1, run-id: 35233428008, path: source-identity-evidence, github-token: "${{ github.token }}"}
+      - name: Resolve exact files and write provenance
+        run: |
+          set -euo pipefail
+          python scripts/validate_v4_weighting_registration_sources.py --metadata-only --track-root source-track-b --diagnostics-root source-diagnostics --output "$OUTPUT_DIR/source/verified-files.json"
+          python -m scripts.resolve_v4_baseline_registration_supplements \
+            --prior-root source-prior-registration \
+            --identity-root source-identity-evidence \
+            --track-root source-track-b \
+            --validated-metadata "$OUTPUT_DIR/source/validated-metadata.json" \
+            --output-dir "$OUTPUT_DIR/source" \
+            --expected-cost-hash 477293feee5fa31ab876b9db589b2c7be6b34d81ccf893f4d2032c2d6c62b2ef \
+            --expected-cost-bytes 525 \
+            --expected-cost-hash-provenance RECORDED_BY_RUN_35686093927_ATTEMPT_1_SUPPLEMENTAL_RESOLUTION
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ['OUTPUT_DIR']); files=json.loads((root/'source/verified-files.json').read_text()); meta=json.loads((root/'source/validated-metadata.json').read_text())
+          import hashlib
+          payload={role:{**meta['diagnostics' if role=='capture' else 'track']} for role in ('canonical','plan','manifest','capture')}
+          for role,key,origin in (('temporal_certification','certification','track'),('diagnostics_workflow_provenance','workflow_provenance','diagnostics'),('capture_provenance','capture_provenance','diagnostics')):
+              path=Path(files[key]); payload[role]={**meta[origin],'path':str(path),'bytes':path.stat().st_size,'sha256_computed':hashlib.sha256(path.read_bytes()).hexdigest(),'provenance_status':'NEWLY_COMPUTED; VALIDATED_BY_SOURCE_RESOLVER'}
+          resolution=json.loads((root/'source/supplemental-resolution.json').read_text())
+          if resolution.get('status') != 'RESOLVED': raise SystemExit('supplemental source resolution did not complete')
+          supplemental=resolution['sources']; prior_copy=Path(supplemental['prior_registration']['consumed_copy_path']); identity_copy=Path(supplemental['identity_evidence']['consumed_copy_path']); cost_copy=Path(supplemental['cost_policy_evidence']['consumed_copy_path'])
+          payload['supplemental_evidence']=supplemental
+          payload['materiality_evidence']={'unresolved_identity_typed_identifier_map_status':'SUPPLIED_FOR_VALIDATOR','identity_evidence_path':str(identity_copy),'identity_evidence_sha256':supplemental['identity_evidence']['sha256_computed']}
+          (root/'source/source-provenance.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
+          values={k:files[k] for k in ('feature_store','split_plan','manifest','capture')}; values.update(PRIOR_REGISTRATION=str(prior_copy),IDENTITY_EVIDENCE=str(identity_copy),COST_POLICY_EVIDENCE=str(cost_copy))
+          (root/'source/resolved-paths.env').write_text('\n'.join(f"{k.upper()}={v}" for k,v in values.items())+'\n')
+          PY
+      - name: Register and scan exact frozen inputs without comparison
+        id: registration
+        run: |
+          set +e
+          set -a; source "$OUTPUT_DIR/source/resolved-paths.env"; set +a
+          python -m scripts.register_alpha_atlas_v4_baseline_comparison --canonical "$FEATURE_STORE" --plan "$SPLIT_PLAN" --manifest "$MANIFEST" --capture "$CAPTURE" --source-provenance "$OUTPUT_DIR/source/source-provenance.json" --output-dir "$OUTPUT_DIR/reports" \
+            --prior-registration "$PRIOR_REGISTRATION" --identity-evidence "$IDENTITY_EVIDENCE" --cost-policy-evidence "$COST_POLICY_EVIDENCE" \
+            --expected-canonical-hash 506073994052be852a5a00fc38e239b85e72a50494c3559640ea980fb6a52d9e \
+            --expected-plan-hash bd60055adc6cb1b3f8b143c6c61031bced01c9151fcb3b67c33f75430106e8e8 \
+            --expected-manifest-hash ea4e55f9faa848219945d7e03c92c7a541645cd4d6df8aa3cfbd0d1334872f15 \
+            --expected-capture-hash 454febde2e14ca8a916222d86a6872db1c5e790a29429f2db6393d828e87e434 \
+            2>&1 | tee "$OUTPUT_DIR/registration.log"
+          rc=${PIPESTATUS[0]}; echo "exit_code=$rc" >> "$GITHUB_OUTPUT"; exit "$rc"
+      - name: Publish registration status
+        if: always()
+        run: |
+          if test -s "$OUTPUT_DIR/source/supplemental-resolution.md"; then cat "$OUTPUT_DIR/source/supplemental-resolution.md" >> "$GITHUB_STEP_SUMMARY"; fi
+          if test -s "$OUTPUT_DIR/reports/registration.md"; then cat "$OUTPUT_DIR/reports/registration.md" >> "$GITHUB_STEP_SUMMARY"; else printf '\n## Registration preparation failed\n\nNo registration, materiality, split-integrity, or comparison result was produced. Review the supplemental-resolution report and logs.\n' >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Upload evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4-development-baseline-registration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/v4-development-baseline-registration/**
+          if-no-files-found: error
