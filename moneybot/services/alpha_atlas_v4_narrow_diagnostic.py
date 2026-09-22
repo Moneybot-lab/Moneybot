@@ -7,10 +7,14 @@ import json
 import math
 from pathlib import Path
 from typing import Any
+from moneybot.services.alpha_atlas_v4_temporal_split import canonical_json_hash
 
 
 class DiagnosticSpecError(ValueError):
-    pass
+    def __init__(self, code: str, *, role: str | None = None, hash_type: str | None = None,
+                 expected: str | None = None, actual: str | None = None):
+        super().__init__(code); self.code=code; self.role=role; self.hash_type=hash_type
+        self.expected=expected; self.actual=actual
 
 
 def sha256(path: Path) -> str:
@@ -18,12 +22,23 @@ def sha256(path: Path) -> str:
 
 
 def validate_spec(spec_path: Path, reviewed_hash: str, inputs: dict[str, Path]) -> dict[str, Any]:
-    if sha256(spec_path) != reviewed_hash:
-        raise DiagnosticSpecError("REVIEWED_SPECIFICATION_HASH_MISMATCH")
+    actual_spec=sha256(spec_path)
+    if actual_spec != reviewed_hash:
+        raise DiagnosticSpecError("REVIEWED_SPECIFICATION_HASH_MISMATCH",role="specification",hash_type="file_byte_sha256",expected=reviewed_hash,actual=actual_spec)
     spec=json.loads(spec_path.read_text())
     for role, expected in spec["frozen_inputs"].items():
-        if role not in inputs or sha256(inputs[role]) != expected["sha256"]:
-            raise DiagnosticSpecError(f"FROZEN_INPUT_HASH_MISMATCH:{role}")
+        if role not in inputs: raise DiagnosticSpecError("FROZEN_INPUT_MISSING",role=role)
+        actual_bytes=sha256(inputs[role]); expected_bytes=expected["file_byte_sha256"]
+        if actual_bytes != expected_bytes:
+            raise DiagnosticSpecError("FROZEN_INPUT_HASH_MISMATCH",role=role,hash_type="file_byte_sha256",expected=expected_bytes,actual=actual_bytes)
+        if role == "plan":
+            plan=json.loads(inputs[role].read_text()); embedded=str(plan.get("plan_sha256") or "")
+            expected_content=expected["semantic_content_sha256"]
+            if embedded != expected_content:
+                raise DiagnosticSpecError("SPLIT_PLAN_EMBEDDED_HASH_MISMATCH",role=role,hash_type="embedded_plan_sha256",expected=expected_content,actual=embedded)
+            core={key:value for key,value in plan.items() if key!="plan_sha256"}; actual_content=canonical_json_hash(core)
+            if actual_content != expected_content:
+                raise DiagnosticSpecError("SPLIT_PLAN_CONTENT_HASH_MISMATCH",role=role,hash_type="canonical_json_sha256_excluding_plan_sha256",expected=expected_content,actual=actual_content)
     if spec.get("execution",{}).get("default") != "OFF" or spec.get("broader_registration",{}).get("status") != "REGISTERED_BLOCKED":
         raise DiagnosticSpecError("SPECIFICATION_SAFETY_BOUNDARY_MISMATCH")
     return spec

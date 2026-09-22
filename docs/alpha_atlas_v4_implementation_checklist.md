@@ -1074,3 +1074,29 @@ immutable provenance. Performance comparison execution remains pending review.
   merge, run **V4 Register Development Baseline Comparison** with no inputs and
   review `narrow_diagnostic_grouping_audit.{json,md}` plus the specification. Do not
   execute scoring until the specification hash is explicitly reviewed and approved.
+
+### Narrow diagnostic split-plan hash correction after run 35758737998-1
+
+- [x] **Cause confirmed.** Registration completed, but the audit compared semantic
+  split content hash `bd60055a...` to the saved plan's file bytes and failed with
+  `FROZEN_INPUT_HASH_MISMATCH:plan`. No grouping audit or scoring completed.
+- [x] **Specification v1 preserved; v1.1 corrects hash semantics only.** The exact
+  2,505,426-byte plan is pinned by file SHA-256
+  `f11257cff0befc1f0b46e4cab9a64678c766b6fe2abdc50b07861a18f7d6933a`.
+  The producer's `canonical_json_hash` is recomputed after removing `plan_sha256`
+  and must equal both the registered and embedded content hash
+  `bd60055adc6cb1b3f8b143c6c61031bced01c9151fcb3b67c33f75430106e8e8`;
+  the embedded declaration is not trusted alone. Canonical, manifest, and capture
+  checks remain exact byte hashes.
+- [x] **Corrected specification hashes.** v1.1 JSON SHA-256 is
+  `206e86dcfd2fa25edfbb8b3201e84e342da55ace668b4e0c6d4d31a4132912b2`;
+  Markdown SHA-256 is
+  `225b87df9134eff3eacad1fa4c29eb0da10670c56253b2cfa0a99013174f86c1`.
+  Dataset, folds, candidates, weighting, metrics, claim limits, and blocked net rule
+  are unchanged.
+- [x] **Failure evidence hardened.** Audit failures now write JSON and Markdown with
+  role, hash type, expected/actual values, and explicit grouping/scoring flags, and
+  preserve the exact reviewed specification before exiting nonzero.
+- [ ] **Real grouping audit still pending.** After merge, run **V4 Register
+  Development Baseline Comparison** with no inputs. Review only the grouping audit;
+  this correction does not approve performance scoring.

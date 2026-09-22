@@ -104,8 +104,8 @@ jobs:
           test -s "$OUTPUT_DIR/source/resolved-paths.env"
           set -a; source "$OUTPUT_DIR/source/resolved-paths.env"; set +a
           python -m scripts.audit_alpha_atlas_v4_narrow_diagnostic \
-            --specification docs/reports/alpha_atlas_v4_narrow_frozen_sample_diagnostic.v1.json \
-            --reviewed-specification-hash f55e749a6616506b1e227ddebb96dad569b33cd3c56599fe189803dc68173e0f \
+            --specification docs/reports/alpha_atlas_v4_narrow_frozen_sample_diagnostic.v1.1.json \
+            --reviewed-specification-hash 206e86dcfd2fa25edfbb8b3201e84e342da55ace668b4e0c6d4d31a4132912b2 \
             --canonical "$FEATURE_STORE" --plan "$SPLIT_PLAN" --manifest "$MANIFEST" --capture "$CAPTURE" \
             --output-dir "$OUTPUT_DIR/reports"
       - name: Publish registration status
