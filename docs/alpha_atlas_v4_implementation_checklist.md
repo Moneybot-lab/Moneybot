@@ -965,3 +965,35 @@ immutable provenance. Performance comparison execution remains pending review.
   not verify comparison readiness. Rerun **V4 Register Development Baseline
   Comparison** with no inputs after merge and review the resolver, materiality, and
   split-integrity reports before any comparison execution.
+
+### Development return and symbol-lineage trace after run 35692705575-1
+
+- [x] **Retain completed evidence.** Registration `35692705575-1`, internal hash
+  `f2eb532c9c050977197c5a3306b1948e2d9a397bc7dd31f7c7efda7255332c3c`,
+  completed source resolution and verified split integrity. It reported entry/exit
+  prices for all 24,846 development rows and endpoint returns for all 10,273 unique
+  validation rows. Portfolio return/drawdown remains `NOT_EVALUABLE`.
+- [x] **Implementation — return semantics cannot be inferred from presence.** Gross
+  endpoint economics is now `EVALUABLE` only when source provenance binds Track B
+  commit `1f8f46d...`, diagnostics commit `5d360cd...`, and every validation return
+  matches `round(exit / (entry * split_factor) - 1, 6)` within `5e-7`. The traced
+  formula is a decimal split-adjusted price return with no cost/slippage term;
+  dividend adjustment is not established. Missing or mismatching trace evidence
+  yields `GROSS_RETURN_SEMANTICS_UNVERIFIED`. Net economics still requires the
+  applicable development policy and cannot borrow the selected-portfolio policy.
+- [x] **Implementation — symbol-ID guarantees narrowed.** Pinned producer code uses
+  `event.point_in_time_symbol_id` when supplied and otherwise falls back to
+  `symbol:event_day`. The validator now counts fallback-pattern rows and cross-symbol
+  collisions and labels the fallback a ticker/date observation key, not proof of a
+  listing, security, ticker-change chain, or share-class continuity. Canonical/OOF
+  join integrity remains separately verified.
+- [x] **Pinned-code supplement.** The source-only trace is preserved at
+  `docs/reports/alpha_atlas_v4_development_semantics_source_trace.json`, SHA-256
+  `9337c5b2b9e1fdaf78e47f098175d030d172dcd8bd48c21d690206797d618a30`.
+  It records code behavior, not yet the real saved-row consistency counts.
+- [ ] **Evidence — authenticated consistency rerun pending.** Run **V4 Register
+  Development Baseline Comparison** with no inputs. The smallest remaining evidence
+  is the real formula match/mismatch/unsupported counts plus saved-ID fallback,
+  collision, and affected-scope counts. Until then, typed-identity sufficiency stays
+  `PARTIAL_UNKNOWN`, gross semantics are not newly certified here, and comparison
+  readiness is not approved.

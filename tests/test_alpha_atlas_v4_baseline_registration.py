@@ -174,3 +174,40 @@ def test_other_scope_numeric_policy_is_recorded_but_not_borrowed(monkeypatch,tmp
     evidence=result['materiality']['cost_evidence']['other_saved_policy_evidence']
     assert evidence['status']=='LOCATED_DIFFERENT_SCOPE' and evidence['applicable_to_development_oof'] is False
     assert result['metric_eligibility']['net_endpoint_economics']['status']=='NOT_EVALUABLE'
+
+def test_complete_returns_without_bound_producer_trace_are_not_labeled_gross(monkeypatch,tmp_path):
+    paths=_write(tmp_path); canonical,plan,manifest,capture,source,expected=paths
+    rows=[json.loads(x) for x in canonical.read_text().splitlines()]
+    for row in rows: row['return_5d']=.1
+    canonical.write_text(''.join(json.dumps(x)+'\n' for x in rows)); expected['canonical']=reg.sha(canonical); monkeypatch.setattr(reg,'EXPECTED',expected)
+    result=reg.register(canonical,plan,manifest,capture,source)
+    gross=result['metric_eligibility']['gross_endpoint_economics']
+    assert gross['status']=='NOT_EVALUABLE'
+    assert gross['reason_codes']==['GROSS_RETURN_SEMANTICS_UNVERIFIED']
+
+def test_bound_producer_trace_and_price_formula_verify_gross_semantics(monkeypatch,tmp_path):
+    paths=_write(tmp_path); canonical,plan,manifest,capture,source,expected=paths
+    rows=[json.loads(x) for x in canonical.read_text().splitlines()]
+    for row in rows:
+        row['return_5d']=.1
+        row['label_split_adjustment_factor']=1.0
+    canonical.write_text(''.join(json.dumps(x)+'\n' for x in rows)); expected['canonical']=reg.sha(canonical); monkeypatch.setattr(reg,'EXPECTED',expected)
+    source['canonical']['source_head_sha']='1f8f46db584dff0881273bdeae1c56c1a8a016c5'
+    source['capture']['source_head_sha']='5d360cdbda802ae8527b35fe59f75920b8c827c8'
+    result=reg.register(canonical,plan,manifest,capture,source)
+    evidence=result['materiality']['return_evidence']
+    assert evidence['economic_semantics_status']=='VERIFIED_GROSS_SPLIT_ADJUSTED_PRICE_RETURN'
+    assert evidence['formula_consistency']['counts']=={'matched':3}
+    assert result['metric_eligibility']['gross_endpoint_economics']['status']=='EVALUABLE'
+    assert result['metric_eligibility']['net_endpoint_economics']['status']=='NOT_EVALUABLE'
+
+def test_point_in_time_symbol_id_name_does_not_overstate_security_identity(monkeypatch,tmp_path):
+    paths=_write(tmp_path); canonical,plan,manifest,capture,source,expected=paths
+    rows=[json.loads(x) for x in canonical.read_text().splitlines()]
+    for row in rows: row['point_in_time_symbol_id']=f"{row['symbol']}:{row['event_date']}"
+    canonical.write_text(''.join(json.dumps(x)+'\n' for x in rows)); expected['canonical']=reg.sha(canonical); monkeypatch.setattr(reg,'EXPECTED',expected)
+    result=reg.register(canonical,plan,manifest,capture,source)
+    lineage=result['materiality']['point_in_time_symbol_lineage']
+    assert lineage['fallback_pattern_rows']==6
+    assert lineage['semantic_guarantee']=='TICKER_DATE_OBSERVATION_KEY_NOT_PROVEN_SECURITY_OR_LISTING_ID'
+    assert lineage['identity_sufficiency_for_frozen_comparison'].startswith('UNKNOWN_')

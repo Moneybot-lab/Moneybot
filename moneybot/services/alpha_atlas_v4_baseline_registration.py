@@ -110,6 +110,25 @@ def _identity_inventory(rows: dict[str,dict], relevant_ids: set[str]) -> dict[st
           "missing_evidence":None if len(present)==len(rows) else "IDENTIFIER_ABSENT_FROM_DEVELOPMENT_OBSERVATION"}
     return result
 
+def _point_in_time_symbol_lineage(rows: dict[str,dict]) -> dict[str,Any]:
+    mappings: dict[str,set[tuple[str,str]]] = {}
+    fallback=[]; missing=[]
+    for canonical_id,row in rows.items():
+        value=str(_nested(row,("point_in_time_symbol_id",),("security_identity","point_in_time_symbol_id")) or "")
+        symbol=str(row.get("symbol") or "").upper(); event_date=str(row.get("event_date") or "")[:10]
+        if not value: missing.append(canonical_id); continue
+        mappings.setdefault(value,set()).add((symbol,event_date))
+        if value == f"{symbol}:{event_date}": fallback.append(canonical_id)
+    conflicts=[{"point_in_time_symbol_id":key,"symbol_dates":sorted(values)} for key,values in mappings.items()
+               if len({symbol for symbol,_ in values})>1]
+    return {"construction_trace":"event.point_in_time_symbol_id or fallback f'{symbol}:{event_day}'",
+      "semantic_guarantee":"TICKER_DATE_OBSERVATION_KEY_NOT_PROVEN_SECURITY_OR_LISTING_ID",
+      "rows_present":len(rows)-len(missing),"rows_missing":len(missing),"unique_values":len(mappings),
+      "fallback_pattern_rows":len(fallback),"cross_symbol_collision_count":len(conflicts),"cross_symbol_collision_examples":conflicts[:10],
+      "join_scope_verified":"canonical observation and OOF ticker/date joins only",
+      "ticker_change_reuse_share_class_guarantee":"NOT_ESTABLISHED",
+      "identity_sufficiency_for_frozen_comparison":"UNKNOWN_UNTIL_AFFECTED_SCOPE_IS_BOUNDED_OR_SECURITY_LINEAGE_IS_PROVEN"}
+
 def _identity_mappings(path: Path | None) -> tuple[dict[str,dict[str,set[str]]],dict]:
     maps={kind:{} for kind in ("share_class_figi","composite_figi","cik")}
     if path is None or not path.is_file(): return maps,{"status":"UNKNOWN","reason":"IDENTITY_EVIDENCE_FILE_UNAVAILABLE","source":None}
@@ -137,8 +156,9 @@ def _external_cost_evidence(path: Path | None) -> dict:
       "source":{"path":path.name,"bytes":path.stat().st_size,"sha256_computed":sha(path)},
       "recorded_policy":{"version":payload.get("version") or payload.get("policy_version"),"transaction_cost_bps":payload.get("transaction_cost_bps"),"slippage_bps":payload.get("slippage_bps"),"units":"basis_points","treatment":"portfolio policy; applicability intentionally not borrowed"}}
 
-def _price_return_cost_evidence(rows: dict[str,dict], validation_ids: set[str]) -> tuple[dict,dict,dict,dict]:
+def _price_return_cost_evidence(rows: dict[str,dict], validation_ids: set[str], *, producer_trace_bound: bool) -> tuple[dict,dict,dict,dict]:
     price=Counter(); examples={}; return_counts=Counter(); cost=Counter(); versions=Counter(); valuation=Counter()
+    formula=Counter(); formula_examples=[]
     for identifier,row in rows.items():
         lineage=row.get("reconstruction_lineage") or {}; execution=lineage.get("execution") or {}
         entry_raw=_nested(row,("entry_price",),("adjusted_entry_price",),("reconstruction_lineage","execution","entry_price"))
@@ -157,6 +177,19 @@ def _price_return_cost_evidence(rows: dict[str,dict], validation_ids: set[str]) 
         elif net_flag is False: return_counts["explicitly_gross"]+=1
         else: return_counts["net_or_gross_unspecified"]+=1
         if identifier in validation_ids: return_counts["validation_rows"]+=1; return_counts["validation_endpoint_return_present"]+=int(bool(return_name and _number(row.get(return_name)) is not None))
+        if identifier in validation_ids and return_name and _number(row.get(return_name)) is not None:
+            execution_entry=_number(execution.get("entry_price")); raw_entry=_number(row.get("raw_entry_price")); adjusted_entry=_number(row.get("adjusted_entry_price"))
+            formula_entry=execution_entry if execution_entry is not None else raw_entry if raw_entry is not None else adjusted_entry if adjusted_entry is not None else _number(row.get("entry_price"))
+            factor=(_number(execution.get("split_factor",row.get("label_split_adjustment_factor",1.0)))
+                    if execution_entry is not None or raw_entry is not None else 1.0)
+            if formula_entry is None or exit_price is None or factor is None or formula_entry*factor<=0:
+                formula["unsupported"]+=1
+            else:
+                replay=exit_price/(formula_entry*factor)-1.0; observed=float(row[return_name])
+                if math.isclose(replay,observed,rel_tol=0,abs_tol=5e-7): formula["matched"]+=1
+                else:
+                    formula["mismatched"]+=1
+                    if len(formula_examples)<5: formula_examples.append({"canonical_id":identifier,"field":return_name,"observed":observed,"replayed":replay})
         policy=str(row.get("execution_cost_policy_version") or execution.get("execution_cost_policy_version") or "")
         if policy: versions[policy]+=1
         components=[execution.get("transaction_cost_bps",row.get("transaction_cost_bps")),execution.get("entry_slippage_bps",row.get("entry_slippage_bps")),execution.get("exit_slippage_bps",row.get("exit_slippage_bps"))]
@@ -173,7 +206,12 @@ def _price_return_cost_evidence(rows: dict[str,dict], validation_ids: set[str]) 
       "field_resolution_order":["entry_price/exit_price","adjusted_entry_price/adjusted_exit_price","reconstruction_lineage.execution.entry_price/exit_price"],
       "prices_reconstructed_from_returns":False}
     net_status=("ALREADY_NET" if return_counts["explicitly_net"]==len(rows) else "GROSS" if return_counts["explicitly_gross"]==len(rows) else "UNKNOWN_OR_MIXED")
-    returns={**return_counts,"return_semantics":"frozen endpoint return; not an entry/exit-price substitute and not a portfolio path","net_status":net_status}
+    formula_complete=(return_counts["validation_rows"]>0 and formula["matched"]==return_counts["validation_rows"])
+    semantics=("VERIFIED_GROSS_SPLIT_ADJUSTED_PRICE_RETURN" if producer_trace_bound and formula_complete and net_status!="ALREADY_NET" else "UNKNOWN_OR_MIXED")
+    returns={**return_counts,"return_semantics":"frozen endpoint return; not an entry/exit-price substitute and not a portfolio path","net_status":net_status,
+      "formula_consistency":{"formula":"round(exit_price / (entry_price * split_factor) - 1, 6)","units":"decimal return","absolute_tolerance":5e-7,"checked_validation_rows":sum(formula.values()),"counts":dict(formula),"examples":formula_examples},
+      "economic_semantics_status":semantics,"producer_trace_bound":producer_trace_bound,
+      "adjustment_scope":"split adjusted; no dividend adjustment established","cost_treatment":"no cost or slippage term in traced producer formula"}
     costs={"row_scope":len(rows),"component_counts":dict(cost),"policy_versions":dict(versions),"missing_is_zero":False,"one_way_components":["transaction_cost_bps","entry_slippage_bps","exit_slippage_bps"]}
     valuation_report={"row_scope":len(rows),**valuation,"zero_uncertified_does_not_mean_certified":True}
     return price_report,returns,costs,valuation_report
@@ -263,18 +301,33 @@ def register(canonical: Path, plan_path: Path, manifest_path: Path, capture_path
         if cik and cik in mappings["cik"]:
             cik_flags.append({"canonical_id":identifier,"folds":fold_ids,"matched_unresolved_tickers":sorted(mappings["cik"][cik]),"reason":"SHARED_CIK_IS_INVESTIGATION_FLAG_NOT_CONTINUITY"})
     inventory=_identity_inventory(rows,relevant_ids)
+    point_in_time_lineage=_point_in_time_symbol_lineage(rows)
     typed_status=("UNKNOWN_AMBIGUOUS_TYPED_MATCHES" if ambiguous else
                   "VERIFIED_NO_TYPED_MATCHES" if mapping_evidence["status"]=="AVAILABLE" and inventory["share_class_figi"]["development_rows_missing"]==0 else
                   "PARTIAL_UNKNOWN")
     validation_ids={identifier for fold in fold_map.values() for identifier in _fold_ids(fold,"validation")}
-    price_evidence,return_evidence,cost_evidence,valuation_evidence=_price_return_cost_evidence(rows,validation_ids)
+    producer_trace={
+      "track_b_commit":(source_provenance.get("canonical") or {}).get("source_head_sha"),
+      "diagnostics_commit":(source_provenance.get("capture") or {}).get("source_head_sha"),
+      "expected_track_b_commit":"1f8f46db584dff0881273bdeae1c56c1a8a016c5",
+      "expected_diagnostics_commit":"5d360cdbda802ae8527b35fe59f75920b8c827c8",
+      "files":{
+       "scripts/build_massive_decision_training_rows.py":"ffa68ed72f7e01ef02ef087b83ad42c35d373c507e374b4a130ca624b42c9bd3",
+       "moneybot/services/corporate_actions.py":"7e37742157356a9907fcb8ed1a41bc7a0bad4d6422aacd9fd9549103ed60d741",
+       "moneybot/services/alpha_atlas_v4_canonical_observations.py":"213b07d9cc8badf1913d15ebcd61d17065b4a9d0a13213b8362874db50eb2ed3",
+       "moneybot/services/alpha_atlas_v4_phase0.py":"4739f081db29f079cae1c3285c33145cf6b455b011eca58da36883554d7516e1",
+       "scripts/capture_alpha_atlas_v4_development_oof.py":"5a778d7a04e799ecc8078fc22ee5122f05af4c2312d45f7dcaa934fb88409df9",
+       "scripts/train_challenger_suite.py":"13fe60562efcdd93b4642c01455cff67e07d4ae1520d8443f74cdcf9ecd73951",
+       "scripts/generate_alpha_atlas_v4_development_diagnostics.py":"9aabf47e3a8664c02f2ea6c6bdd4a736858312fb8df3a2b5cb494f233b51ef33"}}
+    producer_trace["pinned_commits_match"]=producer_trace["track_b_commit"]==producer_trace["expected_track_b_commit"] and producer_trace["diagnostics_commit"]==producer_trace["expected_diagnostics_commit"]
+    price_evidence,return_evidence,cost_evidence,valuation_evidence=_price_return_cost_evidence(rows,validation_ids,producer_trace_bound=producer_trace["pinned_commits_match"])
     cost_evidence["other_saved_policy_evidence"]=_external_cost_evidence(cost_policy_evidence)
     materiality={"status":"BLOCKED" if affected else ("UNKNOWN" if typed_status.startswith(("UNKNOWN","PARTIAL")) else "CLEAR_FOR_EXACT_INPUT"),
         "unique_affected_rows":len({x["canonical_id"] for x in affected}),"dependency_occurrences":len(affected),"affected_rows":affected,
         "direct_historical_match_rows":len({x["canonical_id"] for x in affected if x["matching_basis"].startswith("DIRECT")}),
-        "typed_identifier_mapping_status":typed_status,"identifier_coverage":inventory,"mapping_evidence":mapping_evidence,
+        "typed_identifier_mapping_status":typed_status,"identifier_coverage":inventory,"point_in_time_symbol_lineage":point_in_time_lineage,"mapping_evidence":mapping_evidence,
         "ambiguous_typed_matches":ambiguous,"cik_investigation_flags":cik_flags,
-        "price_evidence":price_evidence,"return_evidence":return_evidence,"cost_evidence":cost_evidence,"valuation_evidence":valuation_evidence,
+        "price_evidence":price_evidence,"return_evidence":return_evidence,"cost_evidence":cost_evidence,"valuation_evidence":valuation_evidence,"producer_source_trace":producer_trace,
         "valuation_scope":"Endpoint metrics may use frozen returns; total return and drawdown remain NOT_EVALUABLE without certified paths.",
         "kaii_supplement":"human odd-lot rule confirmed; 52-quotes/no-trades DATE_ATTRIBUTION_UNCONFIRMED; historical 2023 applicability unknown"}
     interval=sorted(str(r.get("feature_cutoff_at")) for r in rows.values() if r.get("feature_cutoff_at"))
@@ -288,6 +341,7 @@ def register(canonical: Path, plan_path: Path, manifest_path: Path, capture_path
     structural=list(integrity["reason_codes"])
     probability_candidates=any("probability" in {str(x.get("score_semantics")) for x in capture if str(x.get("model_version"))==name} for name in candidates)
     returns_complete=(return_evidence.get("validation_rows",0)>0 and return_evidence.get("validation_endpoint_return_present")==return_evidence.get("validation_rows"))
+    gross_semantics_verified=return_evidence.get("economic_semantics_status")=="VERIFIED_GROSS_SPLIT_ADJUSTED_PRICE_RETURN"
     numeric_cost_complete=cost_evidence["component_counts"].get("numeric_all_components",0)==len(rows)
     explicit_zero_complete=cost_evidence["component_counts"].get("explicit_zero_all_components",0)==len(rows)
     already_net_complete=return_evidence["net_status"]=="ALREADY_NET"
@@ -295,7 +349,7 @@ def register(canonical: Path, plan_path: Path, manifest_path: Path, capture_path
     metric_eligibility={
       "probability_calibration":{"status":"EVALUABLE" if probability_candidates and not structural else "NOT_EVALUABLE","row_scope":"OOF validation assignments for candidates with probability semantics","reason_codes":([] if probability_candidates and not structural else ["NO_VALID_PROBABILITY_OOF_EVIDENCE_OR_SPLIT_FAILURE"]),"materiality_qualification":materiality_qualifier},
       "classification_and_coverage":{"status":"EVALUABLE" if not structural else "NOT_EVALUABLE","row_scope":"all exact OOF validation assignments","reason_codes":structural,"materiality_qualification":materiality_qualifier},
-      "gross_endpoint_economics":{"status":"EVALUABLE" if returns_complete and not structural else "NOT_EVALUABLE","row_scope":"unique development validation rows consumed by OOF candidates","reason_codes":[] if returns_complete else ["FROZEN_ENDPOINT_RETURN_MISSING"],"returns_are_prices":False,"materiality_qualification":materiality_qualifier},
+      "gross_endpoint_economics":{"status":"EVALUABLE" if returns_complete and gross_semantics_verified and not structural else "NOT_EVALUABLE","row_scope":"unique development validation rows consumed by OOF candidates","reason_codes":([] if returns_complete and gross_semantics_verified else (["FROZEN_ENDPOINT_RETURN_MISSING"] if not returns_complete else ["GROSS_RETURN_SEMANTICS_UNVERIFIED"])),"returns_are_prices":False,"materiality_qualification":materiality_qualifier},
       "net_endpoint_economics":{"status":"EVALUABLE" if returns_complete and (already_net_complete or numeric_cost_complete or explicit_zero_complete) and not structural else "NOT_EVALUABLE","row_scope":"unique development validation rows consumed by OOF candidates","reason_codes":[] if already_net_complete or numeric_cost_complete or explicit_zero_complete else ["APPLICABLE_NUMERIC_COST_POLICY_UNAVAILABLE"],"already_net_return_status":return_evidence["net_status"],"cost_application":"NO_ADDITIONAL_SUBTRACTION" if already_net_complete else "APPLY_FROZEN_COMPONENTS" if numeric_cost_complete else "ZERO_ONLY_IF_EXPLICIT" if explicit_zero_complete else "UNAVAILABLE","double_cost_subtraction_forbidden":True},
       "portfolio_total_return_and_drawdown":{"status":"NOT_EVALUABLE","row_scope":"none","reason_codes":["CERTIFIED_PORTFOLIO_PATH_AND_CAPITAL_ACCOUNTING_UNAVAILABLE_FOR_DEVELOPMENT_OOF"],"endpoint_returns_compounded":False},
     }
@@ -318,7 +372,7 @@ def register(canonical: Path, plan_path: Path, manifest_path: Path, capture_path
         old=json.loads(prior_registration.read_text()); prior={"status":"PRESERVED_AND_LINKED","path":prior_registration.name,"bytes":prior_registration.stat().st_size,"file_sha256":sha(prior_registration),"internal_registration_sha256":old.get("registration_sha256"),"expected_internal_registration_sha256":"019fb1387941858c4588f19bb89b8acd34144487025f0233d6e20cb4bfafb107","internal_hash_matches_expected":old.get("registration_sha256")=="019fb1387941858c4588f19bb89b8acd34144487025f0233d6e20cb4bfafb107"}
     registration={"schema_version":SCHEMA,"status":"REGISTERED_BLOCKED" if readiness_reasons else "REGISTERED_READY_FOR_REVIEW","readiness_reason_codes":sorted(set(readiness_reasons)),
       "performance_comparison_executed":False,"development_scope":{"interval_source":"derived_from_development_feature_cutoff_at","start":interval[0][:10] if interval else None,"end":interval[-1][:10] if interval else None,"fold_count":fold_count},
-      "inputs":files,"prior_registration":prior,"correction_change_record":["Inventory identifier coverage and consume saved typed mappings without treating CIK as continuity","Resolve entry/exit prices from documented reconstruction_lineage.execution before reporting missing prices","Separate frozen endpoint returns from price and portfolio-path evidence","Separate missing, explicit-zero, numeric, and already-net cost evidence","Report metric-family eligibility independently from split integrity and overall readiness"],
+      "inputs":files,"prior_registration":prior,"correction_change_record":["Inventory identifier coverage and consume saved typed mappings without treating CIK as continuity","Resolve entry/exit prices from documented reconstruction_lineage.execution before reporting missing prices","Separate frozen endpoint returns from price and portfolio-path evidence","Separate missing, explicit-zero, numeric, and already-net cost evidence","Require pinned producer commits plus price-formula consistency before gross endpoint economics is EVALUABLE","Treat point_in_time_symbol_id fallback values as ticker/date observation keys, not proven security identities","Report metric-family eligibility independently from split integrity and overall readiness"],
       "candidates":candidate_rules,"split_integrity":integrity,"materiality":materiality,"metric_eligibility":metric_eligibility,
       "baselines":{"training_fold_prevalence":{"scope":"each candidate/fold training partition only","probability_metrics":["brier","log_loss","calibration"],"direction":"lower_is_better"},
         "equal_weight_date_cohort":{"eligibility":"same frozen eligible validation rows","allocation":"equal weight unique security per date, then equal weight dates","comparator":"net endpoint excess return"},
