@@ -56,7 +56,14 @@ jobs:
         with: {name: alpha-atlas-v4-historical-coverage-diagnostics-35233428008-1, run-id: 35233428008, path: source-identity-evidence, github-token: "${{ github.token }}"}
       - name: Resolve exact files and write provenance
         run: |
+          set -euo pipefail
           python scripts/validate_v4_weighting_registration_sources.py --metadata-only --track-root source-track-b --diagnostics-root source-diagnostics --output "$OUTPUT_DIR/source/verified-files.json"
+          python -m scripts.resolve_v4_baseline_registration_supplements \
+            --prior-root source-prior-registration \
+            --identity-root source-identity-evidence \
+            --track-root source-track-b \
+            --validated-metadata "$OUTPUT_DIR/source/validated-metadata.json" \
+            --output-dir "$OUTPUT_DIR/source"
           python - <<'PY'
           import json, os
           from pathlib import Path
@@ -65,11 +72,11 @@ jobs:
           payload={role:{**meta['diagnostics' if role=='capture' else 'track']} for role in ('canonical','plan','manifest','capture')}
           for role,key,origin in (('temporal_certification','certification','track'),('diagnostics_workflow_provenance','workflow_provenance','diagnostics'),('capture_provenance','capture_provenance','diagnostics')):
               path=Path(files[key]); payload[role]={**meta[origin],'path':str(path),'bytes':path.stat().st_size,'sha256_computed':hashlib.sha256(path.read_bytes()).hexdigest(),'provenance_status':'NEWLY_COMPUTED; VALIDATED_BY_SOURCE_RESOLVER'}
-          prior=list(Path('source-prior-registration').rglob('registration.json')); identity=list(Path('source-identity-evidence').rglob('alpha_atlas_v4_historical_coverage_diagnostics.json')); costs=list(Path('source-track-b').rglob('execution_policy.json'))
-          if len(prior)!=1 or len(identity)!=1 or len(costs)!=1: raise SystemExit(f'exact supplemental evidence missing/ambiguous: prior={len(prior)} identity={len(identity)} costs={len(costs)}')
-          prior_copy=root/'source/prior-registration.json'; identity_copy=root/'source/identity-evidence.json'; cost_copy=root/'source/other-scope-execution-policy.json'
-          prior_copy.write_bytes(prior[0].read_bytes()); identity_copy.write_bytes(identity[0].read_bytes()); cost_copy.write_bytes(costs[0].read_bytes())
-          payload['materiality_evidence']={'unresolved_identity_typed_identifier_map_status':'SUPPLIED_FOR_VALIDATOR','identity_evidence_path':str(identity_copy),'identity_evidence_sha256':hashlib.sha256(identity_copy.read_bytes()).hexdigest()}
+          resolution=json.loads((root/'source/supplemental-resolution.json').read_text())
+          if resolution.get('status') != 'RESOLVED': raise SystemExit('supplemental source resolution did not complete')
+          supplemental=resolution['sources']; prior_copy=Path(supplemental['prior_registration']['consumed_copy_path']); identity_copy=Path(supplemental['identity_evidence']['consumed_copy_path']); cost_copy=Path(supplemental['cost_policy_evidence']['consumed_copy_path'])
+          payload['supplemental_evidence']=supplemental
+          payload['materiality_evidence']={'unresolved_identity_typed_identifier_map_status':'SUPPLIED_FOR_VALIDATOR','identity_evidence_path':str(identity_copy),'identity_evidence_sha256':supplemental['identity_evidence']['sha256_computed']}
           (root/'source/source-provenance.json').write_text(json.dumps(payload,indent=2,sort_keys=True)+'\n')
           values={k:files[k] for k in ('feature_store','split_plan','manifest','capture')}; values.update(PRIOR_REGISTRATION=str(prior_copy),IDENTITY_EVIDENCE=str(identity_copy),COST_POLICY_EVIDENCE=str(cost_copy))
           (root/'source/resolved-paths.env').write_text('\n'.join(f"{k.upper()}={v}" for k,v in values.items())+'\n')
@@ -90,7 +97,8 @@ jobs:
       - name: Publish registration status
         if: always()
         run: |
-          if test -s "$OUTPUT_DIR/reports/registration.md"; then cat "$OUTPUT_DIR/reports/registration.md" >> "$GITHUB_STEP_SUMMARY"; else printf '## Registration preparation failed\n\nNo registration or comparison result was produced. Review `registration.log`.\n' >> "$GITHUB_STEP_SUMMARY"; fi
+          if test -s "$OUTPUT_DIR/source/supplemental-resolution.md"; then cat "$OUTPUT_DIR/source/supplemental-resolution.md" >> "$GITHUB_STEP_SUMMARY"; fi
+          if test -s "$OUTPUT_DIR/reports/registration.md"; then cat "$OUTPUT_DIR/reports/registration.md" >> "$GITHUB_STEP_SUMMARY"; else printf '\n## Registration preparation failed\n\nNo registration, materiality, split-integrity, or comparison result was produced. Review the supplemental-resolution report and logs.\n' >> "$GITHUB_STEP_SUMMARY"; fi
       - name: Upload evidence even on failure
         if: always()
         uses: actions/upload-artifact@v4

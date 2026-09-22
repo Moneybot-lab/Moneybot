@@ -918,3 +918,30 @@ No corrected real counts or new registration hash are claimed until the same man
 workflow is rerun. It is now additionally pinned to and retrieves source diagnostic
 `35233428008-1` for typed mappings and prior registration `35659754050-1` for
 immutable provenance. Performance comparison execution remains pending review.
+
+### Supplemental source-resolution repair after run 35665126250-1
+
+- [x] **Implementation — deterministic supplemental evidence resolution.** Run
+  `35665126250`, attempt `1`, stopped in **Resolve exact files and write provenance**
+  with `prior=1 identity=3 costs=1`; the registration step was skipped. This is a
+  source-selection failure, not a new split-integrity or materiality result. The
+  recursive basename uniqueness check has been replaced with pinned
+  artifact-relative paths: `reports/registration.json` in registration run
+  `35659754050-1`, top-level
+  `alpha_atlas_v4_historical_coverage_diagnostics.json` in identity run
+  `35233428008-1`, and top-level `execution_policy.json` in Track B run
+  `34689216730-1`. The latter remains explicitly different-scope evidence and does
+  not establish cost applicability to development OOF results.
+- [x] **Failure evidence — preserved and actionable.** The resolver inventories
+  every same-basename candidate with artifact-relative path, byte size, and newly
+  computed SHA-256; validates pinned run/artifact metadata and JSON schema; copies
+  the intended source byte-for-byte; and writes JSON plus Markdown resolution
+  reports before failing for a missing intended path, schema mismatch, or expected
+  report-hash mismatch. A calculated file hash is not represented as an
+  independently expected hash.
+- [ ] **Evidence — corrected real registration remains pending.** Local GitHub
+  authentication is unavailable, so the three report sizes/hashes inside artifact
+  `10502208555` were not independently inspected here and no corrected registration,
+  materiality result, split-integrity result, or new registration hash is claimed.
+  After merge, run **V4 Register Development Baseline Comparison** with no inputs;
+  review `supplemental-resolution.{json,md}` first, then the registration outputs.
