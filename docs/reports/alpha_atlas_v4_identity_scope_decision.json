@@ -1,0 +1,63 @@
+{
+  "decision": {
+    "aggregation": "unchanged registered per-fold and equal-fold aggregate; date cohorts use frozen observation keys",
+    "approval_boundary": "REVIEW_ONLY; NO PERFORMANCE SCORING AUTHORIZED",
+    "candidate_set": "exact frozen registered candidates and three chronological OOF folds",
+    "claim_limitations": [
+      "not net profitability",
+      "not portfolio performance",
+      "not durable predictive advantage",
+      "not promotion readiness",
+      "dividends not established",
+      "same-security continuity not established",
+      "prior development exposure exists"
+    ],
+    "comparison_rule": "UNCHANGED; net-primary ranking lanes remain blocked",
+    "metrics": [
+      "Brier/log loss/calibration where score semantics are probabilities",
+      "precision/recall and decision coverage",
+      "gross split-adjusted endpoint price-return diagnostic"
+    ],
+    "recommended_option": "A_NARROW_FROZEN_SAMPLE_DIAGNOSTIC_ONLY",
+    "status": "PROPOSAL_REQUIRES_REVIEW"
+  },
+  "future_option_b": {
+    "final_holdout_policy_may_be_borrowed": false,
+    "new_assumption": true,
+    "required_pre_results_decisions": [
+      "cost components",
+      "units",
+      "one-way versus round-trip",
+      "spread/slippage",
+      "candidate and baseline application"
+    ],
+    "status": "INACTIVE"
+  },
+  "identity_dependency_summary": {
+    "conflicting_rows": 0,
+    "development_rows_examined": 24846,
+    "direct_historical_matches": 0,
+    "fallback_pattern_rows": 24846,
+    "full_feature_lookback_start": "UNKNOWN",
+    "same_security_continuity": "NOT_ESTABLISHED",
+    "supported_rows": 0,
+    "typed_identity_materiality": "PARTIAL_UNKNOWN",
+    "unique_observation_keys": "PENDING_ARTIFACT_BOUND_CHECK",
+    "unique_tickers": "PENDING_ARTIFACT_BOUND_CHECK",
+    "unresolved_rows": 24846,
+    "validation_rows_examined": 10273
+  },
+  "metric_scope": {
+    "classification_coverage": "MECHANICALLY_COMPUTABLE; NARROW_DIAGNOSTIC_REQUIRES_IDENTITY_QUALIFICATION",
+    "gross_endpoint_economics": "MECHANICALLY_COMPUTABLE_FROM_10273_VERIFIED_FORMULA_MATCHES; BROADER_CLAIM_UNSUPPORTED",
+    "net_endpoint_economics": "NOT_EVALUABLE_APPLICABLE_DEVELOPMENT_COST_POLICY_MISSING",
+    "portfolio_total_return_drawdown": "NOT_EVALUABLE",
+    "probability_calibration": "MECHANICALLY_COMPUTABLE; NARROW_DIAGNOSTIC_REQUIRES_IDENTITY_QUALIFICATION"
+  },
+  "schema_version": "alpha-atlas-v4-identity-scope-decision.v1",
+  "source": {
+    "evidence_status": "USER_SUPPLIED_RUN_SUMMARY; ARTIFACT_RECHECK_PENDING_AUTHENTICATED_WORKFLOW",
+    "internal_registration_sha256": "9c573b0c75b97dbbe9a1b3b17c694425fd647e6fcbd600d2fd2c636d51203608",
+    "registration_run": "35741072083-1"
+  }
+}

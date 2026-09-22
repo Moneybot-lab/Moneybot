@@ -1,0 +1,63 @@
+{
+  "correspondence": [
+    {
+      "response_number": 1,
+      "sha256": "31b447838132d0cf36bef1a8ce8177d685cea8059787a3511e1db35d0a703b40",
+      "verbatim": "Thanks for reaching out! For your questions:\nPer [https://massive.com/docs/rest/stocks/market-operations/condition-codes](https://massive.com/docs/rest/stocks/market-operations/condition-codes), condition 41 updates both price and volume\nI pull the full day of quotes for KAII and found there are only 52 of them. It is indeed expected that there is very few/no trade for a ticker with such a small visibility\nHope this helps!"
+    },
+    {
+      "response_number": 2,
+      "sha256": "087e034c5152b76797965bce291f05c792abfd86eb2bbad37668c945c241f577",
+      "verbatim": "Hello again. Yes I pulled the pull day for KAII and there were only 52 quotes and no trades. This ticker is extremely illiquid.\n\nFor the conditions question, if a trade includes any condition that should be excluded from aggregates, the trade is excluded regardless of what other conditions it has. That means any odd lot trade is excluded from aggregation.\n\nHope this helps!"
+    }
+  ],
+  "linked_preserved_evidence": {
+    "diagnostic_artifact": "alpha-atlas-v4-historical-coverage-diagnostics-35233428008-1",
+    "diagnostic_artifact_digest": "sha256:082092918781f45dc61b57b12128903b9b4e0837ee86f391336bc5d72f6f3786",
+    "diagnostic_run": "35233428008-1",
+    "evaluation_artifact": "kaii-trade-condition-evaluation-35255222521-1",
+    "evaluation_artifact_digest": "sha256:cd734e934fea432c65f6dda64df40e82bbd4817bc37f1ab488ecfa269e5d68cb",
+    "evaluation_run": "35255222521-1",
+    "original_reports_modified": false
+  },
+  "qualifications": [
+    "The correspondence confirms the current combination rule but does not explicitly version the rule or establish its historical applicability to currently served 2023 aggregates.",
+    "Provider testimony is distinct from saved API responses and supplies no query bounds, timezone, entitlement, pagination, response hash, or venue-completeness proof.",
+    "The independently saved February 24 full-day API response remains empty with pagination complete; the 52-quote testimony is not attributed to February 24.",
+    "Quotes do not establish trades or prices; no replacement bar, terminal proceeds, zero recovery, or valuation readiness is inferred.",
+    "Full historical coverage and terminal valuation remain open."
+  ],
+  "recorded_at_utc": "2026-09-21",
+  "response_timestamp_status": "UNKNOWN_NOT_SUPPLIED",
+  "safety": {
+    "model_behavior_changed": false,
+    "original_evidence_unchanged": true,
+    "provider_query_performed": false,
+    "research_only": true,
+    "training_performed": false
+  },
+  "schema_version": "alpha-atlas-v4-kaii-human-support-supplement.v1",
+  "source": {
+    "agent_name": null,
+    "attribution": "Massive human support",
+    "evidence_type": "USER_SUPPLIED_CORRESPONDENCE",
+    "recording_date_is_response_date": false,
+    "ticket_id": null
+  },
+  "supported_findings": {
+    "2023-01-19": {
+      "record_16": "UNCHANGED; interpretation remains attributed only to the saved condition table",
+      "record_17_37_41": "EXCLUDED_FROM_AGGREGATION_UNDER_CONFIRMED_COMBINATION_RULE_BECAUSE_CONDITION_37_IS_ODD_LOT",
+      "scope": "saved regular-session query evidence only"
+    },
+    "2023-02-17": "BOTH_SAVED_14_12_37_41_TRADES_EXCLUDED_FROM_AGGREGATION_UNDER_CONFIRMED_COMBINATION_RULE_BECAUSE_CONDITION_37_IS_ODD_LOT",
+    "52_quotes_no_trades": {
+      "date_attribution": "DATE_ATTRIBUTION_UNCONFIRMED",
+      "not_a_locally_reproduced_result": true,
+      "reason": "Neither preserved response text names a date",
+      "testimony": "Human support reports a full-day KAII query with 52 quotes and no trades"
+    },
+    "combined_conditions": "HUMAN_SUPPORT_CONFIRMED_RESTRICTIVE_CONDITION_PRECEDENCE; any odd-lot condition excludes the trade from aggregation",
+    "condition_41": "HUMAN_SUPPORT_CONFIRMED_UPDATES_PRICE_AND_VOLUME; alone does not explain an absent OHLC bar"
+  }
+}
