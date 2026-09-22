@@ -129,6 +129,54 @@ def _point_in_time_symbol_lineage(rows: dict[str,dict]) -> dict[str,Any]:
       "ticker_change_reuse_share_class_guarantee":"NOT_ESTABLISHED",
       "identity_sufficiency_for_frozen_comparison":"UNKNOWN_UNTIL_AFFECTED_SCOPE_IS_BOUNDED_OR_SECURITY_LINEAGE_IS_PROVEN"}
 
+def _identity_dependency_report(rows: dict[str,dict], validation_ids: set[str]) -> dict[str,Any]:
+    by_key: dict[str,set[str]]={}
+    for row in rows.values():
+        by_key.setdefault(str(row.get("point_in_time_symbol_id") or ""),set()).add(str(row.get("symbol") or "").upper())
+    classifications=Counter(); occurrences=Counter(); affected=[]; windows=[]
+    for canonical_id,row in rows.items():
+        symbol=str(row.get("symbol") or "").upper(); event=str(row.get("event_date") or "")[:10]
+        key=str(row.get("point_in_time_symbol_id") or "")
+        fallback=key==f"{symbol}:{event}"; conflict=len(by_key[key])>1
+        identity_evidence=row.get("security_identity") or {}
+        explicitly_supported=(isinstance(identity_evidence,dict) and identity_evidence.get("status") in {"VERIFIED","SUPPORTED"}
+                              and bool(identity_evidence.get("effective_start")) and bool(identity_evidence.get("effective_end")))
+        classification="CONFLICTING" if conflict else "SUPPORTED" if explicitly_supported else "UNRESOLVED_IDENTITY"
+        classifications[classification]+=1
+        feature_dates=[]
+        for value in (row.get("feature_family_source_at") or {}).values():
+            if value: feature_dates.append(str(value)[:10])
+        feature_start=min(feature_dates) if feature_dates else None
+        feature_end=str(row.get("feature_cutoff_at") or "")[:10] or None
+        dependency_windows={
+          "feature_history":{"start":feature_start,"end":feature_end,"start_status":"SAVED_LATEST_SOURCE_MINIMUM_NOT_FULL_LOOKBACK" if feature_start else "UNKNOWN"},
+          "label_and_execution":{"start":str(row.get("entry_session_date") or row.get("entry_at") or "")[:10] or None,"end":str(row.get("exit_session_date") or row.get("exit_at") or "")[:10] or None},
+          "corporate_actions":{"start":event or None,"end":str(row.get("exit_session_date") or row.get("exit_at") or "")[:10] or None,"evidence":row.get("corporate_action_manifest_sha256") or "REFERENCE_ONLY_OR_ABSENT"},
+          "training_validation_grouping":{"start":event or None,"end":event or None},
+          "oof_join":{"start":event or None,"end":event or None},
+          "date_cohort_and_deduplication":{"start":event or None,"end":event or None}}
+        for dependency in dependency_windows: occurrences[dependency]+=1
+        windows.append((feature_start,dependency_windows["label_and_execution"]["end"]))
+        if classification!="SUPPORTED":
+            affected.append({"canonical_id":canonical_id,"validation_row":canonical_id in validation_ids,"symbol":symbol,
+              "point_in_time_symbol_id":key,"classification":classification,"dependency_windows":dependency_windows,
+              "missing_evidence":"EFFECTIVE_DATED_LISTING_OR_SECURITY_LINEAGE_ACROSS_FEATURE_LABEL_AND_EXECUTION_WINDOWS"})
+    validation_affected=sum(item["validation_row"] for item in affected)
+    starts=[x for x,_ in windows if x]; ends=[x for _,x in windows if x]
+    return {"schema_version":"alpha-atlas-v4-identity-dependency-report.v1",
+      "development_rows_examined":len(rows),"validation_rows_examined":len(validation_ids),
+      "unique_tickers":len({str(row.get('symbol') or '').upper() for row in rows.values()}),
+      "unique_listing_or_observation_keys":len(by_key),"row_classification_counts":dict(classifications),
+      "supported_rows":classifications.get("SUPPORTED",0),"conflicting_rows":classifications.get("CONFLICTING",0),
+      "unresolved_rows":classifications.get("UNRESOLVED_IDENTITY",0),"validation_affected_rows":validation_affected,
+      "dependency_occurrence_counts":dict(occurrences),"affected_rows":affected,
+      "overall_dependency_window":{"earliest_saved_feature_source":min(starts) if starts else None,"latest_exit":max(ends) if ends else None,
+        "full_feature_lookback_start":"UNKNOWN_UNLESS_SOURCE_EVIDENCE_MANIFEST_CAN_BE SELECTIVELY_BOUND_WITHOUT_HOLDOUT_ACCESS"},
+      "known_case_comparison":{"direct_ticker_matches":"REPORTED_SEPARATELY_IN_MATERIALITY","typed_identifier_matches":"REPORTED_SEPARATELY_IN_MATERIALITY",
+        "unresolved_alias_coverage":"ALL_FALLBACK_ROWS_UNBOUNDED_WITHOUT_EFFECTIVE_DATED_ALIAS_EVIDENCE"},
+      "observation_key_correctness":"VERIFIED_BY_CANONICAL_AND_OOF_JOIN_CHECKS",
+      "same_security_continuity":"NOT_ESTABLISHED"}
+
 def _identity_mappings(path: Path | None) -> tuple[dict[str,dict[str,set[str]]],dict]:
     maps={kind:{} for kind in ("share_class_figi","composite_figi","cik")}
     if path is None or not path.is_file(): return maps,{"status":"UNKNOWN","reason":"IDENTITY_EVIDENCE_FILE_UNAVAILABLE","source":None}
@@ -306,6 +354,7 @@ def register(canonical: Path, plan_path: Path, manifest_path: Path, capture_path
                   "VERIFIED_NO_TYPED_MATCHES" if mapping_evidence["status"]=="AVAILABLE" and inventory["share_class_figi"]["development_rows_missing"]==0 else
                   "PARTIAL_UNKNOWN")
     validation_ids={identifier for fold in fold_map.values() for identifier in _fold_ids(fold,"validation")}
+    identity_dependencies=_identity_dependency_report(rows,validation_ids)
     producer_trace={
       "track_b_commit":(source_provenance.get("canonical") or {}).get("source_head_sha"),
       "diagnostics_commit":(source_provenance.get("capture") or {}).get("source_head_sha"),
@@ -320,12 +369,13 @@ def register(canonical: Path, plan_path: Path, manifest_path: Path, capture_path
        "scripts/train_challenger_suite.py":"13fe60562efcdd93b4642c01455cff67e07d4ae1520d8443f74cdcf9ecd73951",
        "scripts/generate_alpha_atlas_v4_development_diagnostics.py":"9aabf47e3a8664c02f2ea6c6bdd4a736858312fb8df3a2b5cb494f233b51ef33"}}
     producer_trace["pinned_commits_match"]=producer_trace["track_b_commit"]==producer_trace["expected_track_b_commit"] and producer_trace["diagnostics_commit"]==producer_trace["expected_diagnostics_commit"]
+    identity_dependencies["provenance"]={"canonical_input":files[0],"identity_mapping_evidence":mapping_evidence.get("source"),"producer_source_trace":producer_trace}
     price_evidence,return_evidence,cost_evidence,valuation_evidence=_price_return_cost_evidence(rows,validation_ids,producer_trace_bound=producer_trace["pinned_commits_match"])
     cost_evidence["other_saved_policy_evidence"]=_external_cost_evidence(cost_policy_evidence)
     materiality={"status":"BLOCKED" if affected else ("UNKNOWN" if typed_status.startswith(("UNKNOWN","PARTIAL")) else "CLEAR_FOR_EXACT_INPUT"),
         "unique_affected_rows":len({x["canonical_id"] for x in affected}),"dependency_occurrences":len(affected),"affected_rows":affected,
         "direct_historical_match_rows":len({x["canonical_id"] for x in affected if x["matching_basis"].startswith("DIRECT")}),
-        "typed_identifier_mapping_status":typed_status,"identifier_coverage":inventory,"point_in_time_symbol_lineage":point_in_time_lineage,"mapping_evidence":mapping_evidence,
+        "typed_identifier_mapping_status":typed_status,"identifier_coverage":inventory,"point_in_time_symbol_lineage":point_in_time_lineage,"identity_dependency_report":identity_dependencies,"mapping_evidence":mapping_evidence,
         "ambiguous_typed_matches":ambiguous,"cik_investigation_flags":cik_flags,
         "price_evidence":price_evidence,"return_evidence":return_evidence,"cost_evidence":cost_evidence,"valuation_evidence":valuation_evidence,"producer_source_trace":producer_trace,
         "valuation_scope":"Endpoint metrics may use frozen returns; total return and drawdown remain NOT_EVALUABLE without certified paths.",
@@ -353,6 +403,25 @@ def register(canonical: Path, plan_path: Path, manifest_path: Path, capture_path
       "net_endpoint_economics":{"status":"EVALUABLE" if returns_complete and (already_net_complete or numeric_cost_complete or explicit_zero_complete) and not structural else "NOT_EVALUABLE","row_scope":"unique development validation rows consumed by OOF candidates","reason_codes":[] if already_net_complete or numeric_cost_complete or explicit_zero_complete else ["APPLICABLE_NUMERIC_COST_POLICY_UNAVAILABLE"],"already_net_return_status":return_evidence["net_status"],"cost_application":"NO_ADDITIONAL_SUBTRACTION" if already_net_complete else "APPLY_FROZEN_COMPONENTS" if numeric_cost_complete else "ZERO_ONLY_IF_EXPLICIT" if explicit_zero_complete else "UNAVAILABLE","double_cost_subtraction_forbidden":True},
       "portfolio_total_return_and_drawdown":{"status":"NOT_EVALUABLE","row_scope":"none","reason_codes":["CERTIFIED_PORTFOLIO_PATH_AND_CAPITAL_ACCOUNTING_UNAVAILABLE_FOR_DEVELOPMENT_OOF"],"endpoint_returns_compounded":False},
     }
+    metric_identity_impact={
+      "probability_calibration":{"mechanically_computable":metric_eligibility["probability_calibration"]["status"]=="EVALUABLE","narrow_frozen_sample_diagnostic":"REVIEWABLE_WITH_IDENTITY_QUALIFICATION","broader_claim":"NOT_SUPPORTED","identity_dependency":"feature histories and labels may cross unverified same-ticker security boundaries"},
+      "classification_and_coverage":{"mechanically_computable":metric_eligibility["classification_and_coverage"]["status"]=="EVALUABLE","narrow_frozen_sample_diagnostic":"REVIEWABLE_WITH_IDENTITY_QUALIFICATION","broader_claim":"NOT_SUPPORTED","identity_dependency":"labels, eligibility, grouping, and cohort membership use ticker/date observation keys"},
+      "gross_endpoint_economics":{"mechanically_computable":metric_eligibility["gross_endpoint_economics"]["status"]=="EVALUABLE","narrow_frozen_sample_diagnostic":"REVIEWABLE_IF_FORMULA_VERIFIED","broader_claim":"NOT_SUPPORTED","identity_dependency":"entry/exit continuity and dividend treatment are not established"},
+      "net_endpoint_economics":{"mechanically_computable":False,"narrow_frozen_sample_diagnostic":"NOT_EVALUABLE","broader_claim":"NOT_SUPPORTED","identity_dependency":"identity qualifications remain and applicable development costs are absent"},
+      "portfolio_total_return_and_drawdown":{"mechanically_computable":False,"narrow_frozen_sample_diagnostic":"NOT_EVALUABLE","broader_claim":"NOT_SUPPORTED","identity_dependency":"certified security paths, terminal valuation, and capital accounting are absent"}}
+    scope_decision={"schema_version":"alpha-atlas-v4-comparison-scope-decision.v1","status":"PROPOSAL_REQUIRES_REVIEW",
+      "recommended_option":"A_NARROW_FROZEN_SAMPLE_DIAGNOSTIC_ONLY",
+      "approval_boundary":"NO_SCORING_OR_EXECUTION_AUTHORIZED; registration advantage rule unchanged",
+      "option_a":{"candidate_set":"exact frozen candidates and 3 chronological OOF folds from the registered manifest",
+        "metrics":["Brier/log loss/calibration for probability-semantic candidates","precision/recall and decision coverage with frozen denominators","gross split-adjusted endpoint price-return diagnostic"],
+        "comparators":["training-fold prevalence for probability metrics","equal-weight eligible date cohort for gross endpoint diagnostic","cash/no-selection only as zero-return arithmetic reference"],
+        "aggregation":"registered per-fold and equal-fold aggregate; date cohorts equal-weight unique observation keys",
+        "comparison_rule":"UNCHANGED_REGISTERED_RULE; net-primary ranking lanes remain blocked",
+        "limitations":["all point-in-time IDs are ticker/date fallback keys in run 35741072083-1","same-security continuity not established","dividends not established","not net profitability","not portfolio performance","not durable predictive advantage","prior development exposure exists","research-only; no promotion"]},
+      "option_b":{"status":"INACTIVE_FUTURE_REGISTRATION","new_assumption_not_recovered_evidence":True,
+        "decisions_required":["cost components","basis-point or currency units","one-way versus round-trip treatment","spread/slippage","identical candidate and baseline application"],
+        "identity_prerequisite":"bound effective-dated identity for every consumed feature/label/execution window or explicitly limit the claim to observation keys",
+        "anti_selection":"costs must be registered and reviewed before results; final-holdout policy cannot be borrowed without justification"}}
     readiness_reasons=list(structural)
     if affected: readiness_reasons.append("UNRESOLVED_HISTORICAL_DEPENDENCY_INTERSECTION")
     if typed_status.startswith(("UNKNOWN","PARTIAL")): readiness_reasons.append("TYPED_IDENTITY_MATERIALITY_UNKNOWN")
@@ -373,7 +442,7 @@ def register(canonical: Path, plan_path: Path, manifest_path: Path, capture_path
     registration={"schema_version":SCHEMA,"status":"REGISTERED_BLOCKED" if readiness_reasons else "REGISTERED_READY_FOR_REVIEW","readiness_reason_codes":sorted(set(readiness_reasons)),
       "performance_comparison_executed":False,"development_scope":{"interval_source":"derived_from_development_feature_cutoff_at","start":interval[0][:10] if interval else None,"end":interval[-1][:10] if interval else None,"fold_count":fold_count},
       "inputs":files,"prior_registration":prior,"correction_change_record":["Inventory identifier coverage and consume saved typed mappings without treating CIK as continuity","Resolve entry/exit prices from documented reconstruction_lineage.execution before reporting missing prices","Separate frozen endpoint returns from price and portfolio-path evidence","Separate missing, explicit-zero, numeric, and already-net cost evidence","Require pinned producer commits plus price-formula consistency before gross endpoint economics is EVALUABLE","Treat point_in_time_symbol_id fallback values as ticker/date observation keys, not proven security identities","Report metric-family eligibility independently from split integrity and overall readiness"],
-      "candidates":candidate_rules,"split_integrity":integrity,"materiality":materiality,"metric_eligibility":metric_eligibility,
+      "candidates":candidate_rules,"split_integrity":integrity,"materiality":materiality,"metric_eligibility":metric_eligibility,"metric_identity_impact":metric_identity_impact,"comparison_scope_decision":scope_decision,
       "baselines":{"training_fold_prevalence":{"scope":"each candidate/fold training partition only","probability_metrics":["brier","log_loss","calibration"],"direction":"lower_is_better"},
         "equal_weight_date_cohort":{"eligibility":"same frozen eligible validation rows","allocation":"equal weight unique security per date, then equal weight dates","comparator":"net endpoint excess return"},
         "cash_no_selection":{"cash_return":0.0,"transaction_cost":0.0,"slippage":0.0,"intentional_difference":"no positions, turnover, or costs"}},

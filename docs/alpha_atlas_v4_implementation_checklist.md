@@ -997,3 +997,42 @@ immutable provenance. Performance comparison execution remains pending review.
   collision, and affected-scope counts. Until then, typed-identity sufficiency stays
   `PARTIAL_UNKNOWN`, gross semantics are not newly certified here, and comparison
   readiness is not approved.
+
+### Exact frozen identity dependencies and scope decision after run 35741072083-1
+
+- [x] **Retain completed evidence.** Registration `35741072083-1`, internal hash
+  `9c573b0c75b97dbbe9a1b3b17c694425fd647e6fcbd600d2fd2c636d51203608`,
+  verified split integrity, all 24,846 development entry/exit prices, and formula
+  matches for all 10,273 validation gross split-adjusted price returns. Dividend
+  adjustment remains unestablished; no applicable development cost policy exists;
+  portfolio total return/drawdown remains unavailable.
+- [x] **Implementation — dependency scope is explicit.** Registration now emits
+  `identity_dependencies.{json,md}` with mutually exclusive `SUPPORTED`,
+  `CONFLICTING`, and `UNRESOLVED_IDENTITY` row classifications; canonical IDs;
+  validation membership; feature-history, label/execution, corporate-action,
+  fold/OOF, and date-cohort dependency windows; separate occurrence counts; and
+  canonical, mapping, and pinned-code provenance. A saved latest feature-source date
+  is not mislabeled as the full lookback start; absent exact lineage remains
+  `UNKNOWN` rather than zero.
+- [x] **Implementation — metric impact separated from arithmetic.** Probability,
+  classification, and verified-gross endpoint metrics may be mechanically
+  computable while security-continuity uncertainty limits interpretation. Net
+  economics remains blocked by the missing applicable cost policy. Portfolio and
+  terminal-valuation claims remain `NOT_EVALUABLE`.
+- [x] **Scope proposal prepared, not activated.** Registration emits
+  `comparison_scope_decision.{json,md}` recommending review of Option A only: the
+  exact frozen candidates and three OOF folds, registered probability/classification
+  metrics, and a gross split-adjusted endpoint diagnostic under the unchanged
+  comparison rule. It expressly excludes net profitability, portfolio performance,
+  durable advantage, and promotion claims. Option B is inactive and would require a
+  new pre-results cost-policy registration plus the same identity prerequisites.
+- [x] **Review companion preserved.** The pre-execution decision is recorded in
+  `docs/reports/alpha_atlas_v4_identity_scope_decision.{json,md}` with SHA-256
+  `e88b9bb38f3d5968b39629b9343d7e8a14c06761320a000e16d13f1f2b83fc86`
+  (JSON) and `9a9314c951e666c3c150d89f724d5e32ddce2af2b1565c08f06585011855d720`
+  (Markdown). Unknown artifact-bound counts remain explicitly pending.
+- [ ] **Evidence readiness — hosted dependency counts pending.** Local artifact
+  authentication is unavailable. Run **V4 Register Development Baseline
+  Comparison** with no inputs and review the identity-dependency and scope-decision
+  reports. This is the single next action; it is a review step, not authorization to
+  score the comparison. No broad identity backfill is requested.

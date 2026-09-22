@@ -96,7 +96,7 @@ def test_exact_module_entrypoint_generates_registration_only(tmp_path):
     payload=json.loads((output/'registration.json').read_text())
     assert payload['performance_comparison_executed'] is False
     assert payload['registration_sha256']
-    assert {p.name for p in output.iterdir()} == {'registration.json','registration.md','split_integrity.json','materiality.json','materiality.md','input_manifest.json','SHA256SUMS'}
+    assert {p.name for p in output.iterdir()} == {'registration.json','registration.md','split_integrity.json','materiality.json','materiality.md','input_manifest.json','identity_dependencies.json','identity_dependencies.md','comparison_scope_decision.json','comparison_scope_decision.md','SHA256SUMS'}
 
 def test_manual_workflow_is_registration_only_and_pinned():
     text=Path('.github/workflows/v4-register-development-baseline-comparison.yml').read_text()
@@ -211,3 +211,32 @@ def test_point_in_time_symbol_id_name_does_not_overstate_security_identity(monke
     assert lineage['fallback_pattern_rows']==6
     assert lineage['semantic_guarantee']=='TICKER_DATE_OBSERVATION_KEY_NOT_PROVEN_SECURITY_OR_LISTING_ID'
     assert lineage['identity_sufficiency_for_frozen_comparison'].startswith('UNKNOWN_')
+
+def test_identity_dependency_windows_include_features_labels_and_execution(monkeypatch,tmp_path):
+    paths=_write(tmp_path); canonical,plan,manifest,capture,source,expected=paths
+    rows=[json.loads(x) for x in canonical.read_text().splitlines()]
+    for row in rows:
+        row['point_in_time_symbol_id']=f"{row['symbol']}:{row['event_date']}"
+        row['feature_family_source_at']={'symbol_daily':'2023-02-15T21:00:00+00:00','fundamental':'2023-01-31T00:00:00+00:00'}
+    canonical.write_text(''.join(json.dumps(x)+'\n' for x in rows)); expected['canonical']=reg.sha(canonical); monkeypatch.setattr(reg,'EXPECTED',expected)
+    report=reg.register(canonical,plan,manifest,capture,source)['materiality']['identity_dependency_report']
+    assert report['development_rows_examined']==6 and report['validation_rows_examined']==3
+    assert report['row_classification_counts']=={'UNRESOLVED_IDENTITY':6}
+    assert report['validation_affected_rows']==3
+    assert report['dependency_occurrence_counts']['feature_history']==6
+    assert report['overall_dependency_window']['earliest_saved_feature_source']=='2023-01-31'
+    assert report['overall_dependency_window']['full_feature_lookback_start'].startswith('UNKNOWN_')
+    decision=reg.register(canonical,plan,manifest,capture,source)['comparison_scope_decision']
+    assert decision['status']=='PROPOSAL_REQUIRES_REVIEW'
+    assert decision['recommended_option']=='A_NARROW_FROZEN_SAMPLE_DIAGNOSTIC_ONLY'
+    assert decision['option_a']['comparison_rule'].startswith('UNCHANGED_REGISTERED_RULE')
+    assert decision['option_b']['new_assumption_not_recovered_evidence'] is True
+
+def test_cross_symbol_point_id_collision_is_conflicting_not_supported(monkeypatch,tmp_path):
+    paths=_write(tmp_path); canonical,plan,manifest,capture,source,expected=paths
+    rows=[json.loads(x) for x in canonical.read_text().splitlines()]
+    rows[0]['point_in_time_symbol_id']='shared'; rows[1]['point_in_time_symbol_id']='shared'; rows[1]['symbol']='MSFT'
+    canonical.write_text(''.join(json.dumps(x)+'\n' for x in rows)); expected['canonical']=reg.sha(canonical); monkeypatch.setattr(reg,'EXPECTED',expected)
+    report=reg.register(canonical,plan,manifest,capture,source)['materiality']['identity_dependency_report']
+    assert report['conflicting_rows']==2
+    assert {x['canonical_id'] for x in report['affected_rows'] if x['classification']=='CONFLICTING'}=={'id0','id1'}
