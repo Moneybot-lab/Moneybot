@@ -2,17 +2,19 @@ from __future__ import annotations
 import hashlib, json, os, subprocess, sys
 from pathlib import Path
 import pytest
-from moneybot.services.alpha_atlas_v4_narrow_diagnostic import DiagnosticSpecError, aggregate_candidate, descriptive_metrics, equal_fold_aggregate, grouping_audit, score_candidate_fold, validate_spec
+from moneybot.services.alpha_atlas_v4_narrow_diagnostic import DiagnosticSpecError, aggregate_candidate, compare_grouping_reproduction, descriptive_metrics, equal_fold_aggregate, grouping_audit, normalize_multiplicity_histogram, score_candidate_fold, validate_spec
 from moneybot.services.alpha_atlas_v4_temporal_split import canonical_json_hash
 
 
 def _row(identifier,ticker,date,horizon=5,entry="2023-01-03T14:30:00+00:00",exit_at="2023-01-10T21:00:00+00:00"):
     return {"canonical_observation_id":identifier,"symbol":ticker,"event_date":date,"label_horizon_sessions":horizon,"entry_at":entry,"exit_at":exit_at}
 
-def _write_spec(path,inputs):
+def _write_spec(path,inputs,audit_contract=None):
     frozen={role:{"file_byte_sha256":hashlib.sha256(source.read_bytes()).hexdigest()} for role,source in inputs.items()}
     plan=json.loads(inputs['plan'].read_text()); frozen['plan'].update(semantic_content_sha256=plan['plan_sha256'],semantic_content_hash_algorithm='canonical_json_hash_without_plan_sha256')
-    path.write_text(json.dumps({"frozen_inputs":frozen,"execution":{"default":"OFF"},"broader_registration":{"status":"REGISTERED_BLOCKED"},"source_registration":{"run":"fixture"}}))
+    payload={"frozen_inputs":frozen,"execution":{"default":"OFF"},"broader_registration":{"status":"REGISTERED_BLOCKED"},"source_registration":{"run":"fixture"},"claim_limits":[]}
+    if audit_contract: payload['approved_grouping_audit']=audit_contract
+    path.write_text(json.dumps(payload))
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -171,3 +173,48 @@ def test_manual_execution_workflow_is_pinned_read_only_and_not_automatic():
     assert '35788348286' in text and '206e86dcfd2fa25edfbb8b3201e84e342da55ace668b4e0c6d4d31a4132912b2' in text
     assert 'python -m scripts.execute_alpha_atlas_v4_narrow_diagnostic' in text
     assert 'train_challenger' not in text and 'MASSIVE_API_KEY' not in text
+
+def test_json_round_trip_histogram_normalizes_representation_only():
+    rows=[_row('a','AAA','2023-01-02'),_row('b','AAA','2023-01-02')]
+    assignments=[{'candidate':'c1','fold':1,'canonical_observation_id':x['canonical_observation_id']} for x in rows]
+    reproduced=grouping_audit(rows,assignments); approved=json.loads(json.dumps(reproduced))
+    diagnostics=compare_grouping_reproduction(approved,reproduced)
+    assert diagnostics['approved_key_types']==['str'] and diagnostics['reproduced_key_types']==['int']
+    assert diagnostics['representation_only'] is True and not diagnostics['missing_multiplicities'] and not diagnostics['extra_multiplicities']
+
+@pytest.mark.parametrize('histogram,code',[
+    ({'2':2},'GROUPING_AUDIT_REPRODUCTION_MISMATCH:groups_by_row_multiplicity'),
+    ({'1':2},'GROUPING_AUDIT_REPRODUCTION_MISMATCH:groups_by_row_multiplicity'),
+    ({},'GROUPING_AUDIT_REPRODUCTION_MISMATCH:groups_by_row_multiplicity'),
+    ({'2':1,'3':1},'GROUPING_AUDIT_REPRODUCTION_MISMATCH:groups_by_row_multiplicity'),
+    ({'2':True},'MALFORMED_MULTIPLICITY_COUNT'),
+    ({'2':1.5},'MALFORMED_MULTIPLICITY_COUNT'),
+    ({'0':1},'MALFORMED_MULTIPLICITY_KEY'),
+])
+def test_histogram_gate_rejects_altered_missing_extra_or_invalid(histogram,code):
+    actual={'rows':2,'assignments':2,'ticker_date_timing_groups':1,'groups_by_row_multiplicity':{2:1},'multiple_observation_groups':1,'cohorts':1,'weights_reconcile_per_cohort':True}
+    approved={**actual,'groups_by_row_multiplicity':histogram}
+    with pytest.raises(DiagnosticSpecError,match=code): compare_grouping_reproduction(approved,actual)
+
+def test_histogram_normalizer_rejects_colliding_keys():
+    with pytest.raises(DiagnosticSpecError,match='AMBIGUOUS_MULTIPLICITY_KEYS'):
+        normalize_multiplicity_histogram({2:1,'2':1},source='fixture')
+
+def test_execution_cli_passes_reloaded_audit_and_scores_synthetic_fixture(tmp_path):
+    train={**_row('train','AAA','2023-01-01'),'label_up_5d':0,'return_5d':0}; valid={**_row('valid','BBB','2023-01-02'),'label_up_5d':1,'return_5d':.1}
+    canonical=tmp_path/'canonical'; canonical.write_text(json.dumps(train)+'\n'+json.dumps(valid)+'\n')
+    core={'train_canonical_observation_ids':['train','valid'],'test_canonical_observation_ids':['holdout']}; plan=tmp_path/'plan'; plan.write_text(json.dumps({**core,'plan_sha256':canonical_json_hash(core)}))
+    manifest=tmp_path/'manifest'; manifest.write_text(json.dumps({'challengers':[{'model_version':'c1','candidate_lane':'ranking'}]}))
+    capture_payload=[{'model_version':'c1','fold_index':1,'decision_threshold':.5,'score_semantics':'probability','target_definition':{'name':'label_up_5d'},'train_ids':['train'],
+      'records':[{'id':'valid','score':.8,'label':1,'return':.1}]}]
+    capture=tmp_path/'capture'; capture.write_text(json.dumps(capture_payload)); inputs={'canonical':canonical,'plan':plan,'manifest':manifest,'capture':capture}
+    spec=tmp_path/'spec'; reviewed=_write_spec(spec,inputs,{'rows':1,'assignments':1})
+    reproduced=grouping_audit([valid],[{'candidate':'c1','fold':1,'canonical_observation_id':'valid'}]); reproduced.update(status='AUDIT_COMPLETE_NO_SCORING',specification_sha256=reviewed,performance_scoring_executed=False,source_registration={'run':'fixture'})
+    audit=tmp_path/'audit'; audit.write_text(json.dumps(reproduced)); audit.write_text(json.dumps(json.loads(audit.read_text())))
+    out=tmp_path/'out'; command=[sys.executable,'-m','scripts.execute_alpha_atlas_v4_narrow_diagnostic','--specification',str(spec),'--reviewed-specification-hash',reviewed,
+      '--canonical',str(canonical),'--plan',str(plan),'--manifest',str(manifest),'--capture',str(capture),'--approved-grouping-audit',str(audit),'--output-dir',str(out)]
+    completed=subprocess.run(command,cwd=Path(__file__).resolve().parents[1],text=True,capture_output=True)
+    assert completed.returncode==0,completed.stderr
+    result=json.loads((out/'narrow_diagnostic_results.json').read_text())
+    assert result['execution_status']=='COMPLETE' and result['candidates'][0]['candidate']=='c1'
+    assert result['grouping_reproduction_diagnostics']['representation_only'] is True

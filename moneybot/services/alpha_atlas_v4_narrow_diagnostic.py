@@ -12,9 +12,9 @@ from moneybot.services.alpha_atlas_v4_temporal_split import canonical_json_hash
 
 class DiagnosticSpecError(ValueError):
     def __init__(self, code: str, *, role: str | None = None, hash_type: str | None = None,
-                 expected: str | None = None, actual: str | None = None):
+                 expected: str | None = None, actual: str | None = None, details: dict[str, Any] | None = None):
         super().__init__(code); self.code=code; self.role=role; self.hash_type=hash_type
-        self.expected=expected; self.actual=actual
+        self.expected=expected; self.actual=actual; self.details=details or {}
 
 
 def sha256(path: Path) -> str:
@@ -72,6 +72,42 @@ def grouping_audit(rows: list[dict[str, Any]], assignments: list[dict[str, Any]]
       "groups_by_row_multiplicity":dict(sorted(multiplicity.items())),"multiple_observation_groups":sum(v for k,v in multiplicity.items() if k>1),
       "cohorts":len(cohort_group_counts),"weights_reconcile_per_cohort":reconciled,"row_to_group_mapping":mapping,
       "security_identity_claimed":False,"group_key_fields":["candidate","fold","event_date","horizon","entry_at","exit_at","ticker"]}
+
+
+def normalize_multiplicity_histogram(value: Any, *, source: str) -> dict[int, int]:
+    if not isinstance(value,dict): raise DiagnosticSpecError("MALFORMED_MULTIPLICITY_HISTOGRAM",details={"source":source,"reason":"NOT_OBJECT"})
+    normalized={}; original={}
+    for key,count in value.items():
+        if isinstance(key,bool) or not (isinstance(key,int) or isinstance(key,str) and key.isdigit()):
+            raise DiagnosticSpecError("MALFORMED_MULTIPLICITY_KEY",details={"source":source,"key":repr(key),"key_type":type(key).__name__})
+        multiplicity=int(key)
+        if multiplicity<=0:
+            raise DiagnosticSpecError("MALFORMED_MULTIPLICITY_KEY",details={"source":source,"key":repr(key),"reason":"NOT_POSITIVE"})
+        if isinstance(count,bool) or not isinstance(count,int) or count<0:
+            raise DiagnosticSpecError("MALFORMED_MULTIPLICITY_COUNT",details={"source":source,"key":repr(key),"count":repr(count),"count_type":type(count).__name__})
+        if multiplicity in normalized:
+            raise DiagnosticSpecError("AMBIGUOUS_MULTIPLICITY_KEYS",details={"source":source,"normalized_key":multiplicity,"keys":[original[multiplicity],repr(key)]})
+        normalized[multiplicity]=count; original[multiplicity]=repr(key)
+    return normalized
+
+
+def compare_grouping_reproduction(approved: dict[str, Any], reproduced: dict[str, Any]) -> dict[str, Any]:
+    field="groups_by_row_multiplicity"
+    expected=normalize_multiplicity_histogram(approved.get(field),source="approved_json")
+    actual=normalize_multiplicity_histogram(reproduced.get(field),source="reproduced_memory")
+    keys=sorted(set(expected)|set(actual)); missing=sorted(set(expected)-set(actual)); extra=sorted(set(actual)-set(expected))
+    differing={str(key):{"expected":expected.get(key),"actual":actual.get(key)} for key in keys if key in expected and key in actual and expected[key]!=actual[key]}
+    diagnostics={"field":field,"approved_key_types":sorted({type(key).__name__ for key in (approved.get(field) or {})}),
+      "reproduced_key_types":sorted({type(key).__name__ for key in (reproduced.get(field) or {})}),
+      "approved_normalized":{str(k):expected[k] for k in sorted(expected)},"reproduced_normalized":{str(k):actual[k] for k in sorted(actual)},
+      "missing_multiplicities":missing,"extra_multiplicities":extra,"differing_counts":differing,
+      "representation_only":expected==actual and approved.get(field)!=reproduced.get(field)}
+    if expected!=actual:
+        raise DiagnosticSpecError(f"GROUPING_AUDIT_REPRODUCTION_MISMATCH:{field}",details=diagnostics)
+    for key in ("rows","assignments","ticker_date_timing_groups","multiple_observation_groups","cohorts","weights_reconcile_per_cohort"):
+        if reproduced.get(key)!=approved.get(key):
+            raise DiagnosticSpecError(f"GROUPING_AUDIT_REPRODUCTION_MISMATCH:{key}",details={"field":key,"expected":approved.get(key),"actual":reproduced.get(key)})
+    return diagnostics
 
 
 def descriptive_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:

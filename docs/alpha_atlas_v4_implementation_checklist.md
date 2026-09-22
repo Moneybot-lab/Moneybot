@@ -1124,3 +1124,25 @@ immutable provenance. Performance comparison execution remains pending review.
   no real candidate metric is claimed here. After merge, manually run **V4 Execute
   Narrow Frozen Sample Diagnostic** with no inputs. Completion requires a successful
   result artifact; tests and workflow implementation do not close this item.
+
+### Narrow execution histogram serialization repair after run 35792997101-1
+
+- [x] **Cause confirmed as representation-only.** Execution stopped before scoring
+  at `groups_by_row_multiplicity`: the approved JSON necessarily reloaded histogram
+  keys as strings while the independently reproduced in-memory `Counter` used
+  integers. Direct dictionary equality therefore failed even when every bin/count
+  was identical. No descriptive finding was produced by run `35792997101-1`.
+- [x] **Strict normalization implemented.** Approved and reproduced histograms are
+  separately normalized to positive-integer multiplicities and nonnegative-integer
+  counts, with booleans, fractional counts, malformed keys, and normalization
+  collisions rejected. Equality remains exact after normalization; missing, extra,
+  or changed bins remain blocking. All other grouping and input checks are unchanged.
+- [x] **Failure evidence improved.** Results now preserve the implementation commit,
+  already validated input hashes, grouping/scoring stage flags, the exact differing
+  field, normalized expected/actual summaries, key types, missing/extra bins, and
+  changed counts. A successful result also records that the mismatch was only JSON
+  representation.
+- [ ] **Authorized real scoring remains pending.** Local GitHub authentication is
+  unavailable, so no metric is claimed from this repair. After merge, rerun the
+  existing **V4 Execute Narrow Frozen Sample Diagnostic** workflow with no inputs;
+  do not repeat registration or the completed grouping audit.
