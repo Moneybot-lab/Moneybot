@@ -1,0 +1,44 @@
+{
+  "schema_version": "alpha-atlas-v4-development-semantics-source-trace.v1",
+  "scope": "pinned_source_code_only; saved-row consistency counts require hosted registration rerun",
+  "track_b": {
+    "run": "34689216730-1",
+    "commit": "1f8f46db584dff0881273bdeae1c56c1a8a016c5",
+    "files": {
+      "scripts/build_massive_decision_training_rows.py": "ffa68ed72f7e01ef02ef087b83ad42c35d373c507e374b4a130ca624b42c9bd3",
+      "moneybot/services/corporate_actions.py": "7e37742157356a9907fcb8ed1a41bc7a0bad4d6422aacd9fd9549103ed60d741",
+      "moneybot/services/alpha_atlas_v4_canonical_observations.py": "213b07d9cc8badf1913d15ebcd61d17065b4a9d0a13213b8362874db50eb2ed3",
+      "moneybot/services/alpha_atlas_v4_phase0.py": "4739f081db29f079cae1c3285c33145cf6b455b011eca58da36883554d7516e1"
+    }
+  },
+  "development_diagnostics": {
+    "run": "34769717178-1",
+    "commit": "5d360cdbda802ae8527b35fe59f75920b8c827c8",
+    "files": {
+      "scripts/capture_alpha_atlas_v4_development_oof.py": "5a778d7a04e799ecc8078fc22ee5122f05af4c2312d45f7dcaa934fb88409df9",
+      "scripts/train_challenger_suite.py": "13fe60562efcdd93b4642c01455cff67e07d4ae1520d8443f74cdcf9ecd73951",
+      "scripts/generate_alpha_atlas_v4_development_diagnostics.py": "9aabf47e3a8664c02f2ea6c6bdd4a736858312fb8df3a2b5cb494f233b51ef33"
+    }
+  },
+  "return_trace": {
+    "formula": "round(exit_price / (entry_price * split_factor) - 1, 6)",
+    "units": "decimal return",
+    "entry": "official regular-session open on entry session",
+    "exit": "official regular-session close on exit session",
+    "adjustments": "event-time split adjustment only; dividend adjustment not established",
+    "costs": "no transaction-cost or slippage term in producer formula",
+    "saved_rows_consistency": "PENDING_AUTHENTICATED_RERUN"
+  },
+  "identity_trace": {
+    "construction": "event.point_in_time_symbol_id or fallback symbol:event_day",
+    "fallback_semantics": "ticker/date observation key, not proven listing or security identity",
+    "historical_universe_certification_eligible": false,
+    "saved_rows_collision_and_fallback_counts": "PENDING_AUTHENTICATED_RERUN"
+  },
+  "safety": {
+    "performance_comparison_executed": false,
+    "holdout_content_accessed": false,
+    "provider_queried": false,
+    "training_or_tuning": false
+  }
+}

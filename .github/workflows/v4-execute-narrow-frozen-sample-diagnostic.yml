@@ -1,0 +1,79 @@
+name: V4 Execute Narrow Frozen Sample Diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  execute-reviewed-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OUTPUT_DIR: artifacts/v4-narrow-frozen-sample-diagnostic
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -r requirements.txt
+      - name: Validate approved grouping-audit run
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR/source"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/35788348286" > "$OUTPUT_DIR/source/grouping-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/35788348286/artifacts?per_page=100" > "$OUTPUT_DIR/source/grouping-artifacts.json"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['OUTPUT_DIR'])/'source'; run=json.loads((root/'grouping-run.json').read_text()); listing=json.loads((root/'grouping-artifacts.json').read_text())
+          if (run.get('name'),run.get('id'),run.get('run_attempt'),run.get('conclusion')) != ('V4 Register Development Baseline Comparison',35788348286,1,'success'): raise SystemExit('approved grouping run metadata mismatch')
+          matches=[x for x in listing.get('artifacts',[]) if x.get('name')=='v4-development-baseline-registration-35788348286-1' and x.get('expired') is False]
+          if len(matches)!=1 or not matches[0].get('digest'): raise SystemExit('approved grouping artifact missing/ambiguous')
+          (root/'grouping-artifact.json').write_text(json.dumps(matches[0],indent=2,sort_keys=True)+'\n')
+          PY
+      - uses: actions/download-artifact@v4
+        with: {name: track-b-offline-output, run-id: 34689216730, path: source-track-b, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with: {name: v4-development-diagnostics-34689216730, run-id: 34769717178, path: source-diagnostics, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with: {name: v4-development-baseline-registration-35788348286-1, run-id: 35788348286, path: source-approved-audit, github-token: "${{ github.token }}"}
+      - name: Resolve and execute reviewed diagnostic
+        run: |
+          set -euo pipefail
+          python scripts/validate_v4_weighting_registration_sources.py --metadata-only --track-root source-track-b --diagnostics-root source-diagnostics --output "$OUTPUT_DIR/source/verified-files.json"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['OUTPUT_DIR']); files=json.loads((root/'source/verified-files.json').read_text())
+          matches=list(Path('source-approved-audit').rglob('narrow_diagnostic_grouping_audit.json'))
+          if len(matches)!=1: raise SystemExit(f'approved audit missing/ambiguous: {len(matches)}')
+          values={k:files[k] for k in ('feature_store','split_plan','manifest','capture')}; values['approved_audit']=str(matches[0])
+          (root/'source/resolved-paths.env').write_text('\n'.join(f'{k.upper()}={v}' for k,v in values.items())+'\n')
+          PY
+          set -a; source "$OUTPUT_DIR/source/resolved-paths.env"; set +a
+          python -m scripts.execute_alpha_atlas_v4_narrow_diagnostic \
+            --specification docs/reports/alpha_atlas_v4_narrow_frozen_sample_diagnostic.v1.1.json \
+            --reviewed-specification-hash 206e86dcfd2fa25edfbb8b3201e84e342da55ace668b4e0c6d4d31a4132912b2 \
+            --canonical "$FEATURE_STORE" --plan "$SPLIT_PLAN" --manifest "$MANIFEST" --capture "$CAPTURE" \
+            --approved-grouping-audit "$APPROVED_AUDIT" --output-dir "$OUTPUT_DIR/reports"
+      - name: Preserve workflow failure evidence
+        if: failure()
+        run: |
+          mkdir -p "$OUTPUT_DIR/reports"
+          if ! test -s "$OUTPUT_DIR/reports/narrow_diagnostic_results.json"; then
+            printf '%s\n' '{"execution_status":"FAILED_BEFORE_SCORING_ENTRYPOINT","grouping_executed":false,"scoring_completed":false,"holdout_content_loaded":false,"reason_code":"REVIEW_WORKFLOW_SOURCE_OR_RESOLUTION_FAILURE"}' > "$OUTPUT_DIR/reports/narrow_diagnostic_results.json"
+            printf '# V4 narrow diagnostic failure\n\n- Execution: `FAILED_BEFORE_SCORING_ENTRYPOINT`.\n- Scoring completed: `false`.\n- Review source validation logs.\n' > "$OUTPUT_DIR/reports/narrow_diagnostic_results.md"
+          fi
+      - name: Publish readable result or failure
+        if: always()
+        run: test ! -s "$OUTPUT_DIR/reports/narrow_diagnostic_results.md" || cat "$OUTPUT_DIR/reports/narrow_diagnostic_results.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4-narrow-frozen-sample-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/v4-narrow-frozen-sample-diagnostic/**
+          if-no-files-found: error
