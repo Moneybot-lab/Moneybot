@@ -63,7 +63,10 @@ jobs:
             --identity-root source-identity-evidence \
             --track-root source-track-b \
             --validated-metadata "$OUTPUT_DIR/source/validated-metadata.json" \
-            --output-dir "$OUTPUT_DIR/source"
+            --output-dir "$OUTPUT_DIR/source" \
+            --expected-cost-hash 477293feee5fa31ab876b9db589b2c7be6b34d81ccf893f4d2032c2d6c62b2ef \
+            --expected-cost-bytes 525 \
+            --expected-cost-hash-provenance RECORDED_BY_RUN_35686093927_ATTEMPT_1_SUPPLEMENTAL_RESOLUTION
           python - <<'PY'
           import json, os
           from pathlib import Path

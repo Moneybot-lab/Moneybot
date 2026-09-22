@@ -929,7 +929,7 @@ immutable provenance. Performance comparison execution remains pending review.
   artifact-relative paths: `reports/registration.json` in registration run
   `35659754050-1`, top-level
   `alpha_atlas_v4_historical_coverage_diagnostics.json` in identity run
-  `35233428008-1`, and top-level `execution_policy.json` in Track B run
+  `35233428008-1`, and the pinned nested selected-portfolio policy in Track B run
   `34689216730-1`. The latter remains explicitly different-scope evidence and does
   not establish cost applicability to development OOF results.
 - [x] **Failure evidence — preserved and actionable.** The resolver inventories
@@ -945,3 +945,23 @@ immutable provenance. Performance comparison execution remains pending review.
   materiality result, split-integrity result, or new registration hash is claimed.
   After merge, run **V4 Register Development Baseline Comparison** with no inputs;
   review `supplemental-resolution.{json,md}` first, then the registration outputs.
+
+### Track B cost-policy source-path repair after run 35686093927-1
+
+- [x] **Implementation — pinned nested policy path.** The hosted resolver confirmed
+  that prior-registration and identity selection completed, then failed only with
+  `COST_POLICY_EVIDENCE_INTENDED_PATH_MISSING`. The Track B policy is now pinned to
+  `track_b/runs/34689216730-1/challenger_suite/portfolio_path/execution_policy.json`
+  relative to the validated `track-b-offline-output` artifact root. There is no
+  recursive or root-level fallback.
+- [x] **Recorded failed-run evidence.** Run `35686093927`, attempt `1`, recorded the
+  selected file as 525 bytes with SHA-256
+  `477293feee5fa31ab876b9db589b2c7be6b34d81ccf893f4d2032c2d6c62b2ef`.
+  The resolver enforces that value while labeling its provenance as recorded by
+  that hosted failure; this documentation does not claim a second independent hash
+  verification. The policy remains `LOCATED_DIFFERENT_SCOPE` and cannot establish
+  development-OOF cost applicability.
+- [ ] **Evidence — corrected registration still pending.** This path repair does
+  not verify comparison readiness. Rerun **V4 Register Development Baseline
+  Comparison** with no inputs after merge and review the resolver, materiality, and
+  split-integrity reports before any comparison execution.

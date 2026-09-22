@@ -24,7 +24,7 @@ SOURCES = {
     },
     "cost_policy_evidence": {
         "root": "track_root",
-        "relative_path": "execution_policy.json",
+        "relative_path": "track_b/runs/34689216730-1/challenger_suite/portfolio_path/execution_policy.json",
         "basename": "execution_policy.json",
         "copy_name": "other-scope-execution-policy.json",
     },
@@ -72,7 +72,10 @@ def _validate_json(role: str, path: Path) -> None:
 
 
 def resolve(*, prior_root: Path, identity_root: Path, track_root: Path, output_dir: Path,
-            validated_metadata: Path, expected_identity_hash: str | None = None) -> dict[str, Any]:
+            validated_metadata: Path, expected_identity_hash: str | None = None,
+            expected_cost_hash: str | None = None,
+            expected_cost_hash_provenance: str | None = None,
+            expected_cost_bytes: int | None = None) -> dict[str, Any]:
     metadata = json.loads(validated_metadata.read_text())
     output_dir.mkdir(parents=True, exist_ok=True)
     roots = {"prior_root": prior_root, "identity_root": identity_root, "track_root": track_root}
@@ -91,6 +94,10 @@ def resolve(*, prior_root: Path, identity_root: Path, track_root: Path, output_d
             computed = _sha(intended)
             if role == "identity_evidence" and expected_identity_hash and computed != expected_identity_hash:
                 raise ResolutionError(f"IDENTITY_EVIDENCE_EXPECTED_HASH_MISMATCH: expected={expected_identity_hash} computed={computed}")
+            if role == "cost_policy_evidence" and expected_cost_hash and computed != expected_cost_hash:
+                raise ResolutionError(f"COST_POLICY_EVIDENCE_EXPECTED_HASH_MISMATCH: expected={expected_cost_hash} computed={computed}")
+            if role == "cost_policy_evidence" and expected_cost_bytes is not None and intended.stat().st_size != expected_cost_bytes:
+                raise ResolutionError(f"COST_POLICY_EVIDENCE_EXPECTED_SIZE_MISMATCH: expected={expected_cost_bytes} computed={intended.stat().st_size}")
             origin = "identity" if role == "identity_evidence" else ("prior" if role == "prior_registration" else "track")
             if origin not in metadata:
                 raise ResolutionError(f"{role.upper()}_PINNED_METADATA_MISSING")
@@ -99,10 +106,19 @@ def resolve(*, prior_root: Path, identity_root: Path, track_root: Path, output_d
             if destination.read_bytes() != intended.read_bytes():
                 raise ResolutionError(f"{role.upper()}_BYTE_PRESERVATION_FAILED")
             entry.update(metadata[origin])
+            expected_hash = expected_identity_hash if role == "identity_evidence" else (expected_cost_hash if role == "cost_policy_evidence" else None)
             entry.update({"consumed_copy_path": str(destination), "bytes": intended.stat().st_size,
-                          "sha256_computed": computed, "expected_report_sha256": expected_identity_hash if role == "identity_evidence" else None,
-                          "expected_hash_status": "VALIDATED" if role == "identity_evidence" and expected_identity_hash else "NOT_INDEPENDENTLY_AVAILABLE"})
+                          "sha256_computed": computed, "expected_report_sha256": expected_hash,
+                          "expected_hash_status": ("VALIDATED_AGAINST_RECORDED_HOSTED_HASH" if role == "cost_policy_evidence" and expected_hash
+                                                   else "VALIDATED" if expected_hash else "NOT_INDEPENDENTLY_AVAILABLE"),
+                          "expected_hash_provenance": expected_cost_hash_provenance if role == "cost_policy_evidence" else None,
+                          "expected_bytes": expected_cost_bytes if role == "cost_policy_evidence" else None})
         report["status"] = "RESOLVED"
+        environment_names = {"prior_registration": "PRIOR_REGISTRATION", "identity_evidence": "IDENTITY_EVIDENCE",
+                             "cost_policy_evidence": "COST_POLICY_EVIDENCE"}
+        (output_dir / "supplemental-paths.env").write_text("\n".join(
+            f"{environment_names[role]}={entry['consumed_copy_path']}" for role, entry in report["sources"].items()
+        ) + "\n")
     except (ResolutionError, KeyError, json.JSONDecodeError) as exc:
         report["reason_codes"].append(str(exc).split(":", 1)[0])
         report["error"] = str(exc)
@@ -123,6 +139,8 @@ def main() -> int:
     parser.add_argument("--prior-root", type=Path, required=True); parser.add_argument("--identity-root", type=Path, required=True)
     parser.add_argument("--track-root", type=Path, required=True); parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--validated-metadata", type=Path, required=True); parser.add_argument("--expected-identity-hash")
+    parser.add_argument("--expected-cost-hash"); parser.add_argument("--expected-cost-hash-provenance")
+    parser.add_argument("--expected-cost-bytes", type=int)
     args = parser.parse_args()
     try:
         resolve(**vars(args))
