@@ -2,7 +2,7 @@ from __future__ import annotations
 import hashlib, json, os, subprocess, sys
 from pathlib import Path
 import pytest
-from moneybot.services.alpha_atlas_v4_narrow_diagnostic import DiagnosticSpecError, descriptive_metrics, equal_fold_aggregate, grouping_audit, validate_spec
+from moneybot.services.alpha_atlas_v4_narrow_diagnostic import DiagnosticSpecError, aggregate_candidate, descriptive_metrics, equal_fold_aggregate, grouping_audit, score_candidate_fold, validate_spec
 from moneybot.services.alpha_atlas_v4_temporal_split import canonical_json_hash
 
 
@@ -112,3 +112,62 @@ def test_audit_entrypoint_preserves_structured_hash_failure(tmp_path):
     failure=json.loads((out/'narrow_diagnostic_grouping_audit.json').read_text())
     assert failure['input_role']=='plan' and failure['hash_type']=='file_byte_sha256'
     assert failure['expected_hash'] and failure['actual_hash'] and not failure['grouping_executed'] and not failure['performance_scoring_executed']
+
+def test_probability_baseline_uses_only_fold_training_partition_and_signed_direction():
+    rows={'train0':{**_row('train0','AAA','2023-01-01'),'label_up_5d':0,'return_5d':0},
+          'train1':{**_row('train1','BBB','2023-01-01'),'label_up_5d':1,'return_5d':0},
+          'v':{**_row('v','CCC','2023-01-02'),'label_up_5d':1,'return_5d':.1}}
+    item={'model_version':'candidate','fold_index':1,'decision_threshold':.6,'score_semantics':'probability','target_definition':{'name':'label_up_5d','horizon_sessions':5},
+      'train_ids':['train0','train1'],'records':[{'id':'v','score':.8,'label':1,'return':.1}]}
+    mapping=grouping_audit([rows['v']],[{'candidate':'candidate','fold':1,'canonical_observation_id':'v'}])['row_to_group_mapping']
+    result=score_candidate_fold(item,rows,mapping)
+    assert result['training_prevalence']==.5 and result['denominators']['training_prevalence_rows']==2
+    assert result['probability']['brier']==pytest.approx(.04) and result['probability']['prevalence_brier']==.25
+    assert result['probability']['signed_difference']<0
+    assert result['probability']['calibration']=='NOT_EVALUABLE_CALIBRATION_BIN_COUNT_UNSPECIFIED'
+
+def test_gross_weighting_partial_selection_and_empty_cohort_are_cash_not_dropped():
+    rows={'a':{**_row('a','AAA','2023-01-02'),'label_up_5d':1,'return_5d':.1},
+          'b':{**_row('b','AAA','2023-01-02'),'label_up_5d':0,'return_5d':-.1},
+          'c':{**_row('c','BBB','2023-01-02'),'label_up_5d':1,'return_5d':.2}}
+    assignments=[{'candidate':'c1','fold':1,'canonical_observation_id':x} for x in rows]
+    mapping=grouping_audit(list(rows.values()),assignments)['row_to_group_mapping']
+    item={'model_version':'c1','fold_index':1,'candidate_type':'ranking','decision_threshold':.5,'score_semantics':'probability','target_definition':{'name':'label_up_5d'},'train_ids':['a','b'],
+      'records':[{'id':'a','score':.9,'label':1,'return':.1},{'id':'b','score':.1,'label':0,'return':-.1},{'id':'c','score':.9,'label':1,'return':.2,'abstained':True}]}
+    result=score_candidate_fold(item,rows,mapping)
+    # AAA has half its group selected: .25*.1; BBB abstains and contributes cash zero.
+    assert result['gross_endpoint']['candidate']==pytest.approx(.025)
+    assert result['gross_endpoint']['equal_weight_ticker_date_timing_baseline']==pytest.approx(.1)
+    assert result['gross_endpoint']['signed_difference']==pytest.approx(-.075)
+    assert result['denominators']['empty_selection_cohorts']==0  # cohort has one selected AAA observation
+    assert result['classification']['abstained']==1
+
+def test_candidate_aggregate_equal_weights_folds_and_preserves_undefined():
+    folds=[{'fold':1,'probability':{'brier':.1,'signed_difference':-.1},'classification':{'precision':.5,'recall':.5,'coverage':.5},'gross_endpoint':{'candidate':.02,'signed_difference':.01}},
+           {'fold':2,'probability':{'brier':.3,'signed_difference':.1},'classification':{'precision':None,'recall':.4,'coverage':0},'gross_endpoint':{'candidate':0,'signed_difference':-.01}}]
+    aggregate=aggregate_candidate(folds)
+    assert aggregate['probability.brier']['value']==.2
+    assert aggregate['classification.precision']['defined_folds']==[1] and aggregate['classification.precision']['undefined_folds']==[2]
+
+def test_execution_entrypoint_fails_closed_on_unapproved_audit_without_scoring(tmp_path):
+    canonical=tmp_path/'canonical'; canonical.write_text(json.dumps(_row('a','AAA','2023-01-02'))+'\n')
+    core={'train_canonical_observation_ids':['a'],'test_canonical_observation_ids':['h']}; plan=tmp_path/'plan'; plan.write_text(json.dumps({**core,'plan_sha256':canonical_json_hash(core)}))
+    manifest=tmp_path/'manifest'; manifest.write_text(json.dumps({'challengers':[]})); capture=tmp_path/'capture'; capture.write_text('[]')
+    inputs={'canonical':canonical,'plan':plan,'manifest':manifest,'capture':capture}; spec=tmp_path/'spec'; reviewed=_write_spec(spec,inputs)
+    audit=tmp_path/'audit'; audit.write_text(json.dumps({'status':'AUDIT_COMPLETE_NO_SCORING','specification_sha256':reviewed,'rows':1,'assignments':0,'weights_reconcile_per_cohort':True,'performance_scoring_executed':False}))
+    out=tmp_path/'out'; command=[sys.executable,'-m','scripts.execute_alpha_atlas_v4_narrow_diagnostic','--specification',str(spec),'--reviewed-specification-hash',reviewed,
+      '--canonical',str(canonical),'--plan',str(plan),'--manifest',str(manifest),'--capture',str(capture),'--approved-grouping-audit',str(audit),'--output-dir',str(out)]
+    completed=subprocess.run(command,cwd=Path(__file__).resolve().parents[1],text=True,capture_output=True)
+    assert completed.returncode==2
+    result=json.loads((out/'narrow_diagnostic_results.json').read_text())
+    assert result['reason_code']=='APPROVED_GROUPING_AUDIT_IDENTITY_MISMATCH' and result['scoring_completed'] is False
+    assert (out/'execution_provenance.json').is_file() and (out/'SHA256SUMS').is_file()
+
+def test_manual_execution_workflow_is_pinned_read_only_and_not_automatic():
+    text=Path('.github/workflows/v4-execute-narrow-frozen-sample-diagnostic.yml').read_text()
+    assert text.startswith('name: V4 Execute Narrow Frozen Sample Diagnostic\n')
+    assert 'workflow_dispatch:' in text and 'push:' not in text and 'schedule:' not in text
+    assert 'actions: read' in text and 'contents: read' in text
+    assert '35788348286' in text and '206e86dcfd2fa25edfbb8b3201e84e342da55ace668b4e0c6d4d31a4132912b2' in text
+    assert 'python -m scripts.execute_alpha_atlas_v4_narrow_diagnostic' in text
+    assert 'train_challenger' not in text and 'MASSIVE_API_KEY' not in text

@@ -1100,3 +1100,27 @@ immutable provenance. Performance comparison execution remains pending review.
 - [ ] **Real grouping audit still pending.** After merge, run **V4 Register
   Development Baseline Comparison** with no inputs. Review only the grouping audit;
   this correction does not approve performance scoring.
+
+### Reviewed narrow diagnostic execution authorization after audit 35788348286-1
+
+- [x] **Grouping audit complete within scope.** Run `35788348286`, attempt `1`,
+  produced `AUDIT_COMPLETE_NO_SCORING` under specification v1.1 hash
+  `206e86dcfd2fa25edfbb8b3201e84e342da55ace668b4e0c6d4d31a4132912b2`:
+  10,273 unique validation observations and 421,193 assignments for 41 candidates
+  across three folds, reconciled cohort weights, and no holdout-content access.
+- [x] **Narrow scoring implementation prepared.** A separate manual workflow,
+  **V4 Execute Narrow Frozen Sample Diagnostic**, validates the exact specification,
+  four frozen inputs, and approved audit identity before scoring. It preserves frozen
+  thresholds, abstention/rejection flags, training-fold-only prevalence, stable
+  manifest roster order, row/cohort weights, empty-selection cash, and equal-fold
+  descriptive aggregation. It never invokes training, tuning, or holdout content.
+- [x] **Interpretation remains bounded.** Calibration intervals/bins and bootstrap
+  intervals are emitted as not evaluated because v1.1 does not fix bin count,
+  replicate count, confidence level, or seed. Same-security continuity, full
+  lookback start, dividends, applicable development costs, and certified portfolio
+  paths remain unresolved. The net-primary registration stays blocked regardless of
+  descriptive results.
+- [ ] **Real scoring execution pending.** Local GitHub authentication is unavailable;
+  no real candidate metric is claimed here. After merge, manually run **V4 Execute
+  Narrow Frozen Sample Diagnostic** with no inputs. Completion requires a successful
+  result artifact; tests and workflow implementation do not close this item.

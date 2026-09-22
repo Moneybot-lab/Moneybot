@@ -88,3 +88,58 @@ def equal_fold_aggregate(values: dict[int, float | None]) -> dict[str, Any]:
     defined={fold:value for fold,value in values.items() if value is not None and math.isfinite(float(value))}
     return {"value":sum(map(float,defined.values()))/len(defined) if defined else None,"defined_folds":sorted(defined),
       "undefined_folds":sorted(set(values)-set(defined)),"weight_per_defined_fold":1/len(defined) if defined else None}
+
+
+def _mean(values: list[float]) -> float | None:
+    return sum(values)/len(values) if values else None
+
+
+def score_candidate_fold(item: dict[str, Any], rows: dict[str, dict[str, Any]], mapping: list[dict[str, Any]]) -> dict[str, Any]:
+    """Score one frozen candidate/fold under the reviewed descriptive rules."""
+    records=item.get("records") or []; threshold=float(item["decision_threshold"]); target=item.get("target_definition") or {}
+    target_name=str(target.get("target_name") or target.get("name") or "label_up_5d")
+    train_ids=[str(x) for x in item.get("train_ids") or []]
+    train_labels=[float(rows[x][target_name]) for x in train_ids if x in rows and rows[x].get(target_name) in (0,1)]
+    prevalence=_mean(train_labels); scored=[]
+    weights={x["canonical_observation_id"]:float(x["final_cohort_row_weight"]) for x in mapping
+             if x["candidate"]==str(item["model_version"]) and x["fold"]==int(item["fold_index"])}
+    cohort_keys={x["canonical_observation_id"]:tuple(x["cohort_key"]) for x in mapping
+                 if x["candidate"]==str(item["model_version"]) and x["fold"]==int(item["fold_index"])}
+    cohort_candidate=defaultdict(float); cohort_baseline=defaultdict(float); cohort_selected=Counter()
+    for record in records:
+        identifier=str(record["id"]); row=rows[identifier]; label=float(record["label"]); score=float(record["score"])
+        rejected=bool(record.get("abstained") or record.get("risk_rejected") or record.get("rule_rejected"))
+        selected=score>=threshold and not rejected; ret=record.get("return",row.get("return_5d")); ret=float(ret) if ret is not None else None
+        scored.append({"id":identifier,"label":label,"score":score,"selected":selected,"abstained":bool(record.get("abstained")),"return":ret})
+        if ret is not None:
+            cohort=cohort_keys[identifier]; weight=weights[identifier]
+            cohort_baseline[cohort]+=weight*ret
+            cohort_candidate[cohort]+=weight*ret*int(selected)
+            cohort_selected[cohort]+=int(selected)
+    semantics=str(item.get("score_semantics") or ""); candidate_type=str(item.get("candidate_type") or "classification")
+    probability=semantics=="probability" and prevalence is not None
+    gross_applicable=candidate_type in {"ranking","selection","ranking_or_selection"}
+    eps=1e-15
+    brier=_mean([(x["score"]-x["label"])**2 for x in scored]) if probability else None
+    baseline_brier=_mean([(prevalence-x["label"])**2 for x in scored]) if probability else None
+    log_loss=_mean([-(x["label"]*math.log(min(1-eps,max(eps,x["score"])))+(1-x["label"])*math.log(min(1-eps,max(eps,1-x["score"])))) for x in scored]) if probability else None
+    baseline_log_loss=_mean([-(x["label"]*math.log(min(1-eps,max(eps,prevalence)))+(1-x["label"])*math.log(min(1-eps,max(eps,1-prevalence)))) for x in scored]) if probability else None
+    classification=descriptive_metrics([{"label":x["label"],"prediction":x["selected"],"abstained":x["abstained"]} for x in scored])
+    candidate_gross=_mean(list(cohort_candidate.values())) if gross_applicable else None; baseline_gross=_mean(list(cohort_baseline.values())) if gross_applicable else None
+    return {"candidate":str(item["model_version"]),"fold":int(item["fold_index"]),"target":target,"score_semantics":semantics,"candidate_type":candidate_type,
+      "threshold":threshold,"denominators":{"validation_observations":len(scored),"training_prevalence_rows":len(train_labels),"gross_cohorts":len(cohort_baseline),"empty_selection_cohorts":sum(v==0 for v in cohort_selected.values())},
+      "training_prevalence":prevalence,"probability":{"applicability":"EVALUABLE" if probability else "INAPPLICABLE_SCORE_SEMANTICS_NOT_PROBABILITY_OR_TRAINING_PREVALENCE_UNAVAILABLE","brier":brier,"prevalence_brier":baseline_brier,"signed_difference":brier-baseline_brier if brier is not None else None,
+        "log_loss":log_loss,"prevalence_log_loss":baseline_log_loss,"log_loss_signed_difference":log_loss-baseline_log_loss if log_loss is not None else None,
+        "calibration":"NOT_EVALUABLE_CALIBRATION_BIN_COUNT_UNSPECIFIED"},
+      "classification":classification,
+      "gross_endpoint":{"applicability":"EVALUABLE" if gross_applicable else "INAPPLICABLE_CANDIDATE_TYPE_NOT_RANKING_OR_SELECTION","candidate":candidate_gross,"equal_weight_ticker_date_timing_baseline":baseline_gross,
+        "signed_difference":candidate_gross-baseline_gross if candidate_gross is not None and baseline_gross is not None else None,"cash_reference":0.0,
+        "partial_selection_rule":"each canonical observation retains its preregistered within-group weight; unselected/rejected observations contribute zero cash return"}}
+
+
+def aggregate_candidate(folds: list[dict[str, Any]]) -> dict[str, Any]:
+    paths=(("probability","brier"),("probability","signed_difference"),("classification","precision"),("classification","recall"),("classification","coverage"),("gross_endpoint","candidate"),("gross_endpoint","signed_difference"))
+    aggregate={}
+    for section,metric in paths:
+        aggregate[f"{section}.{metric}"]=equal_fold_aggregate({x["fold"]:x[section].get(metric) for x in folds})
+    return aggregate
