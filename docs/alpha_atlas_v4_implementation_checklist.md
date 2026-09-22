@@ -1036,3 +1036,41 @@ immutable provenance. Performance comparison execution remains pending review.
   Comparison** with no inputs and review the identity-dependency and scope-decision
   reports. This is the single next action; it is a review step, not authorization to
   score the comparison. No broad identity backfill is requested.
+
+### Narrow frozen-sample diagnostic v1 after run 35755237312-1
+
+- [x] **Evidence retained.** Registration `35755237312-1`, internal hash
+  `aacb8521f35ce37e5beed7ea1376c8a963be8fb79667e5c97e2180a5ce960a06`,
+  reports 24,846 development rows, 10,273 validation rows, 515 tickers, and
+  3,777 ticker/date observation keys. Split and canonical/OOF joins and the gross
+  split-adjusted formula are verified. Continuity and the full lookback start remain
+  unresolved; no identity conflict was confirmed; applicable development costs are
+  unavailable; the registered net-primary experiment remains blocked.
+- [x] **Specification prepared, not approved or executed.** The separately versioned
+  `alpha-atlas-v4-narrow-frozen-sample-diagnostic.v1` asks only how saved frozen OOF
+  predictions compare with simple baselines on recorded validation observations.
+  JSON SHA-256 is
+  `f55e749a6616506b1e227ddebb96dad569b33cd3c56599fe189803dc68173e0f`;
+  Markdown SHA-256 is
+  `f7452cee7eb57cc8bd1bca1785c594d770616381f90ad50ec968f897db66559a`.
+- [x] **Comparison rules disambiguated.** Probability candidates use Brier versus
+  training-fold prevalence; classification reports frozen-threshold precision,
+  recall, coverage, and abstention; gross selection diagnostics use an equal-weight
+  eligible ticker/date timing cohort and cash only as zero-return arithmetic. Signed
+  fold differences and equal-fold aggregates are descriptive. The two-of-three
+  registered advantage criterion is not reused as certification, candidates are not
+  ranked or removed, and inapplicable metrics remain explicit.
+- [x] **Weighting fixed before scoring.** Observation metrics weight canonical rows
+  equally. Gross diagnostics first equal-weight repeated observations within ticker,
+  date, horizon, entry, and exit; then equal-weight ticker groups within matching
+  timing cohorts. Incompatible horizons/windows remain separate. Abstentions and
+  empty-selection cohorts remain in denominators; row mappings and weights must
+  reconcile. These are ticker groups, not verified securities.
+- [x] **Audit implementation complete.** The existing registration workflow now
+  runs a hash-bound membership/grouping/weight audit after registration, even while
+  registration remains blocked, and uploads the audit without scoring. Specification
+  or input hash changes fail closed.
+- [ ] **Review/real audit pending; diagnostic execution not authorized.** After
+  merge, run **V4 Register Development Baseline Comparison** with no inputs and
+  review `narrow_diagnostic_grouping_audit.{json,md}` plus the specification. Do not
+  execute scoring until the specification hash is explicitly reviewed and approved.
