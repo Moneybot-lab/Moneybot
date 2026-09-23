@@ -14,16 +14,17 @@ def main() -> int:
     parser=argparse.ArgumentParser()
     parser.add_argument("--proposal",type=Path,required=True)
     parser.add_argument("--evidence",type=Path,required=True)
+    parser.add_argument("--clarification",type=Path,required=True)
     parser.add_argument("--lineage",type=Path,required=True)
     parser.add_argument("--output",type=Path,required=True)
     parser.add_argument("--request-real-scoring",action="store_true")
     args=parser.parse_args(); args.output.parent.mkdir(parents=True,exist_ok=True)
     try:
-        report=validate_frozen_contract(args.proposal,args.evidence,args.lineage)
+        report=validate_frozen_contract(args.proposal,args.evidence,args.lineage,args.clarification)
         report.update({"schema_version":"alpha-atlas-v4-cohort-ranking-validation.v1",
             "validation":"PASSED","scoring":"NOT_RUN","selected_count":None,"abstained_count":None,
             "metric_denominators":None,"weighting_reconciliation":None,
-            "inputs":{"proposal":str(args.proposal),"evidence":str(args.evidence),"lineage":str(args.lineage)}})
+            "inputs":{"proposal":str(args.proposal),"clarification":str(args.clarification),"evidence":str(args.evidence),"lineage":str(args.lineage)}})
         if args.request_real_scoring:
             if not REAL_SCORING_ENABLED:
                 raise RankingContractError("REAL_SCORING_HARD_DISABLED_REQUIRES_CODE_CHANGE")
@@ -34,7 +35,7 @@ def main() -> int:
             "scoring":"NOT_RUN","reason_code":getattr(exc,"code",type(exc).__name__),
             "failure_details":getattr(exc,"details",{}),"real_scoring_enabled":REAL_SCORING_ENABLED,
             "selected_count":None,"abstained_count":None,"metric_denominators":None,"weighting_reconciliation":None,
-            "inputs":{"proposal":str(args.proposal),"evidence":str(args.evidence),"lineage":str(args.lineage)}}
+            "inputs":{"proposal":str(args.proposal),"clarification":str(args.clarification),"evidence":str(args.evidence),"lineage":str(args.lineage)}}
         code=2
     args.output.write_text(json.dumps(report,indent=2,sort_keys=True)+"\n")
     return code

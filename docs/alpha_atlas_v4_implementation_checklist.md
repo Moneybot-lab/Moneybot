@@ -1214,6 +1214,20 @@ immutable provenance. Performance comparison execution remains pending review.
 - [ ] **Real cohort-relative scoring remains pending separate authorization and a
   code change.** `REAL_SCORING_ENABLED = False`; neither workflow dispatch nor an
   input can enable scoring. No real evidence is scored by this implementation.
+- [x] **Saved-input no-performance audit implementation completed locally.** The
+  hash-bound clarification v1 records the conservative all-members-pass group rule
+  without changing the proposal or historical v1.1 results. The shared selection
+  implementation, exact source resolver, membership checks, deterministic evidence
+  mappings, and weight reconciliation are wired into manual workflow **V4 Cohort
+  Relative Ranking Input Audit**. Focused synthetic tests are not hosted evidence.
+- [x] **Validation run `35875436970-1` retained with its limited scope.** That run
+  validated proposal/specification hashes and source-run metadata only. Its null
+  selected counts, metric denominators, and weight reconciliation did not validate
+  actual saved-input grouping or proposed top-five membership; it is not represented
+  as a completed saved-input audit.
+- [ ] **Hosted saved-input audit pending manual execution.** A passed future run must
+  download the exact pinned artifacts and emit `AUDIT_COMPLETE_NO_PERFORMANCE` with
+  all nine candidate/fold records. No performance aggregation is authorized.
 - [ ] **Broader gates remain open.** Applicable development costs, net-return
   validation, terminal valuation, complete historical coverage, and promotion
   readiness are unchanged and unresolved.
