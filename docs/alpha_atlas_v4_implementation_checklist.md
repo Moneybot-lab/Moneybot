@@ -1196,10 +1196,38 @@ immutable provenance. Performance comparison execution remains pending review.
   freezes inputs, roster, semantics, cohorts, deterministic ties, missing-evidence
   blocking, equal selected-group weights, baselines, and fold aggregation. Proposal
   JSON SHA-256: `000a0f8e2ba0fbaf563eb64dc3589fe4b2ae0695fd6c63fa8c536675d9b26f4d`.
-- [ ] **New experiment is `NOT_AUTHORIZED / NOT_EXECUTED`.** Review must decide
-  whether fixed top five with weights renormalized equally across selected ticker
-  groups is the acceptable exploratory contract. This is a new post-diagnostic rule,
-  not a correction to v1.1; no implementation or execution exists in this task.
+- [x] **Research-only implementation and focused synthetic testing completed.** The
+  authorized implementation preserves proposal JSON SHA-256
+  `000a0f8e2ba0fbaf563eb64dc3589fe4b2ae0695fd6c63fa8c536675d9b26f4d`
+  and diagnostic v1.1 SHA-256
+  `206e86dcfd2fa25edfbb8b3201e84e342da55ace668b4e0c6d4d31a4132912b2`.
+  Because the proposal did not explicitly resolve a ticker group with only some
+  observations passing the gates, the implementation conservatively makes the
+  entire group ineligible if any member is abstained, risk-rejected, or
+  rule-rejected. Eligible group score and return means use every canonical member
+  as the denominator; passing observations are never silently subsetted.
+- [x] **Manual validation-only workflow added.** It validates the pinned proposal,
+  v1.1 evidence, completed diagnostic `35795768048-1`, approved audit
+  `35788348286-1`, and source registration `35755237312-1`, then demonstrates that
+  real scoring is rejected by the source-code gate. Validation and failure details
+  are uploaded even when validation fails where the runner can reach the upload step.
+- [ ] **Real cohort-relative scoring remains pending separate authorization and a
+  code change.** `REAL_SCORING_ENABLED = False`; neither workflow dispatch nor an
+  input can enable scoring. No real evidence is scored by this implementation.
+- [x] **Saved-input no-performance audit implementation completed locally.** The
+  hash-bound clarification v1 records the conservative all-members-pass group rule
+  without changing the proposal or historical v1.1 results. The shared selection
+  implementation, exact source resolver, membership checks, deterministic evidence
+  mappings, and weight reconciliation are wired into manual workflow **V4 Cohort
+  Relative Ranking Input Audit**. Focused synthetic tests are not hosted evidence.
+- [x] **Validation run `35875436970-1` retained with its limited scope.** That run
+  validated proposal/specification hashes and source-run metadata only. Its null
+  selected counts, metric denominators, and weight reconciliation did not validate
+  actual saved-input grouping or proposed top-five membership; it is not represented
+  as a completed saved-input audit.
+- [ ] **Hosted saved-input audit pending manual execution.** A passed future run must
+  download the exact pinned artifacts and emit `AUDIT_COMPLETE_NO_PERFORMANCE` with
+  all nine candidate/fold records. No performance aggregation is authorized.
 - [ ] **Broader gates remain open.** Applicable development costs, net-return
   validation, terminal valuation, complete historical coverage, and promotion
   readiness are unchanged and unresolved.

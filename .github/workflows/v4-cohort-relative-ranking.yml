@@ -1,0 +1,116 @@
+name: V4 Cohort Relative Ranking Input Audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  audit-saved-inputs-no-performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OUTPUT_DIR: artifacts/v4-cohort-relative-ranking
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate pinned run and artifact identities
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR/source"
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          out=Path(os.environ["OUTPUT_DIR"]); source=out/"source"
+          runs={
+            "source_registration":(35755237312,1,None),
+            "approved_grouping_audit":(35788348286,1,"95f9255457f1567e986622c2f21b94ee666696d7"),
+            "completed_diagnostic":(35795768048,1,"896d3356bba186e2c7a2ba08fc8b44ba093110a0"),
+            "track_b":(34689216730,1,"1f8f46db584dff0881273bdeae1c56c1a8a016c5"),
+            "capture":(34769717178,1,"5d360cdbda802ae8527b35fe59f75920b8c827c8"),
+          }
+          metadata={}; artifacts={}
+          for role,(run_id,attempt,commit) in runs.items():
+              run=json.loads(subprocess.check_output(["gh","api",f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run_id}"],text=True))
+              if (run.get("id"),run.get("run_attempt"),run.get("conclusion")) != (run_id,attempt,"success") or (commit and run.get("head_sha")!=commit):
+                  raise SystemExit(f"{role} run identity mismatch")
+              metadata[role]=run
+              listing=json.loads(subprocess.check_output(["gh","api",f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run_id}/artifacts?per_page=100"],text=True))
+              artifacts[role]=listing.get("artifacts",[])
+          required={"track_b":"track-b-offline-output","capture":"v4-development-diagnostics-34689216730"}; provenance={}
+          recorded={
+            "approved_grouping_audit":(10721186254,"v4-development-baseline-registration-35788348286-1","sha256:83d61c942c7568a9689108e60b93ba31dd9df36a884f215476a05e6be2eb8b34"),
+            "completed_diagnostic":(10723897652,"v4-narrow-frozen-sample-diagnostic-35795768048-1","sha256:ff50c8455ef6859a65cd2e223e0bd8644d4c9a1b91c6404e99c4171d85d9d003"),
+          }
+          for role,(artifact_id,name,digest) in recorded.items():
+              matches=[x for x in artifacts[role] if (x.get("id"),x.get("name"),x.get("digest"),x.get("expired"))==(artifact_id,name,digest,False)]
+              if len(matches)!=1: raise SystemExit(f"{role} recorded artifact identity mismatch")
+          for role,name in required.items():
+              matches=[x for x in artifacts[role] if x.get("name")==name and x.get("expired") is False]
+              if len(matches)!=1: raise SystemExit(f"{role} artifact missing or ambiguous: {len(matches)}")
+              run_id,attempt,commit=runs[role]; item=matches[0]
+              provenance_role={"source_run":run_id,"source_attempt":attempt,"source_head_sha":commit,"artifact_id":item.get("id"),"artifact_name":name,"artifact_digest":item.get("digest")}
+              for input_role in (("canonical","plan","manifest") if role=="track_b" else ("capture",)): provenance[input_role]=provenance_role
+          (source/"github-run-metadata.json").write_text(json.dumps(metadata,indent=2,sort_keys=True)+"\n")
+          (source/"github-artifact-metadata.json").write_text(json.dumps(artifacts,indent=2,sort_keys=True)+"\n")
+          (source/"input-provenance.json").write_text(json.dumps(provenance,indent=2,sort_keys=True)+"\n")
+          lineage={"completed_diagnostic":{"run":"35795768048-1"},"approved_grouping_audit":{"run":"35788348286-1"},
+            "source_registration":"35755237312-1","specification_sha256":"206e86dcfd2fa25edfbb8b3201e84e342da55ace668b4e0c6d4d31a4132912b2"}
+          (source/"validated-lineage.json").write_text(json.dumps(lineage,indent=2,sort_keys=True)+"\n")
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          name: track-b-offline-output
+          run-id: 34689216730
+          path: source-track-b
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: v4-development-diagnostics-34689216730
+          run-id: 34769717178
+          path: source-diagnostics
+          github-token: ${{ github.token }}
+      - name: Resolve exact files and audit saved membership
+        run: |
+          set -euo pipefail
+          python scripts/validate_v4_weighting_registration_sources.py --metadata-only --track-root source-track-b --diagnostics-root source-diagnostics --output "$OUTPUT_DIR/source/resolved-inputs.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root=Path(os.environ["OUTPUT_DIR"]); resolved=json.loads((root/"source/resolved-inputs.json").read_text())
+          (root/"source/resolved.env").write_text("\n".join(f"{key.upper()}={resolved[key]}" for key in ("feature_store","split_plan","manifest","capture"))+"\n")
+          PY
+          set -a; source "$OUTPUT_DIR/source/resolved.env"; set +a
+          python -m scripts.audit_alpha_atlas_v4_cohort_ranking_inputs \
+            --proposal docs/reports/alpha_atlas_v4_ranking_cohort_relative_experiment_proposal.v1.json \
+            --clarification docs/reports/alpha_atlas_v4_cohort_relative_ranking_clarification.v1.json \
+            --evidence docs/reports/alpha_atlas_v4_narrow_frozen_sample_diagnostic.v1.1.json \
+            --lineage "$OUTPUT_DIR/source/validated-lineage.json" --canonical "$FEATURE_STORE" --plan "$SPLIT_PLAN" \
+            --manifest "$MANIFEST" --capture "$CAPTURE" --input-provenance "$OUTPUT_DIR/source/input-provenance.json" \
+            --output-dir "$OUTPUT_DIR/reports"
+      - name: Preserve actionable early failure
+        if: failure()
+        run: |
+          mkdir -p "$OUTPUT_DIR/reports"
+          if ! test -s "$OUTPUT_DIR/reports/cohort_ranking_input_audit.json"; then
+            printf '%s\n' '{"status":"AUDIT_FAILED_NO_PERFORMANCE","input_verification_status":"FAILED","grouping_eligibility_audit_status":"NOT_COMPLETED","selection_membership_audit_status":"NOT_COMPLETED","weight_reconciliation_status":"NOT_COMPLETED","performance_scoring":"NOT_RUN","holdout_content_access":false,"reason_code":"WORKFLOW_SOURCE_IDENTITY_DOWNLOAD_OR_RESOLUTION_FAILURE","details":{"review":"source metadata and step logs"}}' > "$OUTPUT_DIR/reports/cohort_ranking_input_audit.json"
+            printf '# Cohort ranking input audit\n\n- Status: `AUDIT_FAILED_NO_PERFORMANCE`.\n- Performance scoring: `NOT_RUN`.\n- Failure: inspect preserved source metadata and step logs.\n' > "$OUTPUT_DIR/reports/cohort_ranking_input_audit.md"
+          fi
+          cp docs/reports/alpha_atlas_v4_ranking_cohort_relative_experiment_proposal.v1.json "$OUTPUT_DIR/reports/" || true
+          cp docs/reports/alpha_atlas_v4_cohort_relative_ranking_clarification.v1.json "$OUTPUT_DIR/reports/" || true
+          (cd "$OUTPUT_DIR/reports" && sha256sum ./* > SHA256SUMS) || true
+      - name: Publish audit summary
+        if: always()
+        run: test ! -s "$OUTPUT_DIR/reports/cohort_ranking_input_audit.md" || cat "$OUTPUT_DIR/reports/cohort_ranking_input_audit.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload audit evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4-cohort-relative-ranking-input-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/v4-cohort-relative-ranking/**
+          if-no-files-found: error
