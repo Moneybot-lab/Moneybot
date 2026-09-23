@@ -1120,10 +1120,9 @@ immutable provenance. Performance comparison execution remains pending review.
   lookback start, dividends, applicable development costs, and certified portfolio
   paths remain unresolved. The net-primary registration stays blocked regardless of
   descriptive results.
-- [ ] **Real scoring execution pending.** Local GitHub authentication is unavailable;
-  no real candidate metric is claimed here. After merge, manually run **V4 Execute
-  Narrow Frozen Sample Diagnostic** with no inputs. Completion requires a successful
-  result artifact; tests and workflow implementation do not close this item.
+- [x] **Real narrow scoring execution completed.** Run `35795768048-1` produced the
+  saved conditional descriptive results. Completion is execution evidence only and
+  does not establish predictive advantage or broader validation readiness.
 
 ### Narrow execution histogram serialization repair after run 35792997101-1
 
@@ -1142,7 +1141,33 @@ immutable provenance. Performance comparison execution remains pending review.
   field, normalized expected/actual summaries, key types, missing/extra bins, and
   changed counts. A successful result also records that the mismatch was only JSON
   representation.
-- [ ] **Authorized real scoring remains pending.** Local GitHub authentication is
-  unavailable, so no metric is claimed from this repair. After merge, rerun the
-  existing **V4 Execute Narrow Frozen Sample Diagnostic** workflow with no inputs;
-  do not repeat registration or the completed grouping audit.
+- [x] **Authorized narrow scoring subsequently completed.** Run `35795768048-1`
+  completed against the pinned inputs after this serialization repair. This closes
+  execution only; its descriptive output does not close the broader net-return or
+  predictive-advantage gates.
+
+### Ranking zero-selection investigation after run 35795768048-1
+
+- [x] **Narrow diagnostic execution is complete within its descriptive scope.** Run
+  `35795768048`, attempt 1, completed under specification v1.1
+  (`206e86dcfd2fa25edfbb8b3201e84e342da55ace668b4e0c6d4d31a4132912b2`).
+  Its three ranking-lane zero-exposure results are arithmetic descriptions, not
+  evidence of stock-selection skill or broader predictive advantage.
+- [x] **Evidence-bound investigation tooling is implemented without rescoring.** It
+  validates the completed result and approved audit, consumes the exact frozen
+  manifest and OOF capture, keeps top-level producer predictions distinct from
+  scores and record-level fields, and emits per-candidate/fold gate counts,
+  mutually exclusive dispositions, deterministic canonical-ID examples,
+  provenance, and checksums. Missing/null selection evidence is never treated as
+  explicit false.
+- [ ] **Real cause classification is pending authenticated artifact execution.** The
+  completed result artifact (ID `10723897652`) and frozen OOF capture cannot be
+  downloaded without GitHub authentication in this environment. Therefore no
+  fixture-derived cause is asserted and diagnostic behavior is unchanged. Run
+  **V4 Investigate Ranking Zero Selection** with no inputs. If exact evidence shows
+  an interpretation defect, corrected scoring requires separate authorization;
+  if producer selections are genuinely empty, record
+  `EXPECTED_FROZEN_ZERO_SELECTION` and stop.
+- [ ] **Broader gates remain open.** Applicable development costs, net-return
+  validation, terminal valuation, complete historical coverage, and promotion
+  readiness are unchanged and unresolved.
