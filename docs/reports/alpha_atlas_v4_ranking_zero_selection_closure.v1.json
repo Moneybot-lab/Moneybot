@@ -1,0 +1,54 @@
+{
+  "candidates": [
+    {
+      "name": "challenger-ranking-lane-full-v1",
+      "score_semantics": "ranking_score_not_buy_probability"
+    },
+    {
+      "name": "challenger-ranking-lane-recent-half-v1",
+      "score_semantics": "ranking_score_not_buy_probability"
+    },
+    {
+      "name": "challenger-ranking-top5-model-v1",
+      "score_semantics": "probability"
+    }
+  ],
+  "classification": "EXPECTED_FROZEN_ZERO_SELECTION",
+  "conclusions": {
+    "corrected_scoring_required": false,
+    "diagnostic_interpretation_defect": false,
+    "gross_result_interpretation": "zero exposure versus a negative equal-weight timing-cohort baseline; not successful stock selection",
+    "selection_design_effectiveness": "NOT_ESTABLISHED"
+  },
+  "historical_report_note": "The original report generic next action was conditional on finding DIAGNOSTIC_INTERPRETATION_DEFECT. That condition was not met; no corrected scoring is warranted. Original report is not modified.",
+  "investigation": {
+    "artifact": "v4-ranking-zero-selection-investigation-35815996007-1",
+    "artifact_digest": "sha256:dbf53e33b4aa03be99369a38b977231701c28ec5d8bad4f5356a2f0cf67382c3",
+    "artifact_id": 10732045472,
+    "commit": "4f55d3ca3fcbb9747b5f6499daec9e1f354a0e97",
+    "conclusion": "success",
+    "local_report_byte_hash_validation": "UNAVAILABLE_WITHOUT_AUTHENTICATED_ARTIFACT_DOWNLOAD",
+    "run": "35815996007-1"
+  },
+  "reconciliation": {
+    "abstained": 0,
+    "assignments": 30819,
+    "candidates": 3,
+    "decision_threshold": 0.6,
+    "diagnostic_selected": 0,
+    "folds": 3,
+    "missing_or_uninterpretable": 0,
+    "observations_per_candidate": 10273,
+    "producer_selected": 0,
+    "risk_rejected": 0,
+    "rule_rejected": 0
+  },
+  "recording_basis": "user-supplied completed findings plus publicly validated GitHub run/artifact metadata; original artifact bytes remain unchanged",
+  "schema_version": "alpha-atlas-v4-ranking-zero-selection-closure.v1",
+  "status": "COMPLETE",
+  "upstream": {
+    "approved_grouping_audit": "35788348286-1",
+    "completed_diagnostic": "35795768048-1",
+    "specification_v1_1_sha256": "206e86dcfd2fa25edfbb8b3201e84e342da55ace668b4e0c6d4d31a4132912b2"
+  }
+}
