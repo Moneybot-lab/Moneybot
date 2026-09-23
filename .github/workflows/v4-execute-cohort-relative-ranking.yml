@@ -1,0 +1,101 @@
+name: V4 Execute Cohort Relative Ranking
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  execute-authorized-development-description:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OUTPUT_DIR: artifacts/v4-cohort-relative-ranking-results
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Validate authorization and approved audit identity
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR/source"
+          python - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          run=json.loads(subprocess.check_output(['gh','api',f'repos/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/35895423660']))
+          listing=json.loads(subprocess.check_output(['gh','api',f'repos/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/35895423660/artifacts?per_page=100']))
+          if (run.get('id'),run.get('run_attempt'),run.get('head_sha'),run.get('conclusion')) != (35895423660,1,'82025b01ee53cf5b22a4a836b3581e880c915a3a','success'): raise SystemExit('approved audit run mismatch')
+          expected=(10766372797,'v4-cohort-relative-ranking-input-audit-35895423660-1','sha256:51ec951dd99efb92ad9d4991844690936d5911959599f71435a77c9f5002897b',False)
+          matches=[x for x in listing.get('artifacts',[]) if (x.get('id'),x.get('name'),x.get('digest'),x.get('expired'))==expected]
+          if len(matches)!=1: raise SystemExit('approved audit artifact mismatch')
+          root=Path(os.environ['OUTPUT_DIR'])/'source'; (root/'approved-audit-run.json').write_text(json.dumps(run,indent=2,sort_keys=True)+'\n'); (root/'approved-audit-artifact.json').write_text(json.dumps(matches[0],indent=2,sort_keys=True)+'\n')
+          lineage={'completed_diagnostic':{'run':'35795768048-1'},'approved_grouping_audit':{'run':'35788348286-1'},'source_registration':'35755237312-1','specification_sha256':'206e86dcfd2fa25edfbb8b3201e84e342da55ace668b4e0c6d4d31a4132912b2'}
+          (root/'validated-lineage.json').write_text(json.dumps(lineage,indent=2,sort_keys=True)+'\n')
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          name: v4-cohort-relative-ranking-input-audit-35895423660-1
+          run-id: 35895423660
+          path: source-approved-audit
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: track-b-offline-output
+          run-id: 34689216730
+          path: source-track-b
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: v4-development-diagnostics-34689216730
+          run-id: 34769717178
+          path: source-diagnostics
+          github-token: ${{ github.token }}
+      - name: Resolve pinned inputs and execute authorized comparison
+        run: |
+          set -euo pipefail
+          python scripts/validate_v4_weighting_registration_sources.py --metadata-only --track-root source-track-b --diagnostics-root source-diagnostics --output "$OUTPUT_DIR/source/resolved-inputs.json"
+          python - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ['OUTPUT_DIR']); resolved=json.loads((root/'source/resolved-inputs.json').read_text())
+          def one(name):
+              hits=list(Path('source-approved-audit').rglob(name))
+              if len(hits)!=1: raise SystemExit(f'{name} missing/ambiguous: {len(hits)}')
+              return str(hits[0])
+          values={key:resolved[key] for key in ('feature_store','split_plan','manifest','capture')}
+          values.update(approved_audit=one('cohort_ranking_input_audit.json'),approved_membership=one('cohort_ranking_membership_evidence.json'),input_provenance=one('input_provenance_manifest.json'))
+          (root/'source/resolved.env').write_text('\n'.join(f'{k.upper()}={v}' for k,v in values.items())+'\n')
+          PY
+          set -a; source "$OUTPUT_DIR/source/resolved.env"; set +a
+          python -m scripts.execute_alpha_atlas_v4_cohort_ranking \
+            --authorization docs/reports/alpha_atlas_v4_cohort_relative_ranking_execution_authorization.v1.json \
+            --proposal docs/reports/alpha_atlas_v4_ranking_cohort_relative_experiment_proposal.v1.json \
+            --clarification docs/reports/alpha_atlas_v4_cohort_relative_ranking_clarification.v1.json \
+            --evidence docs/reports/alpha_atlas_v4_narrow_frozen_sample_diagnostic.v1.1.json \
+            --lineage "$OUTPUT_DIR/source/validated-lineage.json" --approved-audit "$APPROVED_AUDIT" --approved-membership "$APPROVED_MEMBERSHIP" \
+            --canonical "$FEATURE_STORE" --plan "$SPLIT_PLAN" --manifest "$MANIFEST" --capture "$CAPTURE" \
+            --input-provenance "$INPUT_PROVENANCE" --output-dir "$OUTPUT_DIR/reports"
+      - name: Preserve actionable failure
+        if: failure()
+        run: |
+          mkdir -p "$OUTPUT_DIR/reports"
+          if ! test -s "$OUTPUT_DIR/reports/cohort_ranking_results.json"; then
+            printf '%s\n' '{"execution_status":"FAILED_BEFORE_ENTRYPOINT","performance_scoring":"NOT_COMPLETED","holdout_content_access":false,"winner_selected":false,"reason_code":"PINNED_SOURCE_OR_AUTHORIZATION_VALIDATION_FAILURE"}' > "$OUTPUT_DIR/reports/cohort_ranking_results.json"
+            printf '# Cohort ranking execution failure\n\n- Execution: `FAILED_BEFORE_ENTRYPOINT`.\n- Inspect preserved source metadata and logs.\n' > "$OUTPUT_DIR/reports/cohort_ranking_results.md"
+          fi
+          (cd "$OUTPUT_DIR/reports" && rm -f SHA256SUMS && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort | xargs -r sha256sum > SHA256SUMS) || true
+      - name: Publish result summary
+        if: always()
+        run: test ! -s "$OUTPUT_DIR/reports/cohort_ranking_results.md" || cat "$OUTPUT_DIR/reports/cohort_ranking_results.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload results or failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4-cohort-relative-ranking-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/v4-cohort-relative-ranking-results/**
+          if-no-files-found: error

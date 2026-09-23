@@ -1,0 +1,14 @@
+{
+  "clarification": {
+    "gate_evidence": "missing, null, malformed, or uninterpretable required gate evidence blocks validation and never defaults to pass",
+    "group_eligibility": "a ticker/date/horizon/entry/exit group is eligible only when every canonical observation has abstained=false, risk_rejected=false, and rule_rejected=false; any explicit rejection makes the entire group ineligible",
+    "group_score": "arithmetic mean of saved finite scores over every canonical observation in the group; passing members are never subsetted",
+    "multiplicity_weighting": "observation multiplicity does not increase a ticker group's cohort weight",
+    "rejected_evidence": "rejected groups and member-level gate reasons remain in audit evidence"
+  },
+  "historical_scope": "clarification of the new cohort-relative experiment only; historical v1.1 specification and results are unchanged",
+  "performance_audit_authorized": false,
+  "proposal_sha256": "000a0f8e2ba0fbaf563eb64dc3589fe4b2ae0695fd6c63fa8c536675d9b26f4d",
+  "schema_version": "alpha-atlas-v4-cohort-relative-ranking-clarification.v1",
+  "status": "AUTHORIZED_FOR_NO_PERFORMANCE_AUDIT"
+}

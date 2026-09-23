@@ -1,0 +1,402 @@
+{
+  "aggregation": {
+    "categorical_features": "none selected; any future categorical addition requires unanimous value and a new registration",
+    "feature_conflict": "nonfinite values are missing, not zero; conflicting required nonnumeric or timing values block the fold",
+    "feature_missing": "if some member values are missing, average all finite values and record finite/missing counts; if every member is missing, emit group-level missing and impute using the training-fold median for that feature",
+    "identifiers_and_timestamps": "never averaged; required values must be unanimous and identifiers remain provenance only",
+    "multiplicity": "one group is one example and receives training weight 1.0 regardless of member count",
+    "numeric_features": "for each selected feature, arithmetic mean of all finite member values available by the unanimous feature cutoff; binary indicators therefore become member fractions",
+    "outcome": "arithmetic mean of finite saved gross split-adjusted return_5d across every canonical member with equal observation weight; any missing/nonfinite member outcome blocks the affected fold"
+  },
+  "claim_limits": [
+    "exploratory and informed by viewed development results",
+    "ticker is an operational group identifier, not verified security continuity",
+    "gross endpoint arithmetic is not net profitability or portfolio performance",
+    "no independent-row inference or uncertainty interval",
+    "historical coverage, terminal valuation, applicable development costs, and broader validation remain unresolved",
+    "no promotion or production readiness"
+  ],
+  "development_screen": {
+    "aggregate_rule": "selected_minus_baseline > 0",
+    "disclosure": "all fold differences, selected absolute returns, baseline absolute returns, losses, counts, and denominators",
+    "fold_rule": "selected_minus_baseline > 0 in at least 2 of 3 folds",
+    "interpretation": "passing supports further research only; it does not establish significance, positive profitability, out-of-sample superiority, or promotion readiness"
+  },
+  "eligibility": {
+    "difference": "training outcomes are available only inside the training partition for fitting; validation outcomes remain hidden until frozen predictions and membership are persisted",
+    "evaluation": "all groups wholly assigned to that fold's validation IDs under the same fixed rules",
+    "failure": "missing required evidence, invalid timing, incompatible group membership, or missing required outcome blocks the fold; no silent exclusion",
+    "model_independence": "old predictions, selections, abstention, risk_rejected, and rule_rejected flags are not eligibility inputs",
+    "training": "all groups wholly assigned to that fold's training IDs that satisfy fixed canonical, timing, feature-availability, and group-integrity rules"
+  },
+  "evaluation": {
+    "blocked_fold": "retain fold with explicit reason and make aggregate NOT_EVALUABLE; never average surviving folds",
+    "cohort_aggregation": "equal weight across every compatible cohort within fold",
+    "fold_aggregation": "equal weight 1/3 across folds 1, 2, and 3 only when all are complete",
+    "missing_outcome": "block affected fold without reselection, row dropping, substitution, or renormalization",
+    "portfolio_curve": "FORBIDDEN_OVERLAPPING_ENDPOINT_RETURNS_NOT_COMPOUNDED",
+    "primary": "selected equal-weight gross endpoint return minus eligible-cohort equal-weight gross endpoint return",
+    "secondary": [
+      "selected gross endpoint return",
+      "eligible-cohort baseline gross endpoint return",
+      "selected-minus-zero-cash",
+      "selected and eligible group counts",
+      "selected member count",
+      "empty cohort count",
+      "missing-evidence counts"
+    ],
+    "uncertainty": "NOT_REGISTERED_NOT_EVALUATED"
+  },
+  "execution_budget": {
+    "candidate_configurations": 1,
+    "cpu_cores": 2,
+    "final_holdout_fits": 0,
+    "fold_fits": 3,
+    "hyperparameter_trials": 0,
+    "max_features": 42,
+    "max_training_group_examples_per_fold": 24846,
+    "memory_gib": 4,
+    "provider_calls": 0,
+    "wall_clock_minutes": 30
+  },
+  "execution_status": "NOT_AUTHORIZED_NOT_EXECUTED",
+  "experiment_name": "alpha-atlas-v4-ticker-timing-group-return-regression-v1",
+  "features": {
+    "availability": "each value must satisfy the saved feature cutoff/source timestamp contract; outcomes cannot resolve feature conflicts",
+    "count": 42,
+    "excluded": [
+      "feature_close",
+      "canonical_observation_id",
+      "ticker and all security identifiers",
+      "event/decision/entry/exit timestamps",
+      "outcomes and outcome-derived buckets",
+      "historical model scores, predictions, selections, and gates"
+    ],
+    "list": [
+      "feature_above_vwap",
+      "feature_atr_14",
+      "feature_dollar_volume",
+      "feature_ema_10",
+      "feature_ema_20",
+      "feature_macd",
+      "feature_macd_hist",
+      "feature_macd_signal",
+      "feature_market_regime_risk_on",
+      "feature_market_volatility_proxy",
+      "feature_momentum_5d_vs_20d",
+      "feature_price_vs_sma_20",
+      "feature_price_vs_sma_50",
+      "feature_price_vs_vwap",
+      "feature_relative_volume_5d",
+      "feature_return_10d_lagged",
+      "feature_return_1d_lagged",
+      "feature_return_20d_lagged",
+      "feature_return_5d_lagged",
+      "feature_rsi_14",
+      "feature_sector_relative_return_5d",
+      "feature_sma_10",
+      "feature_sma_10_over_20",
+      "feature_sma_20",
+      "feature_sma_20_over_50",
+      "feature_sma_50",
+      "feature_spy_return_1d",
+      "feature_spy_return_5d",
+      "feature_symbol_beta_20d",
+      "feature_symbol_minus_spy_5d",
+      "feature_trend_slope_10d",
+      "feature_trend_slope_20d",
+      "feature_volatility_20d",
+      "feature_volatility_5d",
+      "feature_volume",
+      "feature_volume_ratio_20d",
+      "feature_volume_zscore_20d",
+      "feature_vwap",
+      "feature_vwap_slope",
+      "feature_distance_from_20d_low",
+      "feature_drawdown_from_20d_high",
+      "feature_gap_percent"
+    ]
+  },
+  "frozen_inputs": {
+    "canonical": {
+      "file_byte_sha256": "506073994052be852a5a00fc38e239b85e72a50494c3559640ea980fb6a52d9e",
+      "path": "track_b/runs/34689216730-1/flat_feature_store/all.jsonl"
+    },
+    "manifest": {
+      "file_byte_sha256": "ea4e55f9faa848219945d7e03c92c7a541645cd4d6df8aa3cfbd0d1334872f15",
+      "path": "track_b/runs/34689216730-1/challenger_suite/challenger_suite_manifest.json"
+    },
+    "prior_oof_capture": {
+      "artifact": "v4-development-diagnostics-34689216730",
+      "artifact_digest": "sha256:e341166155b819dd98e3c9a82c2be1d260ba549d637e5fb7ed1f086f21d5b4d4",
+      "artifact_id": 10321991290,
+      "commit": "5d360cdbda802ae8527b35fe59f75920b8c827c8",
+      "file_byte_sha256": "454febde2e14ca8a916222d86a6872db1c5e790a29429f2db6393d828e87e434",
+      "role": "prior_evidence_only_not_model_input_or_predictions",
+      "run": "34769717178-1"
+    },
+    "split_plan": {
+      "embedded_semantic_sha256": "bd60055adc6cb1b3f8b143c6c61031bced01c9151fcb3b67c33f75430106e8e8",
+      "file_byte_sha256": "f11257cff0befc1f0b46e4cab9a64678c766b6fe2abdc50b07861a18f7d6933a",
+      "independently_recomputed_semantic_sha256": "bd60055adc6cb1b3f8b143c6c61031bced01c9151fcb3b67c33f75430106e8e8",
+      "path": "track_b/runs/34689216730-1/challenger_suite/challenger_split_plan.json"
+    },
+    "track_b": {
+      "artifact": "track-b-offline-output",
+      "artifact_digest": "sha256:017cdd8a8b30917e6e2f958e3cba1ae99827e002434b97f9de40c2c4ab871ef9",
+      "artifact_id": 10296724235,
+      "commit": "1f8f46db584dff0881273bdeae1c56c1a8a016c5",
+      "run": "34689216730-1"
+    }
+  },
+  "future_capture_contract": {
+    "fixed_values": {
+      "effective_training_target_name": "group_gross_split_adjusted_return_5d",
+      "evaluation_return_name": "group_gross_split_adjusted_return_5d",
+      "prediction_semantics": "predicted_return"
+    },
+    "forbidden_metadata": [
+      "label_up_5d as effective target",
+      "daily_top5 as effective target",
+      "buy_probability",
+      "daily_top5_probability"
+    ],
+    "ordering": "model, fold, cohort key, ticker, stable_group_identity",
+    "pre_outcome_capture": "persist predictions, group mappings, eligibility, and hashes before reading validation returns",
+    "required_fields": [
+      "model_version",
+      "fold",
+      "stable_group_identity",
+      "source_canonical_observation_ids",
+      "event_date",
+      "ticker",
+      "label_horizon_sessions",
+      "decision_at",
+      "feature_cutoff_at",
+      "entry_at",
+      "exit_at",
+      "effective_training_target_name",
+      "effective_training_target_value_for_training_rows_only",
+      "prediction",
+      "prediction_semantics",
+      "evaluation_return_name",
+      "evaluation_return_value_for_released_validation_outcomes_only",
+      "eligibility_disposition",
+      "eligibility_reasons",
+      "rank",
+      "selected",
+      "selected_group_weight",
+      "eligible_baseline_group_weight"
+    ],
+    "schema_version": "alpha-atlas-v4-group-return-regression-capture.v1"
+  },
+  "group_contract": {
+    "crossing_policy": "if any stable group has members in both train and validation, members assigned to incompatible timing, or group timing violates purge/embargo, block the entire fold; never move or delete rows",
+    "horizon_required": 5,
+    "identity_scope": "operational ticker/timing group; not verified security continuity",
+    "key": [
+      "event_date",
+      "ticker",
+      "label_horizon_sessions",
+      "entry_at",
+      "exit_at"
+    ],
+    "purge_embargo": "recompute after grouping; require every training group label completion/exit before the validation decision boundary and preserve the split plan's one-session embargo",
+    "source_provenance": "retain sorted canonical_observation_ids and their original fold membership",
+    "stable_group_identity": "sha256 of canonical JSON [event_date, uppercase ticker, 5, entry_at, exit_at, sorted canonical_observation_ids]",
+    "timing_requirements": [
+      "every member has finite interpretable event_date, ticker, horizon, entry_at, exit_at, decision_at, and feature_cutoff_at",
+      "all members agree on event_date, ticker, horizon, entry_at, exit_at, decision_at, and feature_cutoff_at",
+      "feature_cutoff_at <= decision_at < entry_at < exit_at",
+      "every feature source timestamp is <= feature_cutoff_at",
+      "timestamps satisfy the established XNYS prediction/execution contract"
+    ]
+  },
+  "hypothesis": "Training directly on equal-weight ticker/timing-group five-session returns may improve top-five gross endpoint selection relative to the eligible-cohort baseline.",
+  "implementation_checklist": [
+    "verify this registration hash and every frozen input byte/semantic hash",
+    "load development IDs only and keep holdout content inaccessible",
+    "construct groups and emit row-to-group provenance",
+    "run group crossing and timing/purge/embargo gates before fitting",
+    "fit training-only preprocessing and exactly one ridge configuration per fold",
+    "persist pre-outcome predictions and reproduce mappings before outcome join",
+    "score only if every fold remains unblocked",
+    "emit all required outputs and no promotion action"
+  ],
+  "implementation_status": "NOT_AUTHORIZED_NOT_IMPLEMENTED",
+  "known_gaps": [
+    "same-security continuity is unverified",
+    "cost policy and terminal valuation are unavailable",
+    "group-level timing compatibility must be established during a future implementation preflight; any conflict blocks its fold"
+  ],
+  "membership": {
+    "development_rows": 24846,
+    "final_holdout": {
+      "content_access": false,
+      "forbidden": [
+        "features",
+        "labels",
+        "prices",
+        "returns",
+        "predictions"
+      ],
+      "membership_metadata_only": true
+    },
+    "folds": [
+      {
+        "earliest_validation_decision_at": "2026-06-01T13:36:35+00:00",
+        "embargo_sessions": 1,
+        "fold": 1,
+        "latest_train_label_completion_at": "2026-05-29T20:00:00+00:00",
+        "train_groups": {
+          "count": 34,
+          "first": "2026-04-02",
+          "last": "2026-05-21"
+        },
+        "train_rows": 11480,
+        "validation_groups": {
+          "count": 11,
+          "first": "2026-06-01",
+          "last": "2026-06-15"
+        },
+        "validation_rows": 4464
+      },
+      {
+        "earliest_validation_decision_at": "2026-06-17T15:01:49+00:00",
+        "embargo_sessions": 1,
+        "fold": 2,
+        "latest_train_label_completion_at": "2026-06-16T20:00:00+00:00",
+        "train_groups": {
+          "count": 46,
+          "first": "2026-04-02",
+          "last": "2026-06-09"
+        },
+        "train_rows": 17856,
+        "validation_groups": {
+          "count": 11,
+          "first": "2026-06-17",
+          "last": "2026-07-02"
+        },
+        "validation_rows": 2479
+      },
+      {
+        "earliest_validation_decision_at": "2026-07-07T13:30:27+00:00",
+        "embargo_sessions": 1,
+        "fold": 3,
+        "latest_train_label_completion_at": "2026-07-06T20:00:00+00:00",
+        "train_groups": {
+          "count": 32,
+          "first": "2026-05-12",
+          "last": "2026-06-26"
+        },
+        "train_rows": 11366,
+        "validation_groups": {
+          "count": 11,
+          "first": "2026-07-07",
+          "last": "2026-07-21"
+        },
+        "validation_rows": 3330
+      }
+    ],
+    "identities_bound_by": "exact split-plan canonical observation ID vectors; no row movement, deletion, or reassignment",
+    "scope": "exact frozen development membership",
+    "validation_rows_per_candidate": 10273
+  },
+  "model": {
+    "alpha": 1.0,
+    "alpha_meaning": "dimensionless L2 coefficient in the explicitly normalized mean-loss objective; newly registered for this regression, not borrowed from classification",
+    "configuration_count": 1,
+    "family": "deterministic ridge linear regression",
+    "fits": 3,
+    "intercept": true,
+    "objective": "minimize mean squared error on continuous group return plus alpha times squared standardized-feature coefficients; intercept unpenalized",
+    "random_seed": 0,
+    "randomness": "none; seed serialized for contract completeness",
+    "searches": false,
+    "solver": "closed-form float64 solve of (X'X/n + alpha*I) beta = X'y/n after centering/scaling; use deterministic SVD pseudoinverse with rcond=1e-12 if direct solve is singular",
+    "training_weight": 1.0
+  },
+  "positioning": {
+    "basis": {
+      "alignment_review_commit": "c3b673c0",
+      "alignment_review_path": "docs/reports/target_score_alignment_review.json",
+      "alignment_review_sha256": "c8d3138c95ff9b5f84e7aafda1b08c8587605699a61e927426e362289b21274b",
+      "completed_scoring_run": "35923707545-1",
+      "finding": "COMPLETE_UNFAVORABLE_FINDINGS"
+    },
+    "confirmatory": false,
+    "prior_development_exposure": true,
+    "type": "exploratory_development_screen"
+  },
+  "preprocessing": {
+    "categorical_encoding": "none",
+    "fit_scope": "training groups within each fold only",
+    "numeric_imputation": "per-feature median of nonmissing training-group aggregates",
+    "scaling": "per-feature training-group mean and population standard deviation after imputation; replace nonfinite or abs(std)<=1e-12 with 1.0",
+    "serialization": "persist ordered feature list, medians, means, standard deviations, counts, and their canonical JSON SHA-256",
+    "unseen_categories": "inapplicable because no categorical feature is selected"
+  },
+  "required_outputs": [
+    "group_construction_audit.json",
+    "group_row_mapping.json",
+    "fold_preprocessing.json",
+    "model_artifacts.json",
+    "development_group_predictions.json",
+    "development_results.json",
+    "execution_provenance.json",
+    "SHA256SUMS"
+  ],
+  "safety": {
+    "execution_authorized": false,
+    "fitting": false,
+    "holdout_content_access": false,
+    "implementation_authorized": false,
+    "parameter_search": false,
+    "performance_calculation": false,
+    "predictions": false,
+    "production_change": false,
+    "provider_access": false,
+    "training": false,
+    "training_authorized": false
+  },
+  "schema_version": "alpha-atlas-v4-group-return-regression-experiment-registration.v1",
+  "selection": {
+    "baseline": "same eligible population, equal group weights summing to 1.0; undefined if empty and retained explicitly",
+    "cohort_key": [
+      "fold",
+      "event_date",
+      "label_horizon_sessions",
+      "entry_at",
+      "exit_at"
+    ],
+    "count": "min(5, eligible group count)",
+    "direction": "descending",
+    "empty": "retain cohort with cash weight 1.0 and selected gross return 0.0",
+    "k": 5,
+    "predicted_return_cutoff": null,
+    "score": "predicted group_gross_split_adjusted_return_5d",
+    "tie_break": [
+      "ticker ascending",
+      "stable_group_identity ascending"
+    ],
+    "weights": "equal across selected groups and sum to 1.0"
+  },
+  "status": "PREPARED_FOR_REVIEW",
+  "target": {
+    "definition": "equal-observation arithmetic mean of member return_5d values from the registered entry_at to exit_at endpoints",
+    "field": "group_gross_split_adjusted_return_5d",
+    "not_semantics": [
+      "buy_probability",
+      "daily_top5_probability",
+      "binary label_up_5d probability"
+    ],
+    "prediction_semantics": "predicted gross split-adjusted five-session group return",
+    "secondary_binary_label": {
+      "status": "NOT_DEFINED_NOT_SERIALIZED"
+    },
+    "type": "continuous_float",
+    "units": "decimal return"
+  },
+  "training_status": "NOT_AUTHORIZED_NOT_EXECUTED",
+  "unresolved_design_choices": []
+}
