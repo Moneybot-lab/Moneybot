@@ -1,0 +1,77 @@
+name: V4 Cohort Relative Ranking (Validation Only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  validate-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      OUTPUT_DIR: artifacts/v4-cohort-relative-ranking
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Validate frozen lineage before any scoring action
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR"
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          expected={
+            "completed_diagnostic": (35795768048, 1),
+            "approved_grouping_audit": (35788348286, 1),
+            "source_registration": (35755237312, 1),
+          }
+          out=Path(os.environ["OUTPUT_DIR"]); metadata={}
+          for role,(run_id,attempt) in expected.items():
+              raw=subprocess.check_output(["gh","api",f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{run_id}"],text=True)
+              run=json.loads(raw); metadata[role]=run
+              if (run.get("id"),run.get("run_attempt"),run.get("conclusion")) != (run_id,attempt,"success"):
+                  raise SystemExit(f"{role} run metadata mismatch")
+          (out/"github-lineage-metadata.json").write_text(json.dumps(metadata,indent=2,sort_keys=True)+"\n")
+          lineage={"completed_diagnostic":{"run":"35795768048-1"},"approved_grouping_audit":{"run":"35788348286-1"},
+            "source_registration":"35755237312-1","specification_sha256":"206e86dcfd2fa25edfbb8b3201e84e342da55ace668b4e0c6d4d31a4132912b2"}
+          (out/"validated-lineage.json").write_text(json.dumps(lineage,indent=2,sort_keys=True)+"\n")
+          PY
+          python -m scripts.validate_alpha_atlas_v4_cohort_ranking \
+            --proposal docs/reports/alpha_atlas_v4_ranking_cohort_relative_experiment_proposal.v1.json \
+            --evidence docs/reports/alpha_atlas_v4_narrow_frozen_sample_diagnostic.v1.1.json \
+            --lineage "$OUTPUT_DIR/validated-lineage.json" --output "$OUTPUT_DIR/validation.json"
+      - name: Confirm real scoring remains hard-disabled
+        run: |
+          set +e
+          python -m scripts.validate_alpha_atlas_v4_cohort_ranking \
+            --proposal docs/reports/alpha_atlas_v4_ranking_cohort_relative_experiment_proposal.v1.json \
+            --evidence docs/reports/alpha_atlas_v4_narrow_frozen_sample_diagnostic.v1.1.json \
+            --lineage "$OUTPUT_DIR/validated-lineage.json" --output "$OUTPUT_DIR/real-scoring-gate.json" --request-real-scoring
+          status=$?
+          test "$status" -eq 2
+          test "$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["reason_code"])' "$OUTPUT_DIR/real-scoring-gate.json")" = REAL_SCORING_HARD_DISABLED_REQUIRES_CODE_CHANGE
+      - name: Preserve early validation failure
+        if: failure()
+        run: |
+          mkdir -p "$OUTPUT_DIR"
+          if ! test -s "$OUTPUT_DIR/validation.json"; then
+            printf '%s\n' '{"validation":"FAILED","scoring":"NOT_RUN","reason_code":"WORKFLOW_LINEAGE_VALIDATION_FAILURE","selected_count":null,"abstained_count":null,"metric_denominators":null,"weighting_reconciliation":null,"real_scoring_enabled":false}' > "$OUTPUT_DIR/validation.json"
+          fi
+      - name: Publish validation summary
+        if: always()
+        run: |
+          printf '## Alpha Atlas V4 cohort-relative ranking\n\n' >> "$GITHUB_STEP_SUMMARY"
+          for file in "$OUTPUT_DIR"/validation.json "$OUTPUT_DIR"/real-scoring-gate.json; do test ! -s "$file" || { printf '### `%s`\n```json\n' "$(basename "$file")" >> "$GITHUB_STEP_SUMMARY"; cat "$file" >> "$GITHUB_STEP_SUMMARY"; printf '```\n' >> "$GITHUB_STEP_SUMMARY"; }; done
+      - name: Upload validation and disabled-result artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4-cohort-relative-ranking-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/v4-cohort-relative-ranking/**
+          if-no-files-found: error
