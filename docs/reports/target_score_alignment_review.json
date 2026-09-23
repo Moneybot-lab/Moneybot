@@ -1,0 +1,240 @@
+{
+  "approved_membership": {
+    "authorization_sha256": "4cbd956cf69ed4077ebbbb21f8ce44a7ade5afaa45ebe9ad894e3d0d62fcc252",
+    "input_provenance_sha256": "35b7b75d21ef0f12a99fd9f311fbc5dc216cca97c29718bbdf1e68a3e057ed22",
+    "membership_sha256": "a5f411fc534cba8a602143c491f6e5e74c5e2280a5dc141a9e1fee8f4c2ab9e0",
+    "report_sha256": "3a71814f1b3ef086a518aa380ce6bf85a65e0bf893d036f788ffc923b1bc79b9",
+    "run": "35895423660-1"
+  },
+  "boundaries": {
+    "holdout_content_access": false,
+    "new_performance_experiment": false,
+    "production_change": false,
+    "provider_access": false,
+    "retraining": false,
+    "tuning": false
+  },
+  "candidate_reviews": [
+    {
+      "candidate": "challenger-ranking-lane-full-v1",
+      "classifications": [
+        "TARGET_AND_DIRECTION_CONSISTENT",
+        "OBJECTIVE_ALIGNMENT_LIMITATION",
+        "CONFIRMED_CONTRACT_OR_IMPLEMENTATION_DEFECT"
+      ],
+      "defect_scope": "capture label/target metadata only; saved score fitting, ordering, membership, and return evaluation are not invalidated",
+      "direction": "larger sigmoid score means stronger fitted positive-class/daily_top5 ordering; descending supported",
+      "model": "weighted logistic; exclude_raw_price; l2=0.004",
+      "saved_semantics": "ranking_score_not_buy_probability",
+      "training_window": "full"
+    },
+    {
+      "candidate": "challenger-ranking-lane-recent-half-v1",
+      "classifications": [
+        "TARGET_AND_DIRECTION_CONSISTENT",
+        "OBJECTIVE_ALIGNMENT_LIMITATION",
+        "CONFIRMED_CONTRACT_OR_IMPLEMENTATION_DEFECT"
+      ],
+      "defect_scope": "capture label/target metadata only; saved score fitting, ordering, membership, and return evaluation are not invalidated",
+      "direction": "larger sigmoid score means stronger fitted positive-class/daily_top5 ordering; descending supported",
+      "model": "weighted logistic; exclude_raw_price; l2=0.004",
+      "saved_semantics": "ranking_score_not_buy_probability",
+      "training_window": "recent_half"
+    },
+    {
+      "candidate": "challenger-ranking-top5-model-v1",
+      "classifications": [
+        "TARGET_AND_DIRECTION_CONSISTENT",
+        "OBJECTIVE_ALIGNMENT_LIMITATION",
+        "CONFIRMED_CONTRACT_OR_IMPLEMENTATION_DEFECT"
+      ],
+      "defect_scope": "capture label/target metadata only; weighting and identity calibration do not establish calibrated population probability or buy probability",
+      "direction": "larger sigmoid output means stronger fitted positive-class/daily_top5 ordering; descending supported",
+      "model": "tail-weighted logistic; includes raw close; l2=0.002",
+      "saved_semantics": "ordinal probability of daily_top5; not a calibrated buy probability",
+      "training_window": "full_window"
+    }
+  ],
+  "completed_scoring": {
+    "all_candidates_underperformed_baseline_in_all_folds": true,
+    "artifact_digest": "sha256:61ac2df3fd4a4302ba88e7d3f75e04dc9b15abfe4560fdcfe0e2c7040ad5917c",
+    "artifact_id": 10778740282,
+    "artifact_name": "v4-cohort-relative-ranking-results-35923707545-1",
+    "checksums_verified": true,
+    "commit": "c1d03575d05a07146f4cf85d35f2087db5259243",
+    "finding": "COMPLETE_UNFAVORABLE",
+    "predictive_advantage": "NOT_ESTABLISHED",
+    "result_sha256": "b2621dfe600f399c5de37a6c9b10dd529898a37f9b2468aa32109b058f109776",
+    "run": "35923707545-1"
+  },
+  "conclusion": {
+    "broader_validation_and_promotion": "UNCHANGED_BLOCKED",
+    "confirmed_defect_requires_current_result_retraction": false,
+    "objective_alignment": "LIMITED_FOR_ALL_THREE",
+    "predictive_advantage": "NOT_ESTABLISHED",
+    "result_disposition": "ACCEPT_UNFAVORABLE_RESULT; tested frozen rule did not improve gross endpoint outcomes on this development sample",
+    "target_and_direction": "CONSISTENT_FOR_ALL_THREE"
+  },
+  "confirmed_defect": {
+    "action_in_this_task": "NONE; historical artifacts and unfavorable result preserved",
+    "affected_artifacts": [
+      "development_walk_forward_predictions.json candidate target_definition and record.label fields",
+      "label-based metrics derived from those configured labels"
+    ],
+    "description": "candidate-specific training replaces y_train with daily_top5 labels, but _apply_walk_forward_metrics retains configured label_up_5d y_test and serializes target_metadata() for label_up_5d plus record.label from y_test",
+    "earliest_affected_stage": "development OOF capture metadata and candidate label serialization at commit 5d360cdbda802ae8527b35fe59f75920b8c827c8",
+    "present": true,
+    "smallest_future_repair": "for any future capture, serialize an effective candidate target definition and independently constructed validation daily_top5 labels using a frozen explicit tie policy; regenerate capture and any label-based evidence that relies on those fields",
+    "unaffected_artifacts": [
+      "saved score values and their descending direction",
+      "approved cohort-relative memberships",
+      "gross return comparison in run 35923707545-1"
+    ]
+  },
+  "contract_alignment": {
+    "evaluation_cohort": "candidate, fold, event_date, label_horizon_sessions, entry_at, exit_at",
+    "evaluation_objective": "equal-weight mean gross return_5d of five selected ticker groups minus all eligible ticker groups",
+    "evaluation_unit": "ticker group formed from all canonical observations",
+    "population": "training label construction does not apply the later all-members-must-pass group gate; evaluation does",
+    "probability_vs_magnitude": "positive-class likelihood/order is not expected-return magnitude and does not guarantee positive or baseline-beating returns",
+    "relative_vs_absolute": "daily_top5 is relative even when every return is negative; evaluation reports return magnitude and baseline difference",
+    "repeated_observations": "training rows can occupy multiple top-five label slots; evaluation averages observations into one ticker-group score and one ticker-group return",
+    "timing_alignment": "both use saved five-session return_5d, but training partitions only by event_date whereas evaluation additionally separates entry and exit timing",
+    "training_cohort": "event_date only",
+    "training_positive_class": "one of the five highest return_5d observation rows on the event date",
+    "training_unit": "canonical observation row",
+    "weighting": "tail-aware weighted logistic fitting versus unweighted ticker-group evaluation economics"
+  },
+  "deterministic_development_example": {
+    "cohort": [
+      1,
+      "2026-06-01",
+      5,
+      "2026-06-02T13:30:00+00:00",
+      "2026-06-08T20:00:00+00:00"
+    ],
+    "full_lane_top5": [
+      "STG",
+      "DEVS",
+      "GTM",
+      "OPTU",
+      "HUBC"
+    ],
+    "note": "example illustrates observation-score averaging and descending group ranking; realized returns were not used to choose it",
+    "recent_half_top5": [
+      "HUBC",
+      "DEVS",
+      "STG",
+      "OPTU",
+      "GTM"
+    ],
+    "selection_basis": "lexicographically first audited cohort, chosen without outcomes",
+    "top5_model_top5": [
+      "STG",
+      "DEVS",
+      "GTM",
+      "OPTU",
+      "HUBC"
+    ]
+  },
+  "hypothesis": {
+    "statement": "an observation-level daily_top5 classification target may be less aligned than a timing-cohort ticker-group target for selecting equal-weight groups by expected five-session return magnitude",
+    "status": "HYPOTHESIS_NOT_TESTED"
+  },
+  "identical_selection_review": {
+    "compared_group_count": 1975,
+    "contract_violation": false,
+    "full_lane_selected_groups": 390,
+    "identical_selected_groups": 390,
+    "interpretation": "effectively duplicated selection evidence for this experiment, but not identical models: feature sets and l2 differ and 242 group ranks differ",
+    "plausible_source_explanation": "shared daily_top5 target, full training window, tail weights, deterministic logistic family, and largely shared features",
+    "same_rank_count": 1733,
+    "same_rank_for_all_ticker_groups": false,
+    "same_selection_every_cohort": true,
+    "top5_model_selected_groups": 390
+  },
+  "inspected_source_facts": [
+    "return column resolves to return_5d for the frozen five-session horizon",
+    "daily_top5 converts return_5d to numeric, fills missing values with zero, groups only by event_date, and marks the five highest observation rows positive",
+    "daily_top5 label sorting is descending return; equal-return ties have no explicit semantic secondary key in the label helper",
+    "ranking lanes train deterministic weighted logistic models on daily_top5 labels; full and recent-half differ only by training window",
+    "top5 model uses the same daily_top5 transformation through the specialized logistic recipe",
+    "tail-aware weights are 4 for big_gain, 3 for big_loss, and 1 otherwise; evaluation group economics are unweighted",
+    "predict_proba returns sigmoid of the fitted positive-class logit; higher scores support descending selection",
+    "OOF capture serializes float scores directly and excludes holdout rows before fitting or prediction",
+    "OOF target_definition and record labels are populated from configured label_up_5d y_test rather than candidate-specific daily_top5 validation labels"
+  ],
+  "recommended_next_step": {
+    "count": 1,
+    "recommendation": "If future work is authorized, pre-register\u2014but do not yet build\u2014a development experiment whose target unit and cohort match the evaluated ticker-group/timing-cohort expected five-session return objective and whose capture records the effective target and deterministic tie policy."
+  },
+  "saved_data_observations": [
+    "run 35923707545-1 completed with all 10,273 outcomes finite and all three folds retained",
+    "all three candidates had negative selected-minus-baseline differences in every fold",
+    "full lane and top5 model selected exactly the same 390 ticker groups across all 78 cohorts despite 242 of 1,975 ticker-group ranks differing",
+    "recent-half lane shared 243 of 390 selections with each full-window candidate"
+  ],
+  "schema_version": "alpha-atlas-v4-target-score-alignment-review.v1",
+  "scope": "focused development-only target, score-direction, and objective-alignment review; no new performance experiment",
+  "source_provenance": [
+    {
+      "commit": "1f8f46db584dff0881273bdeae1c56c1a8a016c5",
+      "file_byte_sha256": "beff32d78fc312d83fdb752ae48d7b02e3c25abb111eadd5c6b7813dec9ebd3e",
+      "git_blob": "35e710427012b3cb767839f90598f54306f5d758",
+      "path": "scripts/train_challenger_suite.py",
+      "stage": "original_manifest_production"
+    },
+    {
+      "commit": "5d360cdbda802ae8527b35fe59f75920b8c827c8",
+      "file_byte_sha256": "13fe60562efcdd93b4642c01455cff67e07d4ae1520d8443f74cdcf9ecd73951",
+      "git_blob": "35eaaf821f910b14c76116dae127650ac48e6bf1",
+      "path": "scripts/train_challenger_suite.py",
+      "stage": "development_oof_producer"
+    },
+    {
+      "commit": "5d360cdbda802ae8527b35fe59f75920b8c827c8",
+      "file_byte_sha256": "5a778d7a04e799ecc8078fc22ee5122f05af4c2312d45f7dcaa934fb88409df9",
+      "git_blob": "fec183ca88967e5f18eed3cae3d6afde5f573d78",
+      "path": "scripts/capture_alpha_atlas_v4_development_oof.py",
+      "stage": "development_oof_entrypoint"
+    },
+    {
+      "commit": "5d360cdbda802ae8527b35fe59f75920b8c827c8",
+      "file_byte_sha256": "80747bc89aa9c704aa092d7aa1c5df037b818352e5eb5953709a3ff14c4405cb",
+      "git_blob": "9a5ed11730596249800549a0362ab7f8f2c84dac",
+      "path": "moneybot/services/deterministic_model.py",
+      "stage": "logistic_fit_and_score"
+    },
+    {
+      "commit": "5d360cdbda802ae8527b35fe59f75920b8c827c8",
+      "file_byte_sha256": "4e4df9f715a6fb28ffe1cdacc26baf32e973b4881c9f62da9859e278afc40ce7",
+      "git_blob": "38f78ae26380214821514ec7f7f4e2226909a1fc",
+      "path": "moneybot/services/decision_target.py",
+      "stage": "configured_target_metadata"
+    },
+    {
+      "artifact": "track-b-offline-output",
+      "commit": "1f8f46db584dff0881273bdeae1c56c1a8a016c5",
+      "file_byte_sha256": "ea4e55f9faa848219945d7e03c92c7a541645cd4d6df8aa3cfbd0d1334872f15",
+      "git_blob": null,
+      "path": "track_b/runs/34689216730-1/challenger_suite/challenger_suite_manifest.json",
+      "run": "34689216730-1",
+      "stage": "frozen_manifest"
+    },
+    {
+      "commit": "c1d03575d05a07146f4cf85d35f2087db5259243",
+      "file_byte_sha256": "1ac0a7ff00230cf51d5a970d56b13a2be7d6e7367b6f0a3716656b51551fa281",
+      "git_blob": "4c35752819d1f6c80bf8cf029e3647174a6bfd98",
+      "path": "scripts/execute_alpha_atlas_v4_cohort_ranking.py",
+      "stage": "exploratory_evaluator"
+    },
+    {
+      "commit": "c1d03575d05a07146f4cf85d35f2087db5259243",
+      "file_byte_sha256": "b52cc19a238ff21b67aa7bec0db34b1fe65124853721917d16aa57db23e7b7c5",
+      "git_blob": "795166edd74bd51a7595bee60a022154bc345294",
+      "path": "moneybot/services/alpha_atlas_v4_cohort_ranking.py",
+      "stage": "shared_selection_and_arithmetic"
+    }
+  ],
+  "status": "COMPLETE"
+}

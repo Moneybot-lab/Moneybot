@@ -1266,6 +1266,24 @@ immutable provenance. Performance comparison execution remains pending review.
   selection rule; keep existing production routing unchanged and retain the result as
   negative exploratory development evidence. Any new rule or search would require a
   separately justified future proposal rather than alteration of this frozen result.
+- [x] **Hosted exploratory scoring closed as `COMPLETE — UNFAVORABLE FINDINGS`.** Run
+  `35923707545-1` artifact `10778740282` (digest
+  `sha256:61ac2df3fd4a4302ba88e7d3f75e04dc9b15abfe4560fdcfe0e2c7040ad5917c`)
+  independently verifies its checksum manifest. All candidates underperformed the
+  eligible-cohort baseline in every fold. Predictive advantage is `NOT_ESTABLISHED`;
+  broader validation, promotion, and production gates are unchanged.
+- [x] **Frozen target/score alignment review completed.** The review accepts the
+  unfavorable result and finds descending score direction consistent for all three
+  candidates, alongside an objective-alignment limitation: observation-level,
+  event-date-only `daily_top5` classification with tail-aware fitting weights is not
+  the same objective as unweighted ticker-group return magnitude within compatible
+  timing cohorts. Full-lane and top-five-model selections are identical in all 78
+  cohorts, providing duplicated selection evidence without proving identical models.
+- [x] **Bounded capture metadata defect recorded without reopening performance.** The
+  producer fits these candidates with transformed `daily_top5` training labels but
+  serializes configured `label_up_5d` target metadata and validation labels. This
+  affects label interpretation, not the saved score order, approved memberships, or
+  gross-return result. No behavior change, regeneration, or corrected scoring occurs.
 - [ ] **Broader gates remain open.** Applicable development costs, net-return
   validation, terminal valuation, complete historical coverage, and promotion
   readiness are unchanged and unresolved.

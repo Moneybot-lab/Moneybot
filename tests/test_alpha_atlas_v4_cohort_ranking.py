@@ -301,3 +301,29 @@ def test_recorded_authorized_result_is_complete_nonpromotional_and_reconciled():
         assert all(fold['cohort_count']==26 for fold in candidate['folds'])
         assert all(fold['metrics']['selected_minus_baseline']<0 for fold in candidate['folds'])
         assert candidate['secondary_label_metrics']['status']=='NOT_EVALUABLE'
+
+def test_target_score_alignment_review_is_checksum_bound_and_bounded():
+    root=Path('docs/reports'); review=json.loads((root/'target_score_alignment_review.json').read_text())
+    assert review['status']=='COMPLETE' and review['completed_scoring']['run']=='35923707545-1'
+    assert review['completed_scoring']['finding']=='COMPLETE_UNFAVORABLE'
+    assert review['conclusion']['predictive_advantage']=='NOT_ESTABLISHED'
+    assert review['conclusion']['confirmed_defect_requires_current_result_retraction'] is False
+    assert review['identical_selection_review']['same_selection_every_cohort'] is True
+    assert review['identical_selection_review']['same_rank_for_all_ticker_groups'] is False
+    assert review['recommended_next_step']['count']==1
+    assert all(not value for value in review['boundaries'].values())
+    lines=(root/'target_score_alignment_review.SHA256SUMS').read_text().splitlines()
+    assert lines and not any(line.endswith('  target_score_alignment_review.SHA256SUMS') for line in lines)
+    for line in lines:
+        expected,name=line.split('  ',1)
+        assert hashlib.sha256((root/name).read_bytes()).hexdigest()==expected
+
+def test_alignment_review_producer_source_pins_match_git_objects():
+    review=json.loads(Path('docs/reports/target_score_alignment_review.json').read_text())
+    for source in review['source_provenance']:
+        if source['git_blob'] is None: continue
+        spec=f"{source['commit']}:{source['path']}"
+        blob=subprocess.check_output(['git','rev-parse',spec],text=True).strip()
+        content=subprocess.check_output(['git','show',spec])
+        assert blob==source['git_blob']
+        assert hashlib.sha256(content).hexdigest()==source['file_byte_sha256']
