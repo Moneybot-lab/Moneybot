@@ -1160,22 +1160,21 @@ immutable provenance. Performance comparison execution remains pending review.
   mutually exclusive dispositions, deterministic canonical-ID examples,
   provenance, and checksums. Missing/null selection evidence is never treated as
   explicit false.
-- [ ] **Real cause classification is pending authenticated artifact execution.** The
-  completed result artifact (ID `10723897652`) and frozen OOF capture cannot be
-  downloaded without GitHub authentication in this environment. Therefore no
-  fixture-derived cause is asserted and diagnostic behavior is unchanged. Run
-  **V4 Investigate Ranking Zero Selection** with no inputs. If exact evidence shows
-  an interpretation defect, corrected scoring requires separate authorization;
-  if producer selections are genuinely empty, record
-  `EXPECTED_FROZEN_ZERO_SELECTION` and stop.
+- [x] **Real cause classification completed.** Investigation run `35815996007-1`
+  reconciled 30,819 assignments (10,273 observations for each of three candidates
+  across three folds) as `EXPECTED_FROZEN_ZERO_SELECTION`: producer and diagnostic
+  selections were both zero, with no missing/uninterpretable selection evidence and
+  no abstention, risk, or rule rejection. No diagnostic interpretation defect was
+  established and no corrected scoring is required. The prior gross difference is
+  zero exposure against a negative baseline, not successful stock selection.
 - [x] **Manual-workflow YAML startup repair completed after commit `b5aa219`.**
   GitHub rejected the workflow before creating a job because the upload step used a
   flow-style `with` mapping whose unquoted artifact-name expression contains `{`
   characters. The upload inputs now use an equivalent block mapping. Pinned source
   identities, read-only permissions, manual-only dispatch, investigation logic,
   failure-summary publication, and unconditional evidence upload are unchanged.
-  This repairs workflow parsing only; the real investigation remains pending until
-  a result artifact exists.
+  This repaired workflow parsing only; the investigation subsequently completed in
+  run `35815996007-1` as recorded above.
 - [x] **Producer-code provenance startup repair completed after run
   `35812443361-1`.** Git-tree inspection establishes that commit
   `5d360cdbda802ae8527b35fe59f75920b8c827c8` contains both
@@ -1186,10 +1185,21 @@ immutable provenance. Performance comparison execution remains pending review.
   IDs and file-byte SHA-256 values and emits a specific partial report if a required
   historical reference remains unavailable; the generic workflow fallback does not
   overwrite an existing detailed report.
-- [ ] **Hosted completion remains pending.** Run `35812443361-1` produced no
-  selection conclusion and is not a model, input-hash, or selection failure. Run
-  **V4 Investigate Ranking Zero Selection** with no inputs after this repair; do not
-  mark the investigation complete until its real saved-evidence artifact exists.
+- [x] **Supplemental closure recorded without rewriting historical evidence.** The
+  original report's generic corrected-scoring next action was conditional on an
+  interpretation defect; that condition was not met. The closure note preserves the
+  distinction between `ranking_score_not_buy_probability` for the two ranking-lane
+  candidates and `probability` for `challenger-ranking-top5-model-v1`.
+- [x] **Cohort-relative ranking proposal is `PREPARED_FOR_REVIEW`.** Version 1 asks
+  whether the exact saved development scores order ticker/date/timing groups under
+  one fixed top-five rule justified by the frozen `daily_top5` training target. It
+  freezes inputs, roster, semantics, cohorts, deterministic ties, missing-evidence
+  blocking, equal selected-group weights, baselines, and fold aggregation. Proposal
+  JSON SHA-256: `000a0f8e2ba0fbaf563eb64dc3589fe4b2ae0695fd6c63fa8c536675d9b26f4d`.
+- [ ] **New experiment is `NOT_AUTHORIZED / NOT_EXECUTED`.** Review must decide
+  whether fixed top five with weights renormalized equally across selected ticker
+  groups is the acceptable exploratory contract. This is a new post-diagnostic rule,
+  not a correction to v1.1; no implementation or execution exists in this task.
 - [ ] **Broader gates remain open.** Applicable development costs, net-return
   validation, terminal valuation, complete historical coverage, and promotion
   readiness are unchanged and unresolved.

@@ -1,0 +1,60 @@
+{
+  "closure_source": {
+    "artifact": "v4-ranking-zero-selection-investigation-35815996007-1",
+    "artifact_digest": "sha256:dbf53e33b4aa03be99369a38b977231701c28ec5d8bad4f5356a2f0cf67382c3",
+    "artifact_id": 10732045472,
+    "commit": "4f55d3ca3fcbb9747b5f6499daec9e1f354a0e97",
+    "conclusion": "success",
+    "local_report_byte_hash_validation": "UNAVAILABLE_WITHOUT_AUTHENTICATED_ARTIFACT_DOWNLOAD",
+    "run": "35815996007-1"
+  },
+  "frozen_specification": {
+    "sha256": "206e86dcfd2fa25edfbb8b3201e84e342da55ace668b4e0c6d4d31a4132912b2",
+    "version": "v1.1"
+  },
+  "inputs": {
+    "canonical": {
+      "artifact": "track-b-offline-output",
+      "commit": "1f8f46db584dff0881273bdeae1c56c1a8a016c5",
+      "file_byte_sha256": "506073994052be852a5a00fc38e239b85e72a50494c3559640ea980fb6a52d9e",
+      "run": "34689216730-1"
+    },
+    "capture": {
+      "commit": "5d360cdbda802ae8527b35fe59f75920b8c827c8",
+      "file_byte_sha256": "454febde2e14ca8a916222d86a6872db1c5e790a29429f2db6393d828e87e434",
+      "run": "34769717178-1"
+    },
+    "manifest": {
+      "commit": "1f8f46db584dff0881273bdeae1c56c1a8a016c5",
+      "file_byte_sha256": "ea4e55f9faa848219945d7e03c92c7a541645cd4d6df8aa3cfbd0d1334872f15",
+      "run": "34689216730-1"
+    },
+    "plan": {
+      "commit": "1f8f46db584dff0881273bdeae1c56c1a8a016c5",
+      "file_byte_sha256": "f11257cff0befc1f0b46e4cab9a64678c766b6fe2abdc50b07861a18f7d6933a",
+      "run": "34689216730-1",
+      "semantic_content_sha256": "bd60055adc6cb1b3f8b143c6c61031bced01c9151fcb3b67c33f75430106e8e8"
+    }
+  },
+  "producer_code": [
+    {
+      "commit": "5d360cdbda802ae8527b35fe59f75920b8c827c8",
+      "git_blob": "fec183ca88967e5f18eed3cae3d6afde5f573d78",
+      "path": "scripts/capture_alpha_atlas_v4_development_oof.py",
+      "role": "capture_entry_point",
+      "sha256": "5a778d7a04e799ecc8078fc22ee5122f05af4c2312d45f7dcaa934fb88409df9"
+    },
+    {
+      "commit": "5d360cdbda802ae8527b35fe59f75920b8c827c8",
+      "git_blob": "35eaaf821f910b14c76116dae127650ac48e6bf1",
+      "path": "scripts/train_challenger_suite.py",
+      "role": "oof_producer",
+      "sha256": "13fe60562efcdd93b4642c01455cff67e07d4ae1520d8443f74cdcf9ecd73951"
+    }
+  ],
+  "schema_version": "alpha-atlas-v4-ranking-cohort-relative-provenance.v1",
+  "source_registration": {
+    "internal_hash": "aacb8521f35ce37e5beed7ea1376c8a963be8fb79667e5c97e2180a5ce960a06",
+    "run": "35755237312-1"
+  }
+}

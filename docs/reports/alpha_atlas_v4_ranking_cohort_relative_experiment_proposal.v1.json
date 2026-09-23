@@ -1,0 +1,150 @@
+{
+  "candidate_roster": [
+    {
+      "basis": "explicit ranking lane trained on daily_top5 target",
+      "eligibility": "ELIGIBLE",
+      "name": "challenger-ranking-lane-full-v1",
+      "score_semantics": "ranking_score_not_buy_probability"
+    },
+    {
+      "basis": "explicit ranking lane trained on daily_top5 target",
+      "eligibility": "ELIGIBLE",
+      "name": "challenger-ranking-lane-recent-half-v1",
+      "score_semantics": "ranking_score_not_buy_probability"
+    },
+    {
+      "basis": "probability of the daily_top5 training target; used only as an ordinal score and never relabeled as buy probability",
+      "eligibility": "ELIGIBLE_WITH_SEMANTIC_QUALIFICATION",
+      "name": "challenger-ranking-top5-model-v1",
+      "score_semantics": "probability"
+    }
+  ],
+  "economics": {
+    "cash_baseline": 0.0,
+    "difference_from_v1_1": "v1.1 retained full-universe group weights and put unselected weight in cash; this proposal equally weights and fully invests across selected groups",
+    "net_costs": "NOT_EVALUABLE_NO_APPLICABLE_POLICY",
+    "portfolio_curve": "FORBIDDEN_OVERLAPPING_ENDPOINT_RETURNS_NOT_COMPOUNDED",
+    "reference_baseline": "equal weight across every eligible ticker group in the same timing cohort",
+    "selected_group_return": "equal mean of saved gross split-adjusted endpoint returns across observations in selected ticker group",
+    "selected_weights": "equal weight across selected ticker groups, renormalized to 100%; this is a new proposal rule",
+    "uninvested_cash": "zero-return cash only when no group is selected; no implicit costs"
+  },
+  "execution_status": "NOT_AUTHORIZED_NOT_EXECUTED",
+  "frozen_inputs": {
+    "canonical": {
+      "artifact": "track-b-offline-output",
+      "commit": "1f8f46db584dff0881273bdeae1c56c1a8a016c5",
+      "file_byte_sha256": "506073994052be852a5a00fc38e239b85e72a50494c3559640ea980fb6a52d9e",
+      "run": "34689216730-1"
+    },
+    "capture": {
+      "commit": "5d360cdbda802ae8527b35fe59f75920b8c827c8",
+      "file_byte_sha256": "454febde2e14ca8a916222d86a6872db1c5e790a29429f2db6393d828e87e434",
+      "run": "34769717178-1"
+    },
+    "manifest": {
+      "commit": "1f8f46db584dff0881273bdeae1c56c1a8a016c5",
+      "file_byte_sha256": "ea4e55f9faa848219945d7e03c92c7a541645cd4d6df8aa3cfbd0d1334872f15",
+      "run": "34689216730-1"
+    },
+    "plan": {
+      "commit": "1f8f46db584dff0881273bdeae1c56c1a8a016c5",
+      "file_byte_sha256": "f11257cff0befc1f0b46e4cab9a64678c766b6fe2abdc50b07861a18f7d6933a",
+      "run": "34689216730-1",
+      "semantic_content_sha256": "bd60055adc6cb1b3f8b143c6c61031bced01c9151fcb3b67c33f75430106e8e8"
+    }
+  },
+  "membership": {
+    "candidate_assignments": 30819,
+    "final_holdout_loaded": false,
+    "folds": 3,
+    "require_exact_hashes": true,
+    "scope": "development-only frozen OOF validation assignments",
+    "validation_observations": 10273
+  },
+  "metrics": {
+    "aggregate": "equal weight across the three folds with denominators disclosed",
+    "cohort_aggregation": "equal weight across evaluable compatible timing cohorts within fold",
+    "per_fold": true,
+    "primary": "per-cohort selected equal-weight gross endpoint return minus full eligible-cohort equal-weight gross endpoint return",
+    "secondary": [
+      "selected gross endpoint return",
+      "eligible-cohort baseline gross endpoint return",
+      "difference versus zero cash",
+      "top-k positive-label precision where label semantics match",
+      "selected group count",
+      "eligible group count",
+      "empty-cohort count"
+    ],
+    "uncertainty": "NOT_SPECIFIED_AND_NOT_EVALUATED",
+    "undefined": "any blocked evidence yields explicit NOT_EVALUABLE for affected candidate/fold; no row dropping"
+  },
+  "positioning": {
+    "not_confirmatory": true,
+    "old_net_rule_status": "REGISTERED_BLOCKED",
+    "old_specification_unchanged": true,
+    "prior_exposure": "development results and zero-selection diagnostic already viewed",
+    "type": "exploratory_post_diagnostic"
+  },
+  "question": "Do the saved ranking scores order the recorded development observations usefully when evaluated under an explicit cohort-relative selection rule?",
+  "safety": {
+    "execution_default": "OFF",
+    "fitting": false,
+    "holdout_content_access": false,
+    "k_search": false,
+    "provider_access": false,
+    "requires_separate_review_and_authorization": true,
+    "threshold_search": false,
+    "training": false,
+    "tuning": false
+  },
+  "schema_version": "alpha-atlas-v4-ranking-cohort-relative-experiment-proposal.v1",
+  "scope_decision": {
+    "blocked": [
+      "out-of-sample predictive advantage",
+      "net profitability or transaction costs",
+      "portfolio return or drawdown",
+      "verified security continuity",
+      "historical-universe completeness",
+      "terminal valuation",
+      "promotion or production readiness"
+    ],
+    "supported": [
+      "conditional ordinal-ranking description on exact saved development sample",
+      "gross split-adjusted endpoint economics under the proposed arithmetic rule"
+    ],
+    "unresolved_design_choices": []
+  },
+  "selection_contract": {
+    "cohort_key": [
+      "candidate",
+      "fold",
+      "event_date",
+      "label_horizon_sessions",
+      "entry_at",
+      "exit_at"
+    ],
+    "empty_cohort": "retain with 100% cash and zero candidate gross return",
+    "fewer_than_k": "select every eligible ticker group",
+    "identity_scope": "ticker groups, not verified same-security identities",
+    "k": 5,
+    "k_basis": "existing frozen target_policy daily_top5 and producer label construction; no k search",
+    "missing_nonfinite": "if any expected score, grouping field, return, or row mapping is missing/nonfinite, block that candidate/fold result; never silently exclude",
+    "old_threshold_0_60": "not used by this new proposal and not described as erroneous",
+    "outcomes_used_for_selection": false,
+    "rejection_gates": "apply saved abstained, risk_rejected, and rule_rejected flags before ranking; missing/null gate evidence blocks",
+    "rule": "fixed_top_k",
+    "score_direction": "descending; larger score ranks first",
+    "selection_count": "min(5, eligible ticker-group count)",
+    "ticker_group_key": [
+      "cohort_key",
+      "ticker"
+    ],
+    "ticker_group_score": "arithmetic mean of every finite saved observation score in the ticker group; equal observation weight",
+    "tie_break": [
+      "ticker ascending",
+      "sorted canonical_observation_id vector ascending"
+    ]
+  },
+  "status": "PREPARED_FOR_REVIEW"
+}
