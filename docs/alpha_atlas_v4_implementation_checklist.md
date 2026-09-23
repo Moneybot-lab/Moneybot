@@ -1284,6 +1284,17 @@ immutable provenance. Performance comparison execution remains pending review.
   serializes configured `label_up_5d` target metadata and validation labels. This
   affects label interpretation, not the saved score order, approved memberships, or
   gross-return result. No behavior change, regeneration, or corrected scoring occurs.
+- [x] **Aligned group-return regression experiment registration is
+  `PREPARED_FOR_REVIEW`.** Version 1 registers one exploratory hypothesis, the exact
+  frozen development membership and split, one ticker/timing-group construction, 42
+  fixed decision-time features, training-fold-only preprocessing, one deterministic
+  ridge return-regression configuration, fixed top-five selection, complete-fold
+  aggregation, and a development-only screen. Registration JSON SHA-256:
+  `c3f58f47354f07a5c0aa536344b97fb542fdde0bee1651f86852d3dd69a6469a`.
+- [ ] **Aligned experiment implementation, training, prediction, and execution are
+  `NOT_AUTHORIZED / NOT_EXECUTED`.** Registration does not authorize fitting or new
+  performance evidence. Final-holdout content remains inaccessible; the historical
+  OOF capture is prior evidence only and is not a prediction input for this model.
 - [ ] **Broader gates remain open.** Applicable development costs, net-return
   validation, terminal valuation, complete historical coverage, and promotion
   readiness are unchanged and unresolved.
