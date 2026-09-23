@@ -6,7 +6,8 @@ from scripts.audit_alpha_atlas_v4_cohort_ranking_inputs import failure_report, n
 
 from moneybot.services.alpha_atlas_v4_cohort_ranking import (
     CLARIFICATION_SHA256, EVIDENCE_SHA256, PROPOSAL_SHA256, RankingContractError,
-    aggregate_folds, audit_selection_membership, score_candidate_fold, validate_frozen_contract,
+    aggregate_folds, audit_selection_membership, compare_membership_evidence, complete_three_fold_aggregate,
+    descriptive_returns_from_membership, score_candidate_fold, validate_execution_authorization, validate_frozen_contract,
 )
 
 CANDIDATE="challenger-ranking-lane-full-v1"
@@ -214,3 +215,89 @@ def test_failure_after_byte_verification_preserves_input_provenance():
     assert report['input_verification_status']=='PASSED'
     assert report['candidate_fold_membership_verification_status']=='FAILED'
     assert report['input_provenance']==provenance and report['details']['missing_authorized_pairs']
+
+def _approved_membership_fixture():
+    records=[{k:v for k,v in item.items() if k not in ('return','label')} for item in [
+      row('a','AAA',3,.1),row('b','AAA',1,.3),row('c','BBB',2,.6)]]
+    return audit_selection_membership(records,candidate=CANDIDATE,fold=1)
+
+def test_registered_outcome_arithmetic_uses_group_then_cohort_weights():
+    membership=_approved_membership_fixture()
+    result=descriptive_returns_from_membership(membership,{'a':.1,'b':.3,'c':.6},candidate=CANDIDATE,fold=1)
+    assert result['metrics']['selected_gross_endpoint_return']==pytest.approx(.4)
+    assert result['metrics']['eligible_baseline_gross_endpoint_return']==pytest.approx(.4)
+    assert result['metrics']['selected_minus_baseline']==pytest.approx(0)
+    assert result['cohorts'][0]['selected_member_observation_count']==3
+
+def test_outcome_changes_do_not_change_audited_membership_and_missing_blocks():
+    membership=_approved_membership_fixture(); before=json.dumps(membership,sort_keys=True)
+    descriptive_returns_from_membership(membership,{'a':-10,'b':20,'c':-30},candidate=CANDIDATE,fold=1)
+    assert json.dumps(membership,sort_keys=True)==before
+    with pytest.raises(RankingContractError,match='MISSING_OR_NONFINITE_OUTCOME'):
+        descriptive_returns_from_membership(membership,{'a':.1,'b':.2},candidate=CANDIDATE,fold=1)
+
+def test_membership_identity_and_weights_must_match_exactly():
+    membership=_approved_membership_fixture(); reproduced=json.loads(json.dumps(membership))
+    assert compare_membership_evidence(membership,reproduced)['rows']['approved_count']==3
+    reproduced['rows'][0]['selected_group_weight']+=.01
+    with pytest.raises(RankingContractError,match='AUDITED_MEMBERSHIP_MISMATCH'):
+        compare_membership_evidence(membership,reproduced)
+
+def test_aggregate_requires_all_three_folds_and_preserves_direction():
+    folds=[]
+    for fold,value in ((1,.1),(2,-.2),(3,.3)):
+      folds.append({'fold':fold,'status':'COMPLETE','metrics':{'selected_gross_endpoint_return':value,
+        'eligible_baseline_gross_endpoint_return':0,'selected_minus_baseline':value,'selected_minus_cash':value}})
+    result=complete_three_fold_aggregate(folds)
+    assert result['status']=='COMPLETE' and result['fold_weight']==pytest.approx(1/3)
+    assert result['metrics']['selected_minus_baseline']==pytest.approx(2/30)
+    assert [x['direction'] for x in result['fold_directions']]==['POSITIVE','NEGATIVE','POSITIVE']
+    assert complete_three_fold_aggregate(folds[:2])['status']=='NOT_EVALUABLE_INCOMPLETE_FOLDS'
+
+def test_changed_or_unauthorized_execution_hash_fails_closed(tmp_path,monkeypatch):
+    import moneybot.services.alpha_atlas_v4_cohort_ranking as service
+    authorization=tmp_path/'authorization'; authorization.write_text(json.dumps({'status':'AUTHORIZED','approved_input_audit':{'run':'35895423660-1','status':'AUDIT_COMPLETE_NO_PERFORMANCE'}}))
+    audit=tmp_path/'audit'; audit.write_text(json.dumps({'status':'AUDIT_COMPLETE_NO_PERFORMANCE','observed_total_assignments':30819,'holdout_membership_overlap_count':0}))
+    membership=tmp_path/'membership'; membership.write_text('{}')
+    monkeypatch.setattr(service,'AUTHORIZED_EXECUTION_SHA256',hashlib.sha256(authorization.read_bytes()).hexdigest())
+    monkeypatch.setattr(service,'APPROVED_AUDIT_REPORT_SHA256',hashlib.sha256(audit.read_bytes()).hexdigest())
+    monkeypatch.setattr(service,'APPROVED_MEMBERSHIP_SHA256',hashlib.sha256(membership.read_bytes()).hexdigest())
+    assert validate_execution_authorization(authorization,audit,membership)['status']=='AUTHORIZED'
+    membership.write_text('{"changed":true}')
+    with pytest.raises(RankingContractError,match='EXECUTION_AUTHORIZATION_OR_AUDIT_HASH_MISMATCH'):
+        validate_execution_authorization(authorization,audit,membership)
+
+def test_scoring_workflow_and_entrypoint_are_separate_and_manual():
+    workflow=Path('.github/workflows/v4-execute-cohort-relative-ranking.yml').read_text()
+    assert workflow.startswith('name: V4 Execute Cohort Relative Ranking\n')
+    assert 'workflow_dispatch:' in workflow and 'push:' not in workflow and 'schedule:' not in workflow
+    assert 'actions: read' in workflow and 'contents: read' in workflow
+    assert '35895423660' in workflow and 'execute_alpha_atlas_v4_cohort_ranking' in workflow
+    assert 'inputs:' not in workflow and 'train_challenger' not in workflow
+    validation=Path('scripts/validate_alpha_atlas_v4_cohort_ranking.py').read_text()
+    assert 'execute_alpha_atlas_v4_cohort_ranking' not in validation
+
+def test_execution_exact_module_entrypoint_without_pythonpath_fails_closed(tmp_path):
+    output=tmp_path/'output'; missing=tmp_path/'missing'
+    command=[sys.executable,'-m','scripts.execute_alpha_atlas_v4_cohort_ranking']
+    for name in ('authorization','proposal','clarification','evidence','lineage','approved-audit','approved-membership','canonical','plan','manifest','capture','input-provenance'):
+        command += ['--'+name,str(missing)]
+    command += ['--output-dir',str(output)]
+    env={k:v for k,v in __import__('os').environ.items() if k!='PYTHONPATH'}
+    completed=subprocess.run(command,cwd=Path(__file__).resolve().parents[1],env=env,text=True,capture_output=True)
+    result=json.loads((output/'cohort_ranking_results.json').read_text())
+    assert completed.returncode==2 and result['execution_status']=='FAILED'
+    assert result['holdout_content_access'] is False and result['winner_selected'] is False
+
+def test_recorded_authorized_result_is_complete_nonpromotional_and_reconciled():
+    path=Path('docs/reports/alpha_atlas_v4_cohort_relative_ranking_results.v1.json'); result=json.loads(path.read_text())
+    assert hashlib.sha256(path.read_bytes()).hexdigest()=='ad73d14b5dfb11b00bc6df3978b2bfdcb015314413f67e2eae32493bb8a116e9'
+    assert result['execution_status']=='COMPLETE' and result['winner_selected'] is False
+    assert result['holdout_content_access'] is False and result['portfolio_curve_computed'] is False
+    assert result['outcome_semantics']['missing_or_nonfinite_count']==0
+    assert result['candidate_order']==list(__import__('moneybot.services.alpha_atlas_v4_cohort_ranking',fromlist=['CANDIDATES']).CANDIDATES)
+    for candidate in result['candidates']:
+        assert [fold['fold'] for fold in candidate['folds']]==[1,2,3]
+        assert all(fold['cohort_count']==26 for fold in candidate['folds'])
+        assert all(fold['metrics']['selected_minus_baseline']<0 for fold in candidate['folds'])
+        assert candidate['secondary_label_metrics']['status']=='NOT_EVALUABLE'

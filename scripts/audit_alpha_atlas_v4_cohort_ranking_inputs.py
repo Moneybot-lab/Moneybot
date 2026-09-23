@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse, hashlib, json, shutil, sys
 from collections import Counter
 from pathlib import Path
+import ijson
 
 ROOT=Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
@@ -34,19 +35,21 @@ def normalize_fold(value:object)->int:
     if fold not in EXPECTED_COUNTS: raise RankingContractError("UNEXPECTED_FOLD",{"value":repr(value),"normalized":fold})
     return fold
 
-def validate_capture_scope(manifest_roster:list[str], capture:list[dict], usable_folds:set[int])->tuple[dict,dict]:
+def validate_capture_scope(manifest_roster:list[str], capture, usable_folds:set[int])->tuple[dict,dict]:
     """Validate the complete source capture, then project the authorized roster."""
     if len(manifest_roster)!=len(set(manifest_roster)):
         raise RankingContractError("DUPLICATE_MANIFEST_CANDIDATE")
-    blocks={}; duplicates=[]; fold_types=Counter()
+    blocks={}; observed=set(); representations={}; duplicates=[]; fold_types=Counter()
     for position,item in enumerate(capture):
         candidate=item.get("model_version")
         if not isinstance(candidate,str) or not candidate: raise RankingContractError("INVALID_CAPTURE_CANDIDATE",{"position":position})
         raw_fold=item.get("fold_index"); fold_types[type(raw_fold).__name__]+=1; fold=normalize_fold(raw_fold)
         key=(candidate,fold)
-        if key in blocks: duplicates.append({"candidate":candidate,"fold":fold,"representations":[repr(blocks[key].get("fold_index")),repr(raw_fold)]})
-        else: blocks[key]=item
-    expected={(candidate,fold) for candidate in manifest_roster for fold in usable_folds}; observed=set(blocks)
+        if key in observed: duplicates.append({"candidate":candidate,"fold":fold,"representations":[representations[key],repr(raw_fold)]})
+        else:
+          observed.add(key); representations[key]=repr(raw_fold)
+          if candidate in CANDIDATES: blocks[key]=item
+    expected={(candidate,fold) for candidate in manifest_roster for fold in usable_folds}
     missing=sorted(expected-observed); unexpected=sorted(observed-expected)
     authorized_expected={(candidate,fold) for candidate in CANDIDATES for fold in usable_folds}
     authorized_observed=observed&authorized_expected
@@ -116,7 +119,7 @@ def audit_inputs(paths:dict[str,Path], contract:dict[str,Path], provenance:dict)
     plan=json.loads(paths["plan"].read_text()); embedded=plan.get("plan_sha256"); recomputed=canonical_json_hash({k:v for k,v in plan.items() if k!="plan_sha256"})
     inputs["plan"].update({"embedded_semantic_sha256":embedded,"recomputed_semantic_sha256":recomputed,"expected_semantic_sha256":PLAN_SEMANTIC})
     if embedded!=PLAN_SEMANTIC or recomputed!=PLAN_SEMANTIC: raise RankingContractError("SPLIT_PLAN_SEMANTIC_HASH_MISMATCH",inputs["plan"])
-    manifest=json.loads(paths["manifest"].read_text()); capture=json.loads(paths["capture"].read_text())
+    manifest=json.loads(paths["manifest"].read_text())
     folds=manifest.get("walk_forward_windows") or []; usable=[x for x in folds if x.get("usable")]; fold_by_index={}; manifest_fold_representations={}
     for item in usable:
       raw=item.get("fold_index"); fold=normalize_fold(raw)
@@ -131,7 +134,8 @@ def audit_inputs(paths:dict[str,Path], contract:dict[str,Path], provenance:dict)
     roster=[name for name in manifest_roster if name in CANDIDATES]
     if roster!=list(CANDIDATES): raise RankingContractError("CANDIDATE_ROSTER_OR_ORDER_MISMATCH",{"observed":roster,"input_provenance":inputs,"input_verification_status":"PASSED"})
     try:
-      capture_by_key,capture_scope=validate_capture_scope(manifest_roster,capture,set(EXPECTED_COUNTS))
+      with paths["capture"].open("rb") as handle:
+        capture_by_key,capture_scope=validate_capture_scope(manifest_roster,ijson.items(handle,"item"),set(EXPECTED_COUNTS))
     except RankingContractError as exc:
       exc.details={**exc.details,"input_provenance":inputs,"input_verification_status":"PASSED"}; raise
     capture_ids={key:[str(x.get("id")) for x in (item.get("records") or [])] for key,item in capture_by_key.items()}

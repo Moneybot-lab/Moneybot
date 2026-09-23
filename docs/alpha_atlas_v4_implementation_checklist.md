@@ -1236,9 +1236,36 @@ immutable provenance. Performance comparison execution remains pending review.
   against the frozen manifest first, records every outside-scope candidate, and then
   projects exactly the three authorized candidates without weakening fold, duplicate,
   unknown-candidate, canonical-ID, hash, or holdout gates.
-- [ ] **Corrected hosted saved-input audit remains pending.** Local synthetic and
-  workflow validation passed, but no corrected hosted artifact is recorded until the
-  revised manual workflow is available on an authenticated GitHub ref and completes.
+- [x] **Saved-input validation completed in run `35895423660-1`.** The exact approved
+  artifact (`10766372797`, digest
+  `sha256:51ec951dd99efb92ad9d4991844690936d5911959599f71435a77c9f5002897b`)
+  reports `AUDIT_COMPLETE_NO_PERFORMANCE`: all nine candidate/fold combinations,
+  30,819 assignments, 78 cohorts per candidate, 390 selected groups per candidate,
+  zero empty cohorts, zero holdout overlap, and complete grouping/selection/weight
+  reconciliation. Report SHA-256 is
+  `3a71814f1b3ef086a518aa380ce6bf85a65e0bf893d036f788ffc923b1bc79b9`;
+  membership SHA-256 is
+  `a5f411fc534cba8a602143c491f6e5e74c5e2280a5dc141a9e1fee8f4c2ab9e0`.
+- [x] **Exploratory descriptive scoring authorized.** Authorization v1 binds the
+  unchanged proposal, clarification, historical v1.1 specification, approved audit,
+  and membership evidence. This is a new post-diagnostic selection experiment, not
+  corrected historical scoring; the proposal's historical status remains unchanged.
+- [x] **Authorized exploratory scoring execution completed against exact pinned
+  artifacts.** The locally executed, checksum-recorded result reproduced the complete
+  approved membership mappings before joining all 10,273 finite saved `return_5d`
+  outcomes; result JSON SHA-256 is
+  `ad73d14b5dfb11b00bc6df3978b2bfdcb015314413f67e2eae32493bb8a116e9`.
+  Artifact archives were obtained read-only and independently matched the GitHub API
+  digests. The hosted manual workflow remains available for a separately hosted copy.
+  All three candidates had negative selected-minus-baseline differences in every fold.
+  Equal-fold differences were `-0.036463521270309864` for the full ranking lane,
+  `-0.030217587936976528` for the recent-half lane, and
+  `-0.036463521270309864` for the ordinal `daily_top5` probability lane. These are
+  exploratory gross endpoint descriptions, not net or portfolio performance.
+- [x] **Evidence-supported next step recorded:** do not promote or route this new
+  selection rule; keep existing production routing unchanged and retain the result as
+  negative exploratory development evidence. Any new rule or search would require a
+  separately justified future proposal rather than alteration of this frozen result.
 - [ ] **Broader gates remain open.** Applicable development costs, net-return
   validation, terminal valuation, complete historical coverage, and promotion
   readiness are unchanged and unresolved.

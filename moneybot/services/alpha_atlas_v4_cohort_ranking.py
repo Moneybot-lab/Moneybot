@@ -18,7 +18,10 @@ EVIDENCE_SHA256 = "206e86dcfd2fa25edfbb8b3201e84e342da55ace668b4e0c6d4d31a413291
 CLARIFICATION_SHA256 = "d439d2148ef00318db0c8daad7a64c65c23a3970c02dd7030a13d96d112c847f"
 EXPECTED_LINEAGE = {"diagnostic_run": "35795768048-1", "audit_run": "35788348286-1", "source_registration": "35755237312-1"}
 SOURCE_REGISTRATION_SHA256 = "aacb8521f35ce37e5beed7ea1376c8a963be8fb79667e5c97e2180a5ce960a06"
-REAL_SCORING_ENABLED = False
+REAL_SCORING_ENABLED = False  # validation/audit paths remain permanently non-scoring
+AUTHORIZED_EXECUTION_SHA256 = "4cbd956cf69ed4077ebbbb21f8ce44a7ade5afaa45ebe9ad894e3d0d62fcc252"
+APPROVED_AUDIT_REPORT_SHA256 = "3a71814f1b3ef086a518aa380ce6bf85a65e0bf893d036f788ffc923b1bc79b9"
+APPROVED_MEMBERSHIP_SHA256 = "a5f411fc534cba8a602143c491f6e5e74c5e2280a5dc141a9e1fee8f4c2ab9e0"
 CANDIDATES = {
     "challenger-ranking-lane-full-v1": "ranking_score_not_buy_probability",
     "challenger-ranking-lane-recent-half-v1": "ranking_score_not_buy_probability",
@@ -81,6 +84,19 @@ def validate_frozen_contract(proposal: Path, evidence: Path, provenance: Path,
         actual["clarification"] = CLARIFICATION_SHA256
     return {"status": "VALIDATED", "verified_hashes": actual, "lineage": observed,
             "frozen_inputs": spec["frozen_inputs"], "real_scoring_enabled": REAL_SCORING_ENABLED}
+
+
+def validate_execution_authorization(path:Path, audit_report:Path, membership:Path)->dict[str,Any]:
+    actual={"authorization":_sha(path),"audit_report":_sha(audit_report),"membership":_sha(membership)}
+    expected={"authorization":AUTHORIZED_EXECUTION_SHA256,"audit_report":APPROVED_AUDIT_REPORT_SHA256,"membership":APPROVED_MEMBERSHIP_SHA256}
+    if actual!=expected: raise RankingContractError("EXECUTION_AUTHORIZATION_OR_AUDIT_HASH_MISMATCH",{"expected":expected,"actual":actual})
+    authorization=_json(path,"execution_authorization"); audit=_json(audit_report,"approved_audit")
+    approved=authorization.get("approved_input_audit") or {}
+    if (authorization.get("status")!="AUTHORIZED" or approved.get("run")!="35895423660-1"
+            or approved.get("status")!="AUDIT_COMPLETE_NO_PERFORMANCE" or audit.get("status")!="AUDIT_COMPLETE_NO_PERFORMANCE"
+            or audit.get("observed_total_assignments")!=30819 or audit.get("holdout_membership_overlap_count")!=0):
+        raise RankingContractError("EXECUTION_AUTHORIZATION_IDENTITY_MISMATCH")
+    return {"status":"AUTHORIZED","verified_hashes":actual,"approved_audit":approved}
 
 
 def _finite(value: Any, field: str) -> float:
@@ -218,3 +234,64 @@ def aggregate_folds(folds: list[dict[str, Any]]) -> dict[str, Any]:
             "undefined_folds":[x["fold"] for x in folds if x not in defined],"fold_weight":1/len(defined) if defined else None,
             "source_denominators":{str(x["fold"]):x["metric_denominators"][name] for x in folds}}
     return {"fold_count":len(folds),"metrics":result,"reconciles":all(v["value"] is None or math.isclose(v["value"],sum(next(x for x in folds if x["fold"]==f)["metrics"][k] for f in v["defined_folds"])/len(v["defined_folds"])) for k,v in result.items())}
+
+
+def compare_membership_evidence(approved: dict[str, Any], reproduced: dict[str, Any]) -> dict[str, Any]:
+    """Require identity-level agreement, not merely matching summary counts."""
+    def equivalent(left:Any,right:Any)->bool:
+        if isinstance(left,(int,float)) and not isinstance(left,bool) and isinstance(right,(int,float)) and not isinstance(right,bool):
+            return math.isclose(float(left),float(right),rel_tol=1e-12,abs_tol=1e-12)
+        if type(left) is not type(right): return False
+        if isinstance(left,dict): return left.keys()==right.keys() and all(equivalent(left[k],right[k]) for k in left)
+        if isinstance(left,list): return len(left)==len(right) and all(equivalent(a,b) for a,b in zip(left,right))
+        return left==right
+    diagnostics={}
+    for kind in ("rows","groups","cohorts"):
+        left=approved.get(kind); right=reproduced.get(kind)
+        if not isinstance(left,list) or not isinstance(right,list): raise RankingContractError("MALFORMED_MEMBERSHIP_EVIDENCE",{"kind":kind})
+        left_encoded=[json.dumps(x,sort_keys=True,separators=(",",":"),allow_nan=False) for x in left]
+        right_encoded=[json.dumps(x,sort_keys=True,separators=(",",":"),allow_nan=False) for x in right]
+        diagnostics[kind]={"approved_count":len(left),"reproduced_count":len(right),
+          "approved_sha256":hashlib.sha256("\n".join(left_encoded).encode()).hexdigest(),
+          "reproduced_sha256":hashlib.sha256("\n".join(right_encoded).encode()).hexdigest()}
+        if len(left)!=len(right) or not all(equivalent(a,b) for a,b in zip(left,right)):
+            first=next((i for i,(a,b) in enumerate(zip(left,right)) if not equivalent(a,b)),min(len(left),len(right)))
+            raise RankingContractError("AUDITED_MEMBERSHIP_MISMATCH",{"kind":kind,"first_difference_index":first,**diagnostics[kind]})
+        diagnostics[kind]["identity_and_weight_agreement"]="EXACT_NONNUMERIC_FIELDS_NUMERIC_WITHIN_1E-12"
+    return diagnostics
+
+
+def descriptive_returns_from_membership(membership: dict[str, Any], outcomes: dict[str,float], *, candidate: str, fold: int) -> dict[str,Any]:
+    """Registered gross endpoint arithmetic using already-frozen membership only."""
+    groups=[x for x in membership["groups"] if x["cohort_key"][0]==candidate and int(x["cohort_key"][1])==fold]
+    cohorts=[x for x in membership["cohorts"] if x["cohort_key"][0]==candidate and int(x["cohort_key"][1])==fold]
+    needed={identifier for group in groups for identifier in group["canonical_observation_ids"]}; missing=sorted(needed-set(outcomes))
+    nonfinite=sorted(x for x in needed if x in outcomes and not math.isfinite(float(outcomes[x])))
+    if missing or nonfinite: raise RankingContractError("MISSING_OR_NONFINITE_OUTCOME",{"missing_count":len(missing),"nonfinite_count":len(nonfinite),"sample":(missing+nonfinite)[:10]})
+    group_return={}
+    for group in groups: group_return[tuple(group["cohort_key"])+(group["ticker"],)]=_mean([float(outcomes[x]) for x in group["canonical_observation_ids"]])
+    results=[]
+    for cohort in cohorts:
+        key=tuple(cohort["cohort_key"]); members=[x for x in groups if tuple(x["cohort_key"])==key]
+        selected=[x for x in members if x["selected"]]; eligible=[x for x in members if x["eligible"]]
+        if len(selected)!=cohort["selected_group_count"] or len(eligible)!=cohort["eligible_group_count"]: raise RankingContractError("MEMBERSHIP_DENOMINATOR_MISMATCH")
+        selected_return=_mean([group_return[key+(x["ticker"],)] for x in selected]) if selected else 0.0
+        baseline=_mean([group_return[key+(x["ticker"],)] for x in eligible])
+        results.append({"cohort_key":list(key),"eligible_group_count":len(eligible),"selected_group_count":len(selected),
+          "selected_member_observation_count":sum(x["observation_count"] for x in selected),"selected_gross_endpoint_return":selected_return,
+          "eligible_baseline_gross_endpoint_return":baseline,"selected_minus_baseline":selected_return-baseline if baseline is not None else None,
+          "cash_reference":0.0,"selected_minus_cash":selected_return,"outcome_observation_count":sum(x["observation_count"] for x in members)})
+    names=("selected_gross_endpoint_return","eligible_baseline_gross_endpoint_return","selected_minus_baseline","selected_minus_cash")
+    metrics={name:_mean([x[name] for x in results]) for name in names}
+    return {"candidate":candidate,"fold":fold,"status":"COMPLETE","cohort_count":len(results),"cohort_weight":1/len(results) if results else None,
+      "outcome_observation_count":len(needed),"missing_outcome_count":0,"metrics":metrics,"metric_denominators":{x:len(results) for x in names},"cohorts":results}
+
+
+def complete_three_fold_aggregate(folds:list[dict[str,Any]])->dict[str,Any]:
+    """Never average over a missing or blocked fold."""
+    if [x.get("fold") for x in folds]!=[1,2,3] or any(x.get("status")!="COMPLETE" for x in folds):
+        return {"status":"NOT_EVALUABLE_INCOMPLETE_FOLDS","folds_present":[x.get("fold") for x in folds],"metrics":None}
+    names=("selected_gross_endpoint_return","eligible_baseline_gross_endpoint_return","selected_minus_baseline","selected_minus_cash")
+    return {"status":"COMPLETE","fold_weight":1/3,"metrics":{name:sum(x["metrics"][name] for x in folds)/3 for name in names},
+      "fold_directions":[{"fold":x["fold"],"selected_minus_baseline":x["metrics"]["selected_minus_baseline"],
+        "direction":"POSITIVE" if x["metrics"]["selected_minus_baseline"]>0 else "NEGATIVE" if x["metrics"]["selected_minus_baseline"]<0 else "ZERO"} for x in folds]}
