@@ -1196,10 +1196,94 @@ immutable provenance. Performance comparison execution remains pending review.
   freezes inputs, roster, semantics, cohorts, deterministic ties, missing-evidence
   blocking, equal selected-group weights, baselines, and fold aggregation. Proposal
   JSON SHA-256: `000a0f8e2ba0fbaf563eb64dc3589fe4b2ae0695fd6c63fa8c536675d9b26f4d`.
-- [ ] **New experiment is `NOT_AUTHORIZED / NOT_EXECUTED`.** Review must decide
-  whether fixed top five with weights renormalized equally across selected ticker
-  groups is the acceptable exploratory contract. This is a new post-diagnostic rule,
-  not a correction to v1.1; no implementation or execution exists in this task.
+- [x] **Research-only implementation and focused synthetic testing completed.** The
+  authorized implementation preserves proposal JSON SHA-256
+  `000a0f8e2ba0fbaf563eb64dc3589fe4b2ae0695fd6c63fa8c536675d9b26f4d`
+  and diagnostic v1.1 SHA-256
+  `206e86dcfd2fa25edfbb8b3201e84e342da55ace668b4e0c6d4d31a4132912b2`.
+  Because the proposal did not explicitly resolve a ticker group with only some
+  observations passing the gates, the implementation conservatively makes the
+  entire group ineligible if any member is abstained, risk-rejected, or
+  rule-rejected. Eligible group score and return means use every canonical member
+  as the denominator; passing observations are never silently subsetted.
+- [x] **Manual validation-only workflow added.** It validates the pinned proposal,
+  v1.1 evidence, completed diagnostic `35795768048-1`, approved audit
+  `35788348286-1`, and source registration `35755237312-1`, then demonstrates that
+  real scoring is rejected by the source-code gate. Validation and failure details
+  are uploaded even when validation fails where the runner can reach the upload step.
+- [ ] **Real cohort-relative scoring remains pending separate authorization and a
+  code change.** `REAL_SCORING_ENABLED = False`; neither workflow dispatch nor an
+  input can enable scoring. No real evidence is scored by this implementation.
+- [x] **Saved-input no-performance audit implementation completed locally.** The
+  hash-bound clarification v1 records the conservative all-members-pass group rule
+  without changing the proposal or historical v1.1 results. The shared selection
+  implementation, exact source resolver, membership checks, deterministic evidence
+  mappings, and weight reconciliation are wired into manual workflow **V4 Cohort
+  Relative Ranking Input Audit**. Focused synthetic tests are not hosted evidence.
+- [x] **Validation run `35875436970-1` retained with its limited scope.** That run
+  validated proposal/specification hashes and source-run metadata only. Its null
+  selected counts, metric denominators, and weight reconciliation did not validate
+  actual saved-input grouping or proposed top-five membership; it is not represented
+  as a completed saved-input audit.
+- [ ] **Hosted saved-input audit pending manual execution.** A passed future run must
+  download the exact pinned artifacts and emit `AUDIT_COMPLETE_NO_PERFORMANCE` with
+  all nine candidate/fold records. No performance aggregation is authorized.
+- [x] **Run `35879478828-1` preserved as failed audit evidence.** Its
+  `CAPTURE_CANDIDATE_FOLD_SET_MISMATCH` occurred after byte validation because the
+  validator compared all 41 frozen capture candidates directly with the three-candidate
+  experiment roster. Grouping, membership selection, and weight reconciliation did
+  not complete; performance remained `NOT_RUN`. The repair validates the full capture
+  against the frozen manifest first, records every outside-scope candidate, and then
+  projects exactly the three authorized candidates without weakening fold, duplicate,
+  unknown-candidate, canonical-ID, hash, or holdout gates.
+- [x] **Saved-input validation completed in run `35895423660-1`.** The exact approved
+  artifact (`10766372797`, digest
+  `sha256:51ec951dd99efb92ad9d4991844690936d5911959599f71435a77c9f5002897b`)
+  reports `AUDIT_COMPLETE_NO_PERFORMANCE`: all nine candidate/fold combinations,
+  30,819 assignments, 78 cohorts per candidate, 390 selected groups per candidate,
+  zero empty cohorts, zero holdout overlap, and complete grouping/selection/weight
+  reconciliation. Report SHA-256 is
+  `3a71814f1b3ef086a518aa380ce6bf85a65e0bf893d036f788ffc923b1bc79b9`;
+  membership SHA-256 is
+  `a5f411fc534cba8a602143c491f6e5e74c5e2280a5dc141a9e1fee8f4c2ab9e0`.
+- [x] **Exploratory descriptive scoring authorized.** Authorization v1 binds the
+  unchanged proposal, clarification, historical v1.1 specification, approved audit,
+  and membership evidence. This is a new post-diagnostic selection experiment, not
+  corrected historical scoring; the proposal's historical status remains unchanged.
+- [x] **Authorized exploratory scoring execution completed against exact pinned
+  artifacts.** The locally executed, checksum-recorded result reproduced the complete
+  approved membership mappings before joining all 10,273 finite saved `return_5d`
+  outcomes; result JSON SHA-256 is
+  `ad73d14b5dfb11b00bc6df3978b2bfdcb015314413f67e2eae32493bb8a116e9`.
+  Artifact archives were obtained read-only and independently matched the GitHub API
+  digests. The hosted manual workflow remains available for a separately hosted copy.
+  All three candidates had negative selected-minus-baseline differences in every fold.
+  Equal-fold differences were `-0.036463521270309864` for the full ranking lane,
+  `-0.030217587936976528` for the recent-half lane, and
+  `-0.036463521270309864` for the ordinal `daily_top5` probability lane. These are
+  exploratory gross endpoint descriptions, not net or portfolio performance.
+- [x] **Evidence-supported next step recorded:** do not promote or route this new
+  selection rule; keep existing production routing unchanged and retain the result as
+  negative exploratory development evidence. Any new rule or search would require a
+  separately justified future proposal rather than alteration of this frozen result.
+- [x] **Hosted exploratory scoring closed as `COMPLETE — UNFAVORABLE FINDINGS`.** Run
+  `35923707545-1` artifact `10778740282` (digest
+  `sha256:61ac2df3fd4a4302ba88e7d3f75e04dc9b15abfe4560fdcfe0e2c7040ad5917c`)
+  independently verifies its checksum manifest. All candidates underperformed the
+  eligible-cohort baseline in every fold. Predictive advantage is `NOT_ESTABLISHED`;
+  broader validation, promotion, and production gates are unchanged.
+- [x] **Frozen target/score alignment review completed.** The review accepts the
+  unfavorable result and finds descending score direction consistent for all three
+  candidates, alongside an objective-alignment limitation: observation-level,
+  event-date-only `daily_top5` classification with tail-aware fitting weights is not
+  the same objective as unweighted ticker-group return magnitude within compatible
+  timing cohorts. Full-lane and top-five-model selections are identical in all 78
+  cohorts, providing duplicated selection evidence without proving identical models.
+- [x] **Bounded capture metadata defect recorded without reopening performance.** The
+  producer fits these candidates with transformed `daily_top5` training labels but
+  serializes configured `label_up_5d` target metadata and validation labels. This
+  affects label interpretation, not the saved score order, approved memberships, or
+  gross-return result. No behavior change, regeneration, or corrected scoring occurs.
 - [ ] **Broader gates remain open.** Applicable development costs, net-return
   validation, terminal valuation, complete historical coverage, and promotion
   readiness are unchanged and unresolved.
