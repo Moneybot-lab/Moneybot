@@ -19,6 +19,8 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: "3.11"}
       - run: pip install -r requirements.txt
+      - name: Fetch exact historical source commits
+        run: git fetch --no-tags --depth=1 origin 1f8f46db584dff0881273bdeae1c56c1a8a016c5 5d360cdbda802ae8527b35fe59f75920b8c827c8
       - uses: actions/download-artifact@v4
         with: {name: v4-narrow-frozen-sample-diagnostic-35795768048-1, run-id: 35795768048, path: source-completed, github-token: "${{ github.token }}"}
       - uses: actions/download-artifact@v4
@@ -47,13 +49,13 @@ jobs:
               hits=list(Path(root).rglob(name))
               if len(hits)!=1: raise SystemExit(f'{name} missing/ambiguous: {len(hits)}')
               return str(hits[0])
-          env={'capture':files['capture'],'manifest':files['manifest'],'completed':one('source-completed','narrow_diagnostic_results.json'),'audit':one('source-audit','narrow_diagnostic_grouping_audit.json')}
+          env={'capture':files['capture'],'manifest':files['manifest'],'workflow_provenance':files['workflow_provenance'],'capture_provenance':files['capture_provenance'],'completed':one('source-completed','narrow_diagnostic_results.json'),'audit':one('source-audit','narrow_diagnostic_grouping_audit.json')}
           Path(os.environ['OUTPUT_DIR'],'resolved.env').write_text('\n'.join(f'{k.upper()}={v}' for k,v in env.items())+'\n')
           PY
       - name: Investigate without scoring
         run: |
           set -euo pipefail; set -a; source "$OUTPUT_DIR/resolved.env"; set +a
-          python -m scripts.investigate_alpha_atlas_v4_ranking_zero_selection --capture "$CAPTURE" --manifest "$MANIFEST" --completed-results "$COMPLETED" --approved-audit "$AUDIT" --output-dir "$OUTPUT_DIR/reports"
+          python -m scripts.investigate_alpha_atlas_v4_ranking_zero_selection --capture "$CAPTURE" --manifest "$MANIFEST" --completed-results "$COMPLETED" --approved-audit "$AUDIT" --workflow-provenance "$WORKFLOW_PROVENANCE" --capture-provenance "$CAPTURE_PROVENANCE" --output-dir "$OUTPUT_DIR/reports"
       - name: Preserve structured failure evidence
         if: failure()
         run: |

@@ -1176,6 +1176,20 @@ immutable provenance. Performance comparison execution remains pending review.
   failure-summary publication, and unconditional evidence upload are unchanged.
   This repairs workflow parsing only; the real investigation remains pending until
   a result artifact exists.
+- [x] **Producer-code provenance startup repair completed after run
+  `35812443361-1`.** Git-tree inspection establishes that commit
+  `5d360cdbda802ae8527b35fe59f75920b8c827c8` contains both
+  `scripts/capture_alpha_atlas_v4_development_oof.py` and its imported producer
+  `scripts/train_challenger_suite.py`; the failed job's default shallow checkout did
+  not contain that historical commit. The workflow now fetches the exact diagnostic
+  and Track B commits before validating paths. The investigation records Git blob
+  IDs and file-byte SHA-256 values and emits a specific partial report if a required
+  historical reference remains unavailable; the generic workflow fallback does not
+  overwrite an existing detailed report.
+- [ ] **Hosted completion remains pending.** Run `35812443361-1` produced no
+  selection conclusion and is not a model, input-hash, or selection failure. Run
+  **V4 Investigate Ranking Zero Selection** with no inputs after this repair; do not
+  mark the investigation complete until its real saved-evidence artifact exists.
 - [ ] **Broader gates remain open.** Applicable development costs, net-return
   validation, terminal valuation, complete historical coverage, and promotion
   readiness are unchanged and unresolved.
