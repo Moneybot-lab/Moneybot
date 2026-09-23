@@ -1168,6 +1168,14 @@ immutable provenance. Performance comparison execution remains pending review.
   an interpretation defect, corrected scoring requires separate authorization;
   if producer selections are genuinely empty, record
   `EXPECTED_FROZEN_ZERO_SELECTION` and stop.
+- [x] **Manual-workflow YAML startup repair completed after commit `b5aa219`.**
+  GitHub rejected the workflow before creating a job because the upload step used a
+  flow-style `with` mapping whose unquoted artifact-name expression contains `{`
+  characters. The upload inputs now use an equivalent block mapping. Pinned source
+  identities, read-only permissions, manual-only dispatch, investigation logic,
+  failure-summary publication, and unconditional evidence upload are unchanged.
+  This repairs workflow parsing only; the real investigation remains pending until
+  a result artifact exists.
 - [ ] **Broader gates remain open.** Applicable development costs, net-return
   validation, terminal valuation, complete historical coverage, and promotion
   readiness are unchanged and unresolved.
