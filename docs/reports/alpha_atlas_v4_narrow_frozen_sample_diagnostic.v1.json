@@ -1,0 +1,148 @@
+{
+  "aggregation_and_uncertainty": {
+    "aggregate": "equal fold weight with denominator disclosure",
+    "fold_consistency": "count sign by fold descriptively; two-of-three is not certification",
+    "per_fold": true,
+    "signed_differences": true,
+    "uncertainty": "date-block bootstrap only, resampling complete cohort dates within fold; overlapping horizons and repeated observations are not independent; insufficient dates yields null"
+  },
+  "broader_registration": {
+    "net_return_advantage_rule": "UNCHANGED_AND_UNEVALUATED",
+    "status": "REGISTERED_BLOCKED"
+  },
+  "candidate_roster": "all candidates in the exact frozen manifest; no winner selection or candidate removal",
+  "candidate_rules": {
+    "classification": {
+      "comparator": "training-fold prevalence only where a probability baseline is meaningful",
+      "direction": "signed differences reported; no certification direction",
+      "primary_metric": "precision/recall/coverage descriptive vector",
+      "target": "capture target_definition",
+      "threshold": "frozen per candidate/fold",
+      "units": "fractions"
+    },
+    "probability": {
+      "comparator": "applicable training-fold prevalence",
+      "direction": "lower signed candidate-minus-baseline difference",
+      "horizon": "capture target_definition; never combine different horizons",
+      "primary_metric": "Brier score",
+      "secondary": [
+        "log loss",
+        "calibration bins",
+        "precision",
+        "recall",
+        "coverage",
+        "abstention"
+      ],
+      "target": "capture target_definition",
+      "threshold": "frozen per candidate/fold",
+      "units": "squared probability error"
+    },
+    "ranking_or_selection": {
+      "comparator": "equal-weight eligible ticker/date timing cohort",
+      "direction": "higher signed candidate-minus-reference difference",
+      "net_primary_rule": "INAPPLICABLE_AND_REMAINS_BLOCKED",
+      "primary_metric": "gross split-adjusted endpoint return difference",
+      "target": "capture target_definition",
+      "threshold": "frozen selection and abstention rules",
+      "units": "decimal endpoint price return"
+    }
+  },
+  "claim_limits": [
+    "conditional description of saved sample",
+    "security continuity unverified",
+    "historical-universe coverage unverified",
+    "dividend adjustment unestablished",
+    "no net profitability",
+    "no portfolio performance",
+    "no durable predictive advantage",
+    "prior development exposure and multiple comparisons must be disclosed",
+    "no promotion readiness"
+  ],
+  "execution": {
+    "command_status": "NOT_EXECUTED",
+    "default": "OFF",
+    "performance_scoring_in_this_task": false,
+    "requires_reviewed_specification_hash": true
+  },
+  "frozen_inputs": {
+    "canonical": {
+      "provenance": {
+        "artifact": "track-b-offline-output",
+        "artifact_digest": "sha256:017cdd8a8b30917e6e2f958e3cba1ae99827e002434b97f9de40c2c4ab871ef9",
+        "artifact_id": 10296724235,
+        "commit": "1f8f46db584dff0881273bdeae1c56c1a8a016c5",
+        "run": "34689216730-1"
+      },
+      "sha256": "506073994052be852a5a00fc38e239b85e72a50494c3559640ea980fb6a52d9e"
+    },
+    "capture": {
+      "provenance": {
+        "artifact": "v4-development-diagnostics-34689216730",
+        "artifact_digest": "sha256:e341166155b819dd98e3c9a82c2be1d260ba549d637e5fb7ed1f086f21d5b4d4",
+        "artifact_id": 10321991290,
+        "commit": "5d360cdbda802ae8527b35fe59f75920b8c827c8",
+        "run": "34769717178-1"
+      },
+      "sha256": "454febde2e14ca8a916222d86a6872db1c5e790a29429f2db6393d828e87e434"
+    },
+    "manifest": {
+      "provenance": {
+        "artifact": "track-b-offline-output",
+        "artifact_digest": "sha256:017cdd8a8b30917e6e2f958e3cba1ae99827e002434b97f9de40c2c4ab871ef9",
+        "artifact_id": 10296724235,
+        "commit": "1f8f46db584dff0881273bdeae1c56c1a8a016c5",
+        "run": "34689216730-1"
+      },
+      "sha256": "ea4e55f9faa848219945d7e03c92c7a541645cd4d6df8aa3cfbd0d1334872f15"
+    },
+    "plan": {
+      "provenance": {
+        "artifact": "track-b-offline-output",
+        "artifact_digest": "sha256:017cdd8a8b30917e6e2f958e3cba1ae99827e002434b97f9de40c2c4ab871ef9",
+        "artifact_id": 10296724235,
+        "commit": "1f8f46db584dff0881273bdeae1c56c1a8a016c5",
+        "run": "34689216730-1"
+      },
+      "sha256": "bd60055adc6cb1b3f8b143c6c61031bced01c9151fcb3b67c33f75430106e8e8"
+    }
+  },
+  "observation_weighting": {
+    "abstention": "retained in denominators; contributes no selected position",
+    "cash": "zero-return arithmetic reference only",
+    "cohort_key": [
+      "candidate",
+      "fold",
+      "event_date",
+      "label_horizon_sessions",
+      "entry_at",
+      "exit_at"
+    ],
+    "fold_aggregate": "equal weight across nonempty cohorts, then report folds separately and an equal-fold descriptive aggregate",
+    "gross_group_key": [
+      "candidate",
+      "fold",
+      "event_date",
+      "label_horizon_sessions",
+      "entry_at",
+      "exit_at",
+      "ticker"
+    ],
+    "identity_scope": "ticker/date timing groups, not verified securities",
+    "no_selection_cohort": "retained with candidate gross endpoint return zero; never dropped",
+    "observation_metrics": "one equal weight per canonical observation within candidate/fold; all validation observations remain in coverage and recall denominators",
+    "within_cohort": "equal weight across ticker groups; ticker means are formed first so repeated observations do not increase ticker weight",
+    "within_ticker_date_timing_group": "equal weight across canonical observations, independent of predictions and realized returns"
+  },
+  "question": "How do the saved frozen OOF predictions compare with simple baselines on the recorded validation observations?",
+  "schema_version": "alpha-atlas-v4-narrow-frozen-sample-diagnostic.v1",
+  "source_registration": {
+    "internal_registration_sha256": "aacb8521f35ce37e5beed7ea1376c8a963be8fb79667e5c97e2180a5ce960a06",
+    "run": "35755237312-1"
+  },
+  "undefined_cases": {
+    "calibration": "null unless score semantics are probabilities",
+    "gross_difference": "null when required saved return or timing field is missing; row is reported, not removed",
+    "precision": "null when no positive selections",
+    "recall": "null when no positive labels"
+  }
+}

@@ -1,0 +1,74 @@
+name: V4 Investigate Ranking Zero Selection
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  investigate-saved-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      OUTPUT_DIR: artifacts/v4-ranking-zero-selection-investigation
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with: {name: v4-narrow-frozen-sample-diagnostic-35795768048-1, run-id: 35795768048, path: source-completed, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with: {name: v4-development-baseline-registration-35788348286-1, run-id: 35788348286, path: source-audit, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with: {name: track-b-offline-output, run-id: 34689216730, path: source-track-b, github-token: "${{ github.token }}"}
+      - uses: actions/download-artifact@v4
+        with: {name: v4-development-diagnostics-34689216730, run-id: 34769717178, path: source-diagnostics, github-token: "${{ github.token }}"}
+      - name: Validate pinned runs and resolve exact files
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR"
+          python scripts/validate_v4_weighting_registration_sources.py --metadata-only --track-root source-track-b --diagnostics-root source-diagnostics --output "$OUTPUT_DIR/verified-files.json"
+          python - <<'PY'
+          import json,os,subprocess
+          from pathlib import Path
+          expected={35795768048:(1,'896d3356bba186e2c7a2ba08fc8b44ba093110a0','success',10723897652,'v4-narrow-frozen-sample-diagnostic-35795768048-1','sha256:ff50c8455ef6859a65cd2e223e0bd8644d4c9a1b91c6404e99c4171d85d9d003'),35788348286:(1,'95f9255457f1567e986622c2f21b94ee666696d7','success',10721186254,'v4-development-baseline-registration-35788348286-1','sha256:83d61c942c7568a9689108e60b93ba31dd9df36a884f215476a05e6be2eb8b34')}
+          for run,(attempt,sha,conclusion,artifact_id,name,digest) in expected.items():
+              meta=json.loads(subprocess.check_output(['gh','api',f'repos/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{run}']))
+              listing=json.loads(subprocess.check_output(['gh','api',f'repos/{os.environ["GITHUB_REPOSITORY"]}/actions/runs/{run}/artifacts?per_page=100']))
+              if (meta['run_attempt'],meta['head_sha'],meta['conclusion'])!=(attempt,sha,conclusion): raise SystemExit(f'run metadata mismatch: {run}')
+              matches=[x for x in listing['artifacts'] if (x['id'],x['name'],x['digest'],x['expired'])==(artifact_id,name,digest,False)]
+              if len(matches)!=1: raise SystemExit(f'artifact metadata mismatch: {run}')
+          files=json.loads(Path(os.environ['OUTPUT_DIR'],'verified-files.json').read_text())
+          def one(root,name):
+              hits=list(Path(root).rglob(name))
+              if len(hits)!=1: raise SystemExit(f'{name} missing/ambiguous: {len(hits)}')
+              return str(hits[0])
+          env={'capture':files['capture'],'manifest':files['manifest'],'completed':one('source-completed','narrow_diagnostic_results.json'),'audit':one('source-audit','narrow_diagnostic_grouping_audit.json')}
+          Path(os.environ['OUTPUT_DIR'],'resolved.env').write_text('\n'.join(f'{k.upper()}={v}' for k,v in env.items())+'\n')
+          PY
+      - name: Investigate without scoring
+        run: |
+          set -euo pipefail; set -a; source "$OUTPUT_DIR/resolved.env"; set +a
+          python -m scripts.investigate_alpha_atlas_v4_ranking_zero_selection --capture "$CAPTURE" --manifest "$MANIFEST" --completed-results "$COMPLETED" --approved-audit "$AUDIT" --output-dir "$OUTPUT_DIR/reports"
+      - name: Preserve structured failure evidence
+        if: failure()
+        run: |
+          mkdir -p "$OUTPUT_DIR/reports"
+          if ! test -s "$OUTPUT_DIR/reports/ranking_zero_selection_investigation.json"; then
+            printf '%s\n' '{"status":"INCOMPLETE","reason_code":"PINNED_SOURCE_RETRIEVAL_VALIDATION_OR_INVESTIGATION_FAILED","performance_scoring_executed":false,"corrected_scoring_executed":false}' > "$OUTPUT_DIR/reports/ranking_zero_selection_investigation.json"
+            printf '# Ranking zero-selection investigation\n\n- Status: `INCOMPLETE`.\n- No cause classification or corrected scoring was produced; inspect source-validation logs.\n' > "$OUTPUT_DIR/reports/ranking_zero_selection_investigation.md"
+          fi
+      - name: Publish readable evidence
+        if: always()
+        run: test ! -s "$OUTPUT_DIR/reports/ranking_zero_selection_investigation.md" || cat "$OUTPUT_DIR/reports/ranking_zero_selection_investigation.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4-ranking-zero-selection-investigation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/v4-ranking-zero-selection-investigation/**
+          if-no-files-found: error
