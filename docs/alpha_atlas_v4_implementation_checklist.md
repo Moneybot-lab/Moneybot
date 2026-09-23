@@ -1228,6 +1228,17 @@ immutable provenance. Performance comparison execution remains pending review.
 - [ ] **Hosted saved-input audit pending manual execution.** A passed future run must
   download the exact pinned artifacts and emit `AUDIT_COMPLETE_NO_PERFORMANCE` with
   all nine candidate/fold records. No performance aggregation is authorized.
+- [x] **Run `35879478828-1` preserved as failed audit evidence.** Its
+  `CAPTURE_CANDIDATE_FOLD_SET_MISMATCH` occurred after byte validation because the
+  validator compared all 41 frozen capture candidates directly with the three-candidate
+  experiment roster. Grouping, membership selection, and weight reconciliation did
+  not complete; performance remained `NOT_RUN`. The repair validates the full capture
+  against the frozen manifest first, records every outside-scope candidate, and then
+  projects exactly the three authorized candidates without weakening fold, duplicate,
+  unknown-candidate, canonical-ID, hash, or holdout gates.
+- [ ] **Corrected hosted saved-input audit remains pending.** Local synthetic and
+  workflow validation passed, but no corrected hosted artifact is recorded until the
+  revised manual workflow is available on an authenticated GitHub ref and completes.
 - [ ] **Broader gates remain open.** Applicable development costs, net-return
   validation, terminal valuation, complete historical coverage, and promotion
   readiness are unchanged and unresolved.

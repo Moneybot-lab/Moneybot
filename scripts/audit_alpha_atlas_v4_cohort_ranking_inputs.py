@@ -26,6 +26,43 @@ def sha(path:Path)->str:
     try: return hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError as exc: raise RankingContractError("INPUT_FILE_MISSING_OR_UNREADABLE",{"path":str(path),"error":type(exc).__name__}) from exc
 
+def normalize_fold(value:object)->int:
+    """Normalize JSON integer/digit-string folds, rejecting lossy representations."""
+    if isinstance(value,bool) or not (isinstance(value,int) or isinstance(value,str) and value.isdigit()):
+        raise RankingContractError("INVALID_FOLD_REPRESENTATION",{"value":repr(value),"type":type(value).__name__})
+    fold=int(value)
+    if fold not in EXPECTED_COUNTS: raise RankingContractError("UNEXPECTED_FOLD",{"value":repr(value),"normalized":fold})
+    return fold
+
+def validate_capture_scope(manifest_roster:list[str], capture:list[dict], usable_folds:set[int])->tuple[dict,dict]:
+    """Validate the complete source capture, then project the authorized roster."""
+    if len(manifest_roster)!=len(set(manifest_roster)):
+        raise RankingContractError("DUPLICATE_MANIFEST_CANDIDATE")
+    blocks={}; duplicates=[]; fold_types=Counter()
+    for position,item in enumerate(capture):
+        candidate=item.get("model_version")
+        if not isinstance(candidate,str) or not candidate: raise RankingContractError("INVALID_CAPTURE_CANDIDATE",{"position":position})
+        raw_fold=item.get("fold_index"); fold_types[type(raw_fold).__name__]+=1; fold=normalize_fold(raw_fold)
+        key=(candidate,fold)
+        if key in blocks: duplicates.append({"candidate":candidate,"fold":fold,"representations":[repr(blocks[key].get("fold_index")),repr(raw_fold)]})
+        else: blocks[key]=item
+    expected={(candidate,fold) for candidate in manifest_roster for fold in usable_folds}; observed=set(blocks)
+    missing=sorted(expected-observed); unexpected=sorted(observed-expected)
+    authorized_expected={(candidate,fold) for candidate in CANDIDATES for fold in usable_folds}
+    authorized_observed=observed&authorized_expected
+    diagnostics={"full_capture_roster":sorted({candidate for candidate,_ in observed}),"frozen_manifest_roster":manifest_roster,
+      "authorized_audit_roster":list(CANDIDATES),"outside_experiment_scope_candidates":[x for x in manifest_roster if x not in CANDIDATES],
+      "expected_source_candidate_fold_pairs":[list(x) for x in sorted(expected)],"observed_source_candidate_fold_pairs":[list(x) for x in sorted(observed)],
+      "missing_source_pairs":[list(x) for x in missing],"unexpected_source_pairs":[list(x) for x in unexpected],"duplicate_pairs":duplicates,
+      "fold_value_types":dict(sorted(fold_types.items())),"expected_authorized_pairs":[list(x) for x in sorted(authorized_expected)],
+      "observed_authorized_pairs":[list(x) for x in sorted(authorized_observed)],
+      "missing_authorized_pairs":[list(x) for x in sorted(authorized_expected-authorized_observed)]}
+    if duplicates: raise RankingContractError("DUPLICATE_CANDIDATE_FOLD_CAPTURE",diagnostics)
+    if unexpected: raise RankingContractError("UNKNOWN_SOURCE_CANDIDATE_OR_FOLD",diagnostics)
+    if missing: raise RankingContractError("MISSING_SOURCE_CANDIDATE_FOLD",diagnostics)
+    if authorized_expected!=authorized_observed: raise RankingContractError("CAPTURE_CANDIDATE_FOLD_SET_MISMATCH",diagnostics)
+    return {key:blocks[key] for key in authorized_expected},diagnostics
+
 def validate_membership_structure(expected_ids:dict[int,set[str]], capture_ids:dict[tuple[str,int],list[str]],
                                   holdout:set[str], *, expected_counts:dict[int,int]=EXPECTED_COUNTS)->None:
     if set(expected_ids)!=set(expected_counts): raise RankingContractError("MISSING_OR_UNEXPECTED_FOLDS",{"observed":sorted(expected_ids)})
@@ -60,6 +97,14 @@ def _summarize(selection:dict, expected:int, observed:int)->dict:
       "empty_cohorts":sum(x["empty"] for x in cohorts),"cohort_weight":1/len(cohorts) if cohorts else None,
       "weight_reconciliation":reconciled,"weight_reconciliation_passed":all(v for k,v in reconciled.items() if k!="empty_baseline_handling")}
 
+def failure_report(exc:Exception)->dict:
+    details=getattr(exc,"details",{}); preserved=details.get("input_provenance",{})
+    return {"schema_version":"alpha-atlas-v4-cohort-ranking-input-audit.v1","status":"AUDIT_FAILED_NO_PERFORMANCE",
+      "input_verification_status":details.get("input_verification_status","FAILED"),"grouping_eligibility_audit_status":"NOT_COMPLETED",
+      "selection_membership_audit_status":"NOT_COMPLETED","weight_reconciliation_status":"NOT_COMPLETED","performance_scoring":"NOT_RUN",
+      "holdout_content_access":False,"reason_code":getattr(exc,"code",type(exc).__name__),"details":details,
+      "input_provenance":preserved,"candidate_fold_membership_verification_status":"FAILED"}
+
 def audit_inputs(paths:dict[str,Path], contract:dict[str,Path], provenance:dict)->tuple[dict,dict]:
     verified=validate_frozen_contract(contract["proposal"],contract["evidence"],contract["lineage"],contract["clarification"])
     inputs={}
@@ -72,23 +117,27 @@ def audit_inputs(paths:dict[str,Path], contract:dict[str,Path], provenance:dict)
     inputs["plan"].update({"embedded_semantic_sha256":embedded,"recomputed_semantic_sha256":recomputed,"expected_semantic_sha256":PLAN_SEMANTIC})
     if embedded!=PLAN_SEMANTIC or recomputed!=PLAN_SEMANTIC: raise RankingContractError("SPLIT_PLAN_SEMANTIC_HASH_MISMATCH",inputs["plan"])
     manifest=json.loads(paths["manifest"].read_text()); capture=json.loads(paths["capture"].read_text())
-    folds=manifest.get("walk_forward_windows") or []; usable=[x for x in folds if x.get("usable")]
-    fold_by_index={int(x["fold_index"]):x for x in usable}
+    folds=manifest.get("walk_forward_windows") or []; usable=[x for x in folds if x.get("usable")]; fold_by_index={}; manifest_fold_representations={}
+    for item in usable:
+      raw=item.get("fold_index"); fold=normalize_fold(raw)
+      if fold in fold_by_index: raise RankingContractError("COLLIDING_MANIFEST_FOLD_REPRESENTATIONS",{"fold":fold,"representations":[manifest_fold_representations[fold],repr(raw)],"input_provenance":inputs,"input_verification_status":"PASSED"})
+      fold_by_index[fold]=item; manifest_fold_representations[fold]=repr(raw)
     expected_ids={fold:set(map(str,item.get("validation_canonical_observation_ids",item.get("validation_ids",[])))) for fold,item in fold_by_index.items()}
     development=set(map(str,plan.get("train_canonical_observation_ids") or [])); holdout=set(map(str,plan.get("test_canonical_observation_ids") or []))
     validation=set().union(*expected_ids.values())
     if validation-development: raise RankingContractError("VALIDATION_NOT_IN_DEVELOPMENT_MEMBERSHIP")
     rows,load_counts=_load_development_rows(paths["canonical"],validation)
-    roster=[str(x.get("model_version")) for x in manifest.get("challengers") or [] if str(x.get("model_version")) in CANDIDATES]
-    if roster!=list(CANDIDATES): raise RankingContractError("CANDIDATE_ROSTER_OR_ORDER_MISMATCH",{"observed":roster})
-    capture_by_key={}; duplicates=[]
-    for item in capture:
-        key=(str(item.get("model_version")),int(item.get("fold_index",-1)))
-        if key in capture_by_key: duplicates.append(key)
-        capture_by_key[key]=item
-    if duplicates: raise RankingContractError("DUPLICATE_CANDIDATE_FOLD_CAPTURE",{"duplicates":duplicates})
+    manifest_roster=[str(x.get("model_version")) for x in manifest.get("challengers") or []]
+    roster=[name for name in manifest_roster if name in CANDIDATES]
+    if roster!=list(CANDIDATES): raise RankingContractError("CANDIDATE_ROSTER_OR_ORDER_MISMATCH",{"observed":roster,"input_provenance":inputs,"input_verification_status":"PASSED"})
+    try:
+      capture_by_key,capture_scope=validate_capture_scope(manifest_roster,capture,set(EXPECTED_COUNTS))
+    except RankingContractError as exc:
+      exc.details={**exc.details,"input_provenance":inputs,"input_verification_status":"PASSED"}; raise
     capture_ids={key:[str(x.get("id")) for x in (item.get("records") or [])] for key,item in capture_by_key.items()}
-    validate_membership_structure(expected_ids,capture_ids,holdout)
+    try: validate_membership_structure(expected_ids,capture_ids,holdout)
+    except RankingContractError as exc:
+      exc.details={**exc.details,"input_provenance":inputs,"input_verification_status":"PASSED","capture_scope":capture_scope}; raise
     fold_reports=[]; evidence={"rows":[],"groups":[],"cohorts":[]}; blocked=[]
     for candidate in roster:
       for fold in sorted(EXPECTED_COUNTS):
@@ -120,7 +169,7 @@ def audit_inputs(paths:dict[str,Path], contract:dict[str,Path], provenance:dict)
       "performance_scoring":"NOT_RUN","holdout_content_access":False,"holdout_membership_overlap_count":0,"security_identity_claimed":False,
       "verified_contract":verified,"input_provenance":inputs,"canonical_loading":load_counts,"expected_total_assignments":30819,
       "observed_total_assignments":sum(x.get("observed_assignments",0) for x in fold_reports),"candidate_manifest_order":roster,
-      "candidate_folds":fold_reports,"blocked_candidate_folds":blocked,"selection_uses_outcomes":False}
+      "capture_scope":capture_scope,"candidate_folds":fold_reports,"blocked_candidate_folds":blocked,"selection_uses_outcomes":False}
     return report,evidence
 
 def main()->int:
@@ -133,9 +182,7 @@ def main()->int:
       report,evidence=audit_inputs({k:getattr(a,k) for k in ("canonical","plan","manifest","capture")},{k:getattr(a,k) for k in ("proposal","clarification","evidence","lineage")},provenance)
       code=0 if report["status"]=="AUDIT_COMPLETE_NO_PERFORMANCE" else 2
     except Exception as exc:
-      report={"schema_version":"alpha-atlas-v4-cohort-ranking-input-audit.v1","status":"AUDIT_FAILED_NO_PERFORMANCE","input_verification_status":"FAILED",
-        "grouping_eligibility_audit_status":"NOT_COMPLETED","selection_membership_audit_status":"NOT_COMPLETED","weight_reconciliation_status":"NOT_COMPLETED",
-        "performance_scoring":"NOT_RUN","holdout_content_access":False,"reason_code":getattr(exc,"code",type(exc).__name__),"details":getattr(exc,"details",{})}; code=2
+      report=failure_report(exc); code=2
     (a.output_dir/"cohort_ranking_input_audit.json").write_text(json.dumps(report,indent=2,sort_keys=True)+"\n")
     (a.output_dir/"cohort_ranking_membership_evidence.json").write_text(json.dumps(evidence,indent=2,sort_keys=True)+"\n")
     (a.output_dir/"input_provenance_manifest.json").write_text(json.dumps(report.get("input_provenance",{}),indent=2,sort_keys=True)+"\n")
@@ -146,6 +193,7 @@ def main()->int:
     (a.output_dir/"cohort_ranking_input_audit.md").write_text("\n".join(lines)+"\n")
     files=sorted(x for x in a.output_dir.iterdir() if x.is_file() and x.name!="SHA256SUMS")
     (a.output_dir/"SHA256SUMS").write_text("".join(f"{sha(x)}  {x.name}\n" for x in files))
+    if code: print(f"cohort ranking input audit failed: {report.get('reason_code')}; see cohort_ranking_input_audit.json for details",file=sys.stderr)
     return code
 
 if __name__=="__main__": raise SystemExit(main())

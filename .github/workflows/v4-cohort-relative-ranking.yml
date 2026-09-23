@@ -103,7 +103,7 @@ jobs:
           fi
           cp docs/reports/alpha_atlas_v4_ranking_cohort_relative_experiment_proposal.v1.json "$OUTPUT_DIR/reports/" || true
           cp docs/reports/alpha_atlas_v4_cohort_relative_ranking_clarification.v1.json "$OUTPUT_DIR/reports/" || true
-          (cd "$OUTPUT_DIR/reports" && sha256sum ./* > SHA256SUMS) || true
+          (cd "$OUTPUT_DIR/reports" && rm -f SHA256SUMS && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort | xargs -r sha256sum > SHA256SUMS) || true
       - name: Publish audit summary
         if: always()
         run: test ! -s "$OUTPUT_DIR/reports/cohort_ranking_input_audit.md" || cat "$OUTPUT_DIR/reports/cohort_ranking_input_audit.md" >> "$GITHUB_STEP_SUMMARY"

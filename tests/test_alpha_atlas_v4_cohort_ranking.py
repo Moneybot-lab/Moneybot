@@ -2,7 +2,7 @@ from __future__ import annotations
 import hashlib, json, subprocess, sys
 from pathlib import Path
 import pytest
-from scripts.audit_alpha_atlas_v4_cohort_ranking_inputs import validate_membership_structure
+from scripts.audit_alpha_atlas_v4_cohort_ranking_inputs import failure_report, normalize_fold, validate_capture_scope, validate_membership_structure
 
 from moneybot.services.alpha_atlas_v4_cohort_ranking import (
     CLARIFICATION_SHA256, EVIDENCE_SHA256, PROPOSAL_SHA256, RankingContractError,
@@ -170,3 +170,47 @@ def test_input_audit_exact_module_entrypoint_without_pythonpath_preserves_failur
     assert completed.returncode==2 and report['status']=='AUDIT_FAILED_NO_PERFORMANCE'
     assert report['performance_scoring']=='NOT_RUN' and report['holdout_content_access'] is False
     assert (output/'SHA256SUMS').is_file() and (output/clarification.name).is_file()
+    checks=(output/'SHA256SUMS').read_text().splitlines()
+    assert checks and not any(line.endswith('  SHA256SUMS') for line in checks)
+
+def _capture_block(candidate,fold):
+    return {'model_version':candidate,'fold_index':fold,'records':[]}
+
+def test_full_capture_legitimate_out_of_scope_candidates_are_validated_then_projected():
+    authorized=list(__import__('moneybot.services.alpha_atlas_v4_cohort_ranking',fromlist=['CANDIDATES']).CANDIDATES)
+    manifest=authorized+['legitimate-other-candidate']
+    capture=[_capture_block(candidate,fold) for candidate in manifest for fold in (1,2,3)]
+    projected,diagnostics=validate_capture_scope(manifest,capture,{1,2,3})
+    assert set(projected)=={(candidate,fold) for candidate in authorized for fold in (1,2,3)}
+    assert diagnostics['outside_experiment_scope_candidates']==['legitimate-other-candidate']
+    assert len(diagnostics['observed_source_candidate_fold_pairs'])==12
+
+def test_capture_scope_reports_missing_authorized_fold_and_unknown_source_candidate():
+    authorized=list(__import__('moneybot.services.alpha_atlas_v4_cohort_ranking',fromlist=['CANDIDATES']).CANDIDATES)
+    complete=[_capture_block(candidate,fold) for candidate in authorized for fold in (1,2,3)]
+    with pytest.raises(RankingContractError,match='MISSING_SOURCE_CANDIDATE_FOLD') as missing:
+        validate_capture_scope(authorized,complete[:-1],{1,2,3})
+    assert missing.value.details['missing_source_pairs'] and missing.value.details['missing_authorized_pairs']
+    with pytest.raises(RankingContractError,match='UNKNOWN_SOURCE_CANDIDATE_OR_FOLD') as unknown:
+        validate_capture_scope(authorized,complete+[_capture_block('unknown',1)],{1,2,3})
+    assert unknown.value.details['unexpected_source_pairs']==[['unknown',1]]
+
+def test_fold_representation_normalization_rejects_invalid_and_collisions():
+    authorized=list(__import__('moneybot.services.alpha_atlas_v4_cohort_ranking',fromlist=['CANDIDATES']).CANDIDATES)
+    capture=[_capture_block(candidate,str(fold)) for candidate in authorized for fold in (1,2,3)]
+    projected,diagnostics=validate_capture_scope(authorized,capture,{1,2,3})
+    assert len(projected)==9 and diagnostics['fold_value_types']=={'str':9}
+    with pytest.raises(RankingContractError,match='DUPLICATE_CANDIDATE_FOLD_CAPTURE') as collision:
+        validate_capture_scope(authorized,capture+[_capture_block(authorized[0],1)],{1,2,3})
+    assert collision.value.details['duplicate_pairs'][0]['representations']==["'1'",'1']
+    for value in (True,1.0,'one',None):
+        with pytest.raises(RankingContractError,match='INVALID_FOLD_REPRESENTATION'): normalize_fold(value)
+
+def test_failure_after_byte_verification_preserves_input_provenance():
+    provenance={'capture':{'computed_sha256':'abc','bytes':123}}
+    error=RankingContractError('CAPTURE_CANDIDATE_FOLD_SET_MISMATCH',{
+      'input_verification_status':'PASSED','input_provenance':provenance,'missing_authorized_pairs':[['candidate',3]]})
+    report=failure_report(error)
+    assert report['input_verification_status']=='PASSED'
+    assert report['candidate_fold_membership_verification_status']=='FAILED'
+    assert report['input_provenance']==provenance and report['details']['missing_authorized_pairs']
