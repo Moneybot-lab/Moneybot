@@ -1,0 +1,74 @@
+name: V4 Execute Group Return Regression
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  execute:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OUTPUT_DIR: artifacts/v4-group-return-regression
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned dependencies
+        run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: track-b-offline-output
+          run-id: 34689216730
+          path: source-track-b
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: v4-development-diagnostics-34689216730
+          run-id: 34769717178
+          path: source-diagnostics
+          github-token: ${{ github.token }}
+      - name: Resolve exact pinned inputs
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR"
+          python scripts/validate_v4_weighting_registration_sources.py --metadata-only --track-root source-track-b --diagnostics-root source-diagnostics --output "$OUTPUT_DIR/resolved-inputs.json"
+      - name: Execute registered regression
+        run: |
+          set -euo pipefail
+          ulimit -v 4194304
+          export OPENBLAS_NUM_THREADS=2 OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 NUMEXPR_NUM_THREADS=2
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          x=json.loads(Path('artifacts/v4-group-return-regression/resolved-inputs.json').read_text())
+          Path('artifacts/v4-group-return-regression/resolved.env').write_text('\n'.join(f'{k.upper()}={x[k]}' for k in ('feature_store','split_plan','manifest'))+'\n')
+          PY
+          set -a; source "$OUTPUT_DIR/resolved.env"; set +a
+          python -m scripts.run_alpha_atlas_v4_group_return_regression \
+            --registration docs/reports/alpha_atlas_v4_group_return_regression_registration.v1.json \
+            --authorization docs/reports/alpha_atlas_v4_group_return_regression_execution_authorization.v1.json \
+            --canonical "$FEATURE_STORE" --plan "$SPLIT_PLAN" --manifest "$MANIFEST" --output-dir "$OUTPUT_DIR/reports"
+      - name: Preserve actionable startup failure
+        if: failure()
+        run: |
+          mkdir -p "$OUTPUT_DIR/reports"
+          if ! test -s "$OUTPUT_DIR/reports/execution_provenance.json"; then
+            printf '%s\n' '{"execution_status":"FAILED_BEFORE_ENTRYPOINT","reason_code":"PINNED_SOURCE_RESOLUTION_FAILURE","holdout_content_access":false}' > "$OUTPUT_DIR/reports/execution_provenance.json"
+          fi
+          if ! test -s "$OUTPUT_DIR/reports/SUMMARY.md"; then printf '# Group-return regression failure\n\nInspect preserved evidence and job logs.\n' > "$OUTPUT_DIR/reports/SUMMARY.md"; fi
+          (cd "$OUTPUT_DIR/reports" && rm -f SHA256SUMS && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort | xargs -r sha256sum > SHA256SUMS) || true
+      - name: Publish readable summary
+        if: always()
+        run: test ! -s "$OUTPUT_DIR/reports/SUMMARY.md" || cat "$OUTPUT_DIR/reports/SUMMARY.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4-group-return-regression-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/v4-group-return-regression/**
+          if-no-files-found: error

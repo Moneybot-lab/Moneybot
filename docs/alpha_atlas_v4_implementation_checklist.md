@@ -1291,10 +1291,18 @@ immutable provenance. Performance comparison execution remains pending review.
   ridge return-regression configuration, fixed top-five selection, complete-fold
   aggregation, and a development-only screen. Registration JSON SHA-256:
   `c3f58f47354f07a5c0aa536344b97fb542fdde0bee1651f86852d3dd69a6469a`.
-- [ ] **Aligned experiment implementation, training, prediction, and execution are
-  `NOT_AUTHORIZED / NOT_EXECUTED`.** Registration does not authorize fitting or new
-  performance evidence. Final-holdout content remains inaccessible; the historical
-  OOF capture is prior evidence only and is not a prediction input for this model.
+- [x] **Aligned experiment implementation and focused testing are complete and execution is authorized.**
+  The separate hash-bound authorization preserves registration v1 unchanged and
+  permits exactly the registered three development-fold fits. The implementation
+  enforces training-only preprocessing, validation-outcome isolation, immutable
+  pre-outcome predictions/selections, temporal and membership gates, deterministic
+  float64 mean-loss ridge, and the registered descriptive evaluation. Final-holdout
+  content remains inaccessible; historical OOF predictions remain prior evidence only.
+- [ ] **Hosted execution is pending authenticated manual dispatch.** This environment
+  has no authenticated GitHub session and therefore cannot retrieve the exact pinned
+  Actions artifacts or dispatch the workflow. Run **V4 Execute Group Return Regression**
+  on branch `work` with no inputs. Do not record a development-screen result until
+  the uploaded checksums and exact input identities verify.
 - [ ] **Broader gates remain open.** Applicable development costs, net-return
   validation, terminal valuation, complete historical coverage, and promotion
   readiness are unchanged and unresolved.
