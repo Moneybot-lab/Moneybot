@@ -1324,3 +1324,18 @@ immutable provenance. Performance comparison execution remains pending review.
 - [ ] **Broader gates remain open.** Applicable development costs, net-return
   validation, terminal valuation, complete historical coverage, and promotion
   readiness are unchanged and unresolved.
+
+### Shared-decision feasibility follow-up
+
+- [x] **Oversized-diff recovery is complete.** Recovery commit `5bebff8` keeps
+  generated row mappings and downloaded artifacts outside the reviewable diff.
+- [x] **Original timing investigation is complete.** Registration v1 remains
+  `NOT_EVALUABLE — INCOMPATIBLE_GROUP_TIMING; ZERO_FITS`; it was not reopened.
+- [ ] **Shared-decision feasibility is `INCOMPLETE_EVIDENCE_UNAVAILABLE`.** A
+  deterministic prior-XNYS-session-close boundary and fail-closed metadata-only
+  analyzer are documented, but exact registered canonical rows and split-plan
+  bytes were not locally available and private Actions access was unauthenticated.
+  Coverage, cohort, and split counts remain null rather than invented.
+- [ ] **Revised registration and training are `NOT_AUTHORIZED / NOT_EXECUTED`.**
+  The exact-timestamp amendment remains `NOT_APPROVED`; no performance work,
+  holdout access, provider query, or production change occurred.
