@@ -1,0 +1,101 @@
+{
+  "schema_version": "alpha-atlas-v4-shared-decision-cohort-feasibility.v1",
+  "classification": "INCOMPLETE_EVIDENCE_UNAVAILABLE",
+  "scope": {
+    "metadata_only": true,
+    "training": false,
+    "predictions": false,
+    "performance_calculation": false,
+    "provider_queries": false,
+    "holdout_content_access": false,
+    "production_changes": false
+  },
+  "preserved_status": {
+    "registration_v1": "NOT_EVALUABLE_INCOMPATIBLE_GROUP_TIMING_ZERO_FITS",
+    "timing_investigation": "COMPLETE",
+    "recovery_commit": "5bebff8",
+    "exact_timestamp_amendment": "NOT_APPROVED"
+  },
+  "common_boundary": {
+    "status": "PROPOSED_OPERATIONAL_CONVENTION_NOT_VERIFIED_HISTORICAL_BEHAVIOR",
+    "rule": "official close of the XNYS session immediately preceding entry_at, calculated by XNYS-rule-calendar.v1 and normalized to UTC",
+    "properties": [
+      "strictly before entry_at",
+      "shared by every ticker in an identical five-session entry/exit window",
+      "independent of scores, returns, saved snapshot count, and cohort size",
+      "does not change registered entry_at or exit_at"
+    ]
+  },
+  "evidence_access": {
+    "local_metadata_checked_during_task": true,
+    "remote_metadata_checked_during_task": false,
+    "current_expiration_or_retention": "UNKNOWN",
+    "archive_contents_retrieved_during_task": false,
+    "downloaded_bytes_verified": false,
+    "internal_checksums_verified": false,
+    "reason": "No authenticated GitHub session or remote is available, and the registered canonical JSONL and split plan do not exist locally.",
+    "artifacts": [
+      {
+        "name": "track-b-offline-output",
+        "id": 10296724235,
+        "recorded_digest": "sha256:017cdd8a8b30917e6e2f958e3cba1ae99827e002434b97f9de40c2c4ab871ef9",
+        "recorded_size_bytes": null,
+        "run": "34689216730-1",
+        "retrieval_url": "https://github.com/Moneybot-lab/Moneybot/actions/runs/34689216730/artifacts/10296724235",
+        "retrieval_verified_during_task": false
+      },
+      {
+        "name": "v4-group-return-regression-36022025311-1",
+        "id": 10816618256,
+        "recorded_digest": "sha256:19b68b9eed3962dccbc5dde119f2e792f017f9a1c94f4ba5d8c54fc4574f5cc4",
+        "recorded_size_bytes": null,
+        "run": "36022025311-1",
+        "retrieval_url": "https://github.com/Moneybot-lab/Moneybot/actions/runs/36022025311/artifacts/10816618256",
+        "retrieval_verified_during_task": false
+      }
+    ],
+    "required_missing_inputs": [
+      {
+        "path": "track_b/runs/34689216730-1/flat_feature_store/all.jsonl",
+        "registered_sha256": "506073994052be852a5a00fc38e239b85e72a50494c3559640ea980fb6a52d9e"
+      },
+      {
+        "path": "track_b/runs/34689216730-1/challenger_suite/challenger_split_plan.json",
+        "registered_sha256": "f11257cff0befc1f0b46e4cab9a64678c766b6fe2abdc50b07861a18f7d6933a"
+      }
+    ]
+  },
+  "availability_rule": {
+    "candidate": "latest qualifying snapshot by common boundary; ties use lexically greatest canonical_observation_id",
+    "requires": ["snapshot construction or capture availability at or before boundary", "every feature-family availability at or before boundary", "supported fresh status"],
+    "source_event_time_is_snapshot_availability": false,
+    "unknown_fails_closed": true
+  },
+  "partition_findings": [
+    {"fold": 1, "partition": "train", "opportunities": null, "qualifying": null, "missing": null, "only_after_boundary": null, "stale": null, "unknown": null, "invalid_or_conflicting": null},
+    {"fold": 1, "partition": "validation", "opportunities": null, "qualifying": null, "missing": null, "only_after_boundary": null, "stale": null, "unknown": null, "invalid_or_conflicting": null},
+    {"fold": 2, "partition": "train", "opportunities": null, "qualifying": null, "missing": null, "only_after_boundary": null, "stale": null, "unknown": null, "invalid_or_conflicting": null},
+    {"fold": 2, "partition": "validation", "opportunities": null, "qualifying": null, "missing": null, "only_after_boundary": null, "stale": null, "unknown": null, "invalid_or_conflicting": null},
+    {"fold": 3, "partition": "train", "opportunities": null, "qualifying": null, "missing": null, "only_after_boundary": null, "stale": null, "unknown": null, "invalid_or_conflicting": null},
+    {"fold": 3, "partition": "validation", "opportunities": null, "qualifying": null, "missing": null, "only_after_boundary": null, "stale": null, "unknown": null, "invalid_or_conflicting": null}
+  ],
+  "cohort_distribution": {
+    "denominator": null,
+    "zero": null,
+    "one": null,
+    "two_through_four": null,
+    "exactly_five": null,
+    "more_than_five": null,
+    "selection_limitation": "min(5, eligible tickers) equals the full eligible baseline for every cohort with five or fewer eligible tickers"
+  },
+  "unique_window_and_split_compatibility": {
+    "genuinely_unique_execution_windows": null,
+    "repeated_fold_partition_appearances": null,
+    "within_fold_conflicts": null,
+    "purge_embargo_conflicts": null,
+    "status": "NOT_COMPUTABLE_WITHOUT_REGISTERED_CANONICAL_ROWS_AND_SPLIT_MEMBERSHIP",
+    "walk_forward_reuse": "Reuse across different folds may be permitted; it must be distinguished from within-fold leakage."
+  },
+  "smallest_missing_evidence_requirement": "Retrieve the exact registered track-b-offline-output artifact, verify its recorded digest and the canonical JSONL/split-plan byte hashes, and expose snapshot construction/capture availability. If the canonical rows contain no such availability field, the saved evidence cannot prove as-of snapshot eligibility.",
+  "next_action": "An authorized reviewer must retrieve artifact 10296724235 and verify the registered archive/file hashes; no amended experiment should be registered or executed before that single evidence-access step."
+}
