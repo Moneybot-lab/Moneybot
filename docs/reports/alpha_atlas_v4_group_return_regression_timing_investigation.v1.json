@@ -1,0 +1,98 @@
+{
+  "affected_run": {
+    "artifact_digest": "sha256:19b68b9eed3962dccbc5dde119f2e792f017f9a1c94f4ba5d8c54fc4574f5cc4",
+    "artifact_id": 10816618256,
+    "head_sha": "196c9b80c356026ae71a35e5a2e2f9a668ac82bf",
+    "run": "36022025311-1"
+  },
+  "conclusion": "GENUINELY_DIFFERENT_DECISION_AND_FEATURE_CUTOFF_INSTANTS_WITHIN_REGISTERED_GROUPS_CONTRACT_AMENDMENT_REQUIRED",
+  "execution_state": {
+    "evaluation_executed": false,
+    "fits_completed": 0,
+    "fits_started": 0,
+    "holdout_content_access": false,
+    "predictions_written": false
+  },
+  "focal_group": {
+    "group_key": [
+      "2026-04-03",
+      "T",
+      5,
+      "2026-04-06T13:30:00Z",
+      "2026-04-10T20:00:00Z"
+    ],
+    "memberships": [
+      "fold_1_train",
+      "fold_2_train"
+    ],
+    "rows": [
+      {
+        "canonical_observation_id": "aav4obs_5c9754c5d5afd9b7a47844c03edd747ec04193d7366164d76d432eb299a543ab",
+        "decision_at_normalized_utc": "2026-04-04T02:03:21Z",
+        "decision_at_raw": "2026-04-04T02:03:21+00:00",
+        "feature_cutoff_at": "2026-04-04T02:03:21+00:00",
+        "label_start_at": "2026-04-06T13:30:00+00:00",
+        "originating_decision_at_max": "2026-04-04T02:03:21+00:00",
+        "originating_decision_at_min": "2026-04-04T02:03:21+00:00"
+      },
+      {
+        "canonical_observation_id": "aav4obs_76e8026d590b9f41981f5d6dcab184bad3d48e551a5392478a48f7c75b11cfee",
+        "decision_at_normalized_utc": "2026-04-04T02:03:46Z",
+        "decision_at_raw": "2026-04-04T02:03:46+00:00",
+        "feature_cutoff_at": "2026-04-04T02:03:46+00:00",
+        "label_start_at": "2026-04-06T13:30:00+00:00",
+        "originating_decision_at_max": "2026-04-04T02:03:46+00:00",
+        "originating_decision_at_min": "2026-04-04T02:03:46+00:00"
+      },
+      {
+        "canonical_observation_id": "aav4obs_dde6d9da4845fb1d3c7888c8996535a53ac19f1e18d09532927689067da21483",
+        "decision_at_normalized_utc": "2026-04-04T02:03:51Z",
+        "decision_at_raw": "2026-04-04T02:03:51+00:00",
+        "feature_cutoff_at": "2026-04-04T02:03:51+00:00",
+        "label_start_at": "2026-04-06T13:30:00+00:00",
+        "originating_decision_at_max": "2026-04-04T02:03:51+00:00",
+        "originating_decision_at_min": "2026-04-04T02:03:51+00:00"
+      }
+    ],
+    "shared_entry_at": "2026-04-06T13:30:00+00:00",
+    "shared_exit_at": "2026-04-10T20:00:00+00:00",
+    "shared_feature_family_source_at": {
+      "market_regime": "2026-04-02T20:00:00+00:00",
+      "sector_daily": "2026-04-02T20:00:00+00:00",
+      "spy_daily": "2026-04-02T20:00:00+00:00",
+      "symbol_daily": "2026-04-02T20:00:00+00:00",
+      "volatility_proxy": "2026-04-02T20:00:00+00:00"
+    },
+    "timestamp_completeness": "ALL_REQUIRED_TIMESTAMPS_PRESENT_AND_EXPLICIT_UTC_OFFSETS"
+  },
+  "frozen_inputs": {
+    "canonical_file_byte_sha256": "506073994052be852a5a00fc38e239b85e72a50494c3559640ea980fb6a52d9e",
+    "manifest_file_byte_sha256": "ea4e55f9faa848219945d7e03c92c7a541645cd4d6df8aa3cfbd0d1334872f15",
+    "split_plan_embedded_semantic_sha256": "bd60055adc6cb1b3f8b143c6c61031bced01c9151fcb3b67c33f75430106e8e8",
+    "split_plan_file_byte_sha256": "f11257cff0befc1f0b46e4cab9a64678c766b6fe2abdc50b07861a18f7d6933a",
+    "split_plan_independently_recomputed_semantic_sha256": "bd60055adc6cb1b3f8b143c6c61031bced01c9151fcb3b67c33f75430106e8e8"
+  },
+  "parsing": {
+    "equivalent_instant_policy": "parse aware ISO-8601, map Z to +00:00, convert to UTC, then compare instants",
+    "focal_classification": "NOT_EQUIVALENT_INSTANTS",
+    "missing_or_timezone_ambiguous_focal_values": 0,
+    "no_inference": true
+  },
+  "registration_sha256": "c3f58f47354f07a5c0aa536344b97fb542fdde0bee1651f86852d3dd69a6469a",
+  "scope_scan": [
+    {"affected_groups": 1627, "affected_unique_rows": 10866, "fold": 1, "groups_scanned": 2241, "partition": "train", "rows_scanned": 11480},
+    {"affected_groups": 487, "affected_unique_rows": 4178, "fold": 1, "groups_scanned": 773, "partition": "validation", "rows_scanned": 4464},
+    {"affected_groups": 2379, "affected_unique_rows": 16839, "fold": 2, "groups_scanned": 3396, "partition": "train", "rows_scanned": 17856},
+    {"affected_groups": 335, "affected_unique_rows": 2315, "fold": 2, "groups_scanned": 499, "partition": "validation", "rows_scanned": 2479},
+    {"affected_groups": 1455, "affected_unique_rows": 10599, "fold": 3, "groups_scanned": 2222, "partition": "train", "rows_scanned": 11366},
+    {"affected_groups": 385, "affected_unique_rows": 3012, "fold": 3, "groups_scanned": 703, "partition": "validation", "rows_scanned": 3330}
+  ],
+  "scope_scan_constraints": {
+    "features_averaged": false,
+    "holdout_content_access": false,
+    "models_fit": false,
+    "outcomes_read_or_calculated": false,
+    "predictions_created": false
+  },
+  "status": "INVESTIGATION_COMPLETE_EXECUTION_REMAINS_BLOCKED"
+}

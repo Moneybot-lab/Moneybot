@@ -1291,10 +1291,36 @@ immutable provenance. Performance comparison execution remains pending review.
   ridge return-regression configuration, fixed top-five selection, complete-fold
   aggregation, and a development-only screen. Registration JSON SHA-256:
   `c3f58f47354f07a5c0aa536344b97fb542fdde0bee1651f86852d3dd69a6469a`.
-- [ ] **Aligned experiment implementation, training, prediction, and execution are
-  `NOT_AUTHORIZED / NOT_EXECUTED`.** Registration does not authorize fitting or new
-  performance evidence. Final-holdout content remains inaccessible; the historical
-  OOF capture is prior evidence only and is not a prediction input for this model.
+- [x] **Aligned experiment implementation and focused testing are complete and execution is authorized.**
+  The separate hash-bound authorization preserves registration v1 unchanged and
+  permits exactly the registered three development-fold fits. The implementation
+  enforces training-only preprocessing, validation-outcome isolation, immutable
+  pre-outcome predictions/selections, temporal and membership gates, deterministic
+  float64 mean-loss ridge, and the registered descriptive evaluation. Final-holdout
+  content remains inaccessible; historical OOF predictions remain prior evidence only.
+- [ ] **Hosted execution is pending authenticated manual dispatch.** This environment
+  has no authenticated GitHub session and therefore cannot retrieve the exact pinned
+  Actions artifacts or dispatch the workflow. Run **V4 Execute Group Return Regression**
+  on branch `work` with no inputs. Do not record a development-screen result until
+  the uploaded checksums and exact input identities verify.
+- [x] **Run `36022025311-1` timing failure investigated without training.** Exact
+  frozen-input hashes verify. The three initially reported `T` observations are fold
+  1 and fold 2 training members of the same registered group, but have genuinely
+  different explicit-UTC `decision_at` and `feature_cutoff_at` instants (02:03:21,
+  02:03:46, and 02:03:51 UTC). The failed attempt started/completed zero fits, wrote
+  no predictions, performed no evaluation, and accessed no holdout content.
+- [x] **Complete development timing scope audited without outcomes.** Incompatible
+  group counts are 1,627/487 for fold 1 train/validation, 2,379/335 for fold 2,
+  and 1,455/385 for fold 3. UTC normalization now accepts equivalent aware
+  representations while rejecting missing, naive, invalid, or genuinely different
+  instants and emits complete fold/partition/group timestamp evidence before fitting.
+- [ ] **Original experiment remains blocked; amendment review required.** Registration
+  v1 requires unanimous decision and cutoff timestamps. A reviewable amendment proposes
+  adding both normalized instants to group and cohort keys; it would change group counts
+  from 2,241/773 to 11,480/4,464 in fold 1, 3,396/499 to 17,856/2,479 in fold 2, and
+  2,222/703 to 11,366/3,330 in fold 3. This is not covered by the existing authorization,
+  so no training or evaluation was run and the workflow must not be redispatched as an
+  amended experiment until explicit review and authorization.
 - [ ] **Broader gates remain open.** Applicable development costs, net-return
   validation, terminal valuation, complete historical coverage, and promotion
   readiness are unchanged and unresolved.

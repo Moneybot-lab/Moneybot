@@ -1,0 +1,22 @@
+{
+  "authorization_status": "NOT_AUTHORIZED_FOR_EXECUTION",
+  "basis": "The frozen metadata scan proves that required decision_at and feature_cutoff_at instants genuinely differ within most registered ticker/timing groups.",
+  "effect": {
+    "evaluation_cohorts": "Add normalized decision_at and feature_cutoff_at to the cohort key so only groups with identical information boundaries compete; this changes the registered evaluation cohorts and will frequently yield singleton cohorts.",
+    "feature_aggregation": "Never average features across different decision or cutoff instants.",
+    "temporal_isolation": "Retain feature_cutoff_at <= decision_at < entry_at < exit_at, feature-source <= cutoff, train/validation separation, purge, and embargo without relaxation.",
+    "training_units": {
+      "fold_1_train_groups_before_after": [2241, 11480],
+      "fold_1_validation_groups_before_after": [773, 4464],
+      "fold_2_train_groups_before_after": [3396, 17856],
+      "fold_2_validation_groups_before_after": [499, 2479],
+      "fold_3_train_groups_before_after": [2222, 11366],
+      "fold_3_validation_groups_before_after": [703, 3330]
+    }
+  },
+  "proposed_change": "Define an operational group by the registered five fields plus UTC-normalized decision_at and feature_cutoff_at; require raw timestamps to be aware ISO-8601 values and compare equivalent instants after UTC normalization.",
+  "registration_sha256": "c3f58f47354f07a5c0aa536344b97fb542fdde0bee1651f86852d3dd69a6469a",
+  "schema_version": "alpha-atlas-v4-group-return-regression-timing-contract-amendment.v1",
+  "status": "PREPARED_FOR_REVIEW_NOT_APPROVED",
+  "warning": "This materially changes training units and evaluation cohorts. The existing execution authorization does not cover it, and no amended training or evaluation may run without explicit review and authorization."
+}
