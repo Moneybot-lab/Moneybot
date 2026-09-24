@@ -1,0 +1,21 @@
+{
+  "authorization_basis": "User task explicitly authorizing implementation, focused tests, a manual hosted workflow, exactly three development-fold fits, and the registered descriptive evaluation; no new proposal cycle",
+  "authorized_scope": {
+    "configuration_count": 1,
+    "development_fold_fits": 3,
+    "final_holdout_fits": 0,
+    "holdout_content_access": false,
+    "hyperparameter_trials": 0,
+    "provider_calls": 0
+  },
+  "execution_authorized": true,
+  "historical_scoring_run": {
+    "disposition": "COMPLETE_UNFAVORABLE_FINDINGS_UNCHANGED",
+    "run": "35923707545-1"
+  },
+  "registration_commit": "5e7230eb",
+  "registration_path": "docs/reports/alpha_atlas_v4_group_return_regression_registration.v1.json",
+  "registration_sha256": "c3f58f47354f07a5c0aa536344b97fb542fdde0bee1651f86852d3dd69a6469a",
+  "schema_version": "alpha-atlas-v4-group-return-regression-execution-authorization.v1",
+  "status": "AUTHORIZED"
+}
