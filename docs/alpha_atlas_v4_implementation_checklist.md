@@ -1339,3 +1339,9 @@ immutable provenance. Performance comparison execution remains pending review.
 - [ ] **Revised registration and training are `NOT_AUTHORIZED / NOT_EXECUTED`.**
   The exact-timestamp amendment remains `NOT_APPROVED`; no performance work,
   holdout access, provider query, or production change occurred.
+- [x] **Shared-decision hosted workflow is implemented, not yet executed.** The
+  manual **V4 Shared Decision Cohort Feasibility** workflow pins run
+  `34689216730-1`, commit `1f8f46d`, artifact ID `10296724235`, archive and
+  exact-file hashes, runs only the metadata analyzer, and preserves specific
+  failures plus available evidence. Hosted feasibility remains incomplete until
+  a post-merge manual run finishes and its output artifact is verified.
