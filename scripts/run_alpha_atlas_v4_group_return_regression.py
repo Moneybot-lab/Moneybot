@@ -8,7 +8,7 @@ ROOT=Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path: sys.path.insert(0,str(ROOT))
 
 from moneybot.services.alpha_atlas_v4_baseline_registration import _load_development_rows
-from moneybot.services.alpha_atlas_v4_group_return_regression import (ContractError, TARGET, check_partitions, construct_groups,
+from moneybot.services.alpha_atlas_v4_group_return_regression import (ContractError, TARGET, audit_group_timing, check_partitions, construct_groups,
   evaluate, file_hash, fit_ridge, predict, select, validate_bindings)
 
 VALIDATION_ALLOWLIST={"canonical_observation_id","symbol","ticker","event_date","label_horizon_sessions","decision_at","feature_cutoff_at","entry_at","exit_at","feature_family_source_at"}
@@ -28,14 +28,22 @@ def execute(a)->dict:
         if (set(train)|set(valid))-development or (set(train)|set(valid))&holdout: raise ContractError("INVALID_DEVELOPMENT_MEMBERSHIP",{"fold":fold})
         fold_members.append((fold,train,valid))
     needed=set().union(*(set(t)|set(v) for _,t,v in fold_members)); rows,load_counts=_load_development_rows(a.canonical,needed)
-    audits=[]; mappings=[]; preprocessing=[]; models=[]; all_predictions=[]; all_selections=[]; all_cohorts=[]; validation_outcomes={}
+    timing=audit_group_timing([(fold,partition,[rows[x] for x in ids]) for fold,train,valid in sorted(fold_members)
+                               for partition,ids in (("train",train),("validation",valid))])
+    write(a.output_dir/"timing_compatibility_audit.json",timing)
+    if timing["affected_group_assignments"]:
+        first=timing["issues"][0]
+        raise ContractError("INCOMPATIBLE_GROUP_TIMING",{"summary":"genuinely different or invalid required timestamps within registered operational group",
+          "affected_group_assignments":timing["affected_group_assignments"],"partitions":timing["partitions"],"first_issue":first,
+          "completed_validation_stages":["registration_hash","authorization","frozen_input_byte_hashes","split_semantic_hashes","development_membership","complete_timing_metadata_scan"],
+          "fits_started":0,"fits_completed":0,"predictions_written":False,"evaluation_executed":False,"holdout_content_access":False})
+    audits=[]; mappings=[]; preprocessing=[]; models=[]; all_predictions=[]; all_selections=[]; all_cohorts=[]
     for fold,train_ids,valid_ids in sorted(fold_members):
         train_groups=construct_groups((rows[x] for x in train_ids),features,outcomes_allowed=True)
         # The prediction stage receives an explicit allowlist and never validation outcomes.
         safe=[]
         for identifier in valid_ids:
             row=rows[identifier]; safe.append({k:row[k] for k in VALIDATION_ALLOWLIST|set(features) if k in row})
-            validation_outcomes[identifier]=row.get("return_5d")
         validation_groups=construct_groups(safe,features,outcomes_allowed=False); check_partitions(train_groups,validation_groups)
         if len(train_groups)>registration["execution_budget"]["max_training_group_examples_per_fold"]: raise ContractError("TRAINING_GROUP_BUDGET_EXCEEDED",{"fold":fold})
         state,_=fit_ridge(train_groups,features); state["fold"]=fold; state["model_version"]=registration["experiment_name"]
@@ -59,7 +67,7 @@ def execute(a)->dict:
         by_id={x["canonical_observation_id"]:x["stable_group_identity"] for x in mappings if x["fold"]==fold and x["partition"]=="validation"}
         grouped={}
         for identifier in valid_ids:
-            value=validation_outcomes.get(identifier); identity=by_id[identifier]; grouped.setdefault(identity,[]).append(value)
+            value=rows[identifier].get("return_5d"); identity=by_id[identifier]; grouped.setdefault(identity,[]).append(value)
         selection=[x for x in all_selections if x["fold"]==fold]
         template={x["stable_group_identity"]:x for x in selection}
         for identity,values in grouped.items():
@@ -91,8 +99,12 @@ def main()->int:
     a=p.parse_args(); a.output_dir.mkdir(parents=True,exist_ok=True); code=0
     try: execute(a)
     except Exception as exc:
-        code=2; write(a.output_dir/"execution_provenance.json",{"execution_status":"FAILED","reason_code":getattr(exc,"code",type(exc).__name__),"details":getattr(exc,"details",{}),"holdout_content_access":False})
-        (a.output_dir/"SUMMARY.md").write_text(f"# Execution failed\n\n- Reason: `{getattr(exc,'code',type(exc).__name__)}`.\n- Details: `{getattr(exc,'details',{})}`.\n")
+        code=2; details=getattr(exc,"details",{}); write(a.output_dir/"execution_provenance.json",{"execution_status":"FAILED","reason_code":getattr(exc,"code",type(exc).__name__),"details":details,
+          "fits_started":details.get("fits_started",0),"fits_completed":details.get("fits_completed",0),"predictions_written":details.get("predictions_written",False),
+          "evaluation_executed":details.get("evaluation_executed",False),"holdout_content_access":False})
+        concise={k:details.get(k) for k in ("summary","affected_group_assignments","first_issue","fits_started","fits_completed","predictions_written","evaluation_executed","holdout_content_access") if k in details}
+        (a.output_dir/"SUMMARY.md").write_text(f"# Execution failed\n\n- Reason: `{getattr(exc,'code',type(exc).__name__)}`.\n- Actionable evidence: `{concise}`.\n- Full evidence: `execution_provenance.json` and `timing_compatibility_audit.json`.\n")
+        print(f"ACTIONABLE FAILURE: {getattr(exc,'code',type(exc).__name__)}: {concise}",file=sys.stderr)
     files=sorted(x for x in a.output_dir.iterdir() if x.is_file() and x.name!="SHA256SUMS")
     (a.output_dir/"SHA256SUMS").write_text("".join(f"{file_hash(x)}  {x.name}\n" for x in files))
     return code

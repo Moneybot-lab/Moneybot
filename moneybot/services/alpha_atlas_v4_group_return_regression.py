@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 import math
@@ -56,8 +56,53 @@ def validate_bindings(registration: Path, authorization: Path, inputs: dict[str,
 
 
 def _time(value: Any) -> datetime:
-    try: return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except Exception as exc: raise ContractError("INVALID_REQUIRED_TIMESTAMP", {"value": value}) from exc
+    try: parsed=datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception as exc: raise ContractError("INVALID_REQUIRED_TIMESTAMP", {"raw_value": value, "parsing":"datetime.fromisoformat_with_Z_as_UTC"}) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ContractError("TIMEZONE_AMBIGUOUS_TIMESTAMP", {"raw_value":value,"parsing":"explicit_UTC_offset_required"})
+    return parsed.astimezone(timezone.utc)
+
+
+def timestamp_evidence(value: Any) -> dict:
+    """Return strict parsing evidence; naive timestamps are never assigned a zone."""
+    try:
+        parsed=_time(value)
+        return {"raw":value,"normalized_utc":parsed.isoformat().replace("+00:00","Z"),"status":"VALID_AWARE_ISO8601",
+                "parsing":"datetime.fromisoformat; Z mapped to +00:00; astimezone(UTC)"}
+    except ContractError as exc:
+        return {"raw":value,"normalized_utc":None,"status":exc.code,"parsing":exc.details.get("parsing")}
+
+
+def audit_group_timing(assignments: list[tuple[int,str,list[dict]]]) -> dict:
+    """Scan every authorized partition using identity/timing metadata only."""
+    partitions=[]; all_issues=[]
+    for fold,partition,rows in assignments:
+        buckets=defaultdict(list)
+        for row in rows:
+            key=(str(row.get("event_date"))[:10],str(row.get("ticker") or row.get("symbol") or "").upper(),row.get("label_horizon_sessions"),
+                 timestamp_evidence(row.get("entry_at"))["normalized_utc"],timestamp_evidence(row.get("exit_at"))["normalized_utc"])
+            buckets[key].append(row)
+        issues=[]
+        for key,members in sorted(buckets.items(),key=lambda x:str(x[0])):
+            field_evidence={}
+            for field in ("decision_at","feature_cutoff_at","entry_at","exit_at"):
+                evidence=[]
+                for member in members:
+                    item=timestamp_evidence(member.get(field)); item["canonical_observation_id"]=str(member.get("canonical_observation_id")); evidence.append(item)
+                if len({x["normalized_utc"] for x in evidence}) != 1 or any(x["status"]!="VALID_AWARE_ISO8601" for x in evidence):
+                    field_evidence[field]=evidence
+            if field_evidence:
+                ids=sorted(str(x["canonical_observation_id"]) for x in members)
+                issue={"fold":fold,"partition":partition,"group_key":{"event_date":key[0],"ticker":key[1],"label_horizon_sessions":key[2],"entry_at_utc":key[3],"exit_at_utc":key[4]},
+                  "affected_ids":ids,"fields":field_evidence,"label_start_at":[timestamp_evidence(x.get("label_start_at"))|{"canonical_observation_id":str(x["canonical_observation_id"])} for x in members],
+                  "timestamp_sources":[{"canonical_observation_id":str(x["canonical_observation_id"]),"decision_at_source":"canonical decision_at",
+                    "feature_cutoff_at_source":"canonical feature_cutoff_at","originating_decision_at_min":x.get("originating_decision_at_min"),"originating_decision_at_max":x.get("originating_decision_at_max"),
+                    "feature_family_source_at":x.get("feature_family_source_at")} for x in members]}
+                issues.append(issue); all_issues.append(issue)
+        affected={i for issue in issues for i in issue["affected_ids"]}
+        partitions.append({"fold":fold,"partition":partition,"rows_scanned":len(rows),"groups_scanned":len(buckets),"affected_groups":len(issues),"affected_unique_rows":len(affected)})
+    return {"schema_version":"alpha-atlas-v4-group-return-regression-timing-audit.v1","scope":"authorized_development_metadata_only",
+      "outcomes_read":False,"holdout_content_access":False,"partitions":partitions,"affected_group_assignments":len(all_issues),"issues":all_issues}
 
 
 def _finite(value: Any) -> float | None:
@@ -79,16 +124,24 @@ def construct_groups(rows: Iterable[dict], features: list[str], *, outcomes_allo
         if not identifier or identifier in seen: raise ContractError("MISSING_OR_DUPLICATE_CANONICAL_ID", {"id": identifier})
         seen.add(identifier)
         ticker = str(row.get("ticker") or row.get("symbol") or "").upper()
-        key = (str(row.get("event_date"))[:10], ticker, row.get("label_horizon_sessions"), str(row.get("entry_at")), str(row.get("exit_at")))
+        entry_evidence=timestamp_evidence(row.get("entry_at")); exit_evidence=timestamp_evidence(row.get("exit_at"))
+        if entry_evidence["status"]!="VALID_AWARE_ISO8601" or exit_evidence["status"]!="VALID_AWARE_ISO8601": raise ContractError("INVALID_GROUP_KEY_TIMESTAMP",{"id":identifier,"entry_at":entry_evidence,"exit_at":exit_evidence})
+        key = (str(row.get("event_date"))[:10], ticker, row.get("label_horizon_sessions"), entry_evidence["normalized_utc"], exit_evidence["normalized_utc"])
         if not ticker or key[2] != 5: raise ContractError("INVALID_GROUP_KEY", {"id": identifier, "key": key})
         buckets[key].append(row)
     groups=[]
     for key, members in sorted(buckets.items()):
         ids=sorted(str(x["canonical_observation_id"]) for x in members)
-        for field in ("event_date", "decision_at", "feature_cutoff_at", "entry_at", "exit_at", "label_horizon_sessions"):
+        for field in ("event_date", "label_horizon_sessions"):
             values={str(x.get(field)) for x in members}
             if len(values) != 1 or "None" in values: raise ContractError("INCOMPATIBLE_GROUP_TIMING", {"ids": ids, "field": field})
-        cutoff=_time(members[0]["feature_cutoff_at"]); decision=_time(members[0]["decision_at"]); entry=_time(key[3]); exit_at=_time(key[4])
+        normalized={}
+        for field in ("decision_at","feature_cutoff_at","entry_at","exit_at"):
+            evidence=[timestamp_evidence(x.get(field))|{"canonical_observation_id":str(x["canonical_observation_id"])} for x in members]
+            if any(x["status"]!="VALID_AWARE_ISO8601" for x in evidence) or len({x["normalized_utc"] for x in evidence})!=1:
+                raise ContractError("INCOMPATIBLE_GROUP_TIMING",{"ids":ids,"field":field,"group_key":[*key],"timestamp_values":evidence})
+            normalized[field]=evidence[0]["normalized_utc"]
+        cutoff=_time(normalized["feature_cutoff_at"]); decision=_time(normalized["decision_at"]); entry=_time(key[3]); exit_at=_time(key[4])
         if not cutoff <= decision < entry < exit_at: raise ContractError("TEMPORAL_ORDER_VIOLATION", {"ids": ids})
         for member in members:
             for source in (member.get("feature_family_source_at") or {}).values():
@@ -103,7 +156,7 @@ def construct_groups(rows: Iterable[dict], features: list[str], *, outcomes_allo
             if any(x is None for x in returns): raise ContractError("MISSING_GROUP_OUTCOME", {"ids": ids})
             target=float(sum(returns)/len(returns))
         groups.append({"stable_group_identity":stable_identity(key,ids),"event_date":key[0],"ticker":key[1],"label_horizon_sessions":5,
-          "decision_at":str(members[0]["decision_at"]),"feature_cutoff_at":str(members[0]["feature_cutoff_at"]),"entry_at":key[3],"exit_at":key[4],
+          "decision_at":normalized["decision_at"],"feature_cutoff_at":normalized["feature_cutoff_at"],"entry_at":key[3],"exit_at":key[4],
           "source_canonical_observation_ids":ids,"member_count":len(ids),"features":values,"feature_finite_counts":finite_counts,
           "feature_missing_counts":missing_counts,"training_weight":1.0,"target":target})
     return groups

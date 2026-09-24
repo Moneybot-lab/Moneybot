@@ -4,8 +4,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from moneybot.services.alpha_atlas_v4_group_return_regression import (ContractError, TARGET, check_partitions, construct_groups,
-  evaluate, fit_ridge, predict, select)
+from moneybot.services.alpha_atlas_v4_group_return_regression import (ContractError, TARGET, audit_group_timing, check_partitions,
+  construct_groups, evaluate, fit_ridge, predict, select, timestamp_evidence)
 
 FEATURES=["a","b","c"]
 def row(identifier="x",ticker="AAA",value=1.0,outcome=.1,decision="2026-01-02T14:00:00+00:00",entry="2026-01-02T14:01:00+00:00",exit_at="2026-01-09T21:00:00+00:00"):
@@ -55,6 +55,34 @@ def test_malformed_groups_duplicate_assignments_and_temporal_crossings_fail():
     late=construct_groups([row("c",ticker="CCC",decision="2026-01-03T14:00:00+00:00",entry="2026-01-03T14:01:00+00:00",exit_at="2026-01-10T21:00:00+00:00")],FEATURES,outcomes_allowed=True)
     early=construct_groups([row("d",ticker="DDD",decision="2026-01-04T14:00:00+00:00",entry="2026-01-04T14:01:00+00:00",exit_at="2026-01-11T21:00:00+00:00")],FEATURES,outcomes_allowed=False)
     with pytest.raises(ContractError,match="PURGE_OR_EMBARGO_VIOLATION"): check_partitions(late,early)
+
+def test_equivalent_timezone_representations_are_same_instant_but_real_difference_blocks():
+    first=row("a"); second=row("b")
+    second.update(decision_at="2026-01-02T09:00:00-05:00",feature_cutoff_at="2026-01-02T09:00:00-05:00",
+                  entry_at="2026-01-02T09:01:00-05:00",exit_at="2026-01-09T16:00:00-05:00")
+    groups=construct_groups([first,second],FEATURES,outcomes_allowed=True)
+    assert len(groups)==1 and groups[0]["decision_at"]=="2026-01-02T14:00:00Z"
+    second["decision_at"]="2026-01-02T09:00:01-05:00"; second["feature_cutoff_at"]=second["decision_at"]
+    with pytest.raises(ContractError,match="INCOMPATIBLE_GROUP_TIMING") as caught: construct_groups([first,second],FEATURES,outcomes_allowed=True)
+    assert caught.value.details["timestamp_values"][1]["normalized_utc"]=="2026-01-02T14:00:01Z"
+
+@pytest.mark.parametrize("value,status",[(None,"INVALID_REQUIRED_TIMESTAMP"),("2026-01-02T14:00:00","TIMEZONE_AMBIGUOUS_TIMESTAMP")])
+def test_missing_and_timezone_ambiguous_timestamps_fail_closed(value,status):
+    evidence=timestamp_evidence(value); assert evidence["status"]==status and evidence["normalized_utc"] is None
+    item=row(); item["decision_at"]=value
+    with pytest.raises(ContractError): construct_groups([item],FEATURES,outcomes_allowed=True)
+
+def test_temporal_order_violation_is_not_normalized_away():
+    item=row(decision="2026-01-02T15:00:00+00:00",entry="2026-01-02T14:01:00+00:00")
+    item["feature_cutoff_at"]="2026-01-02T14:00:00+00:00"
+    with pytest.raises(ContractError,match="TEMPORAL_ORDER_VIOLATION"): construct_groups([item],FEATURES,outcomes_allowed=True)
+
+def test_complete_timing_audit_collects_all_issues_without_outcomes():
+    okay=row("a"); bad=row("b"); bad["decision_at"]="2026-01-02T14:00:01+00:00"; bad["feature_cutoff_at"]=bad["decision_at"]
+    report=audit_group_timing([(1,"train",[okay,bad]),(1,"validation",[okay])])
+    assert report["affected_group_assignments"]==1 and report["outcomes_read"] is False
+    assert report["partitions"][0]["affected_unique_rows"]==2 and report["partitions"][1]["affected_unique_rows"]==0
+    assert report["issues"][0]["fold"]==1 and report["issues"][0]["partition"]=="train"
 
 def test_ties_and_input_order_are_deterministic_and_missing_outcomes_do_not_reselect():
     base={"event_date":"2026-01-02","label_horizon_sessions":5,"entry_at":"e","exit_at":"x","prediction":.1,"member_count":1}
