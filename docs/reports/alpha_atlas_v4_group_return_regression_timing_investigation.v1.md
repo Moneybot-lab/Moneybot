@@ -12,6 +12,35 @@ The failed attempt started and completed zero fits, wrote no predictions, ran
 no evaluation, and accessed no holdout content. Historical run `35923707545-1`
 remains `COMPLETE — UNFAVORABLE FINDINGS`.
 
+## Evidence packaging and retrieval
+
+The complete, row-level `timing_compatibility_audit.json`, resolved-input
+metadata, execution provenance, summary, and checksums were deliberately kept
+out of Git and uploaded as GitHub Actions artifact
+[`v4-group-return-regression-36022025311-1`](https://github.com/Moneybot-lab/Moneybot/actions/runs/36022025311/artifacts/10816618256)
+by [run `36022025311`, attempt 1](https://github.com/Moneybot-lab/Moneybot/actions/runs/36022025311/attempts/1).
+The artifact service recorded bundle SHA-256
+`19b68b9eed3962dccbc5dde119f2e792f017f9a1c94f4ba5d8c54fc4574f5cc4`
+and artifact ID `10816618256`.
+
+The bundle's byte size was not captured in the committed run record. This
+recovery environment has neither a GitHub remote nor an authenticated `gh`
+session, so it cannot query the private artifact API to recover that value or
+currently verify retention. The compact JSON records the size as `null` rather
+than inventing it. The artifact was durable Actions storage when uploaded, but
+its current retrievability must therefore be verified by an authorized
+reviewer. No claim is made that an ephemeral local copy preserves the evidence.
+
+The reviewable Git delta against actual base `196c9b8` contains only the
+focused implementation/tests, checklist, compact reports, and checksum file.
+The largest resulting files are the pre-existing checklist (95,541 bytes),
+implementation (16,853 bytes), runner (11,048 bytes), and test (8,538 bytes);
+the compact JSON and Markdown reports are 5,368 and 5,035 bytes respectively
+after this retrieval annotation. Generated row/group mappings and downloaded
+source artifacts are not Git additions. Those payloads—not the focused source
+change—were the material that exceeded diff extraction limits when included
+inline.
+
 ## Focal group
 
 The three reported IDs are training members in both folds 1 and 2. Their group

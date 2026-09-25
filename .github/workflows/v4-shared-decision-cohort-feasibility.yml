@@ -1,0 +1,74 @@
+name: V4 Shared Decision Cohort Feasibility
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  metadata-only-feasibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OUTPUT_DIR: artifacts/v4-shared-decision-cohort-feasibility
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - name: Install established dependencies
+        run: pip install -r requirements.txt
+      - name: Retrieve exact recorded source evidence
+        id: retrieve
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR/source" "$OUTPUT_DIR/reports"
+          gh api "repos/Moneybot-lab/Moneybot/actions/runs/34689216730" > "$OUTPUT_DIR/source/run.json" || { echo AUTHENTICATION_OR_SOURCE_RUN_RETRIEVAL_FAILURE > "$OUTPUT_DIR/source/retrieval-error.txt"; exit 1; }
+          gh api "repos/Moneybot-lab/Moneybot/actions/runs/34689216730/artifacts?per_page=100" > "$OUTPUT_DIR/source/artifacts.json" || { echo AUTHENTICATION_OR_ARTIFACT_METADATA_RETRIEVAL_FAILURE > "$OUTPUT_DIR/source/retrieval-error.txt"; exit 1; }
+          gh api "repos/Moneybot-lab/Moneybot/actions/artifacts/10296724235/zip" > "$OUTPUT_DIR/source/track-b-offline-output.zip" || { echo SOURCE_ARTIFACT_DOWNLOAD_FAILURE > "$OUTPUT_DIR/source/retrieval-error.txt"; exit 1; }
+      - name: Execute existing metadata-only analyzer
+        if: steps.retrieve.outcome == 'success'
+        run: |
+          set -euo pipefail
+          ulimit -v 4194304
+          export OPENBLAS_NUM_THREADS=2 OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 NUMEXPR_NUM_THREADS=2
+          python -m scripts.run_alpha_atlas_v4_shared_decision_feasibility \
+            --run-metadata "$OUTPUT_DIR/source/run.json" \
+            --artifact-metadata "$OUTPUT_DIR/source/artifacts.json" \
+            --archive "$OUTPUT_DIR/source/track-b-offline-output.zip" \
+            --extract-dir "$RUNNER_TEMP/v4-shared-decision-source" \
+            --output-dir "$OUTPUT_DIR/reports"
+      - name: Preserve specific retrieval failure
+        if: failure() && steps.retrieve.outcome == 'failure'
+        run: |
+          set -euo pipefail
+          reason=$(cat "$OUTPUT_DIR/source/retrieval-error.txt" 2>/dev/null || printf UNKNOWN_RETRIEVAL_FAILURE)
+          printf '{"execution_status":"FAILED","feasibility_status":"NOT_EVALUATED","reason_code":"%s","holdout_content_access":false,"training":false,"predictions":false,"performance":false,"provider_queries":false}\n' "$reason" > "$OUTPUT_DIR/reports/input_verification_and_provenance.json"
+          cp "$OUTPUT_DIR/reports/input_verification_and_provenance.json" "$OUTPUT_DIR/reports/shared_decision_cohort_feasibility.json"
+          printf '# V4 shared-decision cohort feasibility\n\n- Execution: `FAILED`.\n- Feasibility: `NOT_EVALUATED`.\n- Reason: `%s`.\n' "$reason" > "$OUTPUT_DIR/reports/shared_decision_cohort_feasibility.md"
+      - name: Finalize evidence manifest
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR/reports"
+          (cd "$OUTPUT_DIR/reports" && rm -f SHA256SUMS && find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort | xargs -r sha256sum > SHA256SUMS)
+      - name: Publish readable summary
+        if: always()
+        run: |
+          if test -s "$OUTPUT_DIR/reports/shared_decision_cohort_feasibility.md"; then
+            cat "$OUTPUT_DIR/reports/shared_decision_cohort_feasibility.md" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '# V4 shared-decision cohort feasibility\n\n- Execution: `FAILED`.\n- Reason: `ANALYZER_TERMINATED_WITHOUT_SUMMARY`.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Remove downloaded source from upload staging
+        if: always()
+        run: rm -rf "$OUTPUT_DIR/source"
+      - name: Upload available evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v4-shared-decision-cohort-feasibility-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.OUTPUT_DIR }}/reports/**
+          if-no-files-found: error

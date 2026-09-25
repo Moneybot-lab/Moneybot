@@ -1,0 +1,9 @@
+{
+  "schema_version": "alpha-atlas-v4-shared-decision-feasibility-provenance.v1",
+  "registration_path": "docs/reports/alpha_atlas_v4_group_return_regression_registration.v1.json",
+  "registration_verified_sha256": "c3f58f47354f07a5c0aa536344b97fb542fdde0bee1651f86852d3dd69a6469a",
+  "analysis_input_bytes_available": false,
+  "remote_access": "UNAVAILABLE_UNAUTHENTICATED",
+  "generated_full_mapping": false,
+  "local_ephemeral_evidence_claimed_durable": false
+}
