@@ -1324,3 +1324,50 @@ immutable provenance. Performance comparison execution remains pending review.
 - [ ] **Broader gates remain open.** Applicable development costs, net-return
   validation, terminal valuation, complete historical coverage, and promotion
   readiness are unchanged and unresolved.
+
+### Shared-decision feasibility follow-up
+
+- [x] **Oversized-diff recovery is complete.** Recovery commit `5bebff8` keeps
+  generated row mappings and downloaded artifacts outside the reviewable diff.
+- [x] **Original timing investigation remains complete.** Registration v1 remains
+  `NOT_EVALUABLE — INCOMPATIBLE_SAVED_TIMING_EVIDENCE`: the blocked regression
+  produced zero fits, zero predictions, and zero performance evaluations, so it
+  is not an unfavorable model result and the timing investigation was not reopened.
+- [x] **Saved-input shared-decision feasibility is complete as
+  `NOT_SUPPORTED_BY_SAVED_EVIDENCE`.** Run `36065114141-1` retained all three
+  folds and classified all 6,059 fold/partition opportunity assignments as
+  `UNKNOWN_AVAILABILITY_OR_FRESHNESS` at the unchanged proposed prior-XNYS-
+  session-close boundary. Zero verified qualifying assignments does not assert
+  that snapshots, securities, or trading opportunities were absent.
+- [ ] **Revised registration and training are `NOT_AUTHORIZED / NOT_EXECUTED`.**
+  The exact-timestamp amendment remains `NOT_APPROVED`; no performance work,
+  holdout access, provider query, or production change occurred.
+- [x] **Shared-decision hosted workflow and saved-input review are complete.** The
+  manual **V4 Shared Decision Cohort Feasibility** workflow pins run
+  `34689216730-1`, commit `1f8f46d`, artifact ID `10296724235`, archive and
+  exact-file hashes and ran only the metadata analyzer in `36065114141-1`.
+  This closure neither enables shared-boundary training nor changes the prior
+  `35923707545-1` `COMPLETE — UNFAVORABLE FINDINGS` scoring result. Historical
+  coverage, terminal valuation, net-return validation, and promotion gates remain
+  unchanged.
+
+### Prospective shared-decision snapshot capture
+
+- [x] **Prospective capture contract is `PREPARED_FOR_REVIEW`.** Contract v1
+  freezes a new 07:45–08:30 America/New_York collection window, 08:40 durable
+  snapshot deadline, 08:45 decision boundary, and same-session official-open
+  intended entry. It is prospective only and does not alter saved evidence.
+- [ ] **Durable-storage and pilot-universe prerequisites remain open.** Before
+  implementation review, approve one static, outcome-independent manifest of at
+  most 50 already-authorized tickers and verify the configured persistent mount's
+  quota, access control, read-back, and 180-day retention. Ephemeral `data/` and
+  an artifact URL are insufficient.
+- [ ] **Implementation and synthetic testing are `NOT_AUTHORIZED / NOT_EXECUTED`.**
+  The next authorization may implement only the label-free capture adapter,
+  immutable schema/persistence, reconciliation, budget stops, and focused tests;
+  it must still exclude collection and provider calls.
+- [ ] **Prospective collection, outcomes, training, and scoring are
+  `NOT_AUTHORIZED / NOT_EXECUTED`.** The finite pilot is capped at 10 sessions,
+  50 tickers/session, 500 assignments, 55 runtime minutes/session, 250 MiB, one
+  concurrent run, and zero incremental provider requests, but may not start under
+  this preparation task.

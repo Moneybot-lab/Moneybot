@@ -2,8 +2,14 @@
   "affected_run": {
     "artifact_digest": "sha256:19b68b9eed3962dccbc5dde119f2e792f017f9a1c94f4ba5d8c54fc4574f5cc4",
     "artifact_id": 10816618256,
+    "artifact_name": "v4-group-return-regression-36022025311-1",
+    "artifact_size_bytes": null,
+    "artifact_size_status": "NOT_RECORDED_AND_CURRENT_ENVIRONMENT_IS_NOT_AUTHENTICATED_TO_QUERY_PRIVATE_REPOSITORY",
+    "artifact_url": "https://github.com/Moneybot-lab/Moneybot/actions/runs/36022025311/artifacts/10816618256",
     "head_sha": "196c9b80c356026ae71a35e5a2e2f9a668ac82bf",
-    "run": "36022025311-1"
+    "retention_status": "DURABLE_ACTIONS_ARTIFACT_AT_UPLOAD; CURRENT_RETRIEVABILITY_NOT_VERIFIED",
+    "run": "36022025311-1",
+    "run_url": "https://github.com/Moneybot-lab/Moneybot/actions/runs/36022025311/attempts/1"
   },
   "conclusion": "GENUINELY_DIFFERENT_DECISION_AND_FEATURE_CUTOFF_INSTANTS_WITHIN_REGISTERED_GROUPS_CONTRACT_AMENDMENT_REQUIRED",
   "execution_state": {
