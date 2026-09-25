@@ -1329,19 +1329,24 @@ immutable provenance. Performance comparison execution remains pending review.
 
 - [x] **Oversized-diff recovery is complete.** Recovery commit `5bebff8` keeps
   generated row mappings and downloaded artifacts outside the reviewable diff.
-- [x] **Original timing investigation is complete.** Registration v1 remains
-  `NOT_EVALUABLE — INCOMPATIBLE_GROUP_TIMING; ZERO_FITS`; it was not reopened.
-- [ ] **Shared-decision feasibility is `INCOMPLETE_EVIDENCE_UNAVAILABLE`.** A
-  deterministic prior-XNYS-session-close boundary and fail-closed metadata-only
-  analyzer are documented, but exact registered canonical rows and split-plan
-  bytes were not locally available and private Actions access was unauthenticated.
-  Coverage, cohort, and split counts remain null rather than invented.
+- [x] **Original timing investigation remains complete.** Registration v1 remains
+  `NOT_EVALUABLE — INCOMPATIBLE_SAVED_TIMING_EVIDENCE`: the blocked regression
+  produced zero fits, zero predictions, and zero performance evaluations, so it
+  is not an unfavorable model result and the timing investigation was not reopened.
+- [x] **Saved-input shared-decision feasibility is complete as
+  `NOT_SUPPORTED_BY_SAVED_EVIDENCE`.** Run `36065114141-1` retained all three
+  folds and classified all 6,059 fold/partition opportunity assignments as
+  `UNKNOWN_AVAILABILITY_OR_FRESHNESS` at the unchanged proposed prior-XNYS-
+  session-close boundary. Zero verified qualifying assignments does not assert
+  that snapshots, securities, or trading opportunities were absent.
 - [ ] **Revised registration and training are `NOT_AUTHORIZED / NOT_EXECUTED`.**
   The exact-timestamp amendment remains `NOT_APPROVED`; no performance work,
   holdout access, provider query, or production change occurred.
-- [x] **Shared-decision hosted workflow is implemented, not yet executed.** The
+- [x] **Shared-decision hosted workflow and saved-input review are complete.** The
   manual **V4 Shared Decision Cohort Feasibility** workflow pins run
   `34689216730-1`, commit `1f8f46d`, artifact ID `10296724235`, archive and
-  exact-file hashes, runs only the metadata analyzer, and preserves specific
-  failures plus available evidence. Hosted feasibility remains incomplete until
-  a post-merge manual run finishes and its output artifact is verified.
+  exact-file hashes and ran only the metadata analyzer in `36065114141-1`.
+  This closure neither enables shared-boundary training nor changes the prior
+  `35923707545-1` `COMPLETE — UNFAVORABLE FINDINGS` scoring result. Historical
+  coverage, terminal valuation, net-return validation, and promotion gates remain
+  unchanged.

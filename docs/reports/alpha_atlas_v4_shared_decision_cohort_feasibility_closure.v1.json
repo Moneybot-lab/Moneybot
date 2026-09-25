@@ -1,0 +1,73 @@
+{
+  "schema_version": "alpha-atlas-v4-shared-decision-cohort-feasibility-closure.v1",
+  "status": "COMPLETE_NOT_SUPPORTED_BY_SAVED_EVIDENCE",
+  "source_review": {
+    "run": "36065114141-1",
+    "run_url": "https://github.com/Moneybot-lab/Moneybot/actions/runs/36065114141/attempts/1",
+    "output_artifact_name": "v4-shared-decision-cohort-feasibility-36065114141-1",
+    "artifact_id": null,
+    "artifact_digest": null,
+    "current_retention_or_retrievability": "UNKNOWN_NOT_CHECKED",
+    "hosted_run_reported_source_retrieval": "SUCCESSFUL_DURING_RUN",
+    "closure_downloaded_hosted_artifact": false
+  },
+  "feasibility": {
+    "analysis_execution": "COMPLETE",
+    "classification": "NOT_SUPPORTED_BY_SAVED_EVIDENCE",
+    "boundary": {
+      "status": "PROPOSED_OPERATIONAL_CONVENTION_NOT_VERIFIED_HISTORICAL_BEHAVIOR",
+      "rule": "official close of the XNYS session immediately preceding entry_at, calculated with XNYS-rule-calendar.v1 and normalized to UTC",
+      "changed_for_closure": false
+    },
+    "folds_represented": [1, 2, 3],
+    "fold_partition_opportunity_assignments": 6059,
+    "dispositions": {
+      "UNKNOWN_AVAILABILITY_OR_FRESHNESS": 6059,
+      "verified_qualifying": 0
+    },
+    "reconciliation": "ALL_6059_ASSIGNMENTS_ACCOUNTED_FOR_AS_UNKNOWN",
+    "interpretation": "Zero verified qualifying opportunities means only that saved evidence did not establish snapshot availability and freshness at the proposed boundary; it does not mean snapshots, securities, or trading opportunities did not exist.",
+    "source_bar_timestamps_treated_as_snapshot_availability": false
+  },
+  "registered_group_return_regression": {
+    "status": "NOT_EVALUABLE_INCOMPATIBLE_SAVED_TIMING_EVIDENCE",
+    "fits": 0,
+    "predictions": 0,
+    "performance_evaluations": 0,
+    "unfavorable_model_result": false
+  },
+  "preserved_statuses": {
+    "original_timing_investigation": "COMPLETE",
+    "prior_scoring_run_35923707545_1": "COMPLETE_UNFAVORABLE_FINDINGS_UNCHANGED",
+    "shared_boundary_training": "NOT_AUTHORIZED_NOT_EXECUTED",
+    "exact_timestamp_amendment": "NOT_APPROVED",
+    "historical_coverage_terminal_valuation_net_return_validation_promotion_gates": "UNCHANGED_OPEN"
+  },
+  "evidence_verification": {
+    "hosted_output_files_available_in_this_checkout": false,
+    "hosted_report_hashes_newly_verified": false,
+    "hosted_SHA256SUMS_newly_verified": false,
+    "reason": "Run 36065114141-1 output bytes are not present locally and GitHub authentication is unavailable; recorded URLs are not treated as proof of current retention.",
+    "existing_committed_pre_run_report_bytes_newly_verified": true,
+    "existing_committed_manifest": "alpha_atlas_v4_shared_decision_cohort_feasibility.SHA256SUMS",
+    "verified_existing_files": {
+      "alpha_atlas_v4_shared_decision_cohort_feasibility.json": "2c808015fd89997792b682a38135b7dedadb70a4459bd9c9e8689d3d5921d94e",
+      "alpha_atlas_v4_shared_decision_cohort_feasibility.md": "4edfd9eaa6ca7c02c9091e9ca588c5831ad64b440a8131b4d92255743deae408",
+      "alpha_atlas_v4_shared_decision_cohort_feasibility.provenance.json": "31b072f8068d83ae82cb22054af3edd049025c199cb2c1c9b580e79ed4fd846b"
+    },
+    "distinction": "The newly verified bytes are the committed pre-hosted-run feasibility records, not the unavailable hosted run outputs or large mappings. The closure relies on the saved run's recorded findings for the 6059 count and final classification."
+  },
+  "closure_scope": {
+    "investigation_rerun": false,
+    "analyzer_rerun": false,
+    "experiment_rerun": false,
+    "training": false,
+    "scoring": false,
+    "tuning": false,
+    "holdout_content_access": false,
+    "provider_requests": false,
+    "production_changes": false,
+    "prospective_collection": false,
+    "replacement_experiment": false
+  }
+}
