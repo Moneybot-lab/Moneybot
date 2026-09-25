@@ -1,0 +1,115 @@
+{
+  "schema_version": "alpha-atlas-v4-prospective-snapshot-capture-contract.v1",
+  "status": "PREPARED_FOR_REVIEW",
+  "authorization": {
+    "implementation": false,
+    "collection": false,
+    "training": false,
+    "scoring": false,
+    "provider_requests": false,
+    "production_changes": false
+  },
+  "preserved_results": {
+    "shared_decision_run_36065114141_1": "COMPLETE_NOT_SUPPORTED_BY_SAVED_EVIDENCE",
+    "registered_group_return_regression": "NOT_EVALUABLE_INCOMPATIBLE_SAVED_TIMING_EVIDENCE_ZERO_FITS",
+    "prior_scoring_run_35923707545_1": "COMPLETE_UNFAVORABLE_FINDINGS"
+  },
+  "schedule": {
+    "status": "NEW_PROSPECTIVE_CONVENTION_NOT_HISTORICAL_RECONSTRUCTION",
+    "calendar": "XNYS-rule-calendar.v1",
+    "timezone": "America/New_York",
+    "eligible_days": "official XNYS sessions only",
+    "universe_freeze_at_local": "07:45:00",
+    "collection_window_local": "[07:45:00,08:30:00]",
+    "snapshot_deadline_local": "08:40:00",
+    "decision_boundary_local": "08:45:00",
+    "intended_entry": "same eligible session official regular open at 09:30 America/New_York",
+    "five_session_exit": "official close of entry session plus four subsequent eligible XNYS sessions",
+    "utc_rule": "derive UTC instants from the named IANA timezone and calendar for each session; never hard-code a fixed UTC offset",
+    "scheduler_rule": "a future scheduler may use both 11:45 and 12:45 UTC cron candidates but must execute only when local time is 07:45 on an eligible XNYS session and when the cohort/session ID has not run",
+    "late_rule": "completion or durable readiness after 08:40 is LATE; after 08:45 is also after-boundary; neither may be backdated",
+    "calendar_exceptions": "no cohort on holidays or unscheduled closures; early-close entry sessions retain the official open and official early exit close when they are the fifth session",
+    "clock_rule": "record wall-clock UTC and monotonic durations; if clock synchronization/uncertainty cannot establish ordering at deadline equality, disposition is UNKNOWN_CLOCK"
+  },
+  "universe": {
+    "policy": "one reviewed, versioned pilot manifest frozen before the first pilot session; at most 50 lexically ordered uppercase tickers already authorized by the existing subscription; unchanged for all 10 pilot sessions",
+    "manifest_required_fields": ["universe_manifest_id", "policy_version", "created_at", "effective_sessions", "ordered_members", "typed_identifier_or_null", "content_sha256", "code_commit", "configuration_sha256"],
+    "outcome_independent": true,
+    "expected_member_rule": "persist every frozen member before assembly starts; delisted, halted, missing, and failed members remain in reconciliation",
+    "prohibitions": ["no retrospective successful-capture universe", "no surviving-ticker filter", "no score or outcome input", "no silent member deletion"]
+  },
+  "snapshot": {
+    "schema": "alpha-atlas-v4-prospective-feature-snapshot.v1",
+    "feature_contract": "alpha-atlas-v4-features.v2",
+    "content_excludes": ["outcomes", "future prices", "predictions", "scores", "ranks", "selections"],
+    "identity": "snapshot_id is sha256 of canonical JSON containing contract version, cohort_session_id, ticker, typed identifier, feature vector hash, provenance hash, and attempt ID",
+    "feature_vector_hash": "sha256 of canonical, ordered feature-name/type/value/null representation",
+    "required_timestamps": {
+      "source_event_at": "when the source event occurred; not receipt or availability proof",
+      "source_received_at": "UTC instant this collector actually received or read the source, with evidence kind and source object ID",
+      "feature_cutoff_at": "maximum permitted information instant for this snapshot; fixed to snapshot_deadline_at",
+      "assembly_started_at": "UTC wall-clock immediately before feature assembly begins",
+      "assembly_completed_at": "UTC wall-clock after complete vector and provenance validation",
+      "persistence_completed_at": "UTC wall-clock after file flush, fsync, atomic rename, and directory fsync succeed",
+      "ready_for_use_at": "persistence_completed_at for local durable storage; later verified replica completion if the contract requires that replica",
+      "scheduled_decision_at": "fixed 08:45 America/New_York boundary converted to UTC"
+    },
+    "hash_limitation": "hashes prove byte/content identity only, not that a timestamp was historically true",
+    "provenance": "each feature family records definition/version, source object/content hash, event time, receipt evidence, availability status, freshness sessions, missingness, and error codes"
+  },
+  "selection_and_dispositions": {
+    "selection": "latest COMPLETE and durably ready snapshot with ready_for_use_at <= scheduled_decision_at and feature_cutoff_at <= snapshot_deadline_at; ties choose lexically greatest snapshot_id",
+    "duplicates": "same content and identity is DUPLICATE_RETRY and retained as an attempt reference; never overwrites the accepted snapshot",
+    "corrections": "append a new correction snapshot referencing supersedes_snapshot_id; it is eligible only for a later cohort unless independently ready by the original fixed boundary",
+    "different_information_boundaries": "never average or merge",
+    "final_dispositions": ["ELIGIBLE", "MISSING", "LATE", "STALE", "INVALID", "UNKNOWN"],
+    "reconciliation": "exactly one final disposition per expected universe member; overlapping diagnostic reason codes are retained separately; counts sum to manifest member count",
+    "freshness": {
+      "existing_supported_default": "maximum 3 XNYS sessions for required completed-daily families, from DEFAULT_MAX_STALENESS_SESSIONS",
+      "new_limits": "none; any family without a supported existing limit is UNKNOWN_FRESHNESS and not eligible"
+    },
+    "cohort_reporting": ["zero eligible", "one", "two through four", "exactly five", "more than five"],
+    "small_cohort_warning": "min(5, eligible) equals the full eligible baseline when five or fewer qualify"
+  },
+  "storage": {
+    "proposed_root": "$MONEYBOT_PERSISTENT_DATA_DIR/alpha_atlas_v4/prospective_snapshots/v1/<cohort_session_id>",
+    "durability_gate": "is_durable_runtime_configured() must be true and an operator must verify mounted-storage lifecycle, quota, backup/retrieval behavior, and access policy before pilot authorization; fallback data/ is ephemeral and blocks capture",
+    "write_protocol": "write attempt files and manifest to same-filesystem temporary paths; flush and fsync each; atomically os.replace; fsync directory; then append immutable completion record",
+    "session_files": ["universe_manifest.json", "snapshots/<ticker>/<snapshot_id>.json", "attempts.jsonl", "dispositions.jsonl", "session_manifest.json", "SHA256SUMS"],
+    "manifest": "records ordered relative paths, bytes, SHA-256, schema/contract/code/config hashes, expected/reconciled counts, start/completion/ready times, and storage verification",
+    "secrets": "never persist API keys, auth headers, user tokens, private request bodies, or credentials",
+    "access": "existing service identity writes; pilot reviewer receives read-only retrieval; no public artifact",
+    "retention": "proposed minimum 180 days after the tenth pilot session, subject to the durability prerequisite; GitHub artifact URLs are optional transport copies and never durability proof",
+    "retrieval_verification": "within 24 hours of each session, read back manifest and all listed bytes from the durable root and verify hashes; failure is RETRIEVAL_UNVERIFIED and stops subsequent sessions",
+    "failure_reporting": "persist a compact failure manifest even when zero snapshots complete; never claim completeness after partial write"
+  },
+  "pilot_budget": {
+    "eligible_sessions": 10,
+    "expected_tickers_per_session_max": 50,
+    "opportunity_assignments_max": 500,
+    "collection_window_minutes": 45,
+    "hard_runtime_minutes_per_session": 55,
+    "total_uncompressed_storage_mib_max": 250,
+    "incremental_provider_requests": 0,
+    "provider_rule": "consume only data already made available by the existing authorized collection/subscription path; a missing cache/object is recorded, not fetched",
+    "concurrency": 1,
+    "stop_conditions": [
+      "durable runtime prerequisite is not verified",
+      "universe manifest is absent, changes, exceeds 50 members, or fails hash validation",
+      "a run would require an incremental provider request",
+      "runtime, storage, or assignment cap is reached",
+      "atomic persistence or 24-hour retrieval verification fails",
+      "calendar or clock ordering is unknown",
+      "secrets or forbidden outcome/prediction fields are detected"
+    ]
+  },
+  "outcome_attachment": {
+    "status": "SEPARATE_FUTURE_AUTHORIZATION_REQUIRED",
+    "join_key": "immutable snapshot_id plus cohort_session_id and typed security identity",
+    "entry": "same-session official regular open strictly after scheduled_decision_at",
+    "exit": "official close of the fifth eligible XNYS session, counting entry as session one",
+    "immutability": "later outcomes never change universe membership, snapshot bytes, timestamps, disposition, or eligibility",
+    "explicit_failures": ["missing entry or exit price", "corporate action uncertainty", "identity uncertainty", "halt or delisting", "terminal event", "unverified price availability"],
+    "prohibitions": ["no replacement price", "no inferred proceeds", "no forward fill", "no dropping failed members", "no outcome retrieval under this contract"]
+  }
+}

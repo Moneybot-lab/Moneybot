@@ -1350,3 +1350,24 @@ immutable provenance. Performance comparison execution remains pending review.
   `35923707545-1` `COMPLETE — UNFAVORABLE FINDINGS` scoring result. Historical
   coverage, terminal valuation, net-return validation, and promotion gates remain
   unchanged.
+
+### Prospective shared-decision snapshot capture
+
+- [x] **Prospective capture contract is `PREPARED_FOR_REVIEW`.** Contract v1
+  freezes a new 07:45–08:30 America/New_York collection window, 08:40 durable
+  snapshot deadline, 08:45 decision boundary, and same-session official-open
+  intended entry. It is prospective only and does not alter saved evidence.
+- [ ] **Durable-storage and pilot-universe prerequisites remain open.** Before
+  implementation review, approve one static, outcome-independent manifest of at
+  most 50 already-authorized tickers and verify the configured persistent mount's
+  quota, access control, read-back, and 180-day retention. Ephemeral `data/` and
+  an artifact URL are insufficient.
+- [ ] **Implementation and synthetic testing are `NOT_AUTHORIZED / NOT_EXECUTED`.**
+  The next authorization may implement only the label-free capture adapter,
+  immutable schema/persistence, reconciliation, budget stops, and focused tests;
+  it must still exclude collection and provider calls.
+- [ ] **Prospective collection, outcomes, training, and scoring are
+  `NOT_AUTHORIZED / NOT_EXECUTED`.** The finite pilot is capped at 10 sessions,
+  50 tickers/session, 500 assignments, 55 runtime minutes/session, 250 MiB, one
+  concurrent run, and zero incremental provider requests, but may not start under
+  this preparation task.
