@@ -1358,16 +1358,37 @@ immutable provenance. Performance comparison execution remains pending review.
   snapshot deadline, 08:45 decision boundary, and same-session official-open
   intended entry. It is prospective only and does not alter saved evidence.
 - [ ] **Durable-storage and pilot-universe prerequisites remain open.** Before
-  implementation review, approve one static, outcome-independent manifest of at
+  pilot start, approve one static, outcome-independent manifest of at
   most 50 already-authorized tickers and verify the configured persistent mount's
   quota, access control, read-back, and 180-day retention. Ephemeral `data/` and
   an artifact URL are insufficient.
-- [ ] **Implementation and synthetic testing are `NOT_AUTHORIZED / NOT_EXECUTED`.**
-  The next authorization may implement only the label-free capture adapter,
-  immutable schema/persistence, reconciliation, budget stops, and focused tests;
-  it must still exclude collection and provider calls.
+- [x] **Implementation and synthetic testing are `AUTHORIZED / COMPLETE`.**
+  The implemented scope is limited to the label-free cache-only adapter,
+  immutable schema/persistence, reconciliation, budget stops, and focused
+  synthetic tests; collection and provider calls remain excluded.
 - [ ] **Prospective collection, outcomes, training, and scoring are
   `NOT_AUTHORIZED / NOT_EXECUTED`.** The finite pilot is capped at 10 sessions,
   50 tickers/session, 500 assignments, 55 runtime minutes/session, 250 MiB, one
   concurrent run, and zero incremental provider requests, but may not start under
   this preparation task.
+
+#### Prospective capture implementation (separate from pilot authorization)
+
+- [x] **Implementation and focused synthetic testing are complete.** The
+  cache-only label-free adapter, hash-bound timing clarification, immutable
+  payload/completion-receipt storage, deterministic selection/reconciliation,
+  and restart-persistent finite-budget ledger are implemented separately from
+  daily operations. The synthetic CLI and manual synthetic-only workflow expose
+  no real collection mode and use zero provider credentials or requests.
+- [ ] **Actual static pilot ticker manifest approval remains pending.** No real
+  ticker roster was selected; one unchanged, outcome-independent manifest of at
+  most 50 tickers is required for all ten pilot sessions.
+- [ ] **Runtime storage prerequisites remain pending.** Before pilot start, an
+  operator must verify the explicitly configured persistent root's quota,
+  access control, backup/retrieval behavior, and 180-day retention. Immediate
+  fsync/read-back validation is not evidence of those operational properties.
+- [ ] **Prospective collection remains unauthorized and disabled.** Pilot start,
+  outcomes, training, scoring, deployment, routing, and production scheduling
+  require later authorization. The pilot assesses capture reliability and cohort
+  formation only; it cannot establish predictive advantage or automatically
+  authorize training.
