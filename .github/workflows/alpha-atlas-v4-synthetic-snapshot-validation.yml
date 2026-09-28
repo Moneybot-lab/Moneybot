@@ -32,7 +32,11 @@ jobs:
           if [ ! -f evidence/report.json ]; then
             printf '{"schema_version":"alpha-atlas-v4-prospective-synthetic-validation.v1","status":"FAIL","provider_requests":0,"real_collection_available":false}\n' > evidence/report.json
           fi
-          sha256sum evidence/report.json > evidence/SHA256SUMS
+          python - <<'PY'
+          from pathlib import Path
+          from scripts.validate_alpha_atlas_v4_prospective_snapshot import write_artifact_checksums
+          write_artifact_checksums(Path('evidence'))
+          PY
           python - <<'PY' > evidence/report.md
           import json
           x=json.load(open('evidence/report.json'))

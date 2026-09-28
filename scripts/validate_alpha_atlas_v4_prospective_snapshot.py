@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import tempfile
 from datetime import date
@@ -14,6 +15,20 @@ from moneybot.services.alpha_atlas_v4_prospective_snapshot import (
     verify_bound_documents,
 )
 from moneybot.services.runtime_paths import prospective_snapshot_root
+
+
+def write_artifact_checksums(artifact_root: Path, members: tuple[str, ...] = ("report.json",)) -> Path:
+    """Write portable checksums whose member paths are artifact-root relative."""
+    root = artifact_root.resolve()
+    lines = []
+    for member in members:
+        path = (root / member).resolve()
+        if path.parent != root or not path.is_file():
+            raise ValueError(f"invalid artifact member: {member}")
+        lines.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {member}\n")
+    output = root / "SHA256SUMS"
+    output.write_text("".join(lines), encoding="utf-8")
+    return output
 
 
 def run_synthetic(root: Path) -> dict:

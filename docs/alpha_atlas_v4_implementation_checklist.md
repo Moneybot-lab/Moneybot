@@ -1380,9 +1380,10 @@ immutable provenance. Performance comparison execution remains pending review.
   and restart-persistent finite-budget ledger are implemented separately from
   daily operations. The synthetic CLI and manual synthetic-only workflow expose
   no real collection mode and use zero provider credentials or requests.
-- [ ] **Actual static pilot ticker manifest approval remains pending.** No real
-  ticker roster was selected; one unchanged, outcome-independent manifest of at
-  most 50 tickers is required for all ten pilot sessions.
+- [x] **A static pilot ticker manifest is prepared for review.** The deterministic,
+  outcome-independent repository server-owned default produces the lexical list
+  `QQQ, SPY`, proposed unchanged for all ten sessions. Preparation is not approval:
+  user review remains pending, and absent typed identifiers remain null.
 - [ ] **Runtime storage prerequisites remain pending.** Before pilot start, an
   operator must verify the explicitly configured persistent root's quota,
   access control, backup/retrieval behavior, and 180-day retention. Immediate
@@ -1392,3 +1393,18 @@ immutable provenance. Performance comparison execution remains pending review.
   require later authorization. The pilot assesses capture reliability and cohort
   formation only; it cannot establish predictive advantage or automatically
   authorize training.
+- [x] **Hosted synthetic smoke check recorded separately.** Run `36457965993-1`
+  passed in `SYNTHETIC_ONLY` mode with one assignment, zero provider requests,
+  and `real_collection_available=false`; uploaded `report.json` SHA-256 is
+  `7cb11d7d811bf1b3248dae0919a18620d45fc61f0059a7637c52a1957616c9b4`.
+  This is neither the focused unit suite nor operational-readiness evidence. The
+  artifact remains unchanged; future checksum manifests use artifact-root paths.
+- [x] **Repository-supported readiness inspection complete.** The Render blueprint
+  has no persistent disk/root declaration, and no authenticated application-runtime
+  access was available, so no runtime probe was performed. Existing process/Redis
+  caches do not provide the required receipt-bearing daily lookbacks without
+  provider-capable fallback; technical readiness is `BLOCKED_STORAGE_AND_CACHE`.
+- [ ] **Manifest approval, runtime storage verification, and collection
+  authorization remain separate and open.** Configure and evidence the actual
+  mount/quota/access/backup/restore/cleanup/180-day lifecycle, then perform one
+  isolated storage probe. Collection, outcomes, training, and scoring remain off.

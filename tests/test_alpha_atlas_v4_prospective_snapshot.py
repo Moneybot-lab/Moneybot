@@ -5,11 +5,13 @@ import os
 import subprocess
 import sys
 from datetime import date, timedelta
+from pathlib import Path
 
 import pytest
 
 from moneybot.services.alpha_atlas_v4_prospective_snapshot import *
 from moneybot.services.runtime_paths import prospective_snapshot_root
+from scripts.validate_alpha_atlas_v4_prospective_snapshot import write_artifact_checksums
 
 
 def snap(ready, times, *, sid="a", status="COMPLETE", family=None):
@@ -105,3 +107,39 @@ def test_exact_cli_without_pythonpath(tmp_path):
 def test_no_real_collection_mode():
     proc = subprocess.run([sys.executable, "-m", "scripts.validate_alpha_atlas_v4_prospective_snapshot"], text=True, capture_output=True)
     assert proc.returncode != 0
+
+
+def test_artifact_checksums_are_relative_and_verify_after_packaging(tmp_path):
+    staging = tmp_path / "evidence"; staging.mkdir()
+    (staging / "report.json").write_bytes(b'{"status":"PASS"}\n')
+    manifest = write_artifact_checksums(staging)
+    assert manifest.read_text().endswith("  report.json\n")
+    assert "evidence/report.json" not in manifest.read_text()
+    packaged = tmp_path / "uploaded-member"; packaged.mkdir()
+    for name in ("report.json", "SHA256SUMS"):
+        (packaged / name).write_bytes((staging / name).read_bytes())
+    subprocess.run(["sha256sum", "-c", "SHA256SUMS"], cwd=packaged, check=True,
+                   text=True, capture_output=True)
+
+
+def test_proposed_universe_is_source_bound_and_not_approved():
+    root = Path(__file__).resolve().parents[1]
+    manifest = json.loads((root / "docs/reports/alpha_atlas_v4_proposed_pilot_universe.v1.json").read_text())
+    claimed = manifest.pop("content_sha256")
+    assert sha256_bytes(canonical_bytes(manifest)) == claimed
+    assert manifest["ordered_members"] == ["QQQ", "SPY"]
+    assert manifest["approval_status"] == "PENDING_USER_REVIEW"
+    assert manifest["typed_identifiers"] == {"QQQ": None, "SPY": None}
+    assert sha256_bytes((root / manifest["source"]["path"]).read_bytes()) == manifest["source"]["source_sha256"]
+    assert sha256_bytes((root / manifest["source"]["deployment_path"]).read_bytes()) == manifest["source"]["deployment_sha256"]
+
+
+def test_readiness_report_is_fail_closed_and_records_hosted_smoke():
+    root = Path(__file__).resolve().parents[1]
+    report = json.loads((root / "docs/reports/alpha_atlas_v4_prospective_pilot_readiness.v1.json").read_text())
+    assert report["decision"] == "BLOCKED"
+    assert report["hosted_synthetic_check"]["run"] == "36457965993-1"
+    assert report["hosted_synthetic_check"]["uploaded_report_json_sha256"] == "7cb11d7d811bf1b3248dae0919a18620d45fc61f0059a7637c52a1957616c9b4"
+    assert report["runtime"]["runtime_probe_performed"] is False
+    assert {item["status"] for item in report["cache_inspection"]["families"]} == {"UNAVAILABLE"}
+    assert report["prohibitions_observed"]["provider_requests"] == 0
