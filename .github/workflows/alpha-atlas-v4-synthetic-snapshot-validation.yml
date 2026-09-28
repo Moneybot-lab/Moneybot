@@ -1,0 +1,55 @@
+name: Alpha Atlas V4 Synthetic Snapshot Validation Only
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alpha-atlas-v4-synthetic-snapshot-validation
+  cancel-in-progress: false
+
+jobs:
+  synthetic-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Synthetic validation (no credentials, providers, or production data)
+        id: validate
+        continue-on-error: true
+        run: |
+          mkdir -p evidence
+          python -m scripts.validate_alpha_atlas_v4_prospective_snapshot --synthetic --output evidence/report.json \
+            > evidence/stdout.json 2> evidence/stderr.txt
+      - name: Finalize evidence
+        if: always()
+        run: |
+          if [ ! -f evidence/report.json ]; then
+            printf '{"schema_version":"alpha-atlas-v4-prospective-synthetic-validation.v1","status":"FAIL","provider_requests":0,"real_collection_available":false}\n' > evidence/report.json
+          fi
+          python - <<'PY'
+          from pathlib import Path
+          from scripts.validate_alpha_atlas_v4_prospective_snapshot import write_artifact_checksums
+          write_artifact_checksums(Path('evidence'))
+          PY
+          python - <<'PY' > evidence/report.md
+          import json
+          x=json.load(open('evidence/report.json'))
+          print('# Synthetic snapshot validation\n')
+          print(f"- Status: `{x['status']}`")
+          print(f"- Provider requests: `{x['provider_requests']}`")
+          print(f"- Real collection available: `{x['real_collection_available']}`")
+          PY
+          test '${{ steps.validate.outcome }}' = success
+      - name: Preserve structured evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha-atlas-v4-synthetic-snapshot-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: warn
