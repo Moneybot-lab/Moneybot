@@ -1447,3 +1447,15 @@ immutable provenance. Performance comparison execution remains pending review.
   at most 18 attempts and 3.88 MiB evidence; stage C requires approved manifests,
   stage-B evidence, entitlement/cost review, durable restore-tested storage, and
   explicit collection authorization. One persistent ledger spans every stage.
+- [x] **Authenticated account screenshots are incorporated in amendment v3.** They
+  evidence an active Massive Stocks Advanced Individual plan at $200/month, an
+  existing Render Starter stream worker at $7/month with 0.5 CPU/512 MiB and no
+  disk, a Standard web service at $25/month with an existing 1 GB disk, and a Pro
+  workspace with one visible Admin. Screenshot bytes were not supplied as files,
+  so no evidence hash is claimed.
+- [ ] **The observed resources do not close storage or authorization.** The web
+  disk is attached to a different service and is below the 2 GiB worker operating
+  requirement; its mount/root and exact free bytes are unknown. No writable
+  versioned 180-day backup is configured. Provider retained-data terms, approved
+  stock/sector/identity manifests, worker headroom, restore roles, and explicit
+  stage authorization remain open. No purchase or provisioning occurred.

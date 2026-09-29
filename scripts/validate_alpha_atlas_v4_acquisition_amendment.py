@@ -17,9 +17,9 @@ def validate(amendment_path: Path, markdown_path: Path) -> dict[str, object]:
     storage = amendment["storage_budget"]
     deps = {item["dependency"]: item for item in amendment["dependency_accounting"]}
 
-    assert amendment["schema_version"].endswith(".v2")
-    assert amendment["status"] == "CORRECTED_PREPARED_FOR_REVIEW_NOT_AUTHORIZED"
-    assert amendment["corrects"]["commit"] == "1c2400d"
+    assert amendment["schema_version"].endswith(".v3")
+    assert amendment["status"] == "ACCOUNT_EVIDENCE_INCORPORATED_PREPARED_FOR_REVIEW_NOT_AUTHORIZED"
+    assert amendment["corrects"]["commit"] == "5170b8c"
     assert set(deps) == {"universe_source", "typed_identity", "effective_dated_sector_mapping", "stock_spy_sector_history", "split_lineage", "corrections_and_refresh"}
     assert deps["universe_source"]["classification"].startswith("A_")
     assert deps["effective_dated_sector_mapping"]["endpoint"] is None
@@ -54,7 +54,11 @@ def validate(amendment_path: Path, markdown_path: Path) -> dict[str, object]:
     assert amendment["adjustment_revision_policy"]["calculation_input"].startswith("Persist and calculate from provider adjusted=false")
     assert amendment["recommendation"]["acquisition_deadline"] == "07:30 America/New_York"
     assert amendment["storage_arrangement"]["operational_ready"] is False
-    assert amendment["cost"]["affordability"] == "NOT_ESTABLISHED"
+    assert amendment["cost"]["affordability"] == "NOT_ESTABLISHED_UNTIL_BACKUP_AND_TERMS_CONFIRMED"
+    assert amendment["account_runtime_evidence"]["massive"]["plan"] == "Stocks Advanced"
+    assert amendment["account_runtime_evidence"]["render"]["worker"]["disk"] == "NONE_ADD_DISK_AVAILABLE"
+    assert amendment["account_runtime_evidence"]["render"]["web"]["disk_capacity_gb_displayed"] == 1
+    assert amendment["cost"]["known_incremental_floor"].startswith("$0.50/month")
     assert amendment["universe"]["replacement_roster"] is None
     assert amendment["prohibitions_observed"]["provider_requests"] == 0
 
@@ -67,8 +71,8 @@ def validate(amendment_path: Path, markdown_path: Path) -> dict[str, object]:
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser()
-    parser.add_argument("--amendment", type=Path, default=root / "docs/reports/alpha_atlas_v4_prospective_data_acquisition_amendment.v2.json")
-    parser.add_argument("--markdown", type=Path, default=root / "docs/reports/alpha_atlas_v4_prospective_data_acquisition_amendment.v2.md")
+    parser.add_argument("--amendment", type=Path, default=root / "docs/reports/alpha_atlas_v4_prospective_data_acquisition_amendment.v3.json")
+    parser.add_argument("--markdown", type=Path, default=root / "docs/reports/alpha_atlas_v4_prospective_data_acquisition_amendment.v3.md")
     args = parser.parse_args()
     print(json.dumps(validate(args.amendment, args.markdown), indent=2, sort_keys=True))
     return 0

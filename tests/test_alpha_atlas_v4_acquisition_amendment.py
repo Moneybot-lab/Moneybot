@@ -10,8 +10,8 @@ from scripts.validate_alpha_atlas_v4_acquisition_amendment import validate
 
 ROOT = Path(__file__).resolve().parents[1]
 REPORTS = ROOT / "docs" / "reports"
-JSON_PATH = REPORTS / "alpha_atlas_v4_prospective_data_acquisition_amendment.v2.json"
-MD_PATH = REPORTS / "alpha_atlas_v4_prospective_data_acquisition_amendment.v2.md"
+JSON_PATH = REPORTS / "alpha_atlas_v4_prospective_data_acquisition_amendment.v3.json"
+MD_PATH = REPORTS / "alpha_atlas_v4_prospective_data_acquisition_amendment.v3.md"
 
 
 def test_corrected_budget_and_cross_document_consistency():
@@ -32,15 +32,19 @@ def test_dependencies_adjustment_and_stages_are_explicit():
     assert report["adjustment_revision_policy"]["calculation_input"].startswith("Persist and calculate from provider adjusted=false")
     assert "VWAP" in report["adjustment_revision_policy"]["method"]
     assert report["request_budget"]["persistent_accounting"].startswith("Verification, bootstrap")
-    assert report["storage_arrangement"]["blocker"].startswith("No such writable backup")
+    assert report["storage_arrangement"]["blocker"].startswith("No worker disk/root")
 
 
-def test_v1_is_preserved_and_v2_records_correction():
+def test_prior_versions_are_preserved_and_v3_records_account_evidence():
     v1 = REPORTS / "alpha_atlas_v4_prospective_data_acquisition_amendment.v1.json"
+    v2 = REPORTS / "alpha_atlas_v4_prospective_data_acquisition_amendment.v2.json"
     report = json.loads(JSON_PATH.read_text())
-    assert v1.is_file()
-    assert report["corrects"]["version"] == "v1"
-    assert report["corrects"]["commit"] == "1c2400d"
+    assert v1.is_file() and v2.is_file()
+    assert report["corrects"]["version"] == "v2"
+    assert report["corrects"]["commit"] == "5170b8c"
+    assert report["account_runtime_evidence"]["massive"]["plan"] == "Stocks Advanced"
+    assert report["account_runtime_evidence"]["render"]["web"]["disk_capacity_gb_displayed"] == 1
+    assert report["account_runtime_evidence"]["render"]["worker"]["disk"] == "NONE_ADD_DISK_AVAILABLE"
     assert report["preserved_statuses"]["qqq_spy_manifest"] == "PROPOSED_NOT_APPROVED"
 
 
