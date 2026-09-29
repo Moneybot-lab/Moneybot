@@ -1,0 +1,353 @@
+{
+  "bootstrap_plan": {
+    "aggregate_endpoint": "GET /v2/aggs/ticker/{ticker}/range/1/day/{from}/{to}?adjusted=true&sort=asc&limit=50000",
+    "attempts_per_page_max": 3,
+    "concurrency": 1,
+    "date_rule": "calendar-derived 60 prior eligible sessions ending at prior completed session",
+    "deduplication": "one canonical request per unique symbol/window/adjustment; SPY and each sector ETF are shared across all stocks; object identity is provider+sanitized parameters+response hash",
+    "failure": "stop acquisition on cap/entitlement/pagination/hash/storage failure; retain attempts; assembler reports UNKNOWN/MISSING and makes zero fallback requests",
+    "identity_endpoint": "GET /v3/reference/tickers/{ticker}?date={bootstrap_date}",
+    "pagination": {
+      "aggregates_pages_per_symbol_max": 1,
+      "identity_pages_per_symbol_max": 1,
+      "splits_pages_max": 5
+    },
+    "response_caps_bytes": {
+      "aggregate_page": 262144,
+      "identity": 32768,
+      "split_page": 262144
+    },
+    "runtime_minutes_max": 45,
+    "splits_endpoint": "GET /stocks/v1/splits?execution_date.gte={from}&execution_date.lte={receipt_date}&sort=execution_date.asc&limit=5000",
+    "symbols": 62
+  },
+  "cost": {
+    "egress_cost": "UNKNOWN",
+    "incremental_provider_cost": "UNKNOWN",
+    "incremental_storage_cost": "UNKNOWN",
+    "provider_reason": "Official public pricing lists plan-level history/rate features, not this account's entitlement, remaining quota or overage terms. No per-request charge is assumed.",
+    "required_checks": [
+      "Massive account plan includes aggregates, dated ticker details, splits, 60-session history and 2271 maximum attempts without upgrade/overage",
+      "flat-file license permits prospective retention if path B is used",
+      "Render quote for a >=512 MiB disk and backup/export egress",
+      "180-day backup destination lifecycle and restore access"
+    ],
+    "storage_reason": "No disk exists or size/price/account invoice is evidenced; provisioning is not authorized."
+  },
+  "existing_storage": [
+    {
+      "access": "private service binding configured",
+      "charges": "existing plan cost/account details unknown",
+      "decision": "REJECT_FOR_EVIDENCE_STORAGE",
+      "exists": true,
+      "immutability": "no; allkeys-lru eviction and mutable keys",
+      "option": "Render Key Value moneybot-market-state",
+      "quota": "starter plan named; exact free memory unknown",
+      "retention_backup": "paid instances may persist depending mode, but configured mode/restore evidence absent; stream TTL 120 seconds",
+      "runtime_access": "web/worker private REDIS_URL"
+    },
+    {
+      "access": "encrypted at rest; service/SSH access requires confirmation",
+      "charges": "UNKNOWN; provisioning may add cost",
+      "decision": "RECOMMENDED_CONDITIONAL_PATH",
+      "exists": false,
+      "immutability": "filesystem supports implementation's append-only atomic layout",
+      "option": "Render persistent disk",
+      "quota": "not configured",
+      "retention_backup": "official daily snapshots retained at least 7 days, not proof of 180 days; separate backup copy/export required",
+      "runtime_access": "would be single service runtime only"
+    },
+    {
+      "access": "repository Actions permissions",
+      "charges": "UNKNOWN",
+      "decision": "REJECT",
+      "exists": true,
+      "immutability": "uploaded archive only",
+      "option": "GitHub Actions artifacts/runner",
+      "quota": "artifact limits/retention not pinned here",
+      "retention_backup": "runner ephemeral; artifact URL is not durable 180-day preservation",
+      "runtime_access": "workflow only, not application runtime"
+    },
+    {
+      "access": "service credential; controls not inspected",
+      "charges": "UNKNOWN",
+      "decision": "NOT_SUPPORTED_WITHOUT_ACCOUNT_EVIDENCE",
+      "exists": true,
+      "immutability": "no acquisition schema/versioned blob store",
+      "option": "Application DATABASE_URL",
+      "quota": "UNKNOWN",
+      "retention_backup": "provider, backup and restore settings unknown",
+      "runtime_access": "web/worker credential configured"
+    }
+  ],
+  "feature_dependencies": [
+    {
+      "adjustment": "adjusted=true plus separately retained split lineage; never mix adjusted and unadjusted versions",
+      "calendar_span": "start at the repository calendar's 60th previous eligible XNYS session through the immediately previous completed session; exchange sessions, not a fixed calendar-day count",
+      "computation": "43-field registry symbol technicals including SMA50, 20-return volatility, MACD and 29-bar VWAP slope",
+      "family": "symbol_daily_history",
+      "freshness": "latest bar no more than 3 eligible sessions stale",
+      "minimum": "50 valid completed-session OHLCV+VWAP bars per stock; 21 bars for 20 returns are subsumed; request 60 eligible sessions for a 10-session missing-bar/warm-up margin",
+      "provenance": "raw response, request/receipt clocks, bar event dates, request_id, content hash, bytes and pagination"
+    },
+    {
+      "adjustment": "same adjusted basis and split lineage",
+      "calendar_span": "same as symbol window",
+      "computation": "SPY 1d/5d returns, symbol-minus-SPY, 20-return beta, SMA20 regime and 20-return volatility",
+      "family": "spy_market_context",
+      "freshness": "maximum 3 eligible sessions",
+      "minimum": "21 valid SPY bars; use the shared 60-session request once",
+      "provenance": "same immutable receipt record"
+    },
+    {
+      "adjustment": "same adjusted basis and split lineage",
+      "calendar_span": "same window",
+      "computation": "symbol 5d return minus effective sector ETF 5d return",
+      "family": "sector_context",
+      "freshness": "maximum 3 eligible sessions",
+      "minimum": "6 valid ETF bars for five returns; use shared 60-session request for each of at most 11 ETFs",
+      "provenance": "effective-dated stock-to-sector mapping must be separately approved; a mapping observed now is not historical proof"
+    },
+    {
+      "adjustment": "append-only revisions; later provider corrections never rewrite prior objects/snapshots",
+      "calendar_span": "details as of bootstrap date; split query from one eligible session before history start through acquisition receipt date",
+      "computation": "typed point-in-time identity and feature-safe split adjustment lineage",
+      "family": "identity_and_splits",
+      "freshness": "known and received by cutoff; no invented freshness limit",
+      "minimum": "dated ticker details for 50 stocks; all split events affecting 62 symbols over the requested window, including id, ticker, execution_date, adjustment_type, split_from/to and historical_adjustment_factor when supplied",
+      "provenance": "actual receipt time and source version; no inference of identity or sector continuity"
+    }
+  ],
+  "implementation_touchpoints": [
+    "New separate scripts/acquire_alpha_atlas_v4_prospective_sources.py; no scheduler until authorization",
+    "MassiveRestClient response seam must expose immutable raw response bytes/headers before normalization without changing existing clients' production behavior",
+    "Reuse ExchangeCalendar and SECTOR_BENCHMARK_SYMBOLS; consume an approved stock/sector manifest rather than infer mapping",
+    "Write under prospective_snapshot_root sibling acquisition/v1 with ImmutableStore-style atomic objects and append-only receipts",
+    "Snapshot adapter remains cache-only and receives an explicit no-fallback read interface",
+    "Add bounded synthetic fixtures for pages, retries, corrections, partials, hashes and budget stops"
+  ],
+  "official_documentation": [
+    {
+      "facts": "adjusted parameter; max limit 50000; OHLCV, optional VWAP/transactions, request_id and next_url",
+      "url": "https://massive.com/docs/rest/stocks/aggregates/custom-bars",
+      "verified": "2026-09-29"
+    },
+    {
+      "facts": "max limit 5000; next_url; execution date, ratios, adjustment type, ID and historical adjustment factor",
+      "url": "https://massive.com/docs/rest/stocks/corporate-actions/splits",
+      "verified": "2026-09-29"
+    },
+    {
+      "facts": "dated ticker-details endpoint exists; public docs do not prove account entitlement",
+      "url": "https://massive.com/docs/rest/stocks/tickers/ticker-overview",
+      "verified": "2026-09-29"
+    },
+    {
+      "facts": "public Stocks plans differ in calls/minute, historical depth and included data; account plan remains unknown",
+      "url": "https://massive.com/pricing",
+      "verified": "2026-09-29"
+    },
+    {
+      "facts": "default filesystem ephemeral; paid services can attach a single-service disk; encryption at rest; daily snapshots available at least seven days; runtime-only access",
+      "url": "https://render.com/docs/disks",
+      "verified": "2026-09-29"
+    },
+    {
+      "facts": "allkeys-lru evicts keys; paid persistence modes exist but actual configured mode is not evidenced",
+      "url": "https://render.com/docs/key-value",
+      "verified": "2026-09-29"
+    }
+  ],
+  "preserved_statuses": {
+    "closed_investigations": "UNCHANGED",
+    "collection": "DISABLED \u2014 NOT_AUTHORIZED",
+    "pilot_readiness": "COMPLETE \u2014 BLOCKED_STORAGE_AND_CACHE",
+    "qqq_spy_manifest": "PROPOSED_NOT_APPROVED"
+  },
+  "prohibitions_observed": {
+    "collection": false,
+    "deployment": false,
+    "infrastructure_change": false,
+    "provider_requests": 0,
+    "purchase": false,
+    "scoring": false,
+    "training": false
+  },
+  "receipt_record": {
+    "fields": [
+      "provider",
+      "endpoint",
+      "sanitized_parameters_without_credentials",
+      "request_started_at",
+      "response_received_at",
+      "source_event_dates",
+      "http_status",
+      "provider_request_id",
+      "response_sha256",
+      "response_bytes",
+      "page_ordinal",
+      "next_url_present",
+      "pagination_complete",
+      "adjusted",
+      "corporate_action_lineage_ids",
+      "attempt_id",
+      "supersedes_source_object_id"
+    ],
+    "semantics": "Times are actual UTC clocks. New history is received when fetched and never backdated to bar dates. Raw bytes are immutable; corrections append a new source object and revision receipt."
+  },
+  "recommendation": {
+    "bootstrap": "After stock-manifest approval, retrieve one 60-eligible-session adjusted daily window for each of 50 stocks plus SPY and 11 sector ETFs, one dated ticker-details response per stock, and globally date-bounded split pages filtered to all 62 symbols.",
+    "decision": "APPEARS_FEASIBLE_REQUIRES_ACCOUNT_RUNTIME_AND_UNIVERSE_CONFIRMATION",
+    "path": "A separate bounded pre-assembly Massive REST acquisition process preserves immutable raw responses and receipts on a single-writer Render persistent disk; the existing snapshot assembler reads that store cache-only.",
+    "reason": "No disk/root, 180-day backup policy, account plan/entitlement, approved stock universe, or effective-dated sector mapping is evidenced.",
+    "recurring": "On each pilot session, acquire the prior completed-session daily aggregate for 62 unique symbols plus newly available split pages; finish by 07:30 America/New_York, before 07:45 manifest binding.",
+    "storage": "Proposed /var/data/moneybot/alpha_atlas_v4/acquisition/v1 on a disk attached to the single collector service; append-only objects/receipts and a separately verified backup copy.",
+    "supported_with_evidenced_existing_resources": false
+  },
+  "recurring_plan": {
+    "aggregate_scope": "prior completed session only for 62 unique symbols",
+    "attempts_per_page_max": 3,
+    "concurrency": 1,
+    "late_rule": "an incomplete acquisition cannot move 07:45, 08:40 or 08:45; cache-only assembly fails closed",
+    "runtime_minutes_max": 45,
+    "splits_scope": "events since the last successful receipt through current receipt; two pages maximum",
+    "window": "06:30-07:30 America/New_York on each eligible pilot session; acquisition must finish before 07:45 binding"
+  },
+  "request_budget": {
+    "amended_incremental_provider_request_cap": 2271,
+    "authorization": "PREPARED_FOR_REVIEW_NOT_AUTHORIZED",
+    "bootstrap": {
+      "expected": 113,
+      "formula_expected": "62 aggregates + 50 identities + 1 split page",
+      "formula_max": "(62 + 50 + 5 split pages) * 3 attempts",
+      "maximum_including_pages_and_retries": 351
+    },
+    "per_session": {
+      "expected": 63,
+      "formula_expected": "62 aggregates + 1 split page",
+      "formula_max": "(62 + 2 split pages) * 3 attempts",
+      "maximum_including_pages_and_retries": 192
+    },
+    "ten_sessions": {
+      "expected": 630,
+      "maximum_including_pages_and_retries": 1920
+    },
+    "total": {
+      "expected": 743,
+      "maximum_including_pages_and_retries": 2271
+    }
+  },
+  "reusable_ingestion": [
+    {
+      "data": "scheduled 06:15 UTC full day_aggs_v1 prefix, observed-event symbols plus SPY/sector dependencies, historical 120-calendar-day builder window",
+      "deadline_fit": "UNKNOWN: 06:15 UTC is 02:15 EDT/01:15 EST, but flat-file publication completion and transfer by 07:30 New York are not evidenced",
+      "evidence": "configured and prior hosted Track B evidence exists, but runner-local current execution/availability is not an application-runtime guarantee",
+      "job": "Track B flat-file ingest",
+      "location": ".github/workflows/track-b-offline.yml; scripts/ingest_massive_flatfiles.py:ingest_massive_flatfiles; scripts/build_massive_decision_training_rows.py:load_market_history",
+      "retention": "downloaded objects and ingest manifest on an ephemeral Actions runner; builder hashes source objects, but raw files are intentionally not durable pilot storage",
+      "smallest_change": "copy only approved 62-symbol rows plus original object hash/receipt manifest into the acquisition store before runner cleanup; this is preservation of an existing scheduled response, not an extra market request"
+    },
+    {
+      "data": "global execution-date window, limit 1000 pages, filtered to decision symbols plus SPY/11 ETFs",
+      "deadline_fit": "UNKNOWN and current workflow also proceeds into unauthorized training; reuse must be extracted into a separate acquisition stage",
+      "evidence": "configured and historical hosted execution evidenced; not scoped to the proposed prospective roster",
+      "job": "Track B split fetch",
+      "location": ".github/workflows/track-b-offline.yml; scripts/fetch_massive_splits.py:fetch_pages/materialize",
+      "retention": "canonical filtered rows and a manifest retain retrieval time/page count/source hash, but not immutable raw page bytes, per-page receipts or retry bodies",
+      "smallest_change": "preserve every sanitized raw page and per-attempt receipt before normalization; bound pages/retries"
+    },
+    {
+      "data": "per-symbol adjusted daily aggregates, requested on demand, typically 30 bars with a 300-second process cache",
+      "deadline_fit": "not currently",
+      "evidence": "implemented; no scheduled 62-symbol premarket execution evidence",
+      "job": "Application adjusted history",
+      "location": "moneybot/services/market_data.py:MarketDataService.get_price_history_data; moneybot/services/market_data_providers.py:MassiveRestClient.get_aggregates",
+      "retention": "normalized bars omit raw response, receipt timestamp and full pagination; cache expires and miss falls back to yfinance",
+      "smallest_change": "new separate acquisition caller must use the client response-preservation seam, forbid fallback, request 60 sessions and persist raw bytes/receipt before normalization"
+    },
+    {
+      "data": "latest A/AM/Q/T events for demanded symbols; server default SPY/QQQ; continuous when enabled",
+      "deadline_fit": "insufficient fields/lookback",
+      "evidence": "configured enabled on Render worker; current connection/coverage not observed here",
+      "job": "Massive stream worker",
+      "location": "scripts/run_market_stream.py; moneybot/services/market_stream.py:MassiveWebSocketWorker",
+      "retention": "event and genuine receipt timestamps exist but Redis latest state expires/evicts; original messages are not retained",
+      "smallest_change": "not recommended for the daily bootstrap; preserving messages would not replace completed daily history"
+    }
+  ],
+  "schema_version": "alpha-atlas-v4-prospective-data-acquisition-amendment.v1",
+  "source_classes": {
+    "A_retained_reusable": "No repository evidence establishes a complete, durable, receipt-bearing 60-session prospective cache.",
+    "B_existing_responses_preservable": "Scheduled Track B day aggregate flat-file objects and split responses could be copied prospectively if publication timing, licensing, symbol filtering, and durable transfer are confirmed.",
+    "C_additional_bootstrap": "62 aggregate requests + 50 dated ticker-detail requests + 1 expected (5-page maximum) split query.",
+    "D_additional_recurring": "62 one-session aggregate requests + 1 expected (2-page maximum) split query per pilot session unless a verified scheduled flat-file response is preserved instead; never double-count or issue both."
+  },
+  "status": "PREPARED_FOR_REVIEW_NOT_AUTHORIZED",
+  "storage_budget": {
+    "assumptions": "Uncompressed ceilings; corrections, failed attempts, mappings and receipts count. Expected sizes are planning estimates, not live measurements. Backup is a second verified copy.",
+    "backup_copy": {
+      "expected_bytes": 16006144,
+      "maximum_bytes": 263059456
+    },
+    "bootstrap": {
+      "expected_bytes": 2065408,
+      "maximum_bytes": 58324992
+    },
+    "correction_failed_attempt_reserve_max_bytes": 15728640,
+    "each_session_acquisition": {
+      "expected_bytes": 207872,
+      "maximum_bytes": 14155776
+    },
+    "operational_manifest_reserve_expected_bytes": 1048576,
+    "operational_manifest_reserve_max_bytes": 4194304,
+    "original_cap_bytes": 262144000,
+    "original_cap_result": "MAXIMUM_PRIMARY_EXCEEDS_CAP",
+    "primary_total": {
+      "expected_bytes": 16006144,
+      "maximum_bytes": 263059456
+    },
+    "proposed_amended_cap_bytes": 536870912,
+    "proposed_cap_scope": "uncompressed primary plus one verified backup copy through 180 days",
+    "retained_180_day_peak": {
+      "expected_bytes": 32012288,
+      "maximum_bytes": 526118912
+    },
+    "retention_note": "180 days is duration, not an additional copy per day; Render's documented disk snapshots are available at least seven days and do not alone prove 180-day backup retention.",
+    "snapshots_manifests_mappings": {
+      "expected_bytes": 10813440,
+      "maximum_bytes": 43253760
+    },
+    "ten_session_acquisition": {
+      "expected_bytes": 2078720,
+      "maximum_bytes": 141557760
+    }
+  },
+  "universe": {
+    "all_daily_symbols_max": 62,
+    "context_symbols": {
+      "SPY": 1,
+      "sector_etfs_max": 11,
+      "unique_total_max": 12
+    },
+    "current_plumbing_manifest": [
+      "QQQ",
+      "SPY"
+    ],
+    "precise_missing_input": "The repository contains no reviewed, static, outcome-independent <=50 common-stock universe source. Dynamic watchlists/decision logs are user- or observation-driven; examples are not authorization; provider listing enumeration has not been saved for this purpose.",
+    "proposed_rule_after_input_exists": "From one user-approved, effective-dated common-stock source snapshot, retain US common stocks already covered by the account, sort by permanent typed identifier then ticker, and take the first 50. Freeze before session one; do not filter on returns, scores, retrieval success, or later eligibility.",
+    "status": "PROPOSED_NOT_APPROVED",
+    "stock_candidate_manifest": null,
+    "stock_cap": 50,
+    "top_five_limitation": "Selecting both equals the eligible baseline and cannot test top-five stock selection."
+  },
+  "unresolved_prerequisites": [
+    "User-approved <=50-stock outcome-independent source and manifest",
+    "Approved effective-dated stock-to-sector mapping and typed identities",
+    "Massive account entitlement/rate/history/retention confirmation and incremental cost",
+    "Configured >=512 MiB durable primary+backup lifecycle with 180-day policy and restore test",
+    "Evidence scheduled source publication/acquisition can finish by 07:30 New York",
+    "Explicit approval of amended 2271-request and 512 MiB caps",
+    "Separate authorization to implement/execute acquisition and start collection"
+  ],
+  "verified_at": "2026-09-29T00:00:00Z"
+}

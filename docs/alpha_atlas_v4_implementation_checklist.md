@@ -1408,3 +1408,42 @@ immutable provenance. Performance comparison execution remains pending review.
   authorization remain separate and open.** Configure and evidence the actual
   mount/quota/access/backup/restore/cleanup/180-day lifecycle, then perform one
   isolated storage probe. Collection, outcomes, training, and scoring remain off.
+
+#### Prospective acquisition amendment
+
+- [x] **One finite acquisition amendment is `PREPARED_FOR_REVIEW`.** It recommends
+  a separate pre-assembly Massive REST stage, an immutable single-writer primary
+  store plus verified backup, and an unchanged cache-only assembler. Its explicit
+  ten-session budget is 743 expected / 2,271 maximum request attempts and 30.53
+  MiB expected / 501.75 MiB maximum retained storage, requiring review of amended
+  caps of 2,271 requests and 512 MiB. These caps are not authorized.
+- [x] **Existing ingestion and storage paths were inspected without execution.**
+  Track B flat-file/split responses could potentially be preserved, but timing,
+  licensing, and durable transfer are unverified. Current Redis, Actions, database,
+  and filesystem evidence does not establish the required 180-day immutable store.
+  Provider, storage, backup, and egress costs remain `UNKNOWN` pending account quotes.
+- [ ] **A meaningful stock manifest remains blocked on an exact missing input.**
+  QQQ/SPY stays `PROPOSED_NOT_APPROVED` and is plumbing-only. The repository has no
+  reviewed, effective-dated, outcome-independent common-stock source with typed
+  identities; no replacement roster was invented or approved.
+- [ ] **Acquisition implementation and execution remain `NOT_AUTHORIZED`.** Approval
+  must separately cover a stock/sector/identity manifest, account entitlement and
+  cost, the finite request/storage amendments, 180-day backup/restore evidence,
+  implementation, and later execution. No collection, deployment, purchase,
+  training, or scoring occurred in preparing the amendment.
+- [x] **Acquisition amendment v2 corrects v1 without mutating it.** The corrected
+  accounting adds supplied universe/sector inputs, recurring dated identities,
+  complete unadjusted 75-session refreshes, local split-basis reconstruction, and
+  a separately capped operational check. The proposed cumulative budget is now
+  1,248 expected / 3,789 maximum attempts; v1's 743 / 2,271 is superseded, not
+  approved or preserved as the operative estimate.
+- [x] **Storage evidence and operating capacity are separated.** Maximum primary
+  evidence is 674.31 MiB and primary-plus-backup evidence is 1,348.61 MiB under
+  a proposed 1,536 MiB evidence cap. Proposed operating capacity is a 2 GiB
+  primary filesystem plus a distinct 1 GiB versioned backup. No supported backup
+  destination is configured, so the arrangement is not operationally ready.
+- [ ] **All three corrected stages remain proposed.** Stage A implementation and
+  synthetic tests has zero live requests; stage B requires separate approval for
+  at most 18 attempts and 3.88 MiB evidence; stage C requires approved manifests,
+  stage-B evidence, entitlement/cost review, durable restore-tested storage, and
+  explicit collection authorization. One persistent ledger spans every stage.
