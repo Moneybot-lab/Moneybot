@@ -1,0 +1,43 @@
+name: Alpha Atlas V4 Stage A Synthetic Acquisition Only
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alpha-atlas-v4-stage-a-synthetic-acquisition
+  cancel-in-progress: false
+
+jobs:
+  synthetic-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run fake-transport acquisition, backup, and restore
+        id: run
+        continue-on-error: true
+        run: python -m scripts.run_alpha_atlas_v4_synthetic_acquisition --synthetic --output-dir evidence
+      - name: Ensure failure evidence exists
+        if: always()
+        run: |
+          mkdir -p evidence
+          if [ ! -f evidence/report.json ]; then
+            printf '{"status":"FAIL","mode":"SYNTHETIC_ONLY","live_provider_requests":0,"real_acquisition_available":false}\n' > evidence/report.json
+          fi
+          test -f evidence/report.md || printf '# Stage A synthetic acquisition\n\n- Status: `FAIL`\n' > evidence/report.md
+          test -f evidence/run.log || printf 'mode=SYNTHETIC_ONLY status=FAIL live_provider_requests=0\n' > evidence/run.log
+          (cd evidence && sha256sum report.json report.md run.log > SHA256SUMS)
+          test '${{ steps.run.outcome }}' = success
+      - name: Upload evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha-atlas-v4-stage-a-synthetic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error

@@ -1442,8 +1442,13 @@ immutable provenance. Performance comparison execution remains pending review.
   a proposed 1,536 MiB evidence cap. Proposed operating capacity is a 2 GiB
   primary filesystem plus a distinct 1 GiB versioned backup. No supported backup
   destination is configured, so the arrangement is not operationally ready.
-- [ ] **All three corrected stages remain proposed.** Stage A implementation and
-  synthetic tests has zero live requests; stage B requires separate approval for
+- [x] **Stage A is `AUTHORIZED / IMPLEMENTED / SYNTHETICALLY TESTED`.** The
+  transport-injected acquisition planner/runner, crash-conservative attempt ledger,
+  split-consistent adjustment, primary/backup/restore interfaces, deterministic
+  handoff, and synthetic-only CLI/workflow are complete. Stage A exposes no live
+  transport and recorded zero live requests.
+- [ ] **Stage B and Stage C remain `NOT_AUTHORIZED / NOT_EXECUTED`.** Stage B
+  requires separate approval for
   at most 18 attempts and 3.88 MiB evidence; stage C requires approved manifests,
   stage-B evidence, entitlement/cost review, durable restore-tested storage, and
   explicit collection authorization. One persistent ledger spans every stage.
@@ -1452,7 +1457,9 @@ immutable provenance. Performance comparison execution remains pending review.
   existing Render Starter stream worker at $7/month with 0.5 CPU/512 MiB and no
   disk, a Standard web service at $25/month with an existing 1 GB disk, and a Pro
   workspace with one visible Admin. Screenshot bytes were not supplied as files,
-  so no evidence hash is claimed.
+  so no evidence hash is claimed. The screenshot showed the web disk mounted at
+  `/var/data`; its `MONEYBOT_PERSISTENT_DATA_DIR` binding remains unknown, and it
+  is not evidence of worker storage access.
 - [ ] **The observed resources do not close storage or authorization.** The web
   disk is attached to a different service and is below the 2 GiB worker operating
   requirement; its mount/root and exact free bytes are unknown. No writable
