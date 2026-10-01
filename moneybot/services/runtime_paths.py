@@ -40,6 +40,25 @@ def is_durable_runtime_configured() -> bool:
     return bool(os.environ.get("MONEYBOT_PERSISTENT_DATA_DIR") or os.environ.get("MONEYBOT_RUNTIME_DIR"))
 
 
+def prospective_snapshot_root(*, test_root: Path | None = None) -> Path:
+    """Return the V4 snapshot root without ever using an implicit fallback.
+
+    ``test_root`` is intentionally explicit and is only for synthetic tests.  A
+    real pilot must use the persistent setting (not the more permissive legacy
+    runtime setting).
+    """
+    if test_root is not None:
+        root = Path(test_root)
+    else:
+        configured = os.environ.get("MONEYBOT_PERSISTENT_DATA_DIR")
+        if not configured:
+            raise RuntimeError("PERSISTENT_RUNTIME_ROOT_REQUIRED")
+        root = Path(configured).expanduser()
+    root = root / "alpha_atlas_v4" / "prospective_snapshots" / "v1"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def decision_events_log_path() -> Path:
     return resolve_runtime_dir() / "decision_events.jsonl"
 
