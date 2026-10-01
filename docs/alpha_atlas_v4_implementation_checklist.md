@@ -1494,3 +1494,25 @@ immutable provenance. Performance comparison execution remains pending review.
   1 GB disk mounted at `/var/data` with seven-day snapshots. That is not worker
   storage, does not establish `MONEYBOT_PERSISTENT_DATA_DIR`, and does not meet
   the proposed 180-day backup requirement.
+
+## Stage B implementation and offline synthetic validation (2026-10-01)
+
+- [x] **Stage B operational components are implemented and synthetically tested.**
+  The fixed-plan Massive transport, identity quarantine, externally hash-pinned
+  authorization gate, existing-bucket S3 version/Object-Lock adapter, exact-version
+  restore, evidence accounting, telemetry, and offline runner are present. The
+  offline run used five synthetic attempts and zero live provider requests.
+- [x] **The offline entry point is**
+  `python -m scripts.run_alpha_atlas_v4_stage_b_offline --offline-synthetic --output-dir <temporary-output-dir>`.
+  It has no live switch, SDK credential discovery, production storage access, or
+  provider fallback and emits compact JSON, Markdown, log, and relative checksums.
+- [ ] **Operational readiness remains unverified.** No worker disk/root, AWS
+  account/bucket/roles, Object Lock configuration, retained-data permission,
+  Massive endpoint access, or worker headroom was observed. The fixed 2026-10-05
+  fixture also still requires effective AAPL→XLK evidence and a separately
+  approved authorization whose hash is pinned outside the authorization itself.
+- [ ] **Stage B live execution remains `NOT_AUTHORIZED / NOT_EXECUTED`; the
+  ten-session pilot remains disabled and unauthorized.** This implementation
+  does not alter `COMPLETE — BLOCKED_STORAGE_AND_CACHE`, approve QQQ/SPY or a
+  stock universe, reopen prior findings, authorize collection/training/scoring,
+  or change production scheduling or behavior.

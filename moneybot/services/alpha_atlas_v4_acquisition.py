@@ -192,10 +192,13 @@ def remaining_timeout(now: datetime, clock: AcquisitionClock, configured: float)
 
 
 class AcquisitionRunner:
-    def __init__(self, store: ImmutableStore, transport: Transport, *, synthetic: bool = True, clock: Callable[[], datetime] = lambda: datetime.now(UTC)):
-        if not synthetic: raise CaptureError("REAL_ACQUISITION_DISABLED")
+    def __init__(self, store: ImmutableStore, transport: Transport, *, synthetic: bool = True,
+                 live_authorization_sha256: str | None = None,
+                 clock: Callable[[], datetime] = lambda: datetime.now(UTC)):
+        if not synthetic and (not live_authorization_sha256 or len(live_authorization_sha256)!=64):
+            raise CaptureError("REAL_ACQUISITION_DISABLED")
         self.store,self.transport,self.clock=store,transport,clock
-        self.ledger=AttemptLedger(store,synthetic=True)
+        self.ledger=AttemptLedger(store,synthetic=synthetic)
 
     def execute(self, spec: RequestSpec, stage: str, timing: AcquisitionClock) -> dict[str, Any]:
         validate_request_spec(spec)
@@ -216,7 +219,12 @@ class AcquisitionRunner:
                 if response.status!=200: self.ledger.event(attempt,"FAILED",response.received_at,reason=f"HTTP_{response.status}"); raise CaptureError("HTTP_FAILURE",str(response.status))
                 try: payload=json.loads(response.body)
                 except json.JSONDecodeError as exc: self.ledger.event(attempt,"FAILED",response.received_at,reason="MALFORMED_JSON"); raise CaptureError("MALFORMED_RESPONSE") from exc
-                if not isinstance(payload,dict) or not isinstance(payload.get("results"),list): self.ledger.event(attempt,"FAILED",response.received_at,reason="MISSING_RESULTS"); raise CaptureError("MISSING_DATA")
+                if not isinstance(payload,dict): self.ledger.event(attempt,"FAILED",response.received_at,reason="MISSING_RESULTS"); raise CaptureError("MISSING_DATA")
+                result_value=payload.get("results")
+                if spec.family=="identity" and isinstance(result_value,dict):
+                    payload={**payload,"results":[result_value]}
+                elif not isinstance(result_value,list):
+                    self.ledger.event(attempt,"FAILED",response.received_at,reason="MISSING_RESULTS"); raise CaptureError("MISSING_DATA")
                 digest=sha256_bytes(response.body)
                 prior=[]
                 receipt_dir=self.store.root/f"responses/{spec.family}/{spec.request_id.replace(':','_')}"
