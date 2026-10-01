@@ -1466,3 +1466,31 @@ immutable provenance. Performance comparison execution remains pending review.
   versioned 180-day backup is configured. Provider retained-data terms, approved
   stock/sector/identity manifests, worker headroom, restore roles, and explicit
   stage authorization remain open. No purchase or provisioning occurred.
+
+## Stage B operational-verification setup package (2026-10-01)
+
+- [x] **Stage A remains complete.** Hosted synthetic run `36737873047-1`
+  passed with seven synthetic attempts, zero live provider requests, a 75-session
+  eligible synthetic handoff, and temporary primary/backup/restore verification.
+  Its uploaded `report.json` SHA-256 is
+  `ccd9a80839cd10dfe2beb1ad01b1e8779b010037c867923834b6bfa914726cb0`.
+  The artifact contained the compact report, Markdown, log, and checksum manifest;
+  it did not preserve temporary source, backup, or restore objects.
+- [x] **Stage B setup is `PREPARED_FOR_REVIEW`.** The fixture is AAPL with SPY
+  and XLK context, five expected and eighteen maximum attempts, a fixed
+  75-prior-XNYS-session window, a 3 GB-decimal worker disk proposal, and an
+  Amazon S3 Standard `us-east-1` versioned/Object-Locked backup proposal. See
+  `docs/reports/alpha_atlas_v4_stage_b_setup_package.v1.{json,md}` and the
+  separately hashed verification manifest.
+- [ ] **Stage B remains `NOT_AUTHORIZED / NOT_EXECUTED`.** Typed share identity
+  must be resolved by the registered dated request, the AAPL→XLK mapping must be
+  confirmed effective for the bound session, Massive retained-data terms remain
+  unresolved, and the live transport, S3 adapter, authorization gate, telemetry,
+  worker disk, backup bucket/roles, and operational command do not yet exist.
+- [ ] **The ten-session pilot remains disabled and unauthorized.** Stage B PASS
+  would not approve the later stock universe, start collection, authorize
+  training, or establish predictive advantage.
+- [x] Account evidence is stated narrowly: the existing **web service** has a
+  1 GB disk mounted at `/var/data` with seven-day snapshots. That is not worker
+  storage, does not establish `MONEYBOT_PERSISTENT_DATA_DIR`, and does not meet
+  the proposed 180-day backup requirement.
