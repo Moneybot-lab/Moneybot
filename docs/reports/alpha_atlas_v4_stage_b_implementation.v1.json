@@ -1,0 +1,45 @@
+{
+  "schema_version": "alpha-atlas-v4-stage-b-implementation.v1",
+  "status": "IMPLEMENTED_AND_SYNTHETICALLY_TESTED_NOT_OPERATIONALLY_READY",
+  "date": "2026-10-01",
+  "bound_documents": {
+    "alpha_atlas_v4_stage_b_setup_package.v1.json": "3524360467fbd47a3eeb7dfbd4252d82dfda9b407354a2807268d6acb5ba5a79",
+    "alpha_atlas_v4_stage_b_verification_manifest.v1.json": "ef391a01d97a3f170b434ea04022dff16922b13be677ba68996fad229a219996",
+    "fixture_content_sha256": "1e59160a60c0f2db6e8f268a8bc6f7eb30db7444435b8a8bd59582c77126d33b",
+    "amendment_v3_sha256": "767edcee6cb234302af0339187aaa49c25af6b2a6fd21b99f6a2342f42f929f9",
+    "snapshot_contract_sha256": "09bf4a7308533195df5a0be4277cba7a5a3bbcd15b5a6fd28abc4321380ad692",
+    "timing_clarification_sha256": "f92a1d99856a35556abe2b89f6b7923fbcfaf3cd1bcdb05166125935a6efc66a"
+  },
+  "implemented": [
+    "single-exchange no-redirect/no-library-retry Massive HTTPS transport restricted to the five bound requests",
+    "authorization, document, fixture, fixed-date, effective-sector, persistent-root and capacity gates before credential/client construction",
+    "history quarantine until an unambiguous security-level identity resolves; issuer CIK alone is rejected",
+    "version-aware S3 backup interface requiring us-east-1, Versioning, Governance Object Lock >=180 days, SSE-S3, SHA-256 read-back and exact-version isolated restore",
+    "separate append-only S3 operation accounting and Massive durable attempt accounting",
+    "fixed Stage B runner with evidence caps, telemetry, primary read-back, complete primary backup and isolated restore",
+    "offline-only CLI with mock transport/S3 and relative-path checksums"
+  ],
+  "offline_entry_point": "python -m scripts.run_alpha_atlas_v4_stage_b_offline --offline-synthetic --output-dir <temporary-output-dir>",
+  "live_entry_point": null,
+  "live_execution": "NOT_AUTHORIZED_NOT_EXECUTED",
+  "live_provider_requests": 0,
+  "operational_prerequisites": [
+    "separately approved authorization document whose full hash is supplied to the runner",
+    "effective AAPL-to-XLK evidence for 2026-10-05",
+    "unambiguous dated provider security identity returned by request 4",
+    "worker root exactly /var/data/moneybot-stage-b and matching MONEYBOT_PERSISTENT_DATA_DIR",
+    "provisioned writable worker disk with measured capacity/headroom",
+    "existing dedicated us-east-1 bucket with Versioning and >=180-day Governance Object Lock",
+    "least-privilege Massive and S3 credentials and confirmed retained-data permission",
+    "separate explicit authorization for the bounded operational run before the fixed session expires"
+  ],
+  "limits": {
+    "expected_massive_attempts": 5,
+    "maximum_massive_attempts": 18,
+    "cumulative_attempt_cap": 3789,
+    "primary_bytes": 4067328,
+    "backup_bytes": 4067328,
+    "combined_bytes": 8134656,
+    "s3_operation_cap": 512
+  }
+}

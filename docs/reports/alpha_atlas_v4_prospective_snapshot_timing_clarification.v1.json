@@ -1,0 +1,16 @@
+{
+  "schema_version": "alpha-atlas-v4-prospective-snapshot-timing-clarification.v1",
+  "clarifies_contract_sha256": "09bf4a7308533195df5a0be4277cba7a5a3bbcd15b5a6fd28abc4321380ad692",
+  "calendar": "XNYS-rule-calendar.v1",
+  "timezone": "America/New_York",
+  "rules": {
+    "universe": "The approved static pilot universe is unchanged across ten sessions and each session binds its manifest at 07:45.",
+    "assembly_window": "07:45:00 through 08:30:00",
+    "durable_ready_deadline": "08:40:00 inclusive",
+    "decision_boundary": "08:45:00 uses the already-frozen eligible cohort",
+    "late": "Any ready_for_use_at later than 08:40:00 is late, including the interval through 08:45:00, and cannot replace an on-time snapshot or alter the frozen cohort.",
+    "entry": "The intended entry is the session official regular open; the contract five-session exit is unchanged.",
+    "delay": "Delayed execution cannot move a deadline or backdate readiness."
+  },
+  "changes_other_eligibility_rules": false
+}
