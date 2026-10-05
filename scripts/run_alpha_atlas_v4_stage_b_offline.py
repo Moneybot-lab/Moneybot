@@ -27,8 +27,11 @@ class OfflineTransport:
 
 class OfflineS3:
     def __init__(self): self.objects={}; self.n=0
+    def head_bucket(self,**kwargs): return {}
     def get_bucket_location(self,**kwargs): return {"LocationConstraint":"us-east-1"}
     def get_bucket_versioning(self,**kwargs): return {"Status":"Enabled"}
+    def get_public_access_block(self,**kwargs): return {"PublicAccessBlockConfiguration":{"BlockPublicAcls":True,"IgnorePublicAcls":True,"BlockPublicPolicy":True,"RestrictPublicBuckets":True}}
+    def get_bucket_encryption(self,**kwargs): return {"ServerSideEncryptionConfiguration":{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}}
     def get_object_lock_configuration(self,**kwargs): return {"ObjectLockConfiguration":{"ObjectLockEnabled":"Enabled","Rule":{"DefaultRetention":{"Mode":"GOVERNANCE","Days":180}}}}
     def put_object(self,**kwargs):
         self.n+=1; version=f"synthetic-v{self.n}"; self.objects[(kwargs["Key"],version)]=bytes(kwargs["Body"])
@@ -53,7 +56,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="alpha-atlas-stage-b-offline-") as temp:
         root=Path(temp); client=OfflineS3()
         runner=StageBRunner(repo,root,offline=True,now=lambda:NOW)
-        report=runner.execute(synthetic_authorization(),effective_sector_fixture(),lambda:OfflineTransport(),lambda primary:S3EvidenceBackup(client,"synthetic-stage-b-test-only","alpha-atlas-v4/stage-b/offline",S3OperationLedger(ImmutableStore(root/"s3-ledger")),now=lambda:NOW))
+        report=runner.execute(synthetic_authorization(),effective_sector_fixture(),lambda:OfflineTransport(),lambda primary:S3EvidenceBackup(client,"synthetic-stage-b-test-only","alpha-atlas-v4/stage-b/offline",S3OperationLedger(ImmutableStore(root/"s3-ledger")),expected_owner="123456789012",now=lambda:NOW))
         report["bound_documents_verified"]=True; report["temporary_objects_uploaded"]=False
         write(args.output_dir,report)
     print(json.dumps({"status":report["status"],"output_dir":str(args.output_dir),"live_provider_requests":0},sort_keys=True)); return 0

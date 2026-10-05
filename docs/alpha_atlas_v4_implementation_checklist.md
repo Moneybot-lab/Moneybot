@@ -1516,3 +1516,27 @@ immutable provenance. Performance comparison execution remains pending review.
   does not alter `COMPLETE — BLOCKED_STORAGE_AND_CACHE`, approve QQQ/SPY or a
   stock universe, reopen prior findings, authorize collection/training/scoring,
   or change production scheduling or behavior.
+
+## Stage B operational connection reconciliation (2026-10-05)
+
+- [x] The previously mock-only S3 seam now has a lazy concrete boto3 factory,
+  explicit credentials, disabled SDK retries, pre-call durable operation
+  reservations, bucket-owner/region/Versioning/encryption/public-access/Object-Lock
+  gates, and exact-version SHA-256 restore. A non-scheduled operational entry
+  point exists but cannot manufacture approval.
+- [x] The S3 budget is reconciled: 54 operations expected and 62 maximum for one
+  complete path, versus the unchanged defensive cap of 512. Failure stops without
+  retry; an uncertain operation blocks restart. The earlier request-cost allowance
+  was conservative; the corrected known six-month maximum is `$4.501016550784`
+  before account-specific unknowns and authorizes no spending.
+- [x] The preserved 2026-10-05 fixture is **`EXPIRED / NOT EXECUTABLE`**. Its
+  07:30 America/New_York acquisition cutoff and 2026-06-17–2026-10-02 window are
+  unchanged. Tests demonstrate rejection before S3/Massive client construction;
+  no replacement date was selected and no receipt was backdated.
+- [ ] A future run requires a re-bound session/window, dated identity and split
+  parameters, effective AAPL→XLK evidence, new fixture hashes, and a separately
+  approved execution authorization with an externally pinned full hash.
+- [ ] Live Stage B remains `NOT_AUTHORIZED / NOT_EXECUTED`; operational worker
+  disk, AWS destination/roles, permissions, provider terms, runtime headroom,
+  backup and restore remain unverified. The pilot remains disabled, readiness
+  remains `COMPLETE — BLOCKED_STORAGE_AND_CACHE`, and prior findings remain closed.

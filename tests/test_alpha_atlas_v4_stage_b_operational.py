@@ -18,7 +18,7 @@ def runner(tmp_path,now=lambda:NOW): return StageBRunner(REPO,tmp_path,offline=T
 
 def backup(root,client=None):
     client=client or OfflineS3()
-    return S3EvidenceBackup(client,'test-only','prefix',S3OperationLedger(ImmutableStore(root/'ops')),now=lambda:NOW)
+    return S3EvidenceBackup(client,'test-only','prefix',S3OperationLedger(ImmutableStore(root/'ops')),expected_owner='123456789012',now=lambda:NOW)
 
 def test_authorization_hash_binding_and_expiry_reject_before_transport(tmp_path):
     calls=[]; factory=lambda:(calls.append(1) or OfflineTransport())
@@ -71,13 +71,14 @@ def test_s3_missing_config_checksum_and_partial_failure(tmp_path):
         def get_object(self,**kwargs): return {'Body':io.BytesIO(b'wrong')}
     adapter=backup(tmp_path/'b',Corrupt()); adapter.verify_configuration()
     with pytest.raises(CaptureError,match='CHECKSUM'): adapter.publish('x',b'right')
-    assert any(x['operation']=='PUT_OBJECT' for x in adapter.ledger.records())
+    assert any(x.get('operation')=='PUT_OBJECT' and x['event']=='RESERVED' for x in adapter.ledger.records())
 
 def test_complete_runner_backup_restore_caps_and_zero_live(tmp_path):
     report=runner(tmp_path).execute(synthetic_authorization(),effective_sector_fixture(),lambda:OfflineTransport(),lambda p:backup(tmp_path))
     assert report['status']=='PASS' and report['synthetic_transport_attempts']==5 and report['live_provider_requests']==0
     assert report['quarantined_then_released']==['history:AAPL','history:SPY','history:XLK']
     assert report['backup']['objects']==report['restore']['objects'] and report['backup']['bytes_accounted']<=BACKUP_CAP
+    assert report['s3_operations']==s3_operation_budget(12)['total']==54
 
 def test_primary_and_backup_caps(tmp_path,monkeypatch):
     import moneybot.services.alpha_atlas_v4_stage_b as module
@@ -127,3 +128,82 @@ def test_operational_attempt_cap_and_credential_redaction(tmp_path):
         ledger.reserve('operational_verification','overflow',NOW)
     serialized=(tmp_path/'acquisition_attempts.jsonl').read_text()
     assert 'apikey' not in serialized.lower() and 'authorization' not in serialized.lower()
+
+def test_concrete_boto_client_uses_explicit_credentials_and_disables_sdk_retries(monkeypatch):
+    import socket, types
+    monkeypatch.setattr(socket.socket,"connect",lambda *args,**kwargs: (_ for _ in ()).throw(AssertionError("network forbidden")))
+    captured={}
+    class Config:
+        def __init__(self,**kwargs): self.kwargs=kwargs
+    def client(service,**kwargs): captured.update(service=service,**kwargs); return object()
+    monkeypatch.setitem(sys.modules,'boto3',types.SimpleNamespace(client=client))
+    monkeypatch.setitem(sys.modules,'botocore.config',types.SimpleNamespace(Config=Config))
+    result=create_boto3_s3_client(access_key_id='explicit-id',secret_access_key='explicit-secret',session_token='explicit-token')
+    assert result is not None and captured['service']=='s3'
+    assert captured['aws_access_key_id']=='explicit-id' and captured['aws_secret_access_key']=='explicit-secret'
+    assert captured['config'].kwargs['retries']=={'total_max_attempts':1,'mode':'standard'}
+    assert captured['region_name']=='us-east-1'
+
+
+def test_every_s3_call_is_reserved_before_sdk_invocation_and_exact_count(tmp_path):
+    ledger=S3OperationLedger(ImmutableStore(tmp_path/'ops'))
+    class Observed(OfflineS3):
+        def _reserved(self,operation):
+            rows=ledger.records(); assert rows[-2]['event']=='RESERVED' and rows[-2]['operation']==operation
+            assert rows[-1]['event']=='TRANSMITTING'
+        def head_bucket(self,**kwargs): self._reserved('HEAD_BUCKET'); return super().head_bucket(**kwargs)
+        def get_bucket_location(self,**kwargs): self._reserved('GET_BUCKET_LOCATION'); return super().get_bucket_location(**kwargs)
+        def get_bucket_versioning(self,**kwargs): self._reserved('GET_BUCKET_VERSIONING'); return super().get_bucket_versioning(**kwargs)
+        def get_public_access_block(self,**kwargs): self._reserved('GET_PUBLIC_ACCESS_BLOCK'); return super().get_public_access_block(**kwargs)
+        def get_bucket_encryption(self,**kwargs): self._reserved('GET_BUCKET_ENCRYPTION'); return super().get_bucket_encryption(**kwargs)
+        def get_object_lock_configuration(self,**kwargs): self._reserved('GET_OBJECT_LOCK'); return super().get_object_lock_configuration(**kwargs)
+    adapter=S3EvidenceBackup(Observed(),'bucket','prefix',ledger,expected_owner='123456789012',now=lambda:NOW)
+    adapter.verify_configuration(); assert ledger.operation_count()==6
+
+
+def test_s3_uncertain_restart_is_preserved_without_reissue(tmp_path):
+    ledger=S3OperationLedger(ImmutableStore(tmp_path)); operation=ledger.reserve('PUT_OBJECT',key='x'); ledger.event(operation,'TRANSMITTING')
+    restarted=S3OperationLedger(ImmutableStore(tmp_path)); assert restarted.reconcile_uncertain()==1
+    assert restarted.operation_count()==1 and any(r['event']=='UNCERTAIN' for r in restarted.records())
+
+
+def test_s3_public_access_encryption_and_owner_are_required(tmp_path):
+    class Public(OfflineS3):
+        def get_public_access_block(self,**kwargs): return {'PublicAccessBlockConfiguration':{}}
+    with pytest.raises(CaptureError,match='PUBLIC_ACCESS'): backup(tmp_path/'public',Public()).verify_configuration()
+    class Encryption(OfflineS3):
+        def get_bucket_encryption(self,**kwargs): return {'ServerSideEncryptionConfiguration':{'Rules':[]}}
+    with pytest.raises(CaptureError,match='ENCRYPTION'): backup(tmp_path/'encryption',Encryption()).verify_configuration()
+    with pytest.raises(CaptureError,match='EXPECTED_OWNER'):
+        S3EvidenceBackup(OfflineS3(),'bucket','prefix',S3OperationLedger(ImmutableStore(tmp_path/'owner')),expected_owner='')
+
+
+def test_fixed_fixture_is_expired_after_deadline_before_any_client_creation(tmp_path):
+    created=[]
+    expired=datetime(2026,10,5,11,30,0,tzinfo=UTC)
+    with pytest.raises(CaptureError,match='FIXED_SESSION_EXPIRED'):
+        runner(tmp_path,lambda:expired).execute(synthetic_authorization(),effective_sector_fixture(),lambda:(created.append('massive') or OfflineTransport()),lambda p:(created.append('s3') or backup(tmp_path)))
+    assert created==[]
+
+
+def test_runtime_guard_stops_unsafe_headroom(tmp_path):
+    root=tmp_path/'root'; root.mkdir()
+    guard=RuntimeResourceGuard(root,max_rss_kib=1)
+    with pytest.raises(CaptureError,match='RUNTIME_HEADROOM_EXHAUSTED'): guard('DURING_ACQUISITION')
+
+
+def test_s3_operation_budget_expected_maximum_and_cap():
+    assert s3_operation_budget(12)=={'configuration':6,'uploads':12,'retention_version_heads':12,'checksum_readbacks':12,'exact_version_restores':12,'total':54}
+    assert s3_operation_budget(14)['total']==62<S3_OPERATION_CAP
+    with pytest.raises(CaptureError,match='OUT_OF_BOUNDS'): s3_operation_budget(15)
+
+def test_operational_cli_rejects_unapproved_authorization_without_clients(tmp_path):
+    auth=tmp_path/'auth.json'; auth.write_text(json.dumps(synthetic_authorization()))
+    sector=tmp_path/'sector.json'; sector.write_text(json.dumps(effective_sector_fixture()))
+    config=tmp_path/'config.json'; config.write_text(json.dumps({'persistent_root':REQUIRED_ROOT,'s3_bucket':'never-contact','s3_prefix':'x','s3_expected_owner':'123456789012','s3_region':'us-east-1','max_rss_kib':999999}))
+    output=tmp_path/'result.json'; env=os.environ.copy(); env.pop('PYTHONPATH',None)
+    env.update({'AWS_EC2_METADATA_SERVICE_ENDPOINT':'http://127.0.0.1:1','ALPHA_ATLAS_V4_AWS_ACCESS_KEY_ID':'MUST_NOT_READ','ALPHA_ATLAS_V4_AWS_SECRET_ACCESS_KEY':'MUST_NOT_READ','ALPHA_ATLAS_V4_MASSIVE_API_KEY':'MUST_NOT_READ'})
+    run=subprocess.run([sys.executable,'-m','scripts.run_alpha_atlas_v4_stage_b_operational','--authorization',str(auth),'--approved-authorization-sha256','0'*64,'--sector-evidence',str(sector),'--config',str(config),'--output',str(output)],cwd=REPO,env=env,text=True,capture_output=True,timeout=30)
+    assert run.returncode==2
+    result=json.loads(output.read_text()); assert result['error_code']=='EXECUTION_NOT_AUTHORIZED' and result['stage_b_executed'] is False
+    assert 'MUST_NOT_READ' not in output.read_text()
