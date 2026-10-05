@@ -1,0 +1,126 @@
+{
+  "already_existed": [
+    "injected S3 interface with mock-only version/checksum/restore tests",
+    "fixed Massive request order and durable 18-attempt/cumulative 3789-attempt accounting",
+    "authorization, fixture, date, sector, root and evidence-cap gates",
+    "history quarantine and security-level identity gate",
+    "offline-only end-to-end command"
+  ],
+  "cost_reconciliation_usd": {
+    "expected_operation_cost": 7.68e-05,
+    "get_rate_per_1000": 0.0004,
+    "incremental_spending_authorized": false,
+    "maximum_operation_cost": 8.92e-05,
+    "prior_allowance_was_conservative": true,
+    "prior_setup_operation_allowance": 0.0007424,
+    "put_rate_per_1000": 0.005,
+    "revised_known_six_month_maximum": 4.501016550784,
+    "source_rates_verified": "2026-10-01",
+    "unknowns": [
+      "actual AWS account pricing, taxes, credits and billing relationship",
+      "provider retention permission",
+      "worker compute and interference measurements"
+    ]
+  },
+  "expired_fixture": {
+    "acquisition_deadline": "2026-10-05T07:30:00-04:00",
+    "automatic_roll": false,
+    "future_rebind_fields": [
+      "verification_session",
+      "75-prior-XNYS window from/to and ordered sessions",
+      "dated identity request date",
+      "split execution_date.gte/lte",
+      "effective AAPL-to-XLK mapping interval and source hash",
+      "fixture content/file hashes",
+      "setup/contract bindings if changed",
+      "authorization session, fixture hash, setup hash, maximum attempts and full externally pinned authorization hash",
+      "sector evidence content hash",
+      "operational configuration hash binding worker root, bucket, prefix, region and expected owner"
+    ],
+    "session": "2026-10-05",
+    "status": "EXPIRED_PRESERVED_NOT_EXECUTABLE",
+    "window_from": "2026-06-17",
+    "window_to": "2026-10-02"
+  },
+  "fixed_gaps": [
+    "concrete lazy boto3 S3 client factory using explicit credentials and no credential chain",
+    "SDK retry configuration total_max_attempts=1",
+    "non-scheduled operational entry point that cannot manufacture authorization",
+    "bucket owner, region, Versioning, default AES256 encryption, all public-access blocks and 180-day Governance Object Lock verification",
+    "durable reservation before every S3 SDK call with succeeded, failed and uncertain states",
+    "no automatic replay of uncertain S3 or Massive attempts",
+    "runtime RSS and free-space checks before and during acquisition, backup and restore",
+    "explicit fixed-fixture expiration refusal before client creation"
+  ],
+  "massive_budget_unchanged": {
+    "cumulative": 3789,
+    "expected": 5,
+    "extra_identity_or_preflight_request": 0,
+    "maximum": 18
+  },
+  "offline_verification": {
+    "command": "python -m scripts.run_alpha_atlas_v4_stage_b_offline --offline-synthetic --output-dir <temporary-output-dir>",
+    "live_aws_requests": 0,
+    "live_provider_requests": 0,
+    "synthetic_massive_attempts": 5,
+    "synthetic_s3_operations": 54
+  },
+  "operational_entry_point": "python -m scripts.run_alpha_atlas_v4_stage_b_operational --authorization <approved.json> --approved-authorization-sha256 <externally-pinned-sha256> --sector-evidence <mapping.json> --config <runtime.json> --output <result.json>",
+  "operational_requirements_remaining": [
+    "3 GB worker disk and MONEYBOT_PERSISTENT_DATA_DIR=/var/data/moneybot-stage-b",
+    "pre-existing dedicated us-east-1 bucket and expected 12-digit AWS account owner",
+    "least-privilege S3 role/credentials without governance bypass",
+    "Massive retained-data permission and credential",
+    "new effective mapping evidence and future date/window manifest rebind",
+    "separately approved future execution authorization and externally pinned hash",
+    "authorized bounded run to measure worker headroom, interference, backup and restore"
+  ],
+  "owner_setup_order": [
+    "attach 3 GB worker disk and bind MONEYBOT_PERSISTENT_DATA_DIR=/var/data/moneybot-stage-b",
+    "configure existing dedicated us-east-1 S3 bucket, expected owner, Versioning, AES256 encryption, all public-access blocks and >=180-day Governance Object Lock",
+    "install least-privilege S3 and Massive secrets; no governance bypass",
+    "obtain retained-data permission and effective mapping evidence",
+    "rebind and review a future session/window fixture and its hashes",
+    "approve and externally pin one execution authorization, then separately authorize the bounded run"
+  ],
+  "preserves": {
+    "pilot": "DISABLED_NOT_AUTHORIZED",
+    "qqq_spy_manifest": "PROPOSED_NOT_APPROVED",
+    "readiness": "COMPLETE_BLOCKED_STORAGE_AND_CACHE",
+    "setup_package_file_sha256": "3524360467fbd47a3eeb7dfbd4252d82dfda9b407354a2807268d6acb5ba5a79",
+    "stage_a": "COMPLETE",
+    "stage_b_live": "NOT_AUTHORIZED_NOT_EXECUTED",
+    "verification_manifest_content_sha256": "1e59160a60c0f2db6e8f268a8bc6f7eb30db7444435b8a8bd59582c77126d33b",
+    "verification_manifest_file_sha256": "ef391a01d97a3f170b434ea04022dff16922b13be677ba68996fad229a219996"
+  },
+  "recorded_at": "2026-10-05",
+  "s3_operation_budget": {
+    "authentication_basis": "Explicit access key, secret and optional session token are passed only after local preflight; no credential chain, metadata service or STS call.",
+    "authentication_network_operations": 0,
+    "automatic_sdk_retries": 0,
+    "cap_interpretation": "Defensive technical ceiling only, not authorization to retry, rerun, spend, or use all 512 operations.",
+    "crash_rule": "A reserved nonterminal operation becomes UNCERTAIN at restart and blocks execution pending separate review; reconciliation performs zero network operations.",
+    "expected": {
+      "checksum_readbacks": 12,
+      "configuration": 6,
+      "exact_version_restores": 12,
+      "retention_version_heads": 12,
+      "total": 54,
+      "uploads": 12
+    },
+    "failure_rule": "A failed SDK call consumes its pre-reserved operation and stops; it does not add a retry.",
+    "hard_cap": 512,
+    "headroom_to_cap": 450,
+    "maximum_complete_path": {
+      "basis": "two split pages create two additional raw/receipt objects",
+      "checksum_readbacks": 14,
+      "configuration": 6,
+      "exact_version_restores": 14,
+      "retention_version_heads": 14,
+      "total": 62,
+      "uploads": 14
+    }
+  },
+  "schema_version": "alpha-atlas-v4-stage-b-operational-completion.v1",
+  "status": "IMPLEMENTED_OFFLINE_TESTED_FIXTURE_EXPIRED_LIVE_NOT_AUTHORIZED"
+}
