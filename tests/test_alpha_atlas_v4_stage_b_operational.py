@@ -1,6 +1,6 @@
 from __future__ import annotations
 import io, json, os, subprocess, sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import pytest
 
@@ -203,10 +203,28 @@ def test_operational_cli_rejects_unapproved_authorization_without_clients(tmp_pa
     config=REPO/'docs/reports/alpha_atlas_v4_stage_b_runtime_config.v1.json'
     output=tmp_path/'result.json'; env=os.environ.copy(); env.pop('PYTHONPATH',None)
     env.update({'AWS_EC2_METADATA_SERVICE_ENDPOINT':'http://127.0.0.1:1','MONEYBOT_STAGE_B_AWS_ACCESS_KEY_ID':'MUST_NOT_READ','MONEYBOT_STAGE_B_AWS_SECRET_ACCESS_KEY':'MUST_NOT_READ','ALPHA_ATLAS_V4_MASSIVE_API_KEY':'MUST_NOT_READ'})
-    run=subprocess.run([sys.executable,'-m','scripts.run_alpha_atlas_v4_stage_b_operational','--authorization',str(auth),'--approved-authorization-sha256','0'*64,'--sector-evidence',str(sector),'--config',str(config),'--output',str(output)],cwd=REPO,env=env,text=True,capture_output=True,timeout=30)
+    fixture=REPO/'docs/reports/alpha_atlas_v4_stage_b_verification_manifest.v1.json'
+    run=subprocess.run([sys.executable,'-m','scripts.run_alpha_atlas_v4_stage_b_operational','--authorization',str(auth),'--approved-authorization-sha256','0'*64,'--sector-evidence',str(sector),'--config',str(config),'--fixture',str(fixture),'--fixture-file-sha256',FIXTURE_FILE_SHA256,'--fixture-content-sha256',FIXTURE_CONTENT_SHA256,'--session',SESSION.isoformat(),'--output',str(output)],cwd=REPO,env=env,text=True,capture_output=True,timeout=30)
     assert run.returncode==2
     result=json.loads(output.read_text()); assert result['error_code']=='S3_EXPECTED_OWNER_UNRESOLVED' and result['stage_b_executed'] is False
     assert 'MUST_NOT_READ' not in output.read_text()
+
+
+def test_proposed_fixture_is_parameterized_but_dated_sector_evidence_blocks(tmp_path):
+    fixture_name='alpha_atlas_v4_stage_b_verification_manifest.v2.json'
+    fixture_path=REPO/'docs/reports'/fixture_name
+    fixture_file_sha=sha256_bytes(fixture_path.read_bytes())
+    fixture=json.loads(fixture_path.read_text()); fixture_hash=fixture['content_sha256']
+    session=date(2026,10,26)
+    loaded=load_fixture(REPO,fixture_name=fixture_name,fixture_content_sha256=fixture_hash,session=session)
+    assert loaded['history_window']=={'calendar':'repository ExchangeCalendar / XNYS','count':75,'from':'2026-07-10','no_extension':True,'rule':'exactly 75 prior eligible sessions ending at immediately previous completed session','to':'2026-10-23'}
+    auth=changed(synthetic_authorization(),fixture_sha256=fixture_hash,session=session.isoformat())
+    sector=changed(effective_sector_fixture(),fixture_sha256=fixture_hash,effective_from='2026-10-05',effective_through='2026-10-05')
+    proposed=StageBRunner(REPO,tmp_path,offline=True,fixture_name=fixture_name,
+                          fixture_file_sha256=fixture_file_sha,fixture_content_sha256=fixture_hash,
+                          session=session,now=lambda:datetime(2026,10,20,tzinfo=UTC))
+    with pytest.raises(CaptureError,match='SECTOR_EVIDENCE_NOT_EFFECTIVE'):
+        proposed.preflight(auth,sector)
 
 def test_owner_reported_config_exact_bindings_and_owner_binder(tmp_path):
     source=REPO/'docs/reports/alpha_atlas_v4_stage_b_runtime_config.v1.json'

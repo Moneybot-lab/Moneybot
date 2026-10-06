@@ -1,6 +1,7 @@
 """Non-scheduled Stage B runner; an expired or unapproved fixture fails before clients."""
 from __future__ import annotations
 import argparse, json, os
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -23,12 +24,17 @@ def main() -> int:
     parser=argparse.ArgumentParser(description="Stage B fixed-session operational runner (no schedule)")
     parser.add_argument("--authorization",type=Path,required=True); parser.add_argument("--approved-authorization-sha256",required=True)
     parser.add_argument("--sector-evidence",type=Path,required=True); parser.add_argument("--config",type=Path,required=True)
+    parser.add_argument("--fixture",type=Path,required=True)
+    parser.add_argument("--fixture-file-sha256",required=True); parser.add_argument("--fixture-content-sha256",required=True)
+    parser.add_argument("--session",type=date.fromisoformat,required=True)
     parser.add_argument("--output",type=Path,required=True); args=parser.parse_args()
     try:
         authorization=_load(args.authorization); sector=_load(args.sector_evidence); config=load_runtime_config(args.config,require_owner=True)
         root=Path(config["persistent_root"]); guard=RuntimeResourceGuard(root,max_rss_kib=int(config["max_rss_kib"]))
         repo=Path(__file__).resolve().parents[1]
-        runner=StageBRunner(repo,root,offline=False,approved_authorization_sha256=args.approved_authorization_sha256,operational_config_sha256=str(config["content_sha256"]),runtime_guard=guard)
+        try: fixture_name=args.fixture.resolve().relative_to((repo/"docs/reports").resolve()).as_posix()
+        except ValueError as exc: raise CaptureError("FIXTURE_PATH_OUTSIDE_REPORTS") from exc
+        runner=StageBRunner(repo,root,offline=False,approved_authorization_sha256=args.approved_authorization_sha256,operational_config_sha256=str(config["content_sha256"]),fixture_name=fixture_name,fixture_file_sha256=args.fixture_file_sha256,fixture_content_sha256=args.fixture_content_sha256,session=args.session,runtime_guard=guard)
         # These closures discover credentials/create clients only after runner.preflight succeeds.
         def backup_factory(primary: ImmutableStore) -> S3EvidenceBackup:
             access_key,secret_key=_aws_credentials(os.environ)
@@ -37,7 +43,7 @@ def main() -> int:
             if ledger.reconcile_uncertain(): raise CaptureError("S3_UNCERTAIN_OPERATIONS_REQUIRE_REVIEW")
             return S3EvidenceBackup(client,str(config["s3_bucket"]),str(config["s3_prefix"]),ledger,expected_owner=str(config["s3_expected_owner"]))
         def transport_factory() -> MassiveStageBTransport:
-            return MassiveStageBTransport(load_fixture(repo),os.environ.get("ALPHA_ATLAS_V4_MASSIVE_API_KEY",""))
+            return MassiveStageBTransport(load_fixture(repo,fixture_name=fixture_name,fixture_content_sha256=args.fixture_content_sha256,session=args.session),os.environ.get("ALPHA_ATLAS_V4_MASSIVE_API_KEY",""))
         result=runner.execute(authorization,sector,transport_factory,backup_factory)
         exit_code=0
     except Exception as exc:

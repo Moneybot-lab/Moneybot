@@ -100,11 +100,12 @@ def s3_operation_budget(object_count: int) -> dict[str,int]:
     return {**values,"total":sum(values.values())}
 
 
-def verify_stage_b_documents(repo: Path) -> dict[str, str]:
+def verify_stage_b_documents(repo: Path, *, fixture_name: str = "alpha_atlas_v4_stage_b_verification_manifest.v1.json",
+                             fixture_file_sha256: str = FIXTURE_FILE_SHA256) -> dict[str, str]:
     reports = repo / "docs" / "reports"
     expected = {
         "alpha_atlas_v4_stage_b_setup_package.v1.json": SETUP_PACKAGE_FILE_SHA256,
-        "alpha_atlas_v4_stage_b_verification_manifest.v1.json": FIXTURE_FILE_SHA256,
+        fixture_name: fixture_file_sha256,
     }
     found = {}
     for name, wanted in expected.items():
@@ -115,31 +116,35 @@ def verify_stage_b_documents(repo: Path) -> dict[str, str]:
     return found
 
 
-def load_fixture(repo: Path) -> dict[str, Any]:
-    raw = json.loads((repo / "docs/reports/alpha_atlas_v4_stage_b_verification_manifest.v1.json").read_text())
+def load_fixture(repo: Path, *, fixture_name: str = "alpha_atlas_v4_stage_b_verification_manifest.v1.json",
+                 fixture_content_sha256: str = FIXTURE_CONTENT_SHA256,
+                 session: date = SESSION) -> dict[str, Any]:
+    raw = json.loads((repo / "docs/reports" / fixture_name).read_text())
     claimed = raw.pop("content_sha256", None)
-    if claimed != FIXTURE_CONTENT_SHA256 or hashlib.sha256(json.dumps(raw,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest() != claimed:
+    if claimed != fixture_content_sha256 or hashlib.sha256(json.dumps(raw,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest() != claimed:
         raise CaptureError("FIXTURE_HASH_MISMATCH")
     raw["content_sha256"] = claimed
-    if raw.get("verification_session") != SESSION.isoformat():
+    if raw.get("verification_session") != session.isoformat():
         raise CaptureError("FIXTURE_DATE_MISMATCH")
     return raw
 
 
-def validate_effective_sector_evidence(evidence: Mapping[str, Any], fixture_hash: str) -> str:
+def validate_effective_sector_evidence(evidence: Mapping[str, Any], fixture_hash: str,
+                                       *, session: date = SESSION) -> str:
     value = dict(evidence); claimed = value.pop("content_sha256", None)
     if sha256_bytes(canonical_bytes(value)) != claimed:
         raise CaptureError("SECTOR_EVIDENCE_HASH_MISMATCH")
     if value.get("fixture_sha256") != fixture_hash or value.get("ticker") != "AAPL" or value.get("sector_etf") != "XLK":
         raise CaptureError("SECTOR_EVIDENCE_MISMATCH")
-    if value.get("effective_from") > SESSION.isoformat() or value.get("effective_through") < SESSION.isoformat():
+    if value.get("effective_from") > session.isoformat() or value.get("effective_through") < session.isoformat():
         raise CaptureError("SECTOR_EVIDENCE_NOT_EFFECTIVE")
     if not value.get("source_identity") or not value.get("source_sha256"):
         raise CaptureError("SECTOR_EVIDENCE_PROVENANCE_MISSING")
     return str(claimed)
 
 
-def validate_authorization(auth: Mapping[str, Any], *, fixture_sha256: str, setup_sha256: str, offline: bool) -> None:
+def validate_authorization(auth: Mapping[str, Any], *, fixture_sha256: str, setup_sha256: str,
+                           session: date = SESSION, offline: bool) -> None:
     value = dict(auth); claimed = value.pop("content_sha256", None)
     if sha256_bytes(canonical_bytes(value)) != claimed:
         raise CaptureError("AUTHORIZATION_HASH_MISMATCH")
@@ -148,11 +153,12 @@ def validate_authorization(auth: Mapping[str, Any], *, fixture_sha256: str, setu
         raise CaptureError("EXECUTION_NOT_AUTHORIZED")
     if value.get("fixture_sha256") != fixture_sha256 or value.get("setup_package_sha256") != setup_sha256:
         raise CaptureError("AUTHORIZATION_BINDING_MISMATCH")
-    if value.get("session") != SESSION.isoformat() or value.get("maximum_attempts") != 18:
+    if value.get("session") != session.isoformat() or value.get("maximum_attempts") != 18:
         raise CaptureError("AUTHORIZATION_PLAN_MISMATCH")
 
 
-def plan_from_fixture(fixture: Mapping[str, Any], sector_evidence_sha256: str) -> dict[str, Any]:
+def plan_from_fixture(fixture: Mapping[str, Any], sector_evidence_sha256: str,
+                      *, session: date = SESSION) -> dict[str, Any]:
     if sector_evidence_sha256 == "":
         raise CaptureError("SECTOR_EVIDENCE_REQUIRED")
     requests = []
@@ -163,7 +169,7 @@ def plan_from_fixture(fixture: Mapping[str, Any], sector_evidence_sha256: str) -
     if [x.request_id for x in requests] != ["history:AAPL", "history:SPY", "history:XLK", "identity:AAPL", "splits:global"]:
         raise CaptureError("FIXTURE_ORDER_MISMATCH")
     return {"schema_version":"alpha-atlas-v4-stage-b-plan.v1", "stage":"operational_verification",
-            "session":SESSION.isoformat(), "window_sessions":[], "universe_sha256":fixture["content_sha256"],
+            "session":session.isoformat(), "window_sessions":[], "universe_sha256":fixture["content_sha256"],
             "sector_mapping_sha256":sector_evidence_sha256, "stocks":["AAPL"],
             "context_symbols":["SPY","XLK"], "requests":requests}
 
@@ -382,29 +388,38 @@ class StageBRunner:
     def __init__(self, repo: Path, root: Path, *, offline: bool,
                  approved_authorization_sha256: str | None = None,
                  operational_config_sha256: str | None = None,
+                 fixture_name: str = "alpha_atlas_v4_stage_b_verification_manifest.v1.json",
+                 fixture_file_sha256: str = FIXTURE_FILE_SHA256,
+                 fixture_content_sha256: str = FIXTURE_CONTENT_SHA256,
+                 session: date = SESSION,
                  runtime_guard: Callable[[str],Mapping[str,Any]] | None = None,
                  now: Callable[[],datetime]=lambda:datetime.now(UTC)):
         self.repo,self.root,self.offline,self.now=repo,root,offline,now
         self.approved_authorization_sha256=approved_authorization_sha256
         self.operational_config_sha256=operational_config_sha256
+        self.fixture_name,self.fixture_file_sha256=fixture_name,fixture_file_sha256
+        self.fixture_content_sha256,self.session=fixture_content_sha256,session
         self.runtime_guard=runtime_guard or (lambda phase:{"phase":phase})
 
     def preflight(self, authorization: Mapping[str,Any], sector_evidence: Mapping[str,Any]) -> tuple[dict[str,Any],dict[str,Any]]:
-        bound=verify_stage_b_documents(self.repo); fixture=load_fixture(self.repo)
-        validate_authorization(authorization,fixture_sha256=FIXTURE_CONTENT_SHA256,setup_sha256=SETUP_PACKAGE_FILE_SHA256,offline=self.offline)
+        bound=verify_stage_b_documents(self.repo,fixture_name=self.fixture_name,fixture_file_sha256=self.fixture_file_sha256)
+        fixture=load_fixture(self.repo,fixture_name=self.fixture_name,
+                             fixture_content_sha256=self.fixture_content_sha256,session=self.session)
+        validate_authorization(authorization,fixture_sha256=self.fixture_content_sha256,
+                               setup_sha256=SETUP_PACKAGE_FILE_SHA256,session=self.session,offline=self.offline)
         authorization_sha256=sha256_bytes(canonical_bytes(authorization))
         if not self.offline and (not self.approved_authorization_sha256 or authorization_sha256!=self.approved_authorization_sha256):
             raise CaptureError("APPROVED_AUTHORIZATION_HASH_REQUIRED")
-        sector_hash=validate_effective_sector_evidence(sector_evidence,FIXTURE_CONTENT_SHA256)
+        sector_hash=validate_effective_sector_evidence(sector_evidence,self.fixture_content_sha256,session=self.session)
         if not self.offline and (authorization.get("operational_config_sha256")!=self.operational_config_sha256 or authorization.get("sector_evidence_sha256")!=sector_hash):
             raise CaptureError("AUTHORIZATION_OPERATIONAL_BINDING_MISMATCH")
         instant=self.now().astimezone(UTC)
-        if instant.date()>SESSION or instant>=acquisition_clock(SESSION).cutoff:
+        if instant.date()>self.session or instant>=acquisition_clock(self.session).cutoff:
             raise CaptureError("FIXED_SESSION_EXPIRED")
         if not self.offline and (str(self.root)!=REQUIRED_ROOT or os.environ.get("MONEYBOT_PERSISTENT_DATA_DIR")!=REQUIRED_ROOT):
             raise CaptureError("PERSISTENT_ROOT_MISMATCH")
         storage=storage_preflight(self.root); self.runtime_guard("LOCAL_PREFLIGHT")
-        return plan_from_fixture(fixture,sector_hash),{"bound_documents":bound,"storage":storage}
+        return plan_from_fixture(fixture,sector_hash,session=self.session),{"bound_documents":bound,"storage":storage}
 
     @staticmethod
     def _publish_outcome(primary: ImmutableStore, status: str, now: datetime, error: Exception | None=None) -> dict[str,Any]:
@@ -454,7 +469,7 @@ class StageBRunner:
                                  live_authorization_sha256=None if self.offline else self.approved_authorization_sha256,
                                  evidence_limit_bytes=PRIMARY_CAP-262144,clock=self.now)
         if runner.ledger.reconcile_uncertain(self.now()): raise CaptureError("MASSIVE_UNCERTAIN_ATTEMPTS_REQUIRE_REVIEW")
-        results={}; quarantined=[]; identity=None; timing=acquisition_clock(SESSION)
+        results={}; quarantined=[]; identity=None; timing=acquisition_clock(self.session)
         for spec in plan["requests"]:
             measurements.append(dict(self.runtime_guard(f"BEFORE_{spec.request_id}")))
             results[spec.request_id]=runner.execute(spec,"operational_verification",timing)
@@ -467,7 +482,7 @@ class StageBRunner:
         reasons=validate_feature_window(dates(rows["history:AAPL"]),dates(rows["history:SPY"]),dates(rows["history:XLK"]))
         if reasons: raise CaptureError("FEATURE_WINDOW_INVALID",",".join(reasons))
         split_rows=[r for obj in results["splits:global"]["objects"] for r in obj["payload"]["results"] if r.get("ticker") in {"AAPL","SPY","XLK"}]
-        adjusted=adjust_unadjusted_bars(rows["history:AAPL"],split_rows,SESSION,source_sha256=results["history:AAPL"]["objects"][0]["sha256"])
+        adjusted=adjust_unadjusted_bars(rows["history:AAPL"],split_rows,self.session,source_sha256=results["history:AAPL"]["objects"][0]["sha256"])
         handoff=build_handoff(plan,results,generated_at=self.now(),timing=timing,adjustment_bindings={"AAPL":adjusted["binding"]})
         if not handoff["eligible"]: raise CaptureError("HANDOFF_INELIGIBLE",",".join(handoff["reason_codes"]))
         handoff["resolved_identity"]=identity; handoff["quarantine_released"]=sorted(quarantined)
@@ -494,7 +509,7 @@ class StageBRunner:
         except Exception as backup_exc:
             self._publish_outcome(primary,"PARTIAL_BACKUP_FAILED",self.now(),backup_exc); raise
         ended=self.now(); runner=acquired["runner"]
-        return {"status":"PASS","mode":"OFFLINE_SYNTHETIC" if self.offline else "LIVE_STAGE_B","session":SESSION.isoformat(),
+        return {"status":"PASS","mode":"OFFLINE_SYNTHETIC" if self.offline else "LIVE_STAGE_B","session":self.session.isoformat(),
                 "synthetic_transport_attempts":len([x for x in runner.ledger.records() if x["event"]=="RESERVED"]) if self.offline else 0,
                 "live_provider_requests":0 if self.offline else len([x for x in runner.ledger.records() if x["event"]=="RESERVED"]),
                 "real_acquisition_authorized":not self.offline,"preflight":preflight,"identity":acquired["identity"],

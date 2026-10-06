@@ -1611,20 +1611,54 @@ immutable provenance. Performance comparison execution remains pending review.
   whose stated date covers that session, or a methodology/effective-change record
   establishing applicability. The expired October 5 fixture is unchanged and no
   replacement session is selected.
-- [ ] **Massive terms classification is `APPLICABLE_TERMS_UNAVAILABLE`.** The
-  current public Individuals and Market Data Terms were reviewed, but the account's
-  accepted Stocks Advanced Individual Order Form/checkout terms, accepted/versioned
-  agreement record, and any equities addendum are absent. Those documents determine
-  whether the subscription supplies the license referenced by Market Data Terms
-  section 5(d) for private non-display/model-development use.
+- [x] **The earlier `APPLICABLE_TERMS_UNAVAILABLE` finding is preserved as the
+  result of that narrower source set and is superseded for Stage B's limited scope
+  by the focused guidance review below.** The accepted account agreement version
+  remains unavailable, but that absence is recorded as a limitation rather than a
+  blocker after reconciling the official Individual and AI usage guidance with
+  Market Data Terms sections 1, 2, 5(d), 8, and 9.
 - [x] **No blanket 180-day retention-permission letter is required by the reviewed
   text.** The current public documents do not independently require separate consent
   merely for owner-controlled private primary storage and one restricted backup,
   and state no 180-day maximum. They do require confidentiality and deletion/cessation
   on termination. Obtain the accepted account documents first; only a remaining
   section 5(d) ambiguity would justify a narrow consent question. No message was sent.
-- [ ] These two prerequisites are not jointly closed for a future authorization:
-  the dated sector finding is complete, but the applicable account agreement is
-  still missing. Stage B remains `NOT_AUTHORIZED / NOT_EXECUTED`, readiness remains
+- [ ] At this review point these prerequisites were not jointly closed. The focused
+  review below resolves the limited-scope terms question; date-applicable sector
+  evidence and operational gates remain open. Stage B remains
+  `NOT_AUTHORIZED / NOT_EXECUTED`, readiness remains
   `COMPLETE — BLOCKED_STORAGE_AND_CACHE` pending operational verification,
   QQQ/SPY remains `PROPOSED_NOT_APPROVED`, and the pilot remains disabled.
+
+## Stage B narrow guidance and proposed execution package (2026-10-06)
+
+- [x] **Limited personal Stage B scope is supported by available terms and official
+  usage guidance.** Implementation inspection confirms the check is limited to
+  bounded AAPL/SPY/XLK retrieval, dated identity/splits, private feature/handoff
+  validation, immutable evidence, private backup/restore, and measurements. It does
+  not fit models, score predictions, trade, display or redistribute data, serve
+  customers, or run the pilot. Massive's official Individual guidance covers the
+  account holder's own research and scripts, and its official AI guidance demonstrates
+  subscription-backed historical/split analysis. The contractual terms remain
+  controlling and this finding does not extend to training or commercial use.
+- [ ] **Deletion administration remains an operational limitation, not a licensing
+  letter requirement.** Governance retention does not auto-delete versions. The
+  acquisition identity remains unable to delete or bypass retention. A separately
+  authorized owner/admin process must remove every S3 version/delete marker after
+  retention, all local/restore copies, and any service-managed snapshot copies.
+  Early compelled deletion would require explicit Governance bypass by that admin;
+  Render snapshot removal and the end-to-end deletion procedure remain unverified.
+- [ ] **A future execution package is prepared, not approved.** The proposed session
+  is 2026-10-26 with a 07:30 America/New_York (05:30 America/Denver) cutoff and a
+  fixed 75-session 2026-07-10–2026-10-23 window. The fixture and prepared
+  authorization are hash-bound, but the authorization is unusable while status is
+  `PREPARED_FOR_REVIEW_NOT_APPROVED` and sector evidence is absent.
+- [ ] **Fresh AAPL→XLK applicability is the smallest next gate.** The 2026-10-05
+  holding evidence is not extrapolated to 2026-10-26. Authoritative evidence covering
+  the proposed date must be preserved and bound before owner approval and request 1;
+  otherwise the proposal expires without execution.
+- [ ] Runtime storage, AWS permissions/backup/restore, provider access, deletion,
+  capacity, headroom, and interference remain unperformed measurements. Stage B is
+  `NOT_AUTHORIZED / NOT_EXECUTED`; readiness remains `COMPLETE —
+  BLOCKED_STORAGE_AND_CACHE`; QQQ/SPY remains `PROPOSED_NOT_APPROVED`; training and
+  the ten-session pilot remain disabled and unauthorized.
