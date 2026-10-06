@@ -37,6 +37,7 @@ class OfflineS3:
         self.n+=1; version=f"synthetic-v{self.n}"; self.objects[(kwargs["Key"],version)]=bytes(kwargs["Body"])
         return {"VersionId":version}
     def head_object(self,**kwargs): return {"ServerSideEncryption":"AES256","ObjectLockMode":"GOVERNANCE","ObjectLockRetainUntilDate":NOW.replace(year=2027)}
+    def get_object_retention(self,**kwargs): return {"Retention":{"Mode":"GOVERNANCE","RetainUntilDate":NOW.replace(year=2027)}}
     def get_object(self,**kwargs): return {"Body":io.BytesIO(self.objects[(kwargs["Key"],kwargs["VersionId"])])}
 
 def write(output: Path, report: dict[str,Any]) -> None:
@@ -56,7 +57,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="alpha-atlas-stage-b-offline-") as temp:
         root=Path(temp); client=OfflineS3()
         runner=StageBRunner(repo,root,offline=True,now=lambda:NOW)
-        report=runner.execute(synthetic_authorization(),effective_sector_fixture(),lambda:OfflineTransport(),lambda primary:S3EvidenceBackup(client,"synthetic-stage-b-test-only","alpha-atlas-v4/stage-b/offline",S3OperationLedger(ImmutableStore(root/"s3-ledger")),expected_owner="123456789012",now=lambda:NOW))
+        report=runner.execute(synthetic_authorization(),effective_sector_fixture(),lambda:OfflineTransport(),lambda primary:S3EvidenceBackup(client,"moneybot-alpha-atlas-backup-20261006","stage-b/",S3OperationLedger(ImmutableStore(root/"s3-ledger")),expected_owner="123456789012",now=lambda:NOW))
         report["bound_documents_verified"]=True; report["temporary_objects_uploaded"]=False
         write(args.output_dir,report)
     print(json.dumps({"status":report["status"],"output_dir":str(args.output_dir),"live_provider_requests":0},sort_keys=True)); return 0

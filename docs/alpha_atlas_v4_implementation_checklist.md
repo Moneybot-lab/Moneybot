@@ -1540,3 +1540,40 @@ immutable provenance. Performance comparison execution remains pending review.
   disk, AWS destination/roles, permissions, provider terms, runtime headroom,
   backup and restore remain unverified. The pilot remains disabled, readiness
   remains `COMPLETE — BLOCKED_STORAGE_AND_CACHE`, and prior findings remain closed.
+
+## Stage B owner infrastructure binding and backup checkpoint (2026-10-06)
+
+- [x] **Owner-reported configuration is bound offline.** The versioned config
+  records `moneybot-market-stream`, its reported 3 GB `/var/data` disk,
+  `/var/data/moneybot-stage-b`, bucket
+  `moneybot-alpha-atlas-backup-20261006`, `us-east-1`, `stage-b/`, and only the
+  credential-variable names `MONEYBOT_STAGE_B_AWS_ACCESS_KEY_ID` and
+  `MONEYBOT_STAGE_B_AWS_SECRET_ACCESS_KEY`. No secret value was read or stored.
+- [ ] **AWS expected owner remains unresolved.** No verified 12-digit owner ID
+  exists in repository evidence. The committed config contains `null`, rejects
+  placeholders/wildcards, and stops with `S3_EXPECTED_OWNER_UNRESOLVED`. The
+  offline owner-binding command emits new review hashes after the owner supplies
+  the verified ID; it performs no discovery request.
+- [x] **Installed IAM scope is compatible offline with the implemented calls.**
+  The supplied bucket/object read, upload, retention, and exact-version actions
+  cover the call set and `stage-b/` keys. Delete, bucket mutation, broad access,
+  and Governance bypass are neither required nor added. The same reported IAM
+  identity permits upload, read-back, and restore; separate roles are not claimed.
+- [x] **Backup accounting now covers failure evidence and finite checkpoints.**
+  Expected frozen objects are 14 and the maximum small-response path is 40;
+  expected/max S3 calls are 80/210 under the unchanged 512 ceiling. Attempt
+  bodies, retry/failure receipts, transport-failure receipts, the Massive ledger,
+  handoff when present, outcome, and inventory are covered. The completion
+  manifest is uploaded separately; the S3 ledger is excluded to prevent recursion.
+- [x] **The byte-limit conflict is explicit and fail-closed.** The endpoint-specific maximum bodies total
+  4,030,464 bytes; adding eighteen 8,192-byte receipt reserves yields 4,177,920
+  bytes, 110,592 above the 4,067,328-byte primary cap before final manifests.
+  The runner preserves a 262,144-byte finalization reserve and reserves per-request room and stops before the next provider call when insufficient;
+  no body is silently omitted and no storage limit is increased.
+- [ ] **Runtime verification remains unperformed.** Disk access/capacity, secret
+  access, bucket owner/configuration, IAM behavior, Massive access, backup,
+  restore, headroom, and interference remain measurements for a future explicitly
+  authorized, newly date-bound run. The October 5 fixture stays expired; Stage B
+  remains `NOT_AUTHORIZED / NOT_EXECUTED`, readiness remains
+  `COMPLETE — BLOCKED_STORAGE_AND_CACHE`, QQQ/SPY remains unapproved, and the
+  pilot remains disabled.

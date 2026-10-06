@@ -194,11 +194,37 @@ def remaining_timeout(now: datetime, clock: AcquisitionClock, configured: float)
 class AcquisitionRunner:
     def __init__(self, store: ImmutableStore, transport: Transport, *, synthetic: bool = True,
                  live_authorization_sha256: str | None = None,
+                 evidence_limit_bytes: int | None = None,
                  clock: Callable[[], datetime] = lambda: datetime.now(UTC)):
         if not synthetic and (not live_authorization_sha256 or len(live_authorization_sha256)!=64):
             raise CaptureError("REAL_ACQUISITION_DISABLED")
         self.store,self.transport,self.clock=store,transport,clock
+        self.evidence_limit_bytes=evidence_limit_bytes
         self.ledger=AttemptLedger(store,synthetic=synthetic)
+
+    def _stored_bytes(self) -> int:
+        return sum(path.stat().st_size for path in self.store.root.rglob("*") if path.is_file())
+
+    def _ensure_capacity(self, additional: int) -> None:
+        if self.evidence_limit_bytes is not None and self._stored_bytes()+additional>self.evidence_limit_bytes:
+            raise CaptureError("STAGE_B_PRIMARY_CAP_CONFLICT",f"stored={self._stored_bytes()} additional={additional} limit={self.evidence_limit_bytes}")
+
+    def _attempt_failure(self, spec: RequestSpec, attempt: str, page: int, retry: int, at: datetime, reason: str,
+                         response: TransportResponse | None = None) -> None:
+        base=f"attempt-evidence/{spec.request_id.replace(':','_')}/{attempt}"
+        body_record=None
+        estimated_body=len(response.body) if response is not None and len(response.body)<=spec.response_limit else 0
+        self._ensure_capacity(estimated_body+8192)
+        if response is not None and len(response.body)<=spec.response_limit:
+            digest=sha256_bytes(response.body); body_path=f"{base}.body.{digest}"
+            self.store.publish(body_path,response.body); body_record={"path":body_path,"sha256":digest,"bytes":len(response.body)}
+        manifest={"schema_version":"alpha-atlas-v4-attempt-failure.v1","attempt_id":attempt,"request_id":spec.request_id,
+                  "page":page,"retry":retry,"reason":reason,"at":at.astimezone(UTC).isoformat(),
+                  "http_status":response.status if response else None,"response_body":body_record,
+                  "response_sha256":sha256_bytes(response.body) if response else None,"response_bytes":len(response.body) if response else 0,
+                  "body_retained":body_record is not None,
+                  "body_omission_reason":"RESPONSE_TOO_LARGE" if response is not None and body_record is None else None}
+        self.store.publish(f"{base}.failure.json",canonical_bytes(manifest))
 
     def execute(self, spec: RequestSpec, stage: str, timing: AcquisitionClock) -> dict[str, Any]:
         validate_request_spec(spec)
@@ -207,24 +233,31 @@ class AcquisitionRunner:
             response=None
             for retry in range(RETRIES+1):
                 now=self.clock(); timeout=remaining_timeout(now,timing,6.0)
+                self._ensure_capacity(spec.response_limit+16384)
                 attempt=self.ledger.reserve(stage,spec.request_id,now); self.ledger.event(attempt,"TRANSMITTING",now,page=page,retry=retry)
                 try: response=self.transport.send(spec,page_url=page_url,timeout_seconds=timeout)
                 except Exception as exc:
-                    self.ledger.event(attempt,"FAILED",self.clock(),reason=type(exc).__name__)
+                    failed_at=self.clock(); self._attempt_failure(spec,attempt,page,retry,failed_at,type(exc).__name__)
+                    self.ledger.event(attempt,"FAILED",failed_at,reason=type(exc).__name__)
                     if retry==RETRIES: raise CaptureError("TRANSPORT_FAILURE",spec.request_id) from exc
                     continue
                 late=response.received_at.astimezone(UTC)>timing.cutoff
-                if len(response.body)>spec.response_limit: self.ledger.event(attempt,"FAILED",response.received_at,reason="RESPONSE_TOO_LARGE"); raise CaptureError("RESPONSE_TOO_LARGE")
-                if response.status>=500 and retry<RETRIES: self.ledger.event(attempt,"FAILED",response.received_at,reason=f"HTTP_{response.status}"); continue
-                if response.status!=200: self.ledger.event(attempt,"FAILED",response.received_at,reason=f"HTTP_{response.status}"); raise CaptureError("HTTP_FAILURE",str(response.status))
+                if len(response.body)>spec.response_limit:
+                    self._attempt_failure(spec,attempt,page,retry,response.received_at,"RESPONSE_TOO_LARGE",response); self.ledger.event(attempt,"FAILED",response.received_at,reason="RESPONSE_TOO_LARGE"); raise CaptureError("RESPONSE_TOO_LARGE")
+                if response.status>=500 and retry<RETRIES:
+                    self._attempt_failure(spec,attempt,page,retry,response.received_at,f"HTTP_{response.status}",response); self.ledger.event(attempt,"FAILED",response.received_at,reason=f"HTTP_{response.status}"); continue
+                if response.status!=200:
+                    self._attempt_failure(spec,attempt,page,retry,response.received_at,f"HTTP_{response.status}",response); self.ledger.event(attempt,"FAILED",response.received_at,reason=f"HTTP_{response.status}"); raise CaptureError("HTTP_FAILURE",str(response.status))
                 try: payload=json.loads(response.body)
-                except json.JSONDecodeError as exc: self.ledger.event(attempt,"FAILED",response.received_at,reason="MALFORMED_JSON"); raise CaptureError("MALFORMED_RESPONSE") from exc
-                if not isinstance(payload,dict): self.ledger.event(attempt,"FAILED",response.received_at,reason="MISSING_RESULTS"); raise CaptureError("MISSING_DATA")
+                except json.JSONDecodeError as exc:
+                    self._attempt_failure(spec,attempt,page,retry,response.received_at,"MALFORMED_JSON",response); self.ledger.event(attempt,"FAILED",response.received_at,reason="MALFORMED_JSON"); raise CaptureError("MALFORMED_RESPONSE") from exc
+                if not isinstance(payload,dict):
+                    self._attempt_failure(spec,attempt,page,retry,response.received_at,"MISSING_RESULTS",response); self.ledger.event(attempt,"FAILED",response.received_at,reason="MISSING_RESULTS"); raise CaptureError("MISSING_DATA")
                 result_value=payload.get("results")
                 if spec.family=="identity" and isinstance(result_value,dict):
                     payload={**payload,"results":[result_value]}
                 elif not isinstance(result_value,list):
-                    self.ledger.event(attempt,"FAILED",response.received_at,reason="MISSING_RESULTS"); raise CaptureError("MISSING_DATA")
+                    self._attempt_failure(spec,attempt,page,retry,response.received_at,"MISSING_RESULTS",response); self.ledger.event(attempt,"FAILED",response.received_at,reason="MISSING_RESULTS"); raise CaptureError("MISSING_DATA")
                 digest=sha256_bytes(response.body)
                 prior=[]
                 receipt_dir=self.store.root/f"responses/{spec.family}/{spec.request_id.replace(':','_')}"
@@ -233,6 +266,7 @@ class AcquisitionRunner:
                     except json.JSONDecodeError: raise CaptureError("SOURCE_RECEIPT_CORRUPT",receipt_file.as_posix())
                 revision=max(prior,key=lambda x:x.get("received_at","")).get("response_sha256") if prior else None
                 path=f"responses/{spec.family}/{spec.request_id.replace(':','_')}/page-{page}-{digest}.json"
+                self._ensure_capacity(len(response.body)+8192)
                 published=self.store.publish(path,response.body)
                 receipt={"schema_version":"alpha-atlas-v4-source-receipt.v1","attempt_id":attempt,"request_id":spec.request_id,"family":spec.family,"symbol":spec.symbol,"endpoint":spec.endpoint,"sanitized_parameters":dict(spec.params),"page":page,"provider_request_id":payload.get("request_id"),"received_at":response.received_at.astimezone(UTC).isoformat(),"response_sha256":digest,"response_bytes":len(response.body),"late":late,"supersedes_source_sha256":revision,"source_event_dates":sorted({str(x.get('date') or x.get('t') or x.get('execution_date')) for x in payload['results']})}
                 receipt_result=self.store.publish(path+".receipt.json",canonical_bytes(receipt)); self.ledger.event(attempt,"PERSISTED",response.received_at,response_sha256=digest,late=late)

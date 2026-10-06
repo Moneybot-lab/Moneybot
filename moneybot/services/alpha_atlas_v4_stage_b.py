@@ -38,11 +38,65 @@ PRIMARY_CAP = BACKUP_CAP = 4_067_328
 COMBINED_CAP = 8_134_656
 S3_OPERATION_CAP = 512
 REQUIRED_ROOT = "/var/data/moneybot-stage-b"
+RUNTIME_CONFIG_FILE = "alpha_atlas_v4_stage_b_runtime_config.v1.json"
+RUNTIME_CONFIG_FILE_SHA256 = "860e916a0d2152c603f26f0f0438308539aa4b7ede704639bd731755c9ff9463"
+RUNTIME_CONFIG_CONTENT_SHA256 = "4ac339c8caa01c625b54bb53a51b7fef7f294082a2cbe1c52bf9814c7bf03a33"
+BOUND_BUCKET = "moneybot-alpha-atlas-backup-20261006"
+BOUND_PREFIX = "stage-b/"
+AWS_ACCESS_KEY_ENV = "MONEYBOT_STAGE_B_AWS_ACCESS_KEY_ID"
+AWS_SECRET_KEY_ENV = "MONEYBOT_STAGE_B_AWS_SECRET_ACCESS_KEY"
+IAM_ACTIONS = {"HEAD_BUCKET":"s3:ListBucket","GET_BUCKET_LOCATION":"s3:GetBucketLocation","GET_BUCKET_VERSIONING":"s3:GetBucketVersioning","GET_PUBLIC_ACCESS_BLOCK":"s3:GetBucketPublicAccessBlock","GET_BUCKET_ENCRYPTION":"s3:GetEncryptionConfiguration","GET_OBJECT_LOCK":"s3:GetBucketObjectLockConfiguration","PUT_OBJECT":"s3:PutObject+s3:PutObjectRetention","HEAD_OBJECT":"s3:GetObjectVersion","GET_OBJECT_RETENTION":"s3:GetObjectRetention","GET_OBJECT_VERIFY":"s3:GetObjectVersion","GET_OBJECT_RESTORE":"s3:GetObjectVersion"}
+REQUIRED_BUCKET_ACTIONS = {"s3:ListBucket","s3:GetBucketLocation","s3:GetBucketVersioning","s3:GetBucketPublicAccessBlock","s3:GetEncryptionConfiguration","s3:GetBucketObjectLockConfiguration"}
+REQUIRED_OBJECT_ACTIONS = {"s3:PutObject","s3:PutObjectRetention","s3:GetObject","s3:GetObjectVersion","s3:GetObjectRetention"}
+FORBIDDEN_ACTIONS = {"s3:DeleteObject","s3:DeleteObjectVersion","s3:BypassGovernanceRetention","s3:PutBucketPolicy","s3:PutBucketVersioning"}
+
+
+def validate_iam_policy_scope(bucket_actions: set[str], object_actions: set[str]) -> dict[str,Any]:
+    missing_bucket=sorted(REQUIRED_BUCKET_ACTIONS-bucket_actions); missing_object=sorted(REQUIRED_OBJECT_ACTIONS-object_actions)
+    forbidden=sorted((bucket_actions|object_actions)&FORBIDDEN_ACTIONS)
+    if missing_bucket or missing_object: raise CaptureError("IAM_POLICY_ACTION_MISSING",json.dumps({"bucket":missing_bucket,"object":missing_object},sort_keys=True))
+    if forbidden: raise CaptureError("IAM_POLICY_FORBIDDEN_ACTION",",".join(forbidden))
+    return {"status":"COMPATIBLE","bucket_actions":sorted(bucket_actions),"object_actions":sorted(object_actions),"sdk_operation_mapping":dict(sorted(IAM_ACTIONS.items()))}
+
+
+
+def load_runtime_config(path: Path, *, require_owner: bool=True) -> dict[str,Any]:
+    config=json.loads(path.read_text()); claimed=config.pop("content_sha256",None)
+    if sha256_bytes(canonical_bytes(config))!=claimed: raise CaptureError("RUNTIME_CONFIG_HASH_MISMATCH")
+    config["content_sha256"]=claimed
+    exact={"render_service":"moneybot-market-stream","disk_capacity_gb_decimal":3,"disk_mount":"/var/data","persistent_root":REQUIRED_ROOT,"s3_bucket":BOUND_BUCKET,"s3_region":"us-east-1","s3_prefix":BOUND_PREFIX}
+    if any(config.get(k)!=v for k,v in exact.items()): raise CaptureError("RUNTIME_CONFIG_BINDING_MISMATCH")
+    names=config.get("credential_environment_variables",{})
+    if names!={"access_key_id":AWS_ACCESS_KEY_ENV,"secret_access_key":AWS_SECRET_KEY_ENV}: raise CaptureError("RUNTIME_CREDENTIAL_NAMES_MISMATCH")
+    owner=config.get("s3_expected_owner")
+    if owner is None and require_owner: raise CaptureError("S3_EXPECTED_OWNER_UNRESOLVED","Supply the verified 12-digit AWS account owner ID and recompute content_sha256")
+    if owner is not None and (not isinstance(owner,str) or len(owner)!=12 or not owner.isdigit()): raise CaptureError("S3_EXPECTED_OWNER_INVALID")
+    return config
+
+
+def validate_s3_key(prefix: str, relative: str) -> str:
+    if prefix!=BOUND_PREFIX or not relative or relative.startswith(("/","\\")) or "\\" in relative or any(part in {"",".",".."} for part in relative.split("/")):
+        raise CaptureError("S3_PREFIX_ESCAPE")
+    key=prefix+relative
+    if not key.startswith(BOUND_PREFIX): raise CaptureError("S3_PREFIX_ESCAPE")
+    return key
+
+
+
+def backup_object_budget() -> dict[str,Any]:
+    expected={"attempt_bodies_and_receipts":10,"massive_ledger":1,"handoff":1,"outcome":1,"inventory":1}
+    maximum={"attempt_bodies_and_receipts":36,"massive_ledger":1,"handoff":1,"outcome":1,"inventory":1}
+    return {"expected":{**expected,"frozen_objects":sum(expected.values()),"completion_objects":1,"primary_objects":sum(expected.values())+1},
+            "maximum":{**maximum,"frozen_objects":sum(maximum.values()),"completion_objects":1,"primary_objects":sum(maximum.values())+1,"primary_objects_if_completion_backup_fails":sum(maximum.values())+2},
+            "maximum_http_body_bytes":15*262144+3*32768,"maximum_attempt_receipt_reserve_bytes":18*8192,
+            "maximum_attempt_evidence_bytes":15*262144+3*32768+18*8192,"primary_cap_bytes":PRIMARY_CAP,
+            "attempt_evidence_cap_conflict_bytes":15*262144+3*32768+18*8192-PRIMARY_CAP,
+            "acquisition_sublimit_bytes":PRIMARY_CAP-262144}
 
 
 def s3_operation_budget(object_count: int) -> dict[str,int]:
-    if object_count<0 or object_count>14: raise CaptureError("S3_OBJECT_COUNT_OUT_OF_BOUNDS")
-    values={"configuration":6,"uploads":object_count,"retention_version_heads":object_count,"checksum_readbacks":object_count,"exact_version_restores":object_count}
+    if object_count<0 or object_count>40: raise CaptureError("S3_OBJECT_COUNT_OUT_OF_BOUNDS")
+    values={"configuration":6,"uploads":object_count,"version_heads":object_count,"retention_reads":object_count,"checksum_readbacks":object_count,"exact_version_restores":object_count,"completion_upload_verify":4}
     return {**values,"total":sum(values.values())}
 
 
@@ -185,6 +239,7 @@ class S3Client(Protocol):
     def put_object(self, **kwargs: Any) -> Mapping[str, Any]: ...
     def get_object(self, **kwargs: Any) -> Mapping[str, Any]: ...
     def head_object(self, **kwargs: Any) -> Mapping[str, Any]: ...
+    def get_object_retention(self, **kwargs: Any) -> Mapping[str, Any]: ...
 
 
 class S3OperationLedger:
@@ -224,7 +279,8 @@ class S3EvidenceBackup:
     def __init__(self, client: S3Client, bucket: str, prefix: str, ledger: S3OperationLedger, *,
                  expected_owner: str, now: Callable[[],datetime]=lambda:datetime.now(UTC)):
         if not expected_owner or len(expected_owner)!=12 or not expected_owner.isdigit(): raise CaptureError("S3_EXPECTED_OWNER_REQUIRED")
-        self.client,self.bucket,self.prefix,self.ledger,self.now=client,bucket,prefix.strip("/"),ledger,now
+        if bucket!=BOUND_BUCKET or prefix!=BOUND_PREFIX: raise CaptureError("S3_DESTINATION_BINDING_MISMATCH")
+        self.client,self.bucket,self.prefix,self.ledger,self.now=client,bucket,prefix,ledger,now
         self.expected_owner=expected_owner
     def _call(self, operation: str, method: Callable[...,Any], **kwargs: Any) -> Any:
         operation_id=self.ledger.reserve(operation,bucket=self.bucket,key=kwargs.get("Key"),version_id=kwargs.get("VersionId"))
@@ -251,17 +307,19 @@ class S3EvidenceBackup:
         if lock.get("ObjectLockConfiguration",{}).get("ObjectLockEnabled")!="Enabled" or rule.get("Mode")!="GOVERNANCE" or int(rule.get("Days",0))<180: raise CaptureError("S3_RETENTION_CONFIGURATION_INVALID")
 
     def publish(self, relative: str, payload: bytes) -> dict[str,Any]:
-        digest=sha256_bytes(payload); key=f"{self.prefix}/{relative}.{digest}"; retain_until=self.now().astimezone(UTC)+timedelta(days=180)
+        digest=sha256_bytes(payload); key=validate_s3_key(self.prefix,f"{relative}.{digest}"); retain_until=self.now().astimezone(UTC)+timedelta(days=180)
         checksum=base64.b64encode(hashlib.sha256(payload).digest()).decode()
         response=self._call("PUT_OBJECT",self.client.put_object,**self._bucket_args(),Key=key,Body=payload,ServerSideEncryption="AES256",ChecksumSHA256=checksum,ObjectLockMode="GOVERNANCE",ObjectLockRetainUntilDate=retain_until)
         version=response.get("VersionId")
         if not version: raise CaptureError("S3_VERSION_ID_MISSING")
         head=self._call("HEAD_OBJECT",self.client.head_object,**self._bucket_args(),Key=key,VersionId=version)
-        if head.get("ServerSideEncryption")!="AES256" or head.get("ObjectLockMode")!="GOVERNANCE" or not head.get("ObjectLockRetainUntilDate"): raise CaptureError("S3_RETENTION_EVIDENCE_MISSING")
+        if head.get("ServerSideEncryption")!="AES256": raise CaptureError("S3_ENCRYPTION_EVIDENCE_MISSING")
+        retention=self._call("GET_OBJECT_RETENTION",self.client.get_object_retention,**self._bucket_args(),Key=key,VersionId=version).get("Retention",{})
+        if retention.get("Mode")!="GOVERNANCE" or not retention.get("RetainUntilDate"): raise CaptureError("S3_RETENTION_EVIDENCE_MISSING")
         got=self._call("GET_OBJECT_VERIFY",self.client.get_object,**self._bucket_args(),Key=key,VersionId=version,ChecksumMode="ENABLED")
         body=got["Body"].read() if hasattr(got["Body"],"read") else bytes(got["Body"])
         if sha256_bytes(body)!=digest: raise CaptureError("S3_CHECKSUM_MISMATCH")
-        return {"bucket":self.bucket,"expected_owner":self.expected_owner,"key":key,"version_id":version,"sha256":digest,"bytes":len(payload),"retention_mode":"GOVERNANCE","retain_until":head["ObjectLockRetainUntilDate"].isoformat()}
+        return {"bucket":self.bucket,"expected_owner":self.expected_owner,"key":key,"version_id":version,"sha256":digest,"bytes":len(payload),"retention_mode":"GOVERNANCE","retain_until":retention["RetainUntilDate"].isoformat()}
 
     def restore(self, receipt: Mapping[str,Any], destination: ImmutableStore) -> dict[str,Any]:
         if receipt.get("bucket")!=self.bucket or receipt.get("expected_owner")!=self.expected_owner: raise CaptureError("S3_RECEIPT_DESTINATION_MISMATCH")
@@ -348,19 +406,55 @@ class StageBRunner:
         storage=storage_preflight(self.root); self.runtime_guard("LOCAL_PREFLIGHT")
         return plan_from_fixture(fixture,sector_hash),{"bound_documents":bound,"storage":storage}
 
-    def execute(self, authorization: Mapping[str,Any], sector_evidence: Mapping[str,Any],
-                transport_factory: Callable[[],Any], backup_factory: Callable[[ImmutableStore],S3EvidenceBackup]) -> dict[str,Any]:
-        started=self.now(); plan,preflight=self.preflight(authorization,sector_evidence)
-        # Credential discovery and client construction happen only after all local gates pass.
-        primary=ImmutableStore(self.root/"primary")
-        backup=backup_factory(primary); backup.verify_configuration()
-        transport=transport_factory()
+    @staticmethod
+    def _publish_outcome(primary: ImmutableStore, status: str, now: datetime, error: Exception | None=None) -> dict[str,Any]:
+        value={"schema_version":"alpha-atlas-v4-stage-b-outcome.v1","status":status,"recorded_at":now.astimezone(UTC).isoformat(),
+               "error_code":error.code if isinstance(error,CaptureError) else type(error).__name__ if error else None,
+               "error_detail":str(error) if error else None}
+        digest=sha256_bytes(canonical_bytes(value)); return primary.publish(f"run/outcome-{digest}.json",canonical_bytes(value))
+
+    def _backup_checkpoint(self, primary: ImmutableStore, backup: S3EvidenceBackup, measurements: list[dict[str,Any]]) -> dict[str,Any]:
+        # Freeze primary evidence exactly once. The S3 ledger lives outside primary,
+        # preventing recursive inventory growth.
+        entries=[]
+        for path in sorted(p for p in primary.root.rglob("*") if p.is_file() and not p.name.startswith(".")):
+            payload=path.read_bytes(); entries.append({"path":path.relative_to(primary.root).as_posix(),"sha256":sha256_bytes(payload),"bytes":len(payload)})
+        inventory={"schema_version":"alpha-atlas-v4-backup-inventory.v1","frozen_at":self.now().astimezone(UTC).isoformat(),"covered":entries,
+                   "excludes":["s3-operation-ledger","backup-completion-manifest"]}
+        inventory_bytes=canonical_bytes(inventory); inventory_hash=sha256_bytes(inventory_bytes)
+        inventory_path=f"backup/inventory-{inventory_hash}.json"; primary.publish(inventory_path,inventory_bytes)
+        frozen=entries+[{"path":inventory_path,"sha256":inventory_hash,"bytes":len(inventory_bytes)}]
+        primary_bytes=sum(p.stat().st_size for p in primary.root.rglob("*") if p.is_file())
+        if len(frozen)>40: raise CaptureError("BACKUP_OBJECT_COUNT_LIMIT",str(len(frozen)))
+        if primary_bytes>PRIMARY_CAP: raise CaptureError("PRIMARY_EVIDENCE_LIMIT")
+        receipts=[]; backup_bytes=0; restore_store=ImmutableStore(self.root/"isolated-restore"); restored=[]
+        for entry in frozen:
+            measurements.append(dict(self.runtime_guard("BEFORE_BACKUP_OBJECT")))
+            receipt=backup.publish(entry["path"],(primary.root/entry["path"]).read_bytes()); receipts.append(receipt); backup_bytes+=receipt["bytes"]
+            if backup_bytes>BACKUP_CAP or primary_bytes+backup_bytes>COMBINED_CAP: raise CaptureError("STAGE_B_EVIDENCE_LIMIT")
+        for receipt in receipts:
+            measurements.append(dict(self.runtime_guard("BEFORE_RESTORE_OBJECT"))); restored.append(backup.restore(receipt,restore_store))
+        completion={"schema_version":"alpha-atlas-v4-backup-completion.v1","inventory_path":inventory_path,"inventory_sha256":inventory_hash,
+                    "covered_object_count":len(frozen),"covered_bytes":sum(e["bytes"] for e in frozen),
+                    "receipts":[{k:r[k] for k in ("bucket","expected_owner","key","version_id","sha256","bytes","retention_mode","retain_until")} for r in receipts],
+                    "restored_object_count":len(restored),"semantics":"Covers the frozen inventory only; S3 ledger and this completion manifest are finite checkpoint metadata."}
+        completion_bytes=canonical_bytes(completion); completion_hash=sha256_bytes(completion_bytes)
+        completion_path=f"backup/completion-{completion_hash}.json"; primary.publish(completion_path,completion_bytes)
+        completion_receipt=backup.publish(completion_path,completion_bytes); backup_bytes+=len(completion_bytes)
+        primary_bytes=sum(p.stat().st_size for p in primary.root.rglob("*") if p.is_file())
+        if primary_bytes>PRIMARY_CAP or backup_bytes>BACKUP_CAP or primary_bytes+backup_bytes>COMBINED_CAP: raise CaptureError("STAGE_B_EVIDENCE_LIMIT")
+        expected=s3_operation_budget(len(frozen))["total"]
+        if backup.ledger.operation_count()!=expected: raise CaptureError("S3_OPERATION_ACCOUNTING_MISMATCH",f"{backup.ledger.operation_count()}!={expected}")
+        return {"inventory_path":inventory_path,"inventory_sha256":inventory_hash,"covered_objects":len(frozen),
+                "primary_bytes":primary_bytes,"backup_bytes":backup_bytes,"receipts":receipts,
+                "completion_path":completion_path,"completion_receipt":completion_receipt,"restored_objects":len(restored),"operations":expected}
+
+    def _acquire(self, plan: Mapping[str,Any], primary: ImmutableStore, transport: Any, measurements: list[dict[str,Any]]) -> dict[str,Any]:
         runner=AcquisitionRunner(primary,transport,synthetic=self.offline,
                                  live_authorization_sha256=None if self.offline else self.approved_authorization_sha256,
-                                 clock=self.now)
+                                 evidence_limit_bytes=PRIMARY_CAP-262144,clock=self.now)
         if runner.ledger.reconcile_uncertain(self.now()): raise CaptureError("MASSIVE_UNCERTAIN_ATTEMPTS_REQUIRE_REVIEW")
         results={}; quarantined=[]; identity=None; timing=acquisition_clock(SESSION)
-        measurements=[]
         for spec in plan["requests"]:
             measurements.append(dict(self.runtime_guard(f"BEFORE_{spec.request_id}")))
             results[spec.request_id]=runner.execute(spec,"operational_verification",timing)
@@ -368,38 +462,44 @@ class StageBRunner:
             if spec.family=="identity": identity=resolve_identity(results[spec.request_id])
             measurements.append(dict(self.runtime_guard(f"AFTER_{spec.request_id}")))
         if identity is None: raise CaptureError("IDENTITY_UNRESOLVED")
-        rows={key:[r for obj in value["objects"] for r in obj["payload"]["results"] for key2 in [key]] for key,value in results.items() if key.startswith("history:")}
+        rows={key:[r for obj in value["objects"] for r in obj["payload"]["results"]] for key,value in results.items() if key.startswith("history:")}
         dates=lambda values:[str(x.get("date")) for x in values if x.get("date")]
-        feature_reasons=validate_feature_window(dates(rows["history:AAPL"]),dates(rows["history:SPY"]),dates(rows["history:XLK"]))
-        if feature_reasons: raise CaptureError("FEATURE_WINDOW_INVALID",",".join(feature_reasons))
+        reasons=validate_feature_window(dates(rows["history:AAPL"]),dates(rows["history:SPY"]),dates(rows["history:XLK"]))
+        if reasons: raise CaptureError("FEATURE_WINDOW_INVALID",",".join(reasons))
         split_rows=[r for obj in results["splits:global"]["objects"] for r in obj["payload"]["results"] if r.get("ticker") in {"AAPL","SPY","XLK"}]
-        source_sha=results["history:AAPL"]["objects"][0]["sha256"]
-        adjusted=adjust_unadjusted_bars(rows["history:AAPL"],split_rows,SESSION,source_sha256=source_sha)
+        adjusted=adjust_unadjusted_bars(rows["history:AAPL"],split_rows,SESSION,source_sha256=results["history:AAPL"]["objects"][0]["sha256"])
         handoff=build_handoff(plan,results,generated_at=self.now(),timing=timing,adjustment_bindings={"AAPL":adjusted["binding"]})
         if not handoff["eligible"]: raise CaptureError("HANDOFF_INELIGIBLE",",".join(handoff["reason_codes"]))
         handoff["resolved_identity"]=identity; handoff["quarantine_released"]=sorted(quarantined)
         handoff["handoff_sha256"]=sha256_bytes(canonical_bytes({k:v for k,v in handoff.items() if k!="handoff_sha256"}))
-        payload=canonical_bytes(cache_only_handoff(handoff)); primary_result=primary.publish("handoff/handoff.json",payload)
-        primary.verify(primary_result["path"],primary_result["sha256"],primary_result["bytes"])
-        primary_bytes=sum(p.stat().st_size for p in primary.root.rglob("*") if p.is_file())
-        if primary_bytes>PRIMARY_CAP: raise CaptureError("PRIMARY_EVIDENCE_LIMIT")
-        backup_receipts=[]; backup_bytes=0
-        for source in sorted(p for p in primary.root.rglob("*") if p.is_file() and not p.name.startswith(".")):
-            measurements.append(dict(self.runtime_guard("BEFORE_BACKUP_OBJECT")))
-            relative=source.relative_to(primary.root).as_posix(); receipt=backup.publish(relative,source.read_bytes())
-            backup_receipts.append(receipt); backup_bytes+=receipt["bytes"]
-            if backup_bytes>BACKUP_CAP or primary_bytes+backup_bytes>COMBINED_CAP: raise CaptureError("STAGE_B_EVIDENCE_LIMIT")
-        restore_store=ImmutableStore(self.root/"isolated-restore"); restored=[]
-        for receipt in backup_receipts:
-            measurements.append(dict(self.runtime_guard("BEFORE_RESTORE_OBJECT")))
-            restored.append(backup.restore(receipt,restore_store))
-        ended=self.now()
+        payload=canonical_bytes(cache_only_handoff(handoff)); published=primary.publish("handoff/handoff.json",payload); primary.verify(published["path"],published["sha256"],published["bytes"])
+        return {"runner":runner,"identity":identity,"quarantined":sorted(quarantined),"handoff_sha256":handoff["handoff_sha256"]}
+
+    def execute(self, authorization: Mapping[str,Any], sector_evidence: Mapping[str,Any],
+                transport_factory: Callable[[],Any], backup_factory: Callable[[ImmutableStore],S3EvidenceBackup]) -> dict[str,Any]:
+        started=self.now(); plan,preflight=self.preflight(authorization,sector_evidence)
+        primary=ImmutableStore(self.root/"primary"); measurements=[]
+        # Client/credential creation occurs only after all local gates above.
+        backup=backup_factory(primary); backup.verify_configuration(); transport=transport_factory()
+        try:
+            acquired=self._acquire(plan,primary,transport,measurements)
+            self._publish_outcome(primary,"ACQUISITION_COMPLETE",self.now())
+        except Exception as exc:
+            self._publish_outcome(primary,"ACQUISITION_FAILED",self.now(),exc)
+            try: self._backup_checkpoint(primary,backup,measurements)
+            except Exception as backup_exc:
+                self._publish_outcome(primary,"PARTIAL_BACKUP_FAILED",self.now(),backup_exc); raise backup_exc from exc
+            raise
+        try: checkpoint=self._backup_checkpoint(primary,backup,measurements)
+        except Exception as backup_exc:
+            self._publish_outcome(primary,"PARTIAL_BACKUP_FAILED",self.now(),backup_exc); raise
+        ended=self.now(); runner=acquired["runner"]
         return {"status":"PASS","mode":"OFFLINE_SYNTHETIC" if self.offline else "LIVE_STAGE_B","session":SESSION.isoformat(),
                 "synthetic_transport_attempts":len([x for x in runner.ledger.records() if x["event"]=="RESERVED"]) if self.offline else 0,
                 "live_provider_requests":0 if self.offline else len([x for x in runner.ledger.records() if x["event"]=="RESERVED"]),
-                "real_acquisition_authorized":not self.offline,"preflight":preflight,"identity":identity,
-                "quarantined_then_released":sorted(quarantined),"handoff_sha256":handoff["handoff_sha256"],
-                "primary":{"bytes_accounted":primary_bytes,"cap":PRIMARY_CAP,"read_back":True},
-                "backup":{"objects":len(backup_receipts),"bytes_accounted":backup_bytes,"cap":BACKUP_CAP,"receipts":backup_receipts},
-                "restore":{"objects":len(restored),"verified":True},
-                "s3_operations":backup.ledger.operation_count(),"resource_measurements":measurements,"telemetry":telemetry(started,ended)}
+                "real_acquisition_authorized":not self.offline,"preflight":preflight,"identity":acquired["identity"],
+                "quarantined_then_released":acquired["quarantined"],"handoff_sha256":acquired["handoff_sha256"],
+                "primary":{"bytes_accounted":checkpoint["primary_bytes"],"cap":PRIMARY_CAP,"read_back":True},
+                "backup":{"objects":checkpoint["covered_objects"]+1,"covered_objects":checkpoint["covered_objects"],"bytes_accounted":checkpoint["backup_bytes"],"cap":BACKUP_CAP,"completion_path":checkpoint["completion_path"]},
+                "restore":{"objects":checkpoint["restored_objects"],"verified":True},
+                "s3_operations":checkpoint["operations"],"resource_measurements":measurements,"telemetry":telemetry(started,ended)}
