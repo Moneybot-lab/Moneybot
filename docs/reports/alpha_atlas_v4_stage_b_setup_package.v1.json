@@ -1,0 +1,249 @@
+{
+  "acceptance_schema": {
+    "allowed_statuses": [
+      "PASS",
+      "FAIL",
+      "UNKNOWN",
+      "NOT_TESTED"
+    ],
+    "overall_rule": "PASS only when every required item is PASS; UNKNOWN, NOT_TESTED, or FAIL prevents Stage B acceptance.",
+    "requirements": [
+      "authorization_and_manifest_hash",
+      "effective_sector_mapping",
+      "typed_security_identity",
+      "endpoint_access",
+      "pagination_complete",
+      "response_limits",
+      "receipt_provenance",
+      "75_session_window",
+      "split_consistency",
+      "deadline",
+      "attempt_budget",
+      "evidence_budget",
+      "worker_interference",
+      "primary_readback",
+      "backup_version_lock",
+      "isolated_restore",
+      "cache_only_handoff",
+      "secret_redaction",
+      "retention_terms"
+    ]
+  },
+  "account_evidence": {
+    "limits": [
+      "web disk is not worker-accessible",
+      "seven-day Render snapshots do not satisfy 180-day backup",
+      "web /var/data does not evidence MONEYBOT_PERSISTENT_DATA_DIR binding or worker storage"
+    ],
+    "massive": "Stocks Advanced Individual, $200/month (active dashboard evidence)",
+    "web": "Moneybot Standard, $25/month, 1 CPU, 2 GB RAM, existing 1 GB disk mounted /var/data; snapshots retained seven days",
+    "worker": "moneybot-market-stream Starter, $7/month, 0.5 CPU, 512 MB RAM, no disk",
+    "workspace": "Render Pro"
+  },
+  "authorization_stages": {
+    "bounded_run": {
+      "scope": "one manual Stage B run, expected 5 and max 18 live attempts, max 4,067,328 bytes per primary/backup copy; no repeat",
+      "status": "REQUIRES_SEPARATE_AUTHORIZATION"
+    },
+    "measurements": {
+      "items": [
+        "endpoint access/completeness and response sizes",
+        "receipt/provenance and split consistency",
+        "duration and CPU/RAM headroom beside stream worker",
+        "primary read-back, S3 copy and isolated restore",
+        "cache-only eligible handoff"
+      ],
+      "status": "NOT_TESTED"
+    },
+    "setup_implementation": {
+      "scope": "implement missing components; create/configure 3 GB worker disk, dedicated S3 bucket/roles/lifecycle, secrets, and deploy without changing worker start command",
+      "status": "REQUIRES_SEPARATE_AUTHORIZATION"
+    }
+  },
+  "cost": {
+    "conditional_assumptions": [
+      "no worker compute upgrade after headroom measurement",
+      "one Stage B evidence set only",
+      "AWS us-east-1 S3 Standard published rates apply",
+      "no KMS charge (SSE-S3)",
+      "taxes and account billing adjustments excluded"
+    ],
+    "currency": "USD",
+    "known_monthly_recurring_while_retained": 0.750093548544,
+    "known_six_month_upper_arithmetic": 4.501669750784,
+    "render_disk": {
+      "monthly": 0.75,
+      "one_time": 0.0,
+      "published_rate": "$0.25 per GB-month",
+      "six_months": 4.5,
+      "size_gb_decimal": 3
+    },
+    "s3_standard": {
+      "decimal_gb": 0.004067328,
+      "evidence_max_bytes": 4067328,
+      "get_rate_per_1000": 0.0004,
+      "max_egress": 0.00036605952,
+      "max_get_operations": 256,
+      "max_put_copy_post_list_operations": 128,
+      "max_restore_egress_gb_decimal": 0.004067328,
+      "monthly_storage": 9.3548544e-05,
+      "one_time_put_max": 0.00064,
+      "public_egress_rate_assumption_per_gb": 0.09,
+      "published_storage_rate_per_gb_month": 0.023,
+      "put_rate_per_1000": 0.005,
+      "six_month_storage": 0.000561291264,
+      "verification_restore_get_max": 0.0001024
+    },
+    "unknowns": [
+      "whether an AWS account and approved billing relationship exist",
+      "tax, currency conversion, and account-specific credits or contractual rates",
+      "actual retained object count and transfer route",
+      "Render proration and account-specific billing treatment",
+      "provider retained-data permission; access does not establish retention rights"
+    ]
+  },
+  "created_at": "2026-10-01",
+  "limitations": [
+    "Stage B cannot prove full-pilot throughput",
+    "a restore check cannot prove 180 elapsed days of retention",
+    "PASS does not approve a broader universe, start the pilot, authorize training, or establish predictive advantage"
+  ],
+  "manifest": {
+    "path": "alpha_atlas_v4_stage_b_verification_manifest.v1.json",
+    "sha256": "1e59160a60c0f2db6e8f268a8bc6f7eb30db7444435b8a8bd59582c77126d33b"
+  },
+  "massive_terms": {
+    "active_subscription": "EVIDENCED Stocks Advanced Individual $200/month",
+    "actual_endpoint_access": "NOT_TESTED for this fixture; Stage B measurement",
+    "public_support": "Pricing/docs describe custom aggregates, ticker overview, splits/corporate actions and Advanced history/access; verified 2026-10-01",
+    "retained_data_permission": "UNRESOLVED; successful access would not establish storage/backup rights",
+    "support_question_not_sent": "Under my individual Stocks Advanced subscription, may I retain immutable raw responses from Custom Bars, Ticker Overview, and Splits, plus derived snapshots and one versioned backup copy, for 180 days solely for personal prospective reliability research?"
+  },
+  "missing_implementation": [
+    {
+      "component": "Stage B manifest staging",
+      "exact_change": "Extend the planner with a Stage-B-only unresolved-identity declaration that permits planning request 4 but still blocks handoff until its immutable response supplies and validates a typed security identity. Never accept issuer CIK alone."
+    },
+    {
+      "component": "real transport",
+      "exact_change": "Add a Massive HTTPS transport injected only by a separately authorized Stage B command, with credential redaction, host pinning, timeouts, response limits, and the existing durable AttemptLedger. Keep Stage A CLI synthetic-only."
+    },
+    {
+      "component": "S3 backup",
+      "exact_change": "Implement an EvidenceStorage-compatible S3 adapter that writes immutable/versioned objects with 180-day Governance Object Lock, captures version IDs/checksums, reads back, and restores into an isolated local directory."
+    },
+    {
+      "component": "operational runner",
+      "exact_change": "Add authorization-file and manifest-hash gates, effective sector mapping preflight, CPU/RSS sampling, Stage B result schema, and a non-scheduled one-shot command. No such runnable command exists today."
+    }
+  ],
+  "official_sources": [
+    {
+      "topic": "Render disks",
+      "url": "https://render.com/docs/disks",
+      "verified": "2026-10-01"
+    },
+    {
+      "topic": "Render pricing",
+      "url": "https://render.com/pricing",
+      "verified": "2026-10-01"
+    },
+    {
+      "topic": "S3 pricing",
+      "url": "https://aws.amazon.com/s3/pricing/",
+      "verified": "2026-10-01"
+    },
+    {
+      "topic": "S3 Object Lock",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html",
+      "verified": "2026-10-01"
+    },
+    {
+      "topic": "S3 Versioning",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html",
+      "verified": "2026-10-01"
+    },
+    {
+      "topic": "Massive pricing",
+      "url": "https://massive.com/pricing",
+      "verified": "2026-10-01"
+    },
+    {
+      "topic": "Massive aggregates",
+      "url": "https://massive.com/docs/rest/stocks/aggregates/custom-bars",
+      "verified": "2026-10-01"
+    },
+    {
+      "topic": "Massive ticker overview",
+      "url": "https://massive.com/docs/rest/stocks/tickers/ticker-overview",
+      "verified": "2026-10-01"
+    },
+    {
+      "topic": "Massive splits",
+      "url": "https://massive.com/docs/rest/stocks/corporate-actions/splits",
+      "verified": "2026-10-01"
+    }
+  ],
+  "preserved_stage_a": {
+    "handoff": "ELIGIBLE_SYNTHETIC",
+    "live_provider_requests": 0,
+    "not_uploaded": [
+      "temporary source objects",
+      "temporary backup objects",
+      "temporary restore objects"
+    ],
+    "primary_backup_restore": "REPORTED_SYNTHETIC_TEMPORARY_STORAGE_ONLY",
+    "real_acquisition_available": false,
+    "report_json_sha256": "ccd9a80839cd10dfe2beb1ad01b1e8779b010037c867923834b6bfa914726cb0",
+    "run": "36737873047-1",
+    "status": "PASS",
+    "synthetic_attempts": 7,
+    "uploaded_members": [
+      "report.json",
+      "report.md",
+      "run.log",
+      "SHA256SUMS"
+    ],
+    "window_sessions": 75
+  },
+  "recommended_storage": {
+    "adapter_status": "NOT_IMPLEMENTED: Stage A EvidenceStorage copies only between local filesystem ImmutableStore roots; an S3 versioned backup adapter with Object Lock headers, version IDs, checksums, read-back, and isolated restore is required.",
+    "backup": {
+      "acquisition_role": "prefix-scoped PutObject/GetObject/GetObjectVersion/ListBucket/GetObjectRetention; deny DeleteObject/DeleteObjectVersion and s3:BypassGovernanceRetention",
+      "bucket": "NEW_DEDICATED_BUCKET_NAME_CHOSEN_DURING_AUTHORIZED_SETUP",
+      "cleanup": "no primary or backup evidence deletion before 180 days; temporary staging removed only after checksummed primary, backup, and restore receipts exist",
+      "encryption": "SSE-S3",
+      "object_lock": "Governance mode, default retention 180 days, enabled when bucket is created",
+      "prefix": "alpha-atlas-v4/stage-b/<verification-id>/",
+      "public_access": "blocked",
+      "region": "us-east-1",
+      "restore_location": "/var/data/moneybot-stage-b/restore/<verification-id>",
+      "restore_role": "prefix-scoped read-only GetObject/GetObjectVersion/ListBucket into isolated local restore directory",
+      "service": "Amazon S3 Standard",
+      "versioning": "Enabled"
+    },
+    "primary": {
+      "configured_size": "3 GB decimal",
+      "environment": {
+        "MONEYBOT_PERSISTENT_DATA_DIR": "/var/data/moneybot-stage-b"
+      },
+      "minimum_required_bytes": 2147483648,
+      "mount": "/var/data",
+      "reason": "3 GB decimal = 2.794 GiB, exceeding the 2 GiB operating-capacity requirement; 2 GB decimal would be only 1.863 GiB",
+      "research_root": "/var/data/moneybot-stage-b/alpha_atlas_v4/stage-b",
+      "service": "Render persistent disk attached only to moneybot-market-stream"
+    }
+  },
+  "schema_version": "alpha-atlas-v4-stage-b-setup-package.v1",
+  "status": "PREPARED_FOR_REVIEW_NOT_AUTHORIZED_NOT_EXECUTED",
+  "stop_conditions": [
+    "authorization or manifest mismatch",
+    "unexpected billable requirement",
+    "07:30 deadline, 18-attempt, response-size, evidence-size, storage, or runtime limit",
+    "incomplete required pagination",
+    "missing identity, effective sector, or complete split evidence",
+    "corrupt primary, backup, read-back, or restore",
+    "unacceptable stream-worker CPU/RAM/latency interference",
+    "secret leakage or unauthorized destination"
+  ]
+}

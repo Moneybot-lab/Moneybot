@@ -1,0 +1,23 @@
+{
+  "schema_version": "alpha-atlas-v4-stage-b-synthetic-validation.v1",
+  "status": "PASS",
+  "mode": "OFFLINE_SYNTHETIC_ONLY",
+  "fixture": ["AAPL", "SPY", "XLK"],
+  "window_sessions": 75,
+  "synthetic_transport_attempts": 5,
+  "live_provider_requests": 0,
+  "real_acquisition_authorized": false,
+  "identity": "SYNTHETIC_SHARE_CLASS_FIGI_RESOLVED_AFTER_QUARANTINE",
+  "quarantined_history": ["history:AAPL", "history:SPY", "history:XLK"],
+  "primary_bytes": 37595,
+  "primary_cap_bytes": 4067328,
+  "backup_bytes": 37595,
+  "backup_cap_bytes": 4067328,
+  "backup_objects": 12,
+  "restored_objects": 12,
+  "s3_mock_operations": 51,
+  "backup_semantics": "IN_MEMORY_S3_MOCK_ONLY_NOT_OPERATIONAL_RETENTION_EVIDENCE",
+  "bound_documents_verified": true,
+  "temporary_source_backup_restore_objects_committed": false,
+  "artifacts_emitted_by_cli": ["report.json", "report.md", "run.log", "SHA256SUMS"]
+}
