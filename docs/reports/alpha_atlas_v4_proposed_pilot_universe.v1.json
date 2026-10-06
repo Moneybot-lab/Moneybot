@@ -1,0 +1,44 @@
+{
+  "approval_status": "PENDING_USER_REVIEW",
+  "code_commit": "05c1c898cc03a02e4c72fe38a0a563f44677b18c",
+  "configuration_sha256": "0129da81471f52e762f17c49c9eb6a5fcceb0ee194f8fae012c29a5cf5da6ba4",
+  "content_sha256": "a5439b1fd85f4247ffc4b21f91ba1a3176e4839fc86c459daa70d6718cf0d56b",
+  "created_at": "2026-09-28T00:00:00Z",
+  "effective_sessions": [
+    "PILOT_SESSION_01",
+    "PILOT_SESSION_02",
+    "PILOT_SESSION_03",
+    "PILOT_SESSION_04",
+    "PILOT_SESSION_05",
+    "PILOT_SESSION_06",
+    "PILOT_SESSION_07",
+    "PILOT_SESSION_08",
+    "PILOT_SESSION_09",
+    "PILOT_SESSION_10"
+  ],
+  "expected_member_rule": "Bind this unchanged list at 07:45 for each of ten approved sessions; later missing, halted, delisted, or otherwise ineligible members remain expected and reconcile explicitly.",
+  "identity_note": "No typed point-in-time security identifiers are present in the source; null is preserved and continuity is not inferred.",
+  "member_count": 2,
+  "ordered_members": [
+    "QQQ",
+    "SPY"
+  ],
+  "outcome_independent": true,
+  "policy_version": "server-owned-default-symbols.v1",
+  "schema_version": "alpha-atlas-v4-proposed-pilot-universe.v1",
+  "selection_rule": "Take every symbol in the repository default MASSIVE_STREAM_SERVER_SYMBOLS value when render.yaml supplies no override; normalize uppercase, remove wildcards and duplicates, and sort lexically. Do not filter by scores, returns, capture success, or data availability.",
+  "source": {
+    "deployment_path": "render.yaml",
+    "deployment_service": "moneybot-market-stream",
+    "deployment_sha256": "8eaf04f5db5dc54025fa6e7b0d306e92f431f642c8a5dccb4f3d17c84f4dfb7a",
+    "identity": "moneybot.services.market_stream.worker_config_from_env MASSIVE_STREAM_SERVER_SYMBOLS default",
+    "path": "moneybot/services/market_stream.py",
+    "source_sha256": "6cb3021b627004d558f3bce6de6911b1b98c7a1a53415a83b8daaa1ebf6c9a20"
+  },
+  "status": "PROPOSED_NOT_APPROVED",
+  "typed_identifiers": {
+    "QQQ": null,
+    "SPY": null
+  },
+  "universe_manifest_id": "alpha-atlas-v4-pilot-proposed-server-owned-v1"
+}

@@ -1358,16 +1358,242 @@ immutable provenance. Performance comparison execution remains pending review.
   snapshot deadline, 08:45 decision boundary, and same-session official-open
   intended entry. It is prospective only and does not alter saved evidence.
 - [ ] **Durable-storage and pilot-universe prerequisites remain open.** Before
-  implementation review, approve one static, outcome-independent manifest of at
+  pilot start, approve one static, outcome-independent manifest of at
   most 50 already-authorized tickers and verify the configured persistent mount's
   quota, access control, read-back, and 180-day retention. Ephemeral `data/` and
   an artifact URL are insufficient.
-- [ ] **Implementation and synthetic testing are `NOT_AUTHORIZED / NOT_EXECUTED`.**
-  The next authorization may implement only the label-free capture adapter,
-  immutable schema/persistence, reconciliation, budget stops, and focused tests;
-  it must still exclude collection and provider calls.
+- [x] **Implementation and synthetic testing are `AUTHORIZED / COMPLETE`.**
+  The implemented scope is limited to the label-free cache-only adapter,
+  immutable schema/persistence, reconciliation, budget stops, and focused
+  synthetic tests; collection and provider calls remain excluded.
 - [ ] **Prospective collection, outcomes, training, and scoring are
   `NOT_AUTHORIZED / NOT_EXECUTED`.** The finite pilot is capped at 10 sessions,
   50 tickers/session, 500 assignments, 55 runtime minutes/session, 250 MiB, one
   concurrent run, and zero incremental provider requests, but may not start under
   this preparation task.
+
+#### Prospective capture implementation (separate from pilot authorization)
+
+- [x] **Implementation and focused synthetic testing are complete.** The
+  cache-only label-free adapter, hash-bound timing clarification, immutable
+  payload/completion-receipt storage, deterministic selection/reconciliation,
+  and restart-persistent finite-budget ledger are implemented separately from
+  daily operations. The synthetic CLI and manual synthetic-only workflow expose
+  no real collection mode and use zero provider credentials or requests.
+- [x] **A static pilot ticker manifest is prepared for review.** The deterministic,
+  outcome-independent repository server-owned default produces the lexical list
+  `QQQ, SPY`, proposed unchanged for all ten sessions. Preparation is not approval:
+  user review remains pending, and absent typed identifiers remain null.
+- [ ] **Runtime storage prerequisites remain pending.** Before pilot start, an
+  operator must verify the explicitly configured persistent root's quota,
+  access control, backup/retrieval behavior, and 180-day retention. Immediate
+  fsync/read-back validation is not evidence of those operational properties.
+- [ ] **Prospective collection remains unauthorized and disabled.** Pilot start,
+  outcomes, training, scoring, deployment, routing, and production scheduling
+  require later authorization. The pilot assesses capture reliability and cohort
+  formation only; it cannot establish predictive advantage or automatically
+  authorize training.
+- [x] **Hosted synthetic smoke check recorded separately.** Run `36457965993-1`
+  passed in `SYNTHETIC_ONLY` mode with one assignment, zero provider requests,
+  and `real_collection_available=false`; uploaded `report.json` SHA-256 is
+  `7cb11d7d811bf1b3248dae0919a18620d45fc61f0059a7637c52a1957616c9b4`.
+  This is neither the focused unit suite nor operational-readiness evidence. The
+  artifact remains unchanged; future checksum manifests use artifact-root paths.
+- [x] **Repository-supported readiness inspection complete.** The Render blueprint
+  has no persistent disk/root declaration, and no authenticated application-runtime
+  access was available, so no runtime probe was performed. Existing process/Redis
+  caches do not provide the required receipt-bearing daily lookbacks without
+  provider-capable fallback; technical readiness is `BLOCKED_STORAGE_AND_CACHE`.
+- [ ] **Manifest approval, runtime storage verification, and collection
+  authorization remain separate and open.** Configure and evidence the actual
+  mount/quota/access/backup/restore/cleanup/180-day lifecycle, then perform one
+  isolated storage probe. Collection, outcomes, training, and scoring remain off.
+
+#### Prospective acquisition amendment
+
+- [x] **One finite acquisition amendment is `PREPARED_FOR_REVIEW`.** It recommends
+  a separate pre-assembly Massive REST stage, an immutable single-writer primary
+  store plus verified backup, and an unchanged cache-only assembler. Its explicit
+  ten-session budget is 743 expected / 2,271 maximum request attempts and 30.53
+  MiB expected / 501.75 MiB maximum retained storage, requiring review of amended
+  caps of 2,271 requests and 512 MiB. These caps are not authorized.
+- [x] **Existing ingestion and storage paths were inspected without execution.**
+  Track B flat-file/split responses could potentially be preserved, but timing,
+  licensing, and durable transfer are unverified. Current Redis, Actions, database,
+  and filesystem evidence does not establish the required 180-day immutable store.
+  Provider, storage, backup, and egress costs remain `UNKNOWN` pending account quotes.
+- [ ] **A meaningful stock manifest remains blocked on an exact missing input.**
+  QQQ/SPY stays `PROPOSED_NOT_APPROVED` and is plumbing-only. The repository has no
+  reviewed, effective-dated, outcome-independent common-stock source with typed
+  identities; no replacement roster was invented or approved.
+- [ ] **Acquisition implementation and execution remain `NOT_AUTHORIZED`.** Approval
+  must separately cover a stock/sector/identity manifest, account entitlement and
+  cost, the finite request/storage amendments, 180-day backup/restore evidence,
+  implementation, and later execution. No collection, deployment, purchase,
+  training, or scoring occurred in preparing the amendment.
+- [x] **Acquisition amendment v2 corrects v1 without mutating it.** The corrected
+  accounting adds supplied universe/sector inputs, recurring dated identities,
+  complete unadjusted 75-session refreshes, local split-basis reconstruction, and
+  a separately capped operational check. The proposed cumulative budget is now
+  1,248 expected / 3,789 maximum attempts; v1's 743 / 2,271 is superseded, not
+  approved or preserved as the operative estimate.
+- [x] **Storage evidence and operating capacity are separated.** Maximum primary
+  evidence is 674.31 MiB and primary-plus-backup evidence is 1,348.61 MiB under
+  a proposed 1,536 MiB evidence cap. Proposed operating capacity is a 2 GiB
+  primary filesystem plus a distinct 1 GiB versioned backup. No supported backup
+  destination is configured, so the arrangement is not operationally ready.
+- [x] **Stage A is `AUTHORIZED / IMPLEMENTED / SYNTHETICALLY TESTED`.** The
+  transport-injected acquisition planner/runner, crash-conservative attempt ledger,
+  split-consistent adjustment, primary/backup/restore interfaces, deterministic
+  handoff, and synthetic-only CLI/workflow are complete. Stage A exposes no live
+  transport and recorded zero live requests.
+- [ ] **Stage B and Stage C remain `NOT_AUTHORIZED / NOT_EXECUTED`.** Stage B
+  requires separate approval for
+  at most 18 attempts and 3.88 MiB evidence; stage C requires approved manifests,
+  stage-B evidence, entitlement/cost review, durable restore-tested storage, and
+  explicit collection authorization. One persistent ledger spans every stage.
+- [x] **Authenticated account screenshots are incorporated in amendment v3.** They
+  evidence an active Massive Stocks Advanced Individual plan at $200/month, an
+  existing Render Starter stream worker at $7/month with 0.5 CPU/512 MiB and no
+  disk, a Standard web service at $25/month with an existing 1 GB disk, and a Pro
+  workspace with one visible Admin. Screenshot bytes were not supplied as files,
+  so no evidence hash is claimed. The screenshot showed the web disk mounted at
+  `/var/data`; its `MONEYBOT_PERSISTENT_DATA_DIR` binding remains unknown, and it
+  is not evidence of worker storage access.
+- [ ] **The observed resources do not close storage or authorization.** The web
+  disk is attached to a different service and is below the 2 GiB worker operating
+  requirement; its mount/root and exact free bytes are unknown. No writable
+  versioned 180-day backup is configured. Provider retained-data terms, approved
+  stock/sector/identity manifests, worker headroom, restore roles, and explicit
+  stage authorization remain open. No purchase or provisioning occurred.
+
+## Stage B operational-verification setup package (2026-10-01)
+
+- [x] **Stage A remains complete.** Hosted synthetic run `36737873047-1`
+  passed with seven synthetic attempts, zero live provider requests, a 75-session
+  eligible synthetic handoff, and temporary primary/backup/restore verification.
+  Its uploaded `report.json` SHA-256 is
+  `ccd9a80839cd10dfe2beb1ad01b1e8779b010037c867923834b6bfa914726cb0`.
+  The artifact contained the compact report, Markdown, log, and checksum manifest;
+  it did not preserve temporary source, backup, or restore objects.
+- [x] **Stage B setup is `PREPARED_FOR_REVIEW`.** The fixture is AAPL with SPY
+  and XLK context, five expected and eighteen maximum attempts, a fixed
+  75-prior-XNYS-session window, a 3 GB-decimal worker disk proposal, and an
+  Amazon S3 Standard `us-east-1` versioned/Object-Locked backup proposal. See
+  `docs/reports/alpha_atlas_v4_stage_b_setup_package.v1.{json,md}` and the
+  separately hashed verification manifest.
+- [ ] **Stage B remains `NOT_AUTHORIZED / NOT_EXECUTED`.** Typed share identity
+  must be resolved by the registered dated request, the AAPL→XLK mapping must be
+  confirmed effective for the bound session, Massive retained-data terms remain
+  unresolved, and the live transport, S3 adapter, authorization gate, telemetry,
+  worker disk, backup bucket/roles, and operational command do not yet exist.
+- [ ] **The ten-session pilot remains disabled and unauthorized.** Stage B PASS
+  would not approve the later stock universe, start collection, authorize
+  training, or establish predictive advantage.
+- [x] Account evidence is stated narrowly: the existing **web service** has a
+  1 GB disk mounted at `/var/data` with seven-day snapshots. That is not worker
+  storage, does not establish `MONEYBOT_PERSISTENT_DATA_DIR`, and does not meet
+  the proposed 180-day backup requirement.
+
+## Stage B implementation and offline synthetic validation (2026-10-01)
+
+- [x] **Stage B operational components are implemented and synthetically tested.**
+  The fixed-plan Massive transport, identity quarantine, externally hash-pinned
+  authorization gate, existing-bucket S3 version/Object-Lock adapter, exact-version
+  restore, evidence accounting, telemetry, and offline runner are present. The
+  offline run used five synthetic attempts and zero live provider requests.
+- [x] **The offline entry point is**
+  `python -m scripts.run_alpha_atlas_v4_stage_b_offline --offline-synthetic --output-dir <temporary-output-dir>`.
+  It has no live switch, SDK credential discovery, production storage access, or
+  provider fallback and emits compact JSON, Markdown, log, and relative checksums.
+- [ ] **Operational readiness remains unverified.** No worker disk/root, AWS
+  account/bucket/roles, Object Lock configuration, retained-data permission,
+  Massive endpoint access, or worker headroom was observed. The fixed 2026-10-05
+  fixture also still requires effective AAPL→XLK evidence and a separately
+  approved authorization whose hash is pinned outside the authorization itself.
+- [ ] **Stage B live execution remains `NOT_AUTHORIZED / NOT_EXECUTED`; the
+  ten-session pilot remains disabled and unauthorized.** This implementation
+  does not alter `COMPLETE — BLOCKED_STORAGE_AND_CACHE`, approve QQQ/SPY or a
+  stock universe, reopen prior findings, authorize collection/training/scoring,
+  or change production scheduling or behavior.
+
+## Stage B operational connection reconciliation (2026-10-05)
+
+- [x] The previously mock-only S3 seam now has a lazy concrete boto3 factory,
+  explicit credentials, disabled SDK retries, pre-call durable operation
+  reservations, bucket-owner/region/Versioning/encryption/public-access/Object-Lock
+  gates, and exact-version SHA-256 restore. A non-scheduled operational entry
+  point exists but cannot manufacture approval.
+- [x] The S3 budget is reconciled: 54 operations expected and 62 maximum for one
+  complete path, versus the unchanged defensive cap of 512. Failure stops without
+  retry; an uncertain operation blocks restart. The earlier request-cost allowance
+  was conservative; the corrected known six-month maximum is `$4.501016550784`
+  before account-specific unknowns and authorizes no spending.
+- [x] The preserved 2026-10-05 fixture is **`EXPIRED / NOT EXECUTABLE`**. Its
+  07:30 America/New_York acquisition cutoff and 2026-06-17–2026-10-02 window are
+  unchanged. Tests demonstrate rejection before S3/Massive client construction;
+  no replacement date was selected and no receipt was backdated.
+- [ ] A future run requires a re-bound session/window, dated identity and split
+  parameters, effective AAPL→XLK evidence, new fixture hashes, and a separately
+  approved execution authorization with an externally pinned full hash.
+- [ ] Live Stage B remains `NOT_AUTHORIZED / NOT_EXECUTED`; operational worker
+  disk, AWS destination/roles, permissions, provider terms, runtime headroom,
+  backup and restore remain unverified. The pilot remains disabled, readiness
+  remains `COMPLETE — BLOCKED_STORAGE_AND_CACHE`, and prior findings remain closed.
+
+## Stage B owner infrastructure binding and backup checkpoint (2026-10-06)
+
+- [x] **Owner-reported configuration is bound offline.** The versioned config
+  records `moneybot-market-stream`, its reported 3 GB `/var/data` disk,
+  `/var/data/moneybot-stage-b`, bucket
+  `moneybot-alpha-atlas-backup-20261006`, `us-east-1`, `stage-b/`, and only the
+  credential-variable names `MONEYBOT_STAGE_B_AWS_ACCESS_KEY_ID` and
+  `MONEYBOT_STAGE_B_AWS_SECRET_ACCESS_KEY`. No secret value was read or stored.
+- [ ] **AWS expected owner remains unresolved.** No verified 12-digit owner ID
+  exists in repository evidence. The committed config contains `null`, rejects
+  placeholders/wildcards, and stops with `S3_EXPECTED_OWNER_UNRESOLVED`. The
+  offline owner-binding command emits new review hashes after the owner supplies
+  the verified ID; it performs no discovery request.
+- [x] **Installed IAM scope is compatible offline with the implemented calls.**
+  The supplied bucket/object read, upload, retention, and exact-version actions
+  cover the call set and `stage-b/` keys. Delete, bucket mutation, broad access,
+  and Governance bypass are neither required nor added. The same reported IAM
+  identity permits upload, read-back, and restore; separate roles are not claimed.
+- [x] **Backup accounting now covers failure evidence and finite checkpoints.**
+  Expected frozen objects are 14 and the maximum small-response path is 40;
+  expected/max S3 calls are 80/210 under the unchanged 512 ceiling. Attempt
+  bodies, retry/failure receipts, transport-failure receipts, the Massive ledger,
+  handoff when present, outcome, and inventory are covered. The completion
+  manifest is uploaded separately; the S3 ledger is excluded to prevent recursion.
+- [x] **The byte-limit conflict is explicit and fail-closed.** The endpoint-specific maximum bodies total
+  4,030,464 bytes; adding eighteen 8,192-byte receipt reserves yields 4,177,920
+  bytes, 110,592 above the 4,067,328-byte primary cap before final manifests.
+  The runner preserves a 262,144-byte finalization reserve and reserves per-request room and stops before the next provider call when insufficient;
+  no body is silently omitted and no storage limit is increased.
+- [ ] **Runtime verification remains unperformed.** Disk access/capacity, secret
+  access, bucket owner/configuration, IAM behavior, Massive access, backup,
+  restore, headroom, and interference remain measurements for a future explicitly
+  authorized, newly date-bound run. The October 5 fixture stays expired; Stage B
+  remains `NOT_AUTHORIZED / NOT_EXECUTED`, readiness remains
+  `COMPLETE — BLOCKED_STORAGE_AND_CACHE`, QQQ/SPY remains unapproved, and the
+  pilot remains disabled.
+
+## Stage B AWS owner binding (2026-10-06)
+
+- [x] **The owner-supplied AWS account ID `223901279399` is bound offline.**
+  The original unresolved configuration remains unchanged at
+  `docs/reports/alpha_atlas_v4_stage_b_runtime_config.v1.json`. The derived
+  owner-bound record is
+  `docs/reports/alpha_atlas_v4_stage_b_runtime_config.owner-bound.v1.json` with
+  content SHA-256
+  `c33217363d3be4a0cee9107f18bc4b73ca0534814d25897a7cb9702fd28d9186`
+  and file SHA-256
+  `0b7ef94a1a3ff023f01466a94e1b53d321608ff6c5e968e4a802d246b03c0f28`.
+- [x] The bound record retains the exact service, disk/root, bucket, region,
+  `stage-b/` prefix, controls, IAM names, and credential-variable **names** from
+  the reviewed configuration. No credential value was read, stored, or hashed.
+- [ ] Owner binding does not verify runtime disk, bucket controls, IAM behavior,
+  credentials, provider access, backup, restore, headroom, or interference. The
+  October 5 fixture remains expired; no execution authorization exists. Stage B
+  remains `NOT_AUTHORIZED / NOT_EXECUTED`, readiness remains
+  `COMPLETE — BLOCKED_STORAGE_AND_CACHE`, and the pilot remains disabled.
