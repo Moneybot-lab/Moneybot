@@ -1577,3 +1577,23 @@ immutable provenance. Performance comparison execution remains pending review.
   remains `NOT_AUTHORIZED / NOT_EXECUTED`, readiness remains
   `COMPLETE — BLOCKED_STORAGE_AND_CACHE`, QQQ/SPY remains unapproved, and the
   pilot remains disabled.
+
+## Stage B AWS owner binding (2026-10-06)
+
+- [x] **The owner-supplied AWS account ID `223901279399` is bound offline.**
+  The original unresolved configuration remains unchanged at
+  `docs/reports/alpha_atlas_v4_stage_b_runtime_config.v1.json`. The derived
+  owner-bound record is
+  `docs/reports/alpha_atlas_v4_stage_b_runtime_config.owner-bound.v1.json` with
+  content SHA-256
+  `c33217363d3be4a0cee9107f18bc4b73ca0534814d25897a7cb9702fd28d9186`
+  and file SHA-256
+  `0b7ef94a1a3ff023f01466a94e1b53d321608ff6c5e968e4a802d246b03c0f28`.
+- [x] The bound record retains the exact service, disk/root, bucket, region,
+  `stage-b/` prefix, controls, IAM names, and credential-variable **names** from
+  the reviewed configuration. No credential value was read, stored, or hashed.
+- [ ] Owner binding does not verify runtime disk, bucket controls, IAM behavior,
+  credentials, provider access, backup, restore, headroom, or interference. The
+  October 5 fixture remains expired; no execution authorization exists. Stage B
+  remains `NOT_AUTHORIZED / NOT_EXECUTED`, readiness remains
+  `COMPLETE — BLOCKED_STORAGE_AND_CACHE`, and the pilot remains disabled.
