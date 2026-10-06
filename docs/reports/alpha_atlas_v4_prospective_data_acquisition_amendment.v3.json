@@ -1,0 +1,373 @@
+{
+  "account_runtime_evidence": {
+    "content_hash": "UNAVAILABLE_NOT_SAVED_IN_REPOSITORY",
+    "evidence_kind": "USER_SUPPLIED_AUTHENTICATED_DASHBOARD_SCREENSHOTS",
+    "limitations": [
+      "disk mount path is not visible",
+      "MONEYBOT_PERSISTENT_DATA_DIR binding is not shown",
+      "backup destination and lifecycle are not shown",
+      "billing invoice, taxes and disk minimum convention are not shown",
+      "screenshots are not retained/hashable repository artifacts"
+    ],
+    "massive": {
+      "displayed_monthly_amount_usd": 200,
+      "limits_not_shown": [
+        "request throttle or fair-use controls",
+        "remaining capacity",
+        "retained-data rights",
+        "overage behavior"
+      ],
+      "plan": "Stocks Advanced",
+      "status": "OBSERVED_ACTIVE_PLAN",
+      "use": "Individual"
+    },
+    "render": {
+      "visible_member_role": "Admin",
+      "visible_members": 1,
+      "web": {
+        "cpu": "1 CPU",
+        "disk_capacity_gb_displayed": 1,
+        "disk_usage": "GRAPH_ONLY_APPROXIMATELY_0.15_GB_NOT_A_QUOTA_MEASUREMENT",
+        "monthly_compute_usd": 25,
+        "plan": "Standard",
+        "ram_gib": 2,
+        "scaling_with_disk": "NOT_SUPPORTED",
+        "service": "Moneybot"
+      },
+      "worker": {
+        "autoscaling": "OFF",
+        "cpu": ".5 CPU",
+        "disk": "NONE_ADD_DISK_AVAILABLE",
+        "monthly_compute_usd": 7,
+        "plan": "Starter",
+        "ram_mib": 512,
+        "service": "moneybot-market-stream"
+      },
+      "workspace_plan": "Pro"
+    }
+  },
+  "adjustment_revision_policy": {
+    "basis": "For each snapshot, derive a complete 75-session view from one raw response version and the complete set of split events received by cutoff whose execution date is effective by that snapshot. Record raw source-object hash, split-manifest hash, ordered split IDs/factors, adjustment_as_of session and adjustment-engine version.",
+    "calculation_input": "Persist and calculate from provider adjusted=false OHLCV/VWAP raw bars. Never append provider-adjusted bars to a prior adjusted window.",
+    "cost": "Full-window refresh is already the 62 history requests/session and its response storage; local reconstruction is bounded inside the acquisition 45-minute runtime and adds no request. Correction versions use the explicit storage reserve.",
+    "detection": "Each session retrieves the complete unadjusted window, dated identities and incremental split pages. Compare raw per-date hashes and split IDs/factors with the prior receipt. Changed content appends a new source-object revision and triggers complete local window reconstruction.",
+    "failure": "Unknown/incomplete split pagination, incompatible adjusted flag, missing factor, mixed response versions, identity mismatch, absent VWAP adjustment parity, or reconstruction beyond runtime/storage budget blocks the affected dependency/ticker. No extra request and no late acquisition.",
+    "method": "Reuse canonical split normalization and extend the pure adjust_bars_to_asof calculation so open/high/low/close and provider VWAP receive the price factor while volume receives its inverse, exactly once. The current helper does not adjust VWAP, so implementation and parity fixtures are required before operational verification.",
+    "split_during_pilot": "A newly effective split causes the full raw window to be re-derived on the new basis for later snapshots. Earlier raw objects and snapshots remain unchanged. No factor is applied twice."
+  },
+  "corrects": {
+    "change_record": [
+      "records user-supplied authenticated dashboard evidence for the active Massive and Render resources",
+      "changes Massive plan from UNKNOWN to observed Stocks Advanced at $200/month and estimates no subscription upgrade charge, subject to terms and capacity confirmation",
+      "records existing Render worker Starter at $7/month with no disk and web Standard at $25/month with an existing 1 GB disk",
+      "records Pro workspace and one visible Admin member without overstating service credential or backup controls",
+      "evaluates the existing web disk and rejects it for the worker path because Render disks are single-service and 1 GB is below the 2 GiB operating requirement",
+      "leaves request, lookback, adjustment and evidence-cap arithmetic unchanged",
+      "keeps backup destination, manifests, mount/root, compute headroom and operational verification as blockers"
+    ],
+    "commit": "5170b8c",
+    "version": "v2"
+  },
+  "cost": {
+    "affordability": "NOT_ESTABLISHED_UNTIL_BACKUP_AND_TERMS_CONFIRMED",
+    "backup": "UNKNOWN: no supported writable versioned destination; service, region, storage/operation/retrieval/egress rates and lifecycle are missing.",
+    "existing_compute": "Observed worker Starter $7/month and web Standard $25/month; both are existing sunk charges.",
+    "existing_provider_subscription": "Observed Stocks Advanced Individual at $200/month; existing sunk subscription, not an incremental amendment charge.",
+    "existing_web_disk": "Observed 1 GB; no incremental price established, not worker-accessible, and insufficient for 2 GiB operating capacity.",
+    "incremental_compute_estimate": "$0 conditional on measured worker CPU/RAM headroom; otherwise UNKNOWN and no upgrade is authorized.",
+    "known_incremental_floor": "$0.50/month for proposed worker disk; backup and any compute/egress/operations are additional UNKNOWN amounts.",
+    "primary_disk_estimate": "Proposed new 2 GiB worker disk * published $0.25/GB-month = $0.50/month; $3.00 for six months, before tax/minimum conventions.",
+    "provider_incremental_estimate": "$0 subscription upgrade charge, conditional on the active Advanced plan terms covering all 3,789 attempts and retained use; request/fair-use controls, remaining capacity, overage behavior and retention rights were not shown.",
+    "published_rates_verified": "2026-09-29",
+    "restore_egress": "UNKNOWN: workspace is observed Pro, but remaining included bandwidth and backup-provider retrieval charges are not shown."
+  },
+  "deadline_policy": {
+    "acquisition": "All network activity stops at 07:30 America/New_York.",
+    "assembly": "07:45\u201308:30",
+    "decision": "08:45",
+    "handoff": "07:30\u201307:45 validates pagination, hashes, adjustment basis, manifests and read-only visibility; it cannot fetch or retry.",
+    "late": "Incomplete/late acquisition retains evidence, marks dependencies UNKNOWN/MISSING/INVALID as applicable, preserves every expected ticker, and cannot move deadlines or backdate receipt.",
+    "ready": "08:40 inclusive",
+    "universe_binding": "07:45"
+  },
+  "dependency_accounting": [
+    {
+      "bootstrap_expected": 0,
+      "bootstrap_max_attempts": 0,
+      "classification": "A_REQUIRED_SUPPLIED_NOT_YET_VERIFIED",
+      "dependency": "universe_source",
+      "endpoint": null,
+      "recurring_expected_per_session": 0,
+      "recurring_max_per_session": 0,
+      "rule": "One user-supplied, signed/hash-verified, effective-dated <=50 common-stock manifest. Repository has no suitable source; acquisition cannot start without it."
+    },
+    {
+      "bootstrap_expected": 50,
+      "bootstrap_max_attempts": 150,
+      "classification": "C_BOOTSTRAP_AND_D_RECURRING",
+      "dependency": "typed_identity",
+      "endpoint": "GET /v3/reference/tickers/{ticker}?date={session_date}",
+      "recurring_expected_per_session": 50,
+      "recurring_max_per_session": 150,
+      "rule": "One dated record per stock at bootstrap and each session; pagination cap one and three total attempts. Missing/changed/ambiguous identity blocks that ticker."
+    },
+    {
+      "bootstrap_expected": 0,
+      "bootstrap_max_attempts": 0,
+      "classification": "A_REQUIRED_SUPPLIED_NOT_YET_VERIFIED",
+      "dependency": "effective_dated_sector_mapping",
+      "endpoint": null,
+      "recurring_expected_per_session": 0,
+      "recurring_max_per_session": 0,
+      "rule": "Signed/hash-verified mapping manifest covers all ten sessions or carries append-only effective changes. Ticker details observed now do not prove sector history. Missing or expired mapping blocks ticker; no unbudgeted lookup."
+    },
+    {
+      "bootstrap_expected": 62,
+      "bootstrap_max_attempts": 186,
+      "classification": "C_BOOTSTRAP_AND_D_FULL_WINDOW_REFRESH",
+      "dependency": "stock_spy_sector_history",
+      "endpoint": "GET /v2/aggs/ticker/{ticker}/range/1/day/{from}/{to}?adjusted=false&sort=asc&limit=50000",
+      "recurring_expected_per_session": 62,
+      "recurring_max_per_session": 186,
+      "rule": "At most 50 stocks + shared SPY + 11 shared sector ETFs. Each request is the fixed 75-eligible-session window; one page cap, three total attempts. Full-window refresh detects revisions and avoids mixed adjustment bases."
+    },
+    {
+      "bootstrap_expected": 1,
+      "bootstrap_max_attempts": 15,
+      "classification": "C_BOOTSTRAP_AND_D_RECURRING",
+      "dependency": "split_lineage",
+      "endpoint": "GET /stocks/v1/splits?execution_date.gte={from}&execution_date.lte={receipt_date}&sort=execution_date.asc&limit=5000",
+      "recurring_expected_per_session": 1,
+      "recurring_max_per_session": 6,
+      "rule": "Global request filtered to 62 symbols; bootstrap cap five pages, recurring cap two, three attempts/page. next_url after cap means INCOMPLETE_PAGINATION and blocks the split dependency for all affected symbols."
+    },
+    {
+      "bootstrap_expected": 0,
+      "bootstrap_max_attempts": 0,
+      "classification": "D_INCLUDED_IN_FULL_WINDOW_REFRESH",
+      "dependency": "corrections_and_refresh",
+      "endpoint": "same unadjusted aggregate endpoint",
+      "recurring_expected_per_session": 0,
+      "recurring_max_per_session": 0,
+      "rule": "No extra request: every recurring history request refreshes the complete fixed window. Content differences append revisions. Additional out-of-budget refresh is forbidden; unresolved inconsistency blocks eligibility."
+    }
+  ],
+  "implementation_touchpoints": [
+    "Extend the pure corporate-action adjustment helper to adjust VWAP with price fields and add parity fixtures; do not alter production call sites until separately authorized",
+    "Add a standalone acquisition command and raw-response seam beside MassiveRestClient normalization",
+    "Use one persistent ledger across operational verification, bootstrap, retries and pilot; expose only validated no-fallback handoff manifests"
+  ],
+  "lookback_contract": {
+    "failure": "Any missing, duplicate, nonfinite or alignment defect leaving a requirement unsatisfied yields documented INSUFFICIENT_VALID_HISTORY or CONTEXT_ALIGNMENT_FAILED. Do not extend the window, substitute ticker/context, drop features, or fetch again.",
+    "not_a_guarantee": true,
+    "requirements": [
+      {
+        "alignment": "symbol",
+        "feature": "SMA50 and price/SMA50",
+        "valid_observations": 50
+      },
+      {
+        "alignment": "consecutive valid symbol prices",
+        "feature": "20-session return and 20-return volatility",
+        "valid_observations": 21
+      },
+      {
+        "alignment": "same 21 eligible dates for symbol and SPY",
+        "feature": "20-return beta",
+        "valid_observations": 21
+      },
+      {
+        "alignment": "symbol; implementation rejects nonfinite inputs",
+        "feature": "MACD signal/histogram",
+        "valid_observations": 34
+      },
+      {
+        "alignment": "29 consecutive valid OHLCV rows",
+        "feature": "10-value slope of rolling VWAP20",
+        "valid_observations": 29
+      },
+      {
+        "alignment": "same six eligible dates for symbol and effective sector ETF",
+        "feature": "sector five-return comparison",
+        "valid_observations": 6
+      }
+    ],
+    "retrieval_window": "Exactly the 75 previous eligible XNYS sessions ending at the immediately previous completed session; never extend automatically.",
+    "why_75": "A bounded allowance of 25 missing/nonfinite/misaligned sessions above the 50-price maximum; it is an assumption for planning, not a completeness claim."
+  },
+  "official_documentation": [
+    {
+      "url": "https://massive.com/docs/rest/stocks/aggregates/custom-bars",
+      "verified": "2026-09-29"
+    },
+    {
+      "url": "https://massive.com/docs/rest/stocks/corporate-actions/splits",
+      "verified": "2026-09-29"
+    },
+    {
+      "url": "https://massive.com/docs/rest/stocks/tickers/ticker-overview",
+      "verified": "2026-09-29"
+    },
+    {
+      "url": "https://massive.com/pricing",
+      "verified": "2026-09-29"
+    },
+    {
+      "url": "https://render.com/docs/disks",
+      "verified": "2026-09-29"
+    },
+    {
+      "url": "https://render.com/pricing",
+      "verified": "2026-09-29"
+    }
+  ],
+  "preserved_statuses": {
+    "closed_findings": "UNCHANGED",
+    "collection": "DISABLED \u2014 NOT_AUTHORIZED",
+    "pilot_readiness": "COMPLETE \u2014 BLOCKED_STORAGE_AND_CACHE",
+    "qqq_spy_manifest": "PROPOSED_NOT_APPROVED"
+  },
+  "prohibitions_observed": {
+    "collection": false,
+    "deployment": false,
+    "provider_requests": 0,
+    "provisioning": false,
+    "purchase": false,
+    "scoring": false,
+    "training": false
+  },
+  "recommendation": {
+    "acquisition_deadline": "07:30 America/New_York",
+    "assembly": "07:45\u201308:30",
+    "binding": "07:45",
+    "blocker": "A Stocks Advanced plan and existing Render compute are now evidenced, but no writable versioned 180-day backup, approved stock/sector/identity manifests, worker disk/root, or operational restore evidence exists.",
+    "decision": "08:45",
+    "durable_ready": "08:40 inclusive",
+    "path": "Separate single-concurrency Massive REST acquisition stage on the existing Render worker, with a proposed 2 GiB attached primary disk and a proposed distinct versioned object backup destination of at least 1 GiB; cache-only assembly reads only validated handoff manifests.",
+    "readiness": "NOT_READY_FOR_APPROVAL_ACCOUNT_PLAN_CONFIRMED_STORAGE_AND_MANIFESTS_BLOCKED",
+    "validation_handoff": "07:30\u201307:45; acquisition is closed during this interval"
+  },
+  "remaining_questions": [
+    "Do Stocks Advanced terms permit 180-day retention/derived use, and are any request/fair-use, capacity or overage controls applicable to 3,789 attempts?",
+    "What signed/hash-verified stock universe and effective-dated sector mapping with typed identities is approved?",
+    "What writable versioned backup destination guarantees 180 days, and what are its quota, operation, retrieval, egress and restore terms?",
+    "What worker disk mount path and MONEYBOT_PERSISTENT_DATA_DIR value will be used, and may the existing Starter worker attach 2 GiB without a compute upgrade?",
+    "Does the 512 MiB worker have measured CPU/RAM/runtime headroom for acquisition and local reconstruction by 07:30?",
+    "What are the exact read/write/restore roles and isolated restore location?"
+  ],
+  "request_budget": {
+    "all_stages": {
+      "expected": 1248,
+      "formula": "verification + bootstrap + ten sessions",
+      "maximum": 3789
+    },
+    "authorization": "PROPOSED_NOT_AUTHORIZED",
+    "bootstrap": {
+      "expected": 113,
+      "formula_expected": "62 history + 50 identities + 1 split page",
+      "formula_max": "62*3 + 50*3 + 5 split pages*3",
+      "maximum": 351
+    },
+    "operational_verification": {
+      "expected": 5,
+      "formula_expected": "3 history (one proposed stock fixture identity supplied for check, SPY, one sector ETF) + 1 dated identity + 1 split page",
+      "formula_max": "3 history*3 + 1 identity*3 + 2 split pages*3",
+      "maximum": 18
+    },
+    "per_session": {
+      "expected": 113,
+      "formula_expected": "62 full-window history + 50 dated identities + 1 split page",
+      "formula_max": "62*3 + 50*3 + 2 split pages*3",
+      "maximum": 342
+    },
+    "persistent_accounting": "Verification, bootstrap, page attempts, retries, failures and pilot calls share one append-only ledger. Exact response objects from verification may be reused, but totals conservatively assume no deduplication.",
+    "proposed_cap": 3789,
+    "ten_sessions": {
+      "expected": 1130,
+      "maximum": 3420
+    }
+  },
+  "schema_version": "alpha-atlas-v4-prospective-data-acquisition-amendment.v3",
+  "scope": "Pilot assesses capture reliability and cohort formation only; it does not establish representativeness, broad coverage, predictive advantage or training readiness.",
+  "stages": [
+    {
+      "authorization": "PROPOSED_NOT_AUTHORIZED",
+      "live_requests": 0,
+      "scope": "Implement contract, raw receipt persistence, local adjustment/revision logic, budgets and fixtures; no infrastructure activation.",
+      "stage": "A_IMPLEMENTATION_SYNTHETIC"
+    },
+    {
+      "authorization": "SEPARATE_FUTURE_APPROVAL_REQUIRED",
+      "expected_requests": 5,
+      "maximum_requests": 18,
+      "retained_expected_bytes": 144384,
+      "retained_maximum_bytes": 4067328,
+      "scope": "After implementation and supplied manifests: one stock plus SPY/one sector ETF, one identity, capped split pagination; storage atomic read-back, backup copy and restore; measure bytes/timing. This is not a hidden bootstrap.",
+      "stage": "B_BOUNDED_OPERATIONAL_VERIFICATION"
+    },
+    {
+      "authorization": "SEPARATE_FUTURE_APPROVAL_REQUIRED",
+      "expected_requests_including_bootstrap": 1243,
+      "maximum_requests_including_bootstrap": 3771,
+      "prerequisites": "Approved static manifest, stage B evidence, entitlement/cost approval, durable primary+backup, explicit collection authorization",
+      "scope": "Bootstrap then ten fixed-deadline sessions; persistent ledger includes stage B.",
+      "stage": "C_TEN_SESSION_PILOT"
+    }
+  ],
+  "status": "ACCOUNT_EVIDENCE_INCORPORATED_PREPARED_FOR_REVIEW_NOT_AUTHORIZED",
+  "storage_arrangement": {
+    "backup": "Proposed distinct versioned object storage with >=1 GiB capacity, immutable/versioned keys, checksum read-back, 180-day lifecycle and bounded restore credentials.",
+    "blocker": "No worker disk/root or writable versioned 180-day backup is configured. The existing 1 GB web disk is not a substitute because it is attached to a different service and is below required operating capacity.",
+    "existing_web_disk": "Observed 1 GB disk on Moneybot web service. It is single-service runtime storage, below the 2 GiB primary operating requirement, and cannot be used by the worker. Mount path, persistent-root binding, exact free bytes, backup lifecycle and restore evidence remain unknown.",
+    "operational_ready": false,
+    "primary": "Proposed 2 GiB Render persistent disk attached to the existing single-instance worker at /var/data; 768 MiB evidence cap plus 128 MiB staging, 768 MiB restore workspace and 384 MiB filesystem/headroom.",
+    "worker": "Observed existing Starter worker ($7/month, 0.5 CPU, 512 MiB RAM) with no disk. Proposed future attachment remains 2 GiB; headroom must be measured in stage B."
+  },
+  "storage_budget": {
+    "basis": "Uncompressed retained evidence is the contract cap. Compression may reduce physical use but never increases the logical allowance.",
+    "caps": {
+      "backup_uncompressed_evidence_bytes": 805306368,
+      "combined_uncompressed_evidence_bytes": 1610612736,
+      "filesystem_operating_headroom_bytes": 402653184,
+      "primary_temporary_staging_bytes": 134217728,
+      "primary_uncompressed_evidence_bytes": 805306368,
+      "required_backup_capacity_bytes": 1073741824,
+      "required_primary_filesystem_capacity_bytes": 2147483648,
+      "restore_working_bytes": 805306368
+    },
+    "compressed_estimate": {
+      "assumption": "JSON/raw aggregate evidence might store at 40% of uncompressed bytes; unmeasured and not used for enforcement.",
+      "expected_primary_bytes": 14309786,
+      "maximum_primary_bytes": 282824704
+    },
+    "expected": {
+      "backup_evidence_total_bytes": 35774464,
+      "bootstrap_bytes": 2065408,
+      "combined_retained_evidence_bytes": 71548928,
+      "operational_manifests_bytes": 2097152,
+      "primary_evidence_total_bytes": 35774464,
+      "ten_session_acquisition_bytes": 20654080,
+      "ten_session_snapshots_bytes": 10813440,
+      "verification_bytes": 144384
+    },
+    "maximum": {
+      "backup_evidence_total_bytes": 707061760,
+      "bootstrap_bytes": 58324992,
+      "combined_retained_evidence_bytes": 1414123520,
+      "correction_revision_reserve_bytes": 33554432,
+      "operational_manifests_bytes": 8388608,
+      "primary_evidence_total_bytes": 707061760,
+      "ten_session_acquisition_bytes": 559472640,
+      "ten_session_snapshots_bytes": 43253760,
+      "verification_bytes": 4067328
+    },
+    "retention": "Primary and backup evidence remain through 180 days after session ten. Restore workspace is temporary capacity, not retained evidence."
+  },
+  "universe": {
+    "missing_input": "User-supplied verified effective-dated <=50 common-stock manifest with typed identifiers and coverage authorization.",
+    "qqq_spy": "PROPOSED_NOT_APPROVED; plumbing only",
+    "replacement_roster": null,
+    "selection_rule_if_supplied": "Identifier-sort is deterministic and outcome-independent but does not establish representativeness, broad-universe coverage or top-five validity."
+  },
+  "verified_at": "2026-09-29T00:00:00Z"
+}
