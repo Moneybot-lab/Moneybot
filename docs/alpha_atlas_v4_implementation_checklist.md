@@ -1463,7 +1463,7 @@ immutable provenance. Performance comparison execution remains pending review.
 - [ ] **The observed resources do not close storage or authorization.** The web
   disk is attached to a different service and is below the 2 GiB worker operating
   requirement; its mount/root and exact free bytes are unknown. No writable
-  versioned 180-day backup is configured. Provider retained-data terms, approved
+  versioned 180-day backup is configured. Applicable account Order Form/agreement evidence, approved
   stock/sector/identity manifests, worker headroom, restore roles, and explicit
   stage authorization remain open. No purchase or provisioning occurred.
 
@@ -1484,7 +1484,7 @@ immutable provenance. Performance comparison execution remains pending review.
   separately hashed verification manifest.
 - [ ] **Stage B remains `NOT_AUTHORIZED / NOT_EXECUTED`.** Typed share identity
   must be resolved by the registered dated request, the AAPL→XLK mapping must be
-  confirmed effective for the bound session, Massive retained-data terms remain
+  confirmed effective for the bound session, Massive account-specific Order Form/license applicability remains
   unresolved, and the live transport, S3 adapter, authorization gate, telemetry,
   worker disk, backup bucket/roles, and operational command do not yet exist.
 - [ ] **The ten-session pilot remains disabled and unauthorized.** Stage B PASS
@@ -1507,7 +1507,7 @@ immutable provenance. Performance comparison execution remains pending review.
   It has no live switch, SDK credential discovery, production storage access, or
   provider fallback and emits compact JSON, Markdown, log, and relative checksums.
 - [ ] **Operational readiness remains unverified.** No worker disk/root, AWS
-  account/bucket/roles, Object Lock configuration, retained-data permission,
+  account/bucket/roles, Object Lock configuration, accepted Order Form/non-display license applicability,
   Massive endpoint access, or worker headroom was observed. The fixed 2026-10-05
   fixture also still requires effective AAPL→XLK evidence and a separately
   approved authorization whose hash is pinned outside the authorization itself.
@@ -1597,3 +1597,34 @@ immutable provenance. Performance comparison execution remains pending review.
   October 5 fixture remains expired; no execution authorization exists. Stage B
   remains `NOT_AUTHORIZED / NOT_EXECUTED`, readiness remains
   `COMPLETE — BLOCKED_STORAGE_AND_CACHE`, and the pilot remains disabled.
+
+## Stage B sector-context and Massive-terms evidence (2026-10-06)
+
+- [x] **AAPL→XLK has dated support, not an open-ended effective interval.** S&P
+  Dow Jones Indices showed AAPL in Information Technology as of 2026-08-31;
+  State Street's official XLK holdings showed Apple at 13.22% as of 2026-10-05;
+  and the registered experiment explicitly selects XLK as its technology-sector
+  proxy. This does not establish continuous/future membership, cutoff-time
+  availability, or permanent identity. Request 4 remains the identity gate.
+- [ ] **A future session needs one minimal mapping applicability check before
+  request 1.** Preserve and hash authoritative classification/membership evidence
+  whose stated date covers that session, or a methodology/effective-change record
+  establishing applicability. The expired October 5 fixture is unchanged and no
+  replacement session is selected.
+- [ ] **Massive terms classification is `APPLICABLE_TERMS_UNAVAILABLE`.** The
+  current public Individuals and Market Data Terms were reviewed, but the account's
+  accepted Stocks Advanced Individual Order Form/checkout terms, accepted/versioned
+  agreement record, and any equities addendum are absent. Those documents determine
+  whether the subscription supplies the license referenced by Market Data Terms
+  section 5(d) for private non-display/model-development use.
+- [x] **No blanket 180-day retention-permission letter is required by the reviewed
+  text.** The current public documents do not independently require separate consent
+  merely for owner-controlled private primary storage and one restricted backup,
+  and state no 180-day maximum. They do require confidentiality and deletion/cessation
+  on termination. Obtain the accepted account documents first; only a remaining
+  section 5(d) ambiguity would justify a narrow consent question. No message was sent.
+- [ ] These two prerequisites are not jointly closed for a future authorization:
+  the dated sector finding is complete, but the applicable account agreement is
+  still missing. Stage B remains `NOT_AUTHORIZED / NOT_EXECUTED`, readiness remains
+  `COMPLETE — BLOCKED_STORAGE_AND_CACHE` pending operational verification,
+  QQQ/SPY remains `PROPOSED_NOT_APPROVED`, and the pilot remains disabled.
