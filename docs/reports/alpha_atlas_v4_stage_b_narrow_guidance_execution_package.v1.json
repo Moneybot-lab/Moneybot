@@ -1,0 +1,172 @@
+{
+  "authorization_created": "PREPARED_NOT_APPROVED",
+  "bound_configuration": {
+    "bucket": "moneybot-alpha-atlas-backup-20261006",
+    "expected_owner": "223901279399",
+    "file_sha256": "0b7ef94a1a3ff023f01466a94e1b53d321608ff6c5e968e4a802d246b03c0f28",
+    "path": "docs/reports/alpha_atlas_v4_stage_b_runtime_config.owner-bound.v1.json",
+    "prefix": "stage-b/",
+    "region": "us-east-1",
+    "root": "/var/data/moneybot-stage-b",
+    "worker": "moneybot-market-stream"
+  },
+  "budgets_unchanged": {
+    "backup_cap_bytes": 4067328,
+    "combined_cap_bytes": 8134656,
+    "cumulative_massive_cap": 3789,
+    "expected_massive_attempts": 5,
+    "maximum_massive_attempts": 18,
+    "primary_cap_bytes": 4067328,
+    "s3_operation_cap": 512
+  },
+  "content_sha256": "9c3d75df4a408af20329e8ab76d219a6a91bafc00fc91ca481003162163bb52a",
+  "credentials_read": false,
+  "decision": "SUPPORTED_BY_AVAILABLE_TERMS_AND_OFFICIAL_GUIDANCE_FOR_LIMITED_STAGE_B_SCOPE",
+  "guidance_terms_reconciliation": {
+    "account_limit": "The account-specific accepted agreement version remains unavailable, so this is an evidence classification based on the active Individual subscription and current official terms/guidance, not a representation about undisclosed addenda.",
+    "ai_article": "Official guidance illustrates subscription-backed historical-price retrieval, split retrieval/processing, and derived analysis. This supports the characterization of bounded machine processing as an intended use; it is guidance, not an amendment.",
+    "knowledge_base": "Individual coverage expressly includes the account holder\u2019s own research, scripts, and trading; Stage B is owner-only research and scripts with no other viewer.",
+    "section_1": "The limited personal, non-business license matches the account-holder-only scope.",
+    "section_2": "No publication, redistribution, third-party transfer, business, or commercial use occurs.",
+    "section_5d": "Read alone, it requires licensing for non-display/derivative uses. The evidenced Individual subscription plus official Individual guidance covering own scripts and official subscription-based automated analysis support this limited private feature-validation use. The conclusion does not extend to an investment product, automated trading, model training, or commercial reuse.",
+    "section_8": "Termination, restriction, or suspension requires cessation and deletion; the execution package must retain an administratively workable deletion path.",
+    "section_9": "The contractual terms control over guidance if a conflict exists; no conflict was identified for the narrowly bounded personal verification scope."
+  },
+  "live_requests": 0,
+  "proposed_execution_package": {
+    "authorization": {
+      "content_sha256": "1e2f41109071c1b3e9cf27a6fe3547500bed569b9d969ea4f0a3d0c2f246eb56",
+      "file_sha256": "bfabf5fb340dfa06e3d5ba38d05afc27988597abc191c2c9d5c51799ef2c06e9",
+      "path": "docs/reports/alpha_atlas_v4_stage_b_execution_authorization.proposed.v1.json",
+      "status": "PREPARED_FOR_REVIEW_NOT_APPROVED"
+    },
+    "cutoff": {
+      "America/Denver": "2026-10-26T05:30:00-06:00",
+      "America/New_York": "2026-10-26T07:30:00-04:00",
+      "utc": "2026-10-26T11:30:00Z"
+    },
+    "execution_location": "moneybot-market-stream normal worker runtime with mounted /var/data; do not use GitHub Actions or a diskless Render one-off job.",
+    "fixture": {
+      "content_sha256": "f9bea723771f2156674c45a7e035a2dae1b70f53324128ec7092f9aa9f30ebd7",
+      "file_sha256": "f2d1ed7817123656930a4d36560f5e2c6f9d9a87e70cd22d4aeaabeca045ef88",
+      "path": "docs/reports/alpha_atlas_v4_stage_b_verification_manifest.v2.json"
+    },
+    "history_window": {
+      "calendar": "repository ExchangeCalendar / XNYS",
+      "count": 75,
+      "from": "2026-07-10",
+      "no_extension": true,
+      "rule": "exactly 75 prior eligible sessions ending at immediately previous completed session",
+      "to": "2026-10-23"
+    },
+    "manual_command": "python -m scripts.run_alpha_atlas_v4_stage_b_operational --authorization <OWNER_APPROVED_AUTHORIZATION.json> --approved-authorization-sha256 <EXTERNALLY_PINNED_SHA256> --sector-evidence <DATE_APPLICABLE_SECTOR_EVIDENCE.json> --config docs/reports/alpha_atlas_v4_stage_b_runtime_config.owner-bound.v1.json --fixture docs/reports/alpha_atlas_v4_stage_b_verification_manifest.v2.json --fixture-file-sha256 f2d1ed7817123656930a4d36560f5e2c6f9d9a87e70cd22d4aeaabeca045ef88 --fixture-content-sha256 f9bea723771f2156674c45a7e035a2dae1b70f53324128ec7092f9aa9f30ebd7 --session 2026-10-26 --output /var/data/moneybot-stage-b/run/stage-b-result.json",
+    "required_deployed_revision": "Commit containing the fixture-parameterized StageBRunner/operational CLI and the exact implementation hashes bound by the proposed authorization; no deployment occurred.",
+    "sector_applicability": "BLOCKED: dated 2026-10-05 AAPL-in-XLK evidence is not extrapolated to 2026-10-26. Fresh authoritative applicability evidence must be bound before approval and before request 1.",
+    "session": "2026-10-26",
+    "status": "PREPARED_FOR_REVIEW_NOT_APPROVED_BLOCKED_PENDING_SECTOR_APPLICABILITY"
+  },
+  "recorded_at": "2026-10-06T23:10:00Z",
+  "retention_and_deletion": {
+    "acquisition_identity": "The restricted acquisition/backup identity intentionally lacks DeleteObject, DeleteObjectVersion, ListBucketVersions, and BypassGovernanceRetention.",
+    "early_deletion": "If deletion is legally required before Governance retention expires, a separately authorized owner/admin identity would need s3:BypassGovernanceRetention plus version-list/delete permissions and an explicit bypass request. The acquisition identity must not receive these permissions.",
+    "limitations": [
+      "No separately authorized admin deletion role/process is established.",
+      "Removal of Render seven-day service-managed disk snapshots is not established.",
+      "No deletion has been tested; Stage B has not executed."
+    ],
+    "normal_post_retention_deletion": [
+      "Stop acquisition and all use.",
+      "Delete primary response, receipt, ledger, handoff, outcome, inventory, completion, and isolated-restore copies under /var/data/moneybot-stage-b.",
+      "Using a separately authorized owner/admin identity, list every S3 version and delete each exact version after retention expiry; remove delete markers too. A current-object delete alone only creates a delete marker and does not erase versions.",
+      "Address Render service-managed disk snapshots and any other retained copy under the provider/admin deletion process; that removal procedure is not yet evidenced.",
+      "Record version IDs, local paths, deletion attempts, failures, and completion evidence."
+    ],
+    "routine_retention": "Each S3 object version is written with 180-day Governance retention. Retention prevents deletion; it does not automatically delete the version when the period ends."
+  },
+  "schema_version": "alpha-atlas-v4-stage-b-narrow-guidance-execution-package.v1",
+  "scope_verified_from_implementation": {
+    "activities": [
+      "bounded AAPL/SPY/XLK historical retrieval",
+      "dated AAPL security identity",
+      "split lineage",
+      "private feature preparation and cache-only handoff validation",
+      "immutable local receipts and primary persistence",
+      "private version-bound S3 backup/checksum read-back/isolated restore",
+      "runtime and resource measurements"
+    ],
+    "excluded": [
+      "model fitting",
+      "prediction scoring",
+      "automated trading",
+      "public display",
+      "redistribution",
+      "customer access",
+      "production release",
+      "ten-session pilot"
+    ],
+    "files": {
+      "moneybot/services/alpha_atlas_v4_acquisition.py": "07be7537d0855d110a948191f0aa61e94381de730f2b2bfc665f7599a2a8b615",
+      "moneybot/services/alpha_atlas_v4_prospective_snapshot.py": "aa3018a1016c9d4a508e7abbf7aba73f419670cb2d3e9cba94d8cec0dbb19c83",
+      "moneybot/services/alpha_atlas_v4_stage_b.py": "4d5cc00a8e958619591ad052794a49d1310a4a5b98d1070b3b1644b9475ac4c2"
+    }
+  },
+  "smallest_next_owner_action": "Obtain and preserve authoritative AAPL\u2192XLK applicability evidence for 2026-10-26. If it supports that date, review and explicitly approve a final authorization binding its hash and the deployed revision; otherwise let this proposal expire without running it.",
+  "sources": [
+    {
+      "applicability": "Official usage guidance, not a contractual amendment.",
+      "http_status": 200,
+      "publisher": "Massive.com, Inc.",
+      "retrieved_at": "2026-10-06T23:10:00Z",
+      "retrieved_bytes": 188301,
+      "retrieved_bytes_sha256": "11af12032756c55ad87699914a49d505038c35a10df9cfeff0bbaa608b73e1fd",
+      "saved_source_bytes": false,
+      "title": "Massive plan guidance",
+      "url": "https://massive.com/knowledge-base/article/which-plan-do-i-need-to-show-massive-data-in-my-app"
+    },
+    {
+      "applicability": "Official product guidance, not a contractual amendment.",
+      "http_status": 200,
+      "publisher": "Massive.com, Inc.",
+      "retrieved_at": "2026-10-06T23:10:00Z",
+      "retrieved_bytes": 224309,
+      "retrieved_bytes_sha256": "4faa94a68ec35147b5a0206d6d28938c53e773e2c052e5d332ffe3483157c7f8",
+      "saved_source_bytes": false,
+      "title": "Give Your AI Live Market Data with Massive",
+      "url": "https://massive.com/blog/give-your-ai-live-market-data-with-massive"
+    },
+    {
+      "applicability": "Current public contract text; account-specific accepted-version record remains unavailable.",
+      "http_status": 200,
+      "publisher": "Massive.com, Inc.",
+      "retrieved_at": "2026-10-06T23:10:00Z",
+      "retrieved_bytes": 250461,
+      "retrieved_bytes_sha256": "2fb73933b45a2f874cbc175100cd2bf7af7d30172a81d031e11e405d5ed19fbc",
+      "saved_source_bytes": false,
+      "title": "Market Data Terms of Service",
+      "url": "https://massive.com/legal/market-data-terms-of-service"
+    },
+    {
+      "applicability": "Official technical documentation.",
+      "http_status": 200,
+      "publisher": "Amazon Web Services",
+      "retrieved_at": "2026-10-06T23:10:00Z",
+      "retrieved_bytes": 40297,
+      "retrieved_bytes_sha256": "663b40e6aa06689a482737512f3f97afe89e9f73a4f195077d628270c0fef12d",
+      "saved_source_bytes": false,
+      "title": "S3 Object Lock considerations",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock-managing.html"
+    },
+    {
+      "applicability": "Official technical documentation.",
+      "http_status": 200,
+      "publisher": "Amazon Web Services",
+      "retrieved_at": "2026-10-06T23:10:00Z",
+      "retrieved_bytes": 23837,
+      "retrieved_bytes_sha256": "4216af1b1cbbe352a409948753f9ae79fcc12df091d2f04e8f8454a1b298eda2",
+      "saved_source_bytes": false,
+      "title": "Deleting object versions",
+      "url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/DeletingObjectVersions.html"
+    }
+  ],
+  "stage_b_executed": false
+}

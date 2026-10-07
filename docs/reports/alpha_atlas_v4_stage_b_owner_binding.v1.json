@@ -1,0 +1,132 @@
+{
+  "backup_accounting": {
+    "acquisition_sublimit_bytes": 3805184,
+    "attempt_evidence_cap_conflict_bytes": 110592,
+    "backup_cap_bytes": 4067328,
+    "combined_cap_bytes": 8134656,
+    "completion_semantics": "The completion manifest identifies the frozen inventory, all exact S3 versions/hashes/bytes/retention, and restored count. It is uploaded and checksum/retention verified but is not recursively included in its own inventory.",
+    "conflict_behavior": "FAIL_CLOSED_BEFORE_NEXT_REQUEST_USING_ENDPOINT_RESPONSE_LIMIT_PLUS_RECEIPT_RESERVATION_AND_262144_FINALIZATION_RESERVE; limits are not increased",
+    "expected": {
+      "attempt_body_and_receipt_objects": 10,
+      "completion_objects": 1,
+      "frozen_objects": 14,
+      "handoff_objects": 1,
+      "inventory_objects": 1,
+      "ledger_objects": 1,
+      "massive_attempts": 5,
+      "outcome_objects": 1,
+      "s3_operations": 80
+    },
+    "inventory_semantics": "The immutable inventory covers attempt bodies/receipts, Massive ledger, handoff if present, and final outcome. It includes itself as the final frozen object. The S3 ledger and later completion manifest are excluded to avoid recursion.",
+    "maximum_attempt_evidence_bytes": 4177920,
+    "maximum_attempt_receipt_reserve_bytes": 147456,
+    "maximum_http_body_bytes": 4030464,
+    "maximum_object_path": {
+      "attempt_body_and_receipt_objects": 36,
+      "completion_objects": 1,
+      "frozen_objects": 40,
+      "handoff_objects": 1,
+      "inventory_objects": 1,
+      "ledger_objects": 1,
+      "massive_attempts": 18,
+      "outcome_objects": 1,
+      "partial_backup_failure_rule": "A local append-only PARTIAL_BACKUP_FAILED outcome is added; it is not falsely included in the already frozen inventory.",
+      "primary_objects_after_completion": 41,
+      "primary_objects_if_completion_backup_fails": 42,
+      "s3_operations": 210
+    },
+    "operation_formula": "6 configuration + 5 per frozen object (PUT, HEAD, retention GET, checksum GET, restore GET) + 4 completion upload/verification",
+    "primary_cap_bytes": 4067328,
+    "s3_operation_cap": 512
+  },
+  "configuration": {
+    "bucket": "moneybot-alpha-atlas-backup-20261006",
+    "content_sha256": "4ac339c8caa01c625b54bb53a51b7fef7f294082a2cbe1c52bf9814c7bf03a33",
+    "credential_values_read": false,
+    "credential_variable_names": [
+      "MONEYBOT_STAGE_B_AWS_ACCESS_KEY_ID",
+      "MONEYBOT_STAGE_B_AWS_SECRET_ACCESS_KEY"
+    ],
+    "expected_owner": null,
+    "file_sha256": "860e916a0d2152c603f26f0f0438308539aa4b7ede704639bd731755c9ff9463",
+    "missing_owner_gate": "S3_EXPECTED_OWNER_UNRESOLVED",
+    "path": "docs/reports/alpha_atlas_v4_stage_b_runtime_config.v1.json",
+    "persistent_root": "/var/data/moneybot-stage-b",
+    "prefix": "stage-b/",
+    "region": "us-east-1"
+  },
+  "cost_reconciliation_usd": {
+    "account_specific_unknowns": [
+      "AWS account pricing, tax, credits and billing",
+      "actual runtime object sizes and failures",
+      "provider retention permission and runtime access"
+    ],
+    "expected_request_operation_cost": 0.000101,
+    "get_rate_per_1000": 0.0004,
+    "maximum_request_operation_cost": 0.0002726,
+    "previous_allowance_remains_conservative": true,
+    "previous_operation_allowance": 0.0007424,
+    "put_rate_per_1000": 0.005,
+    "revised_known_six_month_maximum": 4.501199950784,
+    "source_rate_verification_date": "2026-10-01",
+    "spending_authorized": false
+  },
+  "iam_compatibility": {
+    "bucket_actions": [
+      "s3:GetBucketLocation",
+      "s3:GetBucketObjectLockConfiguration",
+      "s3:GetBucketPublicAccessBlock",
+      "s3:GetBucketVersioning",
+      "s3:GetEncryptionConfiguration",
+      "s3:ListBucket"
+    ],
+    "forbidden_or_unneeded_actions": [
+      "s3:DeleteObject",
+      "s3:DeleteObjectVersion",
+      "s3:BypassGovernanceRetention",
+      "bucket modification actions"
+    ],
+    "missing_actions": [],
+    "object_actions": [
+      "s3:GetObject",
+      "s3:GetObjectRetention",
+      "s3:GetObjectVersion",
+      "s3:PutObject",
+      "s3:PutObjectRetention"
+    ],
+    "role_separation": "NOT_ESTABLISHED_SAME_RESTRICTED_IDENTITY_PERFORMS_UPLOAD_READBACK_RESTORE",
+    "status": "OFFLINE_COMPATIBLE_WITH_IMPLEMENTED_CALL_SET"
+  },
+  "live_stage_b": "NOT_AUTHORIZED_NOT_EXECUTED",
+  "offline_verification": {
+    "command": "python -m scripts.run_alpha_atlas_v4_stage_b_offline --offline-synthetic --output-dir <temporary-output-dir>",
+    "live_aws_requests": 0,
+    "live_massive_requests": 0,
+    "synthetic_backup_bytes": 47262,
+    "synthetic_completion_objects": 1,
+    "synthetic_frozen_objects": 14,
+    "synthetic_massive_attempts": 5,
+    "synthetic_primary_bytes": 47262,
+    "synthetic_s3_operations": 80
+  },
+  "owner_reported_not_runtime_verified": {
+    "disk": "3 GB mounted /var/data",
+    "encryption": "SSE-S3 AES256",
+    "iam_identity": "moneybot-stage-b-backup",
+    "iam_policy": "MoneyBotStageBBackupAccess",
+    "object_lock": "GOVERNANCE_DEFAULT_180_DAYS",
+    "public_access_blocks": "ALL_FOUR_ENABLED",
+    "render_service": "moneybot-market-stream",
+    "versioning": "Enabled"
+  },
+  "pilot": "DISABLED_NOT_AUTHORIZED",
+  "recorded_at": "2026-10-06",
+  "remaining_owner_inputs": [
+    "verified 12-digit AWS account owner ID",
+    "future re-bound session/window/mapping manifest after review",
+    "separately approved hash-pinned execution authorization",
+    "separate authorization to execute bounded Stage B"
+  ],
+  "schema_version": "alpha-atlas-v4-stage-b-owner-binding.v1",
+  "status": "OWNER_CONFIGURATION_BOUND_OFFLINE_EXPECTED_OWNER_UNRESOLVED"
+}

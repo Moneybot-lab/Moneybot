@@ -1,0 +1,12 @@
+{
+  "claims_constituent_membership": false,
+  "claims_sector_classification": false,
+  "clarification_content_sha256": "8f793c3cecc189f294fc911a70c71ae393f95c623173474a5c69477227c07ddb",
+  "content_sha256": "0cf664f7859881a3c11ae326e6c0f055616086f76a67585488d652839481d5c7",
+  "context_proxy": "XLK",
+  "fixture_sha256": "b22907c9036e3f7476ffa35e6601caaefb810e311050f6457d7d5ff4b3041885",
+  "relationship_type": "EXPERIMENTAL_CONTEXT_PROXY",
+  "schema_version": "alpha-atlas-v4-stage-b-sector-proxy-binding.v1",
+  "status": "PROPOSED_NOT_ACCEPTED",
+  "ticker": "AAPL"
+}

@@ -1,0 +1,30 @@
+{
+  "clarifies": [
+    "docs/reports/alpha_atlas_v4_stage_b_sector_proxy_clarification.v1.json",
+    "docs/reports/alpha_atlas_v4_stage_b_verification_manifest.v3.json"
+  ],
+  "consumption_boundary": "Operational handoffs are ISOLATED_STAGE_B_INSPECTION_ONLY, have pilot_input_allowed=false, and are rejected by the prospective cache-only handoff boundary.",
+  "content_sha256": "5aee330cf3aaab0c10c6b287bce1c5221100863891c536ca050f9b53e2e25661",
+  "execution_purpose": "OPERATIONAL_VERIFICATION_ONLY",
+  "not_tested": [
+    "premarket source availability",
+    "07:30 acquisition-deadline compliance",
+    "prospective snapshot eligibility",
+    "pilot readiness"
+  ],
+  "prospective_non_change": "PROSPECTIVE_PREMARKET retains the historical-session 07:30 cutoff and all later assembly/readiness/decision boundaries.",
+  "rule": "The fixed historical data window and the owner-approved execution-validity interval are independent. Operational verification may execute outside premarket hours but never changes or rolls the historical window.",
+  "schema_version": "alpha-atlas-v4-stage-b-operational-purpose-clarification.v1",
+  "status": "PREPARED_AND_OWNER_ACCEPTED_FOR_PACKAGE_NOT_EXECUTION",
+  "tested_capabilities": [
+    "bounded retrieval",
+    "identity resolution",
+    "split adjustment",
+    "private feature and handoff validation",
+    "persistent attempt accounting",
+    "primary publication",
+    "S3 backup/read-back/exact-version restore",
+    "runtime resource measurement"
+  ],
+  "timestamps": "All request, receipt, assembly, publication, backup, and restore timestamps are actual runtime timestamps; historical source-event dates never establish earlier receipt."
+}
