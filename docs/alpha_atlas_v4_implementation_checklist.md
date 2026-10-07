@@ -1714,3 +1714,34 @@ immutable provenance. Performance comparison execution remains pending review.
   authorization. Until then Stage B remains `NOT_AUTHORIZED / NOT_EXECUTED`,
   readiness remains `COMPLETE — BLOCKED_STORAGE_AND_CACHE`, QQQ/SPY remains
   `PROPOSED_NOT_APPROVED`, and the ten-session pilot remains disabled.
+
+## Stage B operational-verification-only replacement (2026-10-07)
+
+- [x] **Operational and prospective timing are separated.** The replacement purpose
+  is `OPERATIONAL_VERIFICATION_ONLY`; it may run within its separately approved
+  finite execution interval outside premarket. It cannot demonstrate premarket
+  availability, 07:30 compliance, prospective eligibility, or pilot readiness.
+  Prospective mode retains every existing deadline.
+- [x] **One completed historical window is frozen.** The data-as-of is 2026-10-06,
+  using exactly 75 ordered XNYS sessions from 2026-06-22 through and including
+  2026-10-06; October 7 and later are excluded. History, identity, and split request
+  dates are immutable and cannot roll or extend at runtime.
+- [x] **A separate owner proxy acceptance is bound for this scope.** AAPL→XLK is
+  accepted only as an experimental context proxy for this operational fixture. It
+  makes no constituent/classification claim and preserves six-date alignment,
+  request 4 security identity, CIK insufficiency, and quarantine.
+- [x] **Operational handoffs are isolated.** Metadata marks premarket readiness and
+  prospective eligibility `NOT_TESTED`, sets `pilot_input_allowed=false`, and the
+  prospective cache boundary rejects operational handoffs.
+- [x] **Repeated invocation is fail-closed.** A durable execution claim is published
+  before client construction; an existing claim blocks another invocation and does
+  not reset either attempt ledger. Including that claim yields 15 expected/41
+  maximum frozen objects and at most 215 S3 operations within the unchanged 512 cap.
+- [ ] **Execution remains unapproved.** The proposed 2026-10-13T14:00Z through
+  2026-10-15T22:00Z validity interval is finite but not approved and cannot extend
+  automatically. The post-deploy binder emits only
+  `PREPARED_FOR_EXECUTION_APPROVAL_NOT_APPROVED` with an unusable gate.
+- [ ] Merge/deployment and post-deploy binding remain the next action. Stage B stays
+  `NOT_AUTHORIZED / NOT_EXECUTED`; readiness remains `COMPLETE —
+  BLOCKED_STORAGE_AND_CACHE`; QQQ/SPY remains `PROPOSED_NOT_APPROVED`; training,
+  scoring, trading, and the pilot remain disabled and unauthorized.

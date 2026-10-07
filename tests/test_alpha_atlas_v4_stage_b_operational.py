@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import pytest
 
-from moneybot.services.alpha_atlas_v4_acquisition import RequestSpec, TransportResponse, acquisition_clock, prior_sessions
+from moneybot.services.alpha_atlas_v4_acquisition import RequestSpec, TransportResponse, acquisition_clock, cache_only_handoff, prior_sessions
 from moneybot.services.alpha_atlas_v4_prospective_snapshot import CaptureError, ImmutableStore, canonical_bytes, sha256_bytes
 from moneybot.services.alpha_atlas_v4_stage_b import *
 from scripts.run_alpha_atlas_v4_stage_b_offline import OfflineS3, OfflineTransport, NOW
@@ -78,7 +78,7 @@ def test_complete_runner_backup_restore_caps_and_zero_live(tmp_path):
     assert report['status']=='PASS' and report['synthetic_transport_attempts']==5 and report['live_provider_requests']==0
     assert report['quarantined_then_released']==['history:AAPL','history:SPY','history:XLK']
     assert report['backup']['covered_objects']==report['restore']['objects'] and report['backup']['bytes_accounted']<=BACKUP_CAP
-    assert report['s3_operations']==s3_operation_budget(14)['total']==80
+    assert report['s3_operations']==s3_operation_budget(15)['total']==85
 
 def test_primary_and_backup_caps(tmp_path,monkeypatch):
     import moneybot.services.alpha_atlas_v4_stage_b as module
@@ -194,8 +194,8 @@ def test_runtime_guard_stops_unsafe_headroom(tmp_path):
 
 def test_s3_operation_budget_expected_maximum_and_cap():
     assert s3_operation_budget(14)=={'configuration':6,'uploads':14,'version_heads':14,'retention_reads':14,'checksum_readbacks':14,'exact_version_restores':14,'completion_upload_verify':4,'total':80}
-    assert s3_operation_budget(40)['total']==210<S3_OPERATION_CAP
-    with pytest.raises(CaptureError,match='OUT_OF_BOUNDS'): s3_operation_budget(41)
+    assert s3_operation_budget(41)['total']==215<S3_OPERATION_CAP
+    with pytest.raises(CaptureError,match='OUT_OF_BOUNDS'): s3_operation_budget(42)
 
 def test_operational_cli_rejects_unapproved_authorization_without_clients(tmp_path):
     auth=tmp_path/'auth.json'; auth.write_text(json.dumps(synthetic_authorization()))
@@ -267,6 +267,71 @@ def test_experimental_proxy_is_not_membership_and_requires_owner_acceptance(tmp_
     with pytest.raises(CaptureError,match='SECTOR_PROXY_CLARIFICATION_NOT_ACCEPTED'):
         accepted_runner.preflight(accepted_auth,accepted)
 
+
+def operational_fixture():
+    name='alpha_atlas_v4_stage_b_operational_verification_manifest.v1.json'
+    path=REPO/'docs/reports'/name
+    fixture=json.loads(path.read_text())
+    proxy=json.loads((REPO/'docs/reports/alpha_atlas_v4_stage_b_operational_sector_proxy_binding.accepted.v1.json').read_text())
+    auth=changed(synthetic_authorization(),fixture_sha256=fixture['content_sha256'],session='2026-10-06',
+                 execution_purpose='OPERATIONAL_VERIFICATION_ONLY',
+                 execution_valid_from='2026-10-13T14:00:00Z',execution_valid_until='2026-10-15T22:00:00Z')
+    return name,path,fixture,proxy,auth
+
+
+def test_operational_window_runs_outside_premarket_but_never_becomes_prospective(tmp_path):
+    name,path,fixture,proxy,auth=operational_fixture(); now=datetime(2026,10,14,18,tzinfo=UTC)
+    run=StageBRunner(REPO,tmp_path,offline=True,fixture_name=name,
+                     fixture_file_sha256=sha256_bytes(path.read_bytes()),fixture_content_sha256=fixture['content_sha256'],
+                     session=date(2026,10,6),now=lambda:now)
+    report=run.execute(auth,proxy,
+                       lambda:OfflineTransport(sessions=fixture['history_window']['ordered_sessions'],now=now),
+                       lambda p:backup(tmp_path))
+    assert report['status']=='PASS' and report['execution_purpose']=='OPERATIONAL_VERIFICATION_ONLY'
+    assert report['premarket_timing_readiness']=='NOT_TESTED' and report['prospective_snapshot_eligibility']=='NOT_TESTED'
+    assert report['hard_runtime_minutes']==55 and report['runtime_deadline']=='2026-10-14T18:55:00+00:00'
+    handoff=json.loads((tmp_path/'primary/handoff/handoff.json').read_text())
+    assert handoff['pilot_input_allowed'] is False and handoff['consumption_scope']=='ISOLATED_STAGE_B_INSPECTION_ONLY'
+    with pytest.raises(CaptureError,match='OPERATIONAL_HANDOFF_NOT_PROSPECTIVE_INPUT'):
+        cache_only_handoff(handoff)
+    receipts=list((tmp_path/'primary/responses').rglob('*.receipt.json'))
+    assert receipts and all(json.loads(p.read_text())['received_at'].startswith('2026-10-14T18:00:00') for p in receipts)
+
+
+def test_operational_validity_frozen_window_and_duplicate_claim_fail_closed(tmp_path):
+    name,path,fixture,proxy,auth=operational_fixture()
+    assert fixture['history_window']['ordered_sessions'][0]=='2026-06-22'
+    assert fixture['history_window']['ordered_sessions'][-1]=='2026-10-06'
+    assert len(fixture['history_window']['ordered_sessions'])==75
+    late=StageBRunner(REPO,tmp_path/'late',offline=True,fixture_name=name,
+                      fixture_file_sha256=sha256_bytes(path.read_bytes()),fixture_content_sha256=fixture['content_sha256'],
+                      session=date(2026,10,6),now=lambda:datetime(2026,10,16,tzinfo=UTC))
+    with pytest.raises(CaptureError,match='EXECUTION_VALIDITY_INVALID'):
+        late.preflight(auth,proxy)
+    now=datetime(2026,10,14,18,tzinfo=UTC); root=tmp_path/'once'; calls=[]
+    run=StageBRunner(REPO,root,offline=True,fixture_name=name,
+                     fixture_file_sha256=sha256_bytes(path.read_bytes()),fixture_content_sha256=fixture['content_sha256'],
+                     session=date(2026,10,6),now=lambda:now)
+    transport=lambda:(calls.append('transport') or OfflineTransport(sessions=fixture['history_window']['ordered_sessions'],now=now))
+    back=lambda p:(calls.append('backup') or backup(root))
+    run.execute(auth,proxy,transport,back)
+    with pytest.raises(CaptureError,match='EXECUTION_ALREADY_CLAIMED'):
+        run.execute(auth,proxy,transport,back)
+    assert calls==['backup','transport']
+
+
+def test_operational_incomplete_session_and_wrong_purpose_are_rejected(tmp_path):
+    name,path,fixture,proxy,auth=operational_fixture()
+    bad=json.loads(json.dumps(fixture)); bad['history_window']['ordered_sessions'][-1]='2026-10-07'
+    with pytest.raises(CaptureError,match='HISTORICAL_WINDOW_BINDING_MISMATCH'):
+        validate_operational_window(bad,date(2026,10,6))
+    wrong=changed(auth,execution_purpose='PROSPECTIVE_PREMARKET')
+    run=StageBRunner(REPO,tmp_path,offline=True,fixture_name=name,
+                     fixture_file_sha256=sha256_bytes(path.read_bytes()),fixture_content_sha256=fixture['content_sha256'],
+                     session=date(2026,10,6),now=lambda:datetime(2026,10,14,18,tzinfo=UTC))
+    with pytest.raises(CaptureError,match='EXECUTION_PURPOSE_MISMATCH'):
+        run.preflight(wrong,proxy)
+
 def test_owner_reported_config_exact_bindings_and_owner_binder(tmp_path):
     source=REPO/'docs/reports/alpha_atlas_v4_stage_b_runtime_config.v1.json'
     config=load_runtime_config(source,require_owner=False)
@@ -309,10 +374,10 @@ def test_failed_http_attempt_then_success_is_in_backup_inventory(tmp_path):
             return super().send(request,**kwargs)
     report=runner(tmp_path).execute(synthetic_authorization(),effective_sector_fixture(),lambda:RetryOnce(),lambda p:backup(tmp_path))
     assert report['synthetic_transport_attempts']==6
-    assert report['backup']['covered_objects']==16 and report['s3_operations']==s3_operation_budget(16)['total']==90
+    assert report['backup']['covered_objects']==17 and report['s3_operations']==s3_operation_budget(17)['total']==95
     assert len(list((tmp_path/'primary/attempt-evidence/history_AAPL').glob('*')))==2
     completion=json.loads(next((tmp_path/'primary/backup').glob('completion-*.json')).read_text())
-    assert completion['covered_object_count']==16 and completion['restored_object_count']==16
+    assert completion['covered_object_count']==17 and completion['restored_object_count']==17
 
 
 def test_partial_acquisition_failure_is_checkpointed_without_repeat(tmp_path):
@@ -324,13 +389,13 @@ def test_partial_acquisition_failure_is_checkpointed_without_repeat(tmp_path):
         runner(tmp_path).execute(synthetic_authorization(),effective_sector_fixture(),lambda:ExhaustFirst(),lambda p:S3EvidenceBackup(client,BOUND_BUCKET,BOUND_PREFIX,S3OperationLedger(ImmutableStore(tmp_path/'ops')),expected_owner='123456789012',now=lambda:NOW))
     assert len(list((tmp_path/'primary/attempt-evidence/history_AAPL').glob('*.body.*')))==3
     completion=json.loads(next((tmp_path/'primary/backup').glob('completion-*.json')).read_text())
-    assert completion['covered_object_count']==9
-    assert client.n==10  # nine frozen objects plus the finite completion object
+    assert completion['covered_object_count']==10
+    assert client.n==11  # ten frozen objects plus the finite completion object
 
 
 def test_maximum_object_and_byte_accounting_conflict_is_fail_closed(tmp_path):
     budget=backup_object_budget()
-    assert budget['expected']['frozen_objects']==14 and budget['maximum']['frozen_objects']==40
+    assert budget['expected']['frozen_objects']==15 and budget['maximum']['frozen_objects']==41
     assert budget['maximum_http_body_bytes']==4030464
     assert budget['maximum_attempt_receipt_reserve_bytes']==147456
     assert budget['maximum_attempt_evidence_bytes']==4177920

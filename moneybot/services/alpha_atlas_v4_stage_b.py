@@ -14,6 +14,7 @@ import json
 import os
 import resource
 import ssl
+import subprocess
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -22,8 +23,9 @@ from urllib.parse import parse_qsl, urlencode, urlparse
 
 from moneybot.services.alpha_atlas_v4_acquisition import (
     ADJUSTMENT_ENGINE_VERSION, ALLOWED_HOST, AcquisitionRunner, AttemptLedger,
-    RequestSpec, TransportResponse, acquisition_clock, adjust_unadjusted_bars,
+    AcquisitionClock, RequestSpec, TransportResponse, acquisition_clock, adjust_unadjusted_bars,
     build_handoff, cache_only_handoff, validate_feature_window,
+    prior_sessions,
 )
 from moneybot.services.alpha_atlas_v4_prospective_snapshot import (
     CaptureError, ImmutableStore, canonical_bytes, sha256_bytes,
@@ -84,8 +86,8 @@ def validate_s3_key(prefix: str, relative: str) -> str:
 
 
 def backup_object_budget() -> dict[str,Any]:
-    expected={"attempt_bodies_and_receipts":10,"massive_ledger":1,"handoff":1,"outcome":1,"inventory":1}
-    maximum={"attempt_bodies_and_receipts":36,"massive_ledger":1,"handoff":1,"outcome":1,"inventory":1}
+    expected={"attempt_bodies_and_receipts":10,"massive_ledger":1,"execution_claim":1,"handoff":1,"outcome":1,"inventory":1}
+    maximum={"attempt_bodies_and_receipts":36,"massive_ledger":1,"execution_claim":1,"handoff":1,"outcome":1,"inventory":1}
     return {"expected":{**expected,"frozen_objects":sum(expected.values()),"completion_objects":1,"primary_objects":sum(expected.values())+1},
             "maximum":{**maximum,"frozen_objects":sum(maximum.values()),"completion_objects":1,"primary_objects":sum(maximum.values())+1,"primary_objects_if_completion_backup_fails":sum(maximum.values())+2},
             "maximum_http_body_bytes":15*262144+3*32768,"maximum_attempt_receipt_reserve_bytes":18*8192,
@@ -95,7 +97,7 @@ def backup_object_budget() -> dict[str,Any]:
 
 
 def s3_operation_budget(object_count: int) -> dict[str,int]:
-    if object_count<0 or object_count>40: raise CaptureError("S3_OBJECT_COUNT_OUT_OF_BOUNDS")
+    if object_count<0 or object_count>41: raise CaptureError("S3_OBJECT_COUNT_OUT_OF_BOUNDS")
     values={"configuration":6,"uploads":object_count,"version_heads":object_count,"retention_reads":object_count,"checksum_readbacks":object_count,"exact_version_restores":object_count,"completion_upload_verify":4}
     return {**values,"total":sum(values.values())}
 
@@ -172,7 +174,7 @@ def validate_sector_context(repo: Path, evidence: Mapping[str, Any], fixture: Ma
             or clarification_claimed != binding.get("clarification_content_sha256")
             or value.get("clarification_content_sha256") != clarification_claimed):
         raise CaptureError("SECTOR_PROXY_CLARIFICATION_HASH_MISMATCH")
-    if value.get("status") == "OWNER_ACCEPTED_FOR_2026-10-20_STAGE_B_VERIFICATION":
+    if str(value.get("status","")).startswith("OWNER_ACCEPTED_FOR_"):
         acceptance_name = value.get("owner_acceptance_path")
         acceptance_file_sha = value.get("owner_acceptance_file_sha256")
         if not isinstance(acceptance_name, str) or not isinstance(acceptance_file_sha, str):
@@ -219,6 +221,26 @@ def plan_from_fixture(fixture: Mapping[str, Any], sector_evidence_sha256: str,
             "session":session.isoformat(), "window_sessions":[], "universe_sha256":fixture["content_sha256"],
             "sector_mapping_sha256":sector_evidence_sha256, "stocks":["AAPL"],
             "context_symbols":["SPY","XLK"], "requests":requests}
+
+
+def validate_operational_window(fixture: Mapping[str,Any], session: date) -> list[str]:
+    if fixture.get("historical_data_as_of") != session.isoformat():
+        raise CaptureError("HISTORICAL_WINDOW_BINDING_MISMATCH")
+    wanted=[x.isoformat() for x in prior_sessions(session+timedelta(days=1),75)]
+    window=fixture.get("history_window",{})
+    if (window.get("ordered_sessions")!=wanted or window.get("from")!=wanted[0]
+            or window.get("to")!=wanted[-1] or wanted[-1]!=session.isoformat()
+            or window.get("ordered_sessions_sha256")!=sha256_bytes(canonical_bytes(wanted))):
+        raise CaptureError("HISTORICAL_WINDOW_BINDING_MISMATCH")
+    for row in fixture.get("requests_in_order",[]):
+        if row.get("family")=="history" and not str(row.get("path","")).endswith(f"/{wanted[0]}/{wanted[-1]}"):
+            raise CaptureError("HISTORICAL_WINDOW_BINDING_MISMATCH")
+        if row.get("family")=="identity" and row.get("params",{}).get("date")!=session.isoformat():
+            raise CaptureError("HISTORICAL_WINDOW_BINDING_MISMATCH")
+        if row.get("family")=="splits" and (row.get("params",{}).get("execution_date.gte")!=wanted[0]
+                or row.get("params",{}).get("execution_date.lte")!=session.isoformat()):
+            raise CaptureError("HISTORICAL_WINDOW_BINDING_MISMATCH")
+    return wanted
 
 
 class _NoRedirect:
@@ -452,6 +474,7 @@ class StageBRunner:
         bound=verify_stage_b_documents(self.repo,fixture_name=self.fixture_name,fixture_file_sha256=self.fixture_file_sha256)
         fixture=load_fixture(self.repo,fixture_name=self.fixture_name,
                              fixture_content_sha256=self.fixture_content_sha256,session=self.session)
+        purpose=fixture.get("execution_purpose","PROSPECTIVE_PREMARKET")
         validate_authorization(authorization,fixture_sha256=self.fixture_content_sha256,
                                setup_sha256=SETUP_PACKAGE_FILE_SHA256,session=self.session,offline=self.offline)
         authorization_sha256=sha256_bytes(canonical_bytes(authorization))
@@ -462,17 +485,52 @@ class StageBRunner:
         if not self.offline and (authorization.get("operational_config_sha256")!=self.operational_config_sha256 or authorization_sector_hash!=sector_hash):
             raise CaptureError("AUTHORIZATION_OPERATIONAL_BINDING_MISMATCH")
         if not self.offline and sector_kind == "EXPERIMENTAL_CONTEXT_PROXY":
-            if sector_evidence.get("status") != "OWNER_ACCEPTED_FOR_2026-10-20_STAGE_B_VERIFICATION":
+            if not str(sector_evidence.get("status","")).startswith("OWNER_ACCEPTED_FOR_"):
                 raise CaptureError("SECTOR_PROXY_BINDING_NOT_ACCEPTED")
+            if sector_evidence.get("execution_purpose",purpose) != purpose:
+                raise CaptureError("SECTOR_PROXY_PURPOSE_MISMATCH")
             if authorization.get("owner_accepts_sector_proxy_clarification") is not True:
                 raise CaptureError("SECTOR_PROXY_CLARIFICATION_NOT_ACCEPTED")
         instant=self.now().astimezone(UTC)
-        if instant.date()>self.session or instant>=acquisition_clock(self.session).cutoff:
-            raise CaptureError("FIXED_SESSION_EXPIRED")
+        if authorization.get("execution_purpose",purpose)!=purpose:
+            raise CaptureError("EXECUTION_PURPOSE_MISMATCH")
+        if purpose == "OPERATIONAL_VERIFICATION_ONLY":
+            validate_operational_window(fixture,self.session)
+            try:
+                valid_from=datetime.fromisoformat(str(authorization["execution_valid_from"]).replace("Z","+00:00")).astimezone(UTC)
+                valid_until=datetime.fromisoformat(str(authorization["execution_valid_until"]).replace("Z","+00:00")).astimezone(UTC)
+            except (KeyError,ValueError) as exc:
+                raise CaptureError("EXECUTION_VALIDITY_INVALID") from exc
+            if valid_from>=valid_until or instant<valid_from or instant>valid_until:
+                raise CaptureError("EXECUTION_VALIDITY_INVALID")
+            if not self.offline:
+                revision=authorization.get("deployed_revision",{})
+                observed=subprocess.run(["git","rev-parse","HEAD"],cwd=self.repo,check=True,text=True,capture_output=True).stdout.strip()
+                if revision.get("git_commit")!=observed:
+                    raise CaptureError("DEPLOYED_REVISION_MISMATCH")
+                source_hashes=revision.get("source_file_sha256s",{})
+                if set(source_hashes)!={"moneybot/services/alpha_atlas_v4_stage_b.py","scripts/run_alpha_atlas_v4_stage_b_operational.py"}:
+                    raise CaptureError("DEPLOYED_REVISION_MISMATCH","source set")
+                for name,wanted in source_hashes.items():
+                    path=(self.repo/name).resolve()
+                    if not path.is_relative_to(self.repo.resolve()) or not path.is_file() or sha256_bytes(path.read_bytes())!=wanted:
+                        raise CaptureError("DEPLOYED_REVISION_MISMATCH",str(name))
+        elif purpose == "PROSPECTIVE_PREMARKET":
+            if instant.date()>self.session or instant>=acquisition_clock(self.session).cutoff:
+                raise CaptureError("FIXED_SESSION_EXPIRED")
+            valid_from=valid_until=None
+        else:
+            raise CaptureError("EXECUTION_PURPOSE_INVALID")
         if not self.offline and (str(self.root)!=REQUIRED_ROOT or os.environ.get("MONEYBOT_PERSISTENT_DATA_DIR")!=REQUIRED_ROOT):
             raise CaptureError("PERSISTENT_ROOT_MISMATCH")
         storage=storage_preflight(self.root); self.runtime_guard("LOCAL_PREFLIGHT")
-        return plan_from_fixture(fixture,sector_hash,session=self.session),{"bound_documents":bound,"storage":storage}
+        plan=plan_from_fixture(fixture,sector_hash,session=self.session)
+        plan["execution_purpose"]=purpose
+        plan["historical_data_as_of"]=fixture.get("historical_data_as_of")
+        plan["execution_valid_from"]=valid_from.isoformat() if valid_from else None
+        plan["execution_valid_until"]=valid_until.isoformat() if valid_until else None
+        plan["hard_runtime_minutes"]=55
+        return plan,{"bound_documents":bound,"storage":storage,"execution_purpose":purpose}
 
     @staticmethod
     def _publish_outcome(primary: ImmutableStore, status: str, now: datetime, error: Exception | None=None) -> dict[str,Any]:
@@ -493,7 +551,7 @@ class StageBRunner:
         inventory_path=f"backup/inventory-{inventory_hash}.json"; primary.publish(inventory_path,inventory_bytes)
         frozen=entries+[{"path":inventory_path,"sha256":inventory_hash,"bytes":len(inventory_bytes)}]
         primary_bytes=sum(p.stat().st_size for p in primary.root.rglob("*") if p.is_file())
-        if len(frozen)>40: raise CaptureError("BACKUP_OBJECT_COUNT_LIMIT",str(len(frozen)))
+        if len(frozen)>41: raise CaptureError("BACKUP_OBJECT_COUNT_LIMIT",str(len(frozen)))
         if primary_bytes>PRIMARY_CAP: raise CaptureError("PRIMARY_EVIDENCE_LIMIT")
         receipts=[]; backup_bytes=0; restore_store=ImmutableStore(self.root/"isolated-restore"); restored=[]
         for entry in frozen:
@@ -522,7 +580,14 @@ class StageBRunner:
                                  live_authorization_sha256=None if self.offline else self.approved_authorization_sha256,
                                  evidence_limit_bytes=PRIMARY_CAP-262144,clock=self.now)
         if runner.ledger.reconcile_uncertain(self.now()): raise CaptureError("MASSIVE_UNCERTAIN_ATTEMPTS_REQUIRE_REVIEW")
-        results={}; quarantined=[]; identity=None; timing=acquisition_clock(self.session)
+        results={}; quarantined=[]; identity=None
+        if plan.get("execution_purpose") == "OPERATIONAL_VERIFICATION_ONLY":
+            hard_deadline=datetime.fromisoformat(plan["runtime_deadline"])
+            timing=AcquisitionClock(hard_deadline,
+                                    hard_deadline,
+                                    datetime.fromisoformat(plan["execution_valid_from"]))
+        else:
+            timing=acquisition_clock(self.session)
         for spec in plan["requests"]:
             measurements.append(dict(self.runtime_guard(f"BEFORE_{spec.request_id}")))
             results[spec.request_id]=runner.execute(spec,"operational_verification",timing)
@@ -539,14 +604,32 @@ class StageBRunner:
         handoff=build_handoff(plan,results,generated_at=self.now(),timing=timing,adjustment_bindings={"AAPL":adjusted["binding"]})
         if not handoff["eligible"]: raise CaptureError("HANDOFF_INELIGIBLE",",".join(handoff["reason_codes"]))
         handoff["resolved_identity"]=identity; handoff["quarantine_released"]=sorted(quarantined)
+        handoff["execution_purpose"]=plan.get("execution_purpose","PROSPECTIVE_PREMARKET")
+        if handoff["execution_purpose"] == "OPERATIONAL_VERIFICATION_ONLY":
+            handoff.update({"consumption_scope":"ISOLATED_STAGE_B_INSPECTION_ONLY",
+                            "premarket_timing_readiness":"NOT_TESTED",
+                            "prospective_snapshot_eligibility":"NOT_TESTED",
+                            "pilot_input_allowed":False})
         handoff["handoff_sha256"]=sha256_bytes(canonical_bytes({k:v for k,v in handoff.items() if k!="handoff_sha256"}))
-        payload=canonical_bytes(cache_only_handoff(handoff)); published=primary.publish("handoff/handoff.json",payload); primary.verify(published["path"],published["sha256"],published["bytes"])
+        if handoff["execution_purpose"] == "OPERATIONAL_VERIFICATION_ONLY":
+            payload=canonical_bytes(handoff)
+        else:
+            payload=canonical_bytes(cache_only_handoff(handoff))
+        published=primary.publish("handoff/handoff.json",payload); primary.verify(published["path"],published["sha256"],published["bytes"])
         return {"runner":runner,"identity":identity,"quarantined":sorted(quarantined),"handoff_sha256":handoff["handoff_sha256"]}
 
     def execute(self, authorization: Mapping[str,Any], sector_evidence: Mapping[str,Any],
                 transport_factory: Callable[[],Any], backup_factory: Callable[[ImmutableStore],S3EvidenceBackup]) -> dict[str,Any]:
         started=self.now(); plan,preflight=self.preflight(authorization,sector_evidence)
+        if plan["execution_purpose"]=="OPERATIONAL_VERIFICATION_ONLY":
+            validity_end=datetime.fromisoformat(plan["execution_valid_until"])
+            plan["runtime_deadline"]=min(validity_end,started.astimezone(UTC)+timedelta(minutes=55)).isoformat()
         primary=ImmutableStore(self.root/"primary"); measurements=[]
+        claim={"schema_version":"alpha-atlas-v4-stage-b-execution-claim.v1","authorization_sha256":sha256_bytes(canonical_bytes(authorization)),
+               "execution_purpose":plan["execution_purpose"],"claimed_at":self.now().astimezone(UTC).isoformat()}
+        if (primary.root/"run/execution-claim.json").exists():
+            raise CaptureError("EXECUTION_ALREADY_CLAIMED")
+        primary.publish("run/execution-claim.json",canonical_bytes(claim))
         # Client/credential creation occurs only after all local gates above.
         backup=backup_factory(primary); backup.verify_configuration(); transport=transport_factory()
         try:
@@ -563,6 +646,9 @@ class StageBRunner:
             self._publish_outcome(primary,"PARTIAL_BACKUP_FAILED",self.now(),backup_exc); raise
         ended=self.now(); runner=acquired["runner"]
         return {"status":"PASS","mode":"OFFLINE_SYNTHETIC" if self.offline else "LIVE_STAGE_B","session":self.session.isoformat(),
+                "execution_purpose":plan["execution_purpose"],"premarket_timing_readiness":"NOT_TESTED" if plan["execution_purpose"]=="OPERATIONAL_VERIFICATION_ONLY" else "TESTED_BY_PROSPECTIVE_RULES",
+                "prospective_snapshot_eligibility":"NOT_TESTED" if plan["execution_purpose"]=="OPERATIONAL_VERIFICATION_ONLY" else "EVALUATED",
+                "runtime_deadline":plan.get("runtime_deadline"),"hard_runtime_minutes":plan["hard_runtime_minutes"],
                 "synthetic_transport_attempts":len([x for x in runner.ledger.records() if x["event"]=="RESERVED"]) if self.offline else 0,
                 "live_provider_requests":0 if self.offline else len([x for x in runner.ledger.records() if x["event"]=="RESERVED"]),
                 "real_acquisition_authorized":not self.offline,"preflight":preflight,"identity":acquired["identity"],

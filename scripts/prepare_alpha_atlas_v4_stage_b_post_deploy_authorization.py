@@ -9,11 +9,15 @@ from pathlib import Path
 
 from moneybot.services.alpha_atlas_v4_prospective_snapshot import CaptureError, canonical_bytes
 
-FIXTURE_FILE_SHA256 = "c7d06f54aa18d4c3bd52c29e9c7423605e6919a076f29ba24dcfa7e61eecf113"
-FIXTURE_CONTENT_SHA256 = "b22907c9036e3f7476ffa35e6601caaefb810e311050f6457d7d5ff4b3041885"
+FIXTURE_FILE_SHA256 = "de6c1b13f978421947eb93ed64439fd50780ca20faa1741a10af4786b99dbb4e"
+FIXTURE_CONTENT_SHA256 = "579013c85367c75f8a821aa30c75fe9cd261080a9c8060cfcd94af3d958499e9"
 CONFIG_FILE_SHA256 = "0b7ef94a1a3ff023f01466a94e1b53d321608ff6c5e968e4a802d246b03c0f28"
-ACCEPTED_PROXY_FILE_SHA256 = "a6cf01746642cbc956a5f6affd0c4e425536bf2e84ed89614adc121a80b1454d"
-ACCEPTED_PROXY_CONTENT_SHA256 = "43f3e472f4e97ee9d6c92a227cd9b1d2eb2c661c38461bb88185a2f306d8881e"
+ACCEPTED_PROXY_FILE_SHA256 = "9613f67239d0297cc148fbeb1260eed28bfd1b625ccc58c74061b156df5b84bf"
+ACCEPTED_PROXY_CONTENT_SHA256 = "ba59fd773cd8be78816280e3a16a02bb3b83fcff8b3a92e5299eb78ceae28fc4"
+PURPOSE_CLARIFICATION_FILE_SHA256 = "6bb84d9acfae889ee2be6ec3c9d202e079256b361f0d05f24dff5d92399361ef"
+PROXY_ACCEPTANCE_FILE_SHA256 = "9bef7795c582e40ce17f48963fd513a5a46b2ea0a6d25af656fb3da00aaee2e1"
+EXECUTION_VALID_FROM = "2026-10-13T14:00:00Z"
+EXECUTION_VALID_UNTIL = "2026-10-15T22:00:00Z"
 
 
 def _sha256(path: Path) -> str:
@@ -30,14 +34,18 @@ def prepare(repo: Path, deployed_commit: str) -> dict[str, object]:
         raise CaptureError("DEPLOYED_COMMIT_MISMATCH", f"observed={observed}")
     reports = repo / "docs" / "reports"
     paths = {
-        "fixture": reports / "alpha_atlas_v4_stage_b_verification_manifest.v3.json",
+        "fixture": reports / "alpha_atlas_v4_stage_b_operational_verification_manifest.v1.json",
         "config": reports / "alpha_atlas_v4_stage_b_runtime_config.owner-bound.v1.json",
-        "sector_context": reports / "alpha_atlas_v4_stage_b_sector_proxy_binding.accepted.v2.json",
+        "sector_context": reports / "alpha_atlas_v4_stage_b_operational_sector_proxy_binding.accepted.v1.json",
+        "purpose_clarification": reports / "alpha_atlas_v4_stage_b_operational_purpose_clarification.v1.json",
+        "proxy_acceptance": reports / "alpha_atlas_v4_stage_b_operational_proxy_acceptance.v1.json",
     }
     expected = {
         "fixture": FIXTURE_FILE_SHA256,
         "config": CONFIG_FILE_SHA256,
         "sector_context": ACCEPTED_PROXY_FILE_SHA256,
+        "purpose_clarification": PURPOSE_CLARIFICATION_FILE_SHA256,
+        "proxy_acceptance": PROXY_ACCEPTANCE_FILE_SHA256,
     }
     for key, path in paths.items():
         if _sha256(path) != expected[key]:
@@ -54,7 +62,14 @@ def prepare(repo: Path, deployed_commit: str) -> dict[str, object]:
         "owner_approval": "NOT_GIVEN_FOR_EXECUTION",
         "owner_accepts_sector_proxy_clarification": True,
         "stage_b_execution": "NOT_AUTHORIZED_NOT_EXECUTED",
-        "session": "2026-10-20",
+        "execution_purpose": "OPERATIONAL_VERIFICATION_ONLY",
+        "historical_data_as_of": "2026-10-06",
+        "session": "2026-10-06",
+        "execution_valid_from": EXECUTION_VALID_FROM,
+        "execution_valid_until": EXECUTION_VALID_UNTIL,
+        "hard_runtime_minutes": 55,
+        "premarket_timing_readiness": "NOT_TESTED",
+        "prospective_snapshot_eligibility": "NOT_TESTED",
         "maximum_attempts": 18,
         "fixture_sha256": FIXTURE_CONTENT_SHA256,
         "sector_context_sha256": ACCEPTED_PROXY_CONTENT_SHA256,

@@ -386,6 +386,8 @@ def build_handoff(plan: Mapping[str,Any], results: Mapping[str,Mapping[str,Any]]
 
 def cache_only_handoff(handoff: Mapping[str,Any]) -> Mapping[str,Any]:
     """Return an eligible frozen handoff; there is deliberately no refresh hook."""
+    if handoff.get("execution_purpose") == "OPERATIONAL_VERIFICATION_ONLY":
+        raise CaptureError("OPERATIONAL_HANDOFF_NOT_PROSPECTIVE_INPUT")
     if handoff.get("eligible") is not True or handoff.get("reason_codes"):
         raise CaptureError("HANDOFF_INELIGIBLE")
     return handoff
