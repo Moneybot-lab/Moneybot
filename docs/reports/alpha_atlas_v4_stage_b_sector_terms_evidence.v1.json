@@ -1,0 +1,129 @@
+{
+  "schema_version": "alpha-atlas-v4-stage-b-sector-terms-evidence.v1",
+  "status": "SECTOR_DATED_EVIDENCE_RESOLVED_TERMS_DOCUMENT_UNAVAILABLE",
+  "recorded_at": "2026-10-06T21:57:17Z",
+  "bound_runtime_configuration": {
+    "path": "docs/reports/alpha_atlas_v4_stage_b_runtime_config.owner-bound.v1.json",
+    "file_sha256": "0b7ef94a1a3ff023f01466a94e1b53d321608ff6c5e968e4a802d246b03c0f28",
+    "owner_id": "223901279399"
+  },
+  "sector_context": {
+    "decision": "SUPPORTED_FOR_DATED_CONTEXT_ONLY",
+    "apple_classification": {
+      "finding": "Apple Inc. (AAPL) was shown in the Information Technology sector by S&P Dow Jones Indices as of 2026-08-31.",
+      "source_url": "https://www.spglobal.com/spdji/en/indices/equity/sp-global-1200-information-technology-sector/",
+      "publisher": "S&P Dow Jones Indices",
+      "as_of": "2026-08-31",
+      "retrieved_at": "2026-10-06T21:57:17Z",
+      "retrieval_status": "PUBLIC_INDEXED_RENDERING_INSPECTED_DIRECT_RETRIEVAL_403",
+      "saved_source_bytes": false,
+      "source_bytes_sha256": null,
+      "limitation": "Supports the dated sector classification; it does not prove a continuous interval, identity continuity, or availability at a decision timestamp."
+    },
+    "xlk_membership": {
+      "finding": "State Street's XLK fund holdings listed APPLE INC with 52,443,075 shares and 13.22% weight as of 2026-10-05.",
+      "source_url": "https://www.ssga.com/us/en/individual/etfs/state-street-technology-select-sector-spdr-etf-xlk",
+      "publisher": "State Street Global Advisors",
+      "as_of": "2026-10-05",
+      "retrieved_at": "2026-10-06T21:57:17Z",
+      "http_status": 200,
+      "retrieved_bytes": 236143,
+      "retrieved_bytes_sha256": "f2628b7b699dd444f195aa2f296c5fe3c1e67b31523ba88bb29eee384ffc9a8e",
+      "saved_source_bytes": false,
+      "preservation": "Hash and compact facts retained; temporary retrieved HTML was not committed.",
+      "limitation": "Proves membership only for the stated holdings date, not before the 2026-10-05 acquisition cutoff and not for a future session."
+    },
+    "proxy_choice": {
+      "finding": "The State Street page states that XLK tracks the Technology Select Sector Index, intended to represent the S&P 500 technology sector. The registered fixture independently and explicitly selects XLK as AAPL's sector ETF.",
+      "registered_fixture_path": "docs/reports/alpha_atlas_v4_stage_b_verification_manifest.v1.json",
+      "registered_fixture_file_sha256": "ef391a01d97a3f170b434ea04022dff16922b13be677ba68996fad229a219996",
+      "registered_fixture_content_sha256": "1e59160a60c0f2db6e8f268a8bc6f7eb30db7444435b8a8bd59582c77126d33b",
+      "meaning": "XLK is a deliberate experiment proxy, not a claim that XLK is the only possible technology benchmark."
+    },
+    "identity_boundary": "Holdings membership and sector classification do not establish permanent security identity. Future request 4 remains responsible for an unambiguous provider security identifier.",
+    "future_minimum_check": "When a future execution session is selected, before request 1 preserve and hash authoritative classification/membership evidence whose stated effective/as-of date covers that session or a documented methodology/effective-change record establishing applicability. Do not extrapolate this snapshot."
+  },
+  "subscription_terms": {
+    "classification": "APPLICABLE_TERMS_UNAVAILABLE",
+    "intended_use": "Private personal research/development; owner-only Render primary plus one access-restricted private S3 backup; 180-day retention; no display, redistribution, customer access, resale, or production release.",
+    "account_evidence": "Saved user-supplied dashboard evidence establishes an active Stocks Advanced Individual subscription, but the accepted Order Form, accepted/versioned agreement record, and any account-specific or exchange addenda are not saved.",
+    "public_document_hierarchy": [
+      "Massive terms router says Individuals Terms apply to products labeled Individual Use.",
+      "Individuals Terms section 15.2 places Order Form first, Additional Terms second, Individuals Terms third, then incorporated terms unless lower-precedence terms state otherwise.",
+      "Individuals Terms incorporate Market Data Terms; Market Data Terms section 9 states those Market Data Terms control conflicts with the Terms or other Massive agreements.",
+      "The account-specific Order Form and accepted agreement/version evidence are necessary to determine whether the subscription supplies the license referenced by Market Data Terms section 5(d)."
+    ],
+    "current_public_terms_analysis": {
+      "personal_grant": "Individuals Terms sections 2 and Market Data Terms section 1 grant limited personal, non-business, non-commercial use.",
+      "non_display_model_development": "Market Data Terms section 5(d) restricts non-display use and creation of derivative works unless licensed; whether Stocks Advanced's account-specific Order Form supplies that license is not evidenced.",
+      "private_storage_backup": "No reviewed clause independently requires a separate letter merely because private raw responses are stored on an owner-controlled worker and one access-restricted backup. Section 2's copy/transmission restriction is framed around publication, distribution, or business/commercial use, while section 6 requires confidentiality.",
+      "retention": "No reviewed current public clause states a 180-day maximum. Market Data Terms section 8 requires deletion and cessation of use upon account/agreement termination, which must govern any retained copies.",
+      "redistribution": "Market Data Terms sections 2 and 5(c) prohibit third-party transfer, redistribution, display, and commercial use absent permission; the proposed private design does none of those things.",
+      "marketing_context": "The current Stocks page advertises backtesting, quantitative work, and model-training use cases while stating Individual plans are personal/non-professional; this does not override the agreement hierarchy or prove this account's license."
+    },
+    "missing_applicable_documents": [
+      "The Stocks Advanced Individual Order Form or subscription checkout terms accepted for this account.",
+      "The account's accepted/versioned Individuals Terms and Market Data Terms record, including notice/effective-version evidence.",
+      "Any account-specific or equities third-party agreement/addendum presented during subscription."
+    ],
+    "next_step": "Obtain/export the accepted account agreement and Order Form before asking support. Review whether they license private non-display/model-development use. Only if they do not resolve Market Data Terms section 5(d), prepare a narrow unsent consent question citing that clause.",
+    "support_message_sent": false,
+    "consent_letter_required_now": false
+  },
+  "public_sources": [
+    {
+      "title": "Massive for Individuals Terms of Service",
+      "url": "https://massive.com/legal/individuals-terms-of-service",
+      "publisher": "Massive.com, Inc.",
+      "document_last_updated": "2025-07-18",
+      "retrieved_at": "2026-10-06T21:57:17Z",
+      "http_status": 200,
+      "retrieved_bytes": 258104,
+      "retrieved_bytes_sha256": "179bfa05bdb4b385cf383ca3d0b40c062fb32a904383b6c5c176ae2ea62070bb",
+      "saved_source_bytes": false,
+      "applicability": "Current public terms for Individual Use; account-specific acceptance/version and Order Form not established."
+    },
+    {
+      "title": "Market Data Terms of Service",
+      "url": "https://massive.com/legal/market-data-terms-of-service",
+      "publisher": "Massive.com, Inc.",
+      "document_last_updated": "2025-08-28",
+      "retrieved_at": "2026-10-06T21:57:17Z",
+      "http_status": 200,
+      "retrieved_bytes": 250461,
+      "retrieved_bytes_sha256": "2fb73933b45a2f874cbc175100cd2bf7af7d30172a81d031e11e405d5ed19fbc",
+      "saved_source_bytes": false,
+      "applicability": "Current incorporated public market-data terms; actual accepted/versioned account record is unavailable."
+    },
+    {
+      "title": "Massive Terms of Service router",
+      "url": "https://massive.com/legal/terms",
+      "publisher": "Massive.com, Inc.",
+      "retrieved_at": "2026-10-06T21:57:17Z",
+      "http_status": 200,
+      "retrieved_bytes": 150020,
+      "retrieved_bytes_sha256": "8b6c30b6e03d226cf57164670afc46341efb635b80e221de899dcc5a1695c91b",
+      "saved_source_bytes": false,
+      "applicability": "Identifies Individuals Terms for Individual Use products."
+    },
+    {
+      "title": "Massive Stocks product page",
+      "url": "https://www.massive.com/stocks",
+      "publisher": "Massive.com, Inc.",
+      "retrieved_at": "2026-10-06T21:57:17Z",
+      "http_status": 200,
+      "retrieved_bytes": 812019,
+      "retrieved_bytes_sha256": "383d4fe865cac51a677996f699c6832ff19042e54691179eb0694523d716ccce",
+      "saved_source_bytes": false,
+      "applicability": "Current marketing/product context only; not an Order Form or contract override."
+    }
+  ],
+  "prerequisite_decision": {
+    "aapl_xlk": "RESOLVED_FOR_2026-10-05_DATED_EVIDENCE_ONLY_FUTURE_RECHECK_REQUIRED",
+    "massive_terms": "NOT_RESOLVED_APPLICABLE_TERMS_UNAVAILABLE",
+    "ready_to_prepare_future_stage_b_authorization": false,
+    "smallest_next_action": "Export the account's accepted Stocks Advanced Individual Order Form/agreement/version record; do not contact support until that document is reviewed."
+  },
+  "authorization": "NONE_CREATED",
+  "live_requests": 0
+}
