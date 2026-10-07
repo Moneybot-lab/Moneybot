@@ -23,13 +23,16 @@ def _aws_credentials(environ: Any) -> tuple[str,str]:
 def main() -> int:
     parser=argparse.ArgumentParser(description="Stage B fixed-session operational runner (no schedule)")
     parser.add_argument("--authorization",type=Path,required=True); parser.add_argument("--approved-authorization-sha256",required=True)
-    parser.add_argument("--sector-evidence",type=Path,required=True); parser.add_argument("--config",type=Path,required=True)
+    sector=parser.add_mutually_exclusive_group(required=True)
+    sector.add_argument("--sector-context",type=Path,dest="sector_context")
+    sector.add_argument("--sector-evidence",type=Path,dest="sector_context",help="legacy dated-mapping input")
+    parser.add_argument("--config",type=Path,required=True)
     parser.add_argument("--fixture",type=Path,required=True)
     parser.add_argument("--fixture-file-sha256",required=True); parser.add_argument("--fixture-content-sha256",required=True)
     parser.add_argument("--session",type=date.fromisoformat,required=True)
     parser.add_argument("--output",type=Path,required=True); args=parser.parse_args()
     try:
-        authorization=_load(args.authorization); sector=_load(args.sector_evidence); config=load_runtime_config(args.config,require_owner=True)
+        authorization=_load(args.authorization); sector=_load(args.sector_context); config=load_runtime_config(args.config,require_owner=True)
         root=Path(config["persistent_root"]); guard=RuntimeResourceGuard(root,max_rss_kib=int(config["max_rss_kib"]))
         repo=Path(__file__).resolve().parents[1]
         try: fixture_name=args.fixture.resolve().relative_to((repo/"docs/reports").resolve()).as_posix()

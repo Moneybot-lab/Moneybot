@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import pytest
 
-from moneybot.services.alpha_atlas_v4_acquisition import RequestSpec, TransportResponse, acquisition_clock
+from moneybot.services.alpha_atlas_v4_acquisition import RequestSpec, TransportResponse, acquisition_clock, prior_sessions
 from moneybot.services.alpha_atlas_v4_prospective_snapshot import CaptureError, ImmutableStore, canonical_bytes, sha256_bytes
 from moneybot.services.alpha_atlas_v4_stage_b import *
 from scripts.run_alpha_atlas_v4_stage_b_offline import OfflineS3, OfflineTransport, NOW
@@ -225,6 +225,37 @@ def test_proposed_fixture_is_parameterized_but_dated_sector_evidence_blocks(tmp_
                           session=session,now=lambda:datetime(2026,10,20,tzinfo=UTC))
     with pytest.raises(CaptureError,match='SECTOR_EVIDENCE_NOT_EFFECTIVE'):
         proposed.preflight(auth,sector)
+
+
+def test_experimental_proxy_is_not_membership_and_requires_owner_acceptance(tmp_path):
+    fixture_name='alpha_atlas_v4_stage_b_verification_manifest.v3.json'
+    fixture_path=REPO/'docs/reports'/fixture_name
+    fixture=json.loads(fixture_path.read_text()); fixture_hash=fixture['content_sha256']
+    proxy=json.loads((REPO/'docs/reports/alpha_atlas_v4_stage_b_sector_proxy_binding.proposed.v1.json').read_text())
+    session=date(2026,10,20)
+    loaded=load_fixture(REPO,fixture_name=fixture_name,fixture_content_sha256=fixture_hash,session=session)
+    assert loaded['sector_context']['AAPL']['relationship_type']=='EXPERIMENTAL_CONTEXT_PROXY'
+    assert loaded['sector_context']['AAPL']['claims_constituent_membership'] is False
+    assert loaded['history_window']['from']=='2026-07-06' and loaded['history_window']['to']=='2026-10-19'
+    sessions=prior_sessions(session,75)
+    assert len(sessions)==75 and sessions[0]==date(2026,7,6) and sessions[-1]==date(2026,10,19)
+    context_hash,kind=validate_sector_context(REPO,proxy,loaded,session=session)
+    assert kind=='EXPERIMENTAL_CONTEXT_PROXY' and context_hash==proxy['content_sha256']
+    unsupported=changed(proxy,claims_constituent_membership=True)
+    with pytest.raises(CaptureError,match='UNSUPPORTED_SECTOR_MEMBERSHIP_CLAIM'):
+        validate_sector_context(REPO,unsupported,loaded,session=session)
+
+    auth=changed(synthetic_authorization(),status='APPROVED',mode='LIVE',fixture_sha256=fixture_hash,
+                 session=session.isoformat(),operational_config_sha256='config-hash',
+                 sector_context_sha256=context_hash,owner_accepts_sector_proxy_clarification=False)
+    proposed=StageBRunner(REPO,tmp_path,offline=False,
+                          approved_authorization_sha256=sha256_bytes(canonical_bytes(auth)),
+                          operational_config_sha256='config-hash',fixture_name=fixture_name,
+                          fixture_file_sha256=sha256_bytes(fixture_path.read_bytes()),
+                          fixture_content_sha256=fixture_hash,session=session,
+                          now=lambda:datetime(2026,10,19,tzinfo=UTC))
+    with pytest.raises(CaptureError,match='SECTOR_PROXY_CLARIFICATION_NOT_ACCEPTED'):
+        proposed.preflight(auth,proxy)
 
 def test_owner_reported_config_exact_bindings_and_owner_binder(tmp_path):
     source=REPO/'docs/reports/alpha_atlas_v4_stage_b_runtime_config.v1.json'

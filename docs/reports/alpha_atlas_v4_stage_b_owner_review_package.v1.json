@@ -1,0 +1,119 @@
+{
+  "bindings": {
+    "authorization": {
+      "content_sha256": "0f0839b18372e9435ddc51346d641fadc2039bf3feb3538ae7464bb025ab46aa",
+      "file_sha256": "d2c64306e3d1531f01ab0b63d39553ca6082727041f76ca081619a68f56b1297",
+      "path": "docs/reports/alpha_atlas_v4_stage_b_execution_authorization.proposed.v2.json"
+    },
+    "fixture": {
+      "content_sha256": "b22907c9036e3f7476ffa35e6601caaefb810e311050f6457d7d5ff4b3041885",
+      "file_sha256": "c7d06f54aa18d4c3bd52c29e9c7423605e6919a076f29ba24dcfa7e61eecf113",
+      "path": "docs/reports/alpha_atlas_v4_stage_b_verification_manifest.v3.json",
+      "supersedes": "October 26 proposal in alpha_atlas_v4_stage_b_verification_manifest.v2.json"
+    },
+    "owner_config": {
+      "file_sha256": "0b7ef94a1a3ff023f01466a94e1b53d321608ff6c5e968e4a802d246b03c0f28",
+      "path": "docs/reports/alpha_atlas_v4_stage_b_runtime_config.owner-bound.v1.json"
+    },
+    "proxy": {
+      "content_sha256": "0cf664f7859881a3c11ae326e6c0f055616086f76a67585488d652839481d5c7",
+      "file_sha256": "9e6937103bfbec524536047d83b16fbd8f42c79c7843e5f7c05d97d36a92d079",
+      "path": "docs/reports/alpha_atlas_v4_stage_b_sector_proxy_binding.proposed.v1.json"
+    }
+  },
+  "budgets": {
+    "backup_cap_bytes": 4067328,
+    "combined_cap_bytes": 8134656,
+    "cumulative_massive_cap": 3789,
+    "expected_massive_attempts": 5,
+    "maximum_massive_attempts": 18,
+    "primary_cap_bytes": 4067328,
+    "s3_operation_cap": 512
+  },
+  "clarification": {
+    "content_sha256": "8f793c3cecc189f294fc911a70c71ae393f95c623173474a5c69477227c07ddb",
+    "file_sha256": "35109bd3b4836bf73cd39f785b0142c587f61fd5295a2fdf8295d62c6ba6c2e6",
+    "owner_acceptance": "REQUIRED_IN_FINAL_AUTHORIZATION",
+    "path": "docs/reports/alpha_atlas_v4_stage_b_sector_proxy_clarification.v1.json"
+  },
+  "content_sha256": "10cf2cecd093bff47a1a8272225605b30bdb077355e5064db9ee4714b8fd139e",
+  "credentials_read": false,
+  "date_selection": {
+    "cutoff": {
+      "America/Denver": "2026-10-20T05:30:00-06:00",
+      "America/New_York": "2026-10-20T07:30:00-04:00",
+      "utc": "2026-10-20T11:30:00Z"
+    },
+    "history_window": {
+      "calendar": "repository ExchangeCalendar / XNYS",
+      "count": 75,
+      "from": "2026-07-06",
+      "no_extension": true,
+      "rule": "exactly 75 prior eligible sessions ending at immediately previous completed session",
+      "to": "2026-10-19"
+    },
+    "rationale": "This is the earliest practical XNYS session selected on 2026-10-06 that leaves thirteen full calendar days for review and deployment before the session. No data dependency requires waiting until October 26. No automatic rolling is permitted.",
+    "session": "2026-10-20"
+  },
+  "deployed": false,
+  "execution_location": "normal moneybot-market-stream worker runtime with mounted /var/data; never GitHub Actions or a diskless one-off job",
+  "implementation": {
+    "authorization_revision_binding": "The final authorization is created outside the deployed revision after deployment. It records the already-deployed immutable Git commit plus these reviewed source hashes; the runner receives the final authorization file and its independently pinned hash. The authorization is not committed into the revision it authorizes.",
+    "correction": "Runner accepts an independently hash-pinned session fixture and validates either legacy dated evidence or a registered experimental proxy contract. Unsupported membership/classification claims fail closed. Operational proxy use additionally requires explicit acceptance in an APPROVED authorization."
+  },
+  "infrastructure": {
+    "aws_owner": "223901279399",
+    "bucket": "moneybot-alpha-atlas-backup-20261006",
+    "credential_variable_names": [
+      "MONEYBOT_STAGE_B_AWS_ACCESS_KEY_ID",
+      "MONEYBOT_STAGE_B_AWS_SECRET_ACCESS_KEY"
+    ],
+    "prefix": "stage-b/",
+    "region": "us-east-1",
+    "root": "/var/data/moneybot-stage-b",
+    "service": "moneybot-market-stream"
+  },
+  "live_requests": 0,
+  "manual_command": "python -m scripts.run_alpha_atlas_v4_stage_b_operational --authorization <SEPARATELY_APPROVED_AUTHORIZATION.json> --approved-authorization-sha256 <EXTERNALLY_PINNED_SHA256> --sector-context docs/reports/alpha_atlas_v4_stage_b_sector_proxy_binding.proposed.v1.json --config docs/reports/alpha_atlas_v4_stage_b_runtime_config.owner-bound.v1.json --fixture docs/reports/alpha_atlas_v4_stage_b_verification_manifest.v3.json --fixture-file-sha256 c7d06f54aa18d4c3bd52c29e9c7423605e6919a076f29ba24dcfa7e61eecf113 --fixture-content-sha256 b22907c9036e3f7476ffa35e6601caaefb810e311050f6457d7d5ff4b3041885 --session 2026-10-20 --output /var/data/moneybot-stage-b/run/stage-b-result.json",
+  "owner_review_checklist": [
+    {
+      "action": "Review this clarification, fixture, proxy binding, implementation source hashes, unchanged budgets, and command.",
+      "status": "PREPARED",
+      "step": 1
+    },
+    {
+      "action": "Deploy the reviewed immutable revision to the normal moneybot-market-stream worker without changing its start command.",
+      "status": "NOT_DONE",
+      "step": 2
+    },
+    {
+      "action": "Create a separate APPROVED authorization outside that deployed revision, bind the deployed Git commit/source hashes and all package hashes, and set owner_accepts_sector_proxy_clarification=true.",
+      "status": "NOT_DONE",
+      "step": 3
+    },
+    {
+      "action": "Only then manually execute once on the normal worker before the fixed cutoff. If review/deployment/approval misses the cutoff, do not roll the date or run.",
+      "status": "NOT_AUTHORIZED",
+      "step": 4
+    }
+  ],
+  "pilot_authorized": false,
+  "recorded_at": "2026-10-06T23:55:00Z",
+  "remaining_blockers": [
+    "Owner review and acceptance of the proxy clarification.",
+    "Deployment of the reviewed immutable implementation revision.",
+    "Creation and external pinning of a separate APPROVED authorization after deployment.",
+    "Runtime storage, AWS, Massive, backup/restore, capacity, and headroom remain unverified until the authorized bounded check."
+  ],
+  "schema_version": "alpha-atlas-v4-stage-b-owner-review-package.v1",
+  "sector_gate_finding": {
+    "behavior": "XLK history acquisition, alignment, five-session comparison, provenance, budgets, and all timing gates are unchanged.",
+    "classification": "AAPL classification is a separate descriptive fact; XLK membership is a separate dated fact; the feature requires neither as its gate.",
+    "decision": "UNNECESSARY_CONFLATION_WITH_EXPERIMENTAL_PROXY_SELECTION",
+    "identity": "Request 4 still independently requires an unambiguous security-level identity; CIK alone remains insufficient.",
+    "membership": "No current or future XLK membership is claimed.",
+    "proxy": "The computation needs a fixed, owner-approved experimental context series with six aligned dates. AAPL->XLK is configuration, not a membership assertion."
+  },
+  "stage_b_executed": false,
+  "status": "PREPARED_FOR_REVIEW_NOT_APPROVED"
+}

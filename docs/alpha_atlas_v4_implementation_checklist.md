@@ -1662,3 +1662,32 @@ immutable provenance. Performance comparison execution remains pending review.
   `NOT_AUTHORIZED / NOT_EXECUTED`; readiness remains `COMPLETE —
   BLOCKED_STORAGE_AND_CACHE`; QQQ/SPY remains `PROPOSED_NOT_APPROVED`; training and
   the ten-session pilot remain disabled and unauthorized.
+
+## Stage B sector-proxy correction and owner-review package (2026-10-06)
+
+- [x] **The sector gate was an unnecessary conflation for Stage B.** The feature
+  consumes six aligned stock/context-ETF dates; planner and validation code do not
+  derive sector classification or test ETF membership. AAPL classification, dated
+  XLK constituent membership, experimental XLK proxy choice, and request 4 security
+  identity are now represented as four distinct concepts.
+- [x] **A versioned clarification is prepared without weakening the feature.** It
+  labels AAPL→XLK as an `EXPERIMENTAL_CONTEXT_PROXY`, makes no membership,
+  classification, or identity claim, and preserves XLK history, alignment, formula,
+  provenance, receipt, identity, timing, storage, and budget requirements.
+- [ ] **Owner acceptance is still required.** Operational proxy use requires an
+  `APPROVED` authorization binding the clarification and proxy contract with
+  `owner_accepts_sector_proxy_clarification=true`; the committed proposed
+  authorization is deliberately unusable and has `owner_approval: NOT_GIVEN`.
+- [ ] **One replacement proposal is prepared for 2026-10-20.** Its cutoff is 07:30
+  America/New_York / 05:30 America/Denver / 11:30 UTC and its exact 75-session
+  window is 2026-07-06–2026-10-19. It supersedes the unapproved October 26 proposal;
+  both prior fixtures remain unchanged. There is no automatic date rolling.
+- [x] **Budgets and infrastructure bindings are unchanged.** The package preserves
+  5 expected/18 maximum Massive attempts, cumulative 3,789 attempts, 512 S3
+  operations, 4,067,328-byte primary and backup caps, 8,134,656 combined bytes,
+  the owner-bound worker/root/bucket/prefix, finalization reserve, quarantine, and
+  immutable actual receipt times.
+- [ ] Deployment, owner approval, and operational verification remain unperformed.
+  Stage B is `NOT_AUTHORIZED / NOT_EXECUTED`; readiness remains `COMPLETE —
+  BLOCKED_STORAGE_AND_CACHE`; QQQ/SPY remains `PROPOSED_NOT_APPROVED`; training,
+  scoring, and the pilot remain disabled and unauthorized.

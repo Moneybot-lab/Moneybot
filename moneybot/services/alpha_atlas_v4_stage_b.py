@@ -143,6 +143,38 @@ def validate_effective_sector_evidence(evidence: Mapping[str, Any], fixture_hash
     return str(claimed)
 
 
+def validate_sector_context(repo: Path, evidence: Mapping[str, Any], fixture: Mapping[str, Any],
+                            *, session: date = SESSION) -> tuple[str, str]:
+    """Validate either legacy dated mapping evidence or an explicit proxy contract."""
+    if evidence.get("relationship_type") != "EXPERIMENTAL_CONTEXT_PROXY":
+        return validate_effective_sector_evidence(evidence, fixture["content_sha256"], session=session), "DATED_EVIDENCE"
+    value = dict(evidence); claimed = value.pop("content_sha256", None)
+    if sha256_bytes(canonical_bytes(value)) != claimed:
+        raise CaptureError("SECTOR_EVIDENCE_HASH_MISMATCH")
+    if (value.get("fixture_sha256") != fixture["content_sha256"] or value.get("ticker") != "AAPL"
+            or value.get("context_proxy") != "XLK"):
+        raise CaptureError("SECTOR_PROXY_MISMATCH")
+    if value.get("claims_constituent_membership") is not False or value.get("claims_sector_classification") is not False:
+        raise CaptureError("UNSUPPORTED_SECTOR_MEMBERSHIP_CLAIM")
+    binding = fixture.get("sector_context", {}).get("AAPL", {})
+    if binding.get("relationship_type") != "EXPERIMENTAL_CONTEXT_PROXY":
+        raise CaptureError("SECTOR_PROXY_NOT_REGISTERED")
+    clarification_name = binding.get("clarification_path")
+    clarification_sha = binding.get("clarification_file_sha256")
+    if not isinstance(clarification_name, str) or not isinstance(clarification_sha, str):
+        raise CaptureError("SECTOR_PROXY_CLARIFICATION_MISSING")
+    clarification_path = repo / clarification_name
+    if not clarification_path.is_file() or sha256_bytes(clarification_path.read_bytes()) != clarification_sha:
+        raise CaptureError("SECTOR_PROXY_CLARIFICATION_HASH_MISMATCH")
+    clarification = json.loads(clarification_path.read_text())
+    clarification_claimed = clarification.pop("content_sha256", None)
+    if (sha256_bytes(canonical_bytes(clarification)) != clarification_claimed
+            or clarification_claimed != binding.get("clarification_content_sha256")
+            or value.get("clarification_content_sha256") != clarification_claimed):
+        raise CaptureError("SECTOR_PROXY_CLARIFICATION_HASH_MISMATCH")
+    return str(claimed), "EXPERIMENTAL_CONTEXT_PROXY"
+
+
 def validate_authorization(auth: Mapping[str, Any], *, fixture_sha256: str, setup_sha256: str,
                            session: date = SESSION, offline: bool) -> None:
     value = dict(auth); claimed = value.pop("content_sha256", None)
@@ -410,9 +442,12 @@ class StageBRunner:
         authorization_sha256=sha256_bytes(canonical_bytes(authorization))
         if not self.offline and (not self.approved_authorization_sha256 or authorization_sha256!=self.approved_authorization_sha256):
             raise CaptureError("APPROVED_AUTHORIZATION_HASH_REQUIRED")
-        sector_hash=validate_effective_sector_evidence(sector_evidence,self.fixture_content_sha256,session=self.session)
-        if not self.offline and (authorization.get("operational_config_sha256")!=self.operational_config_sha256 or authorization.get("sector_evidence_sha256")!=sector_hash):
+        sector_hash,sector_kind=validate_sector_context(self.repo,sector_evidence,fixture,session=self.session)
+        authorization_sector_hash = authorization.get("sector_context_sha256", authorization.get("sector_evidence_sha256"))
+        if not self.offline and (authorization.get("operational_config_sha256")!=self.operational_config_sha256 or authorization_sector_hash!=sector_hash):
             raise CaptureError("AUTHORIZATION_OPERATIONAL_BINDING_MISMATCH")
+        if not self.offline and sector_kind == "EXPERIMENTAL_CONTEXT_PROXY" and authorization.get("owner_accepts_sector_proxy_clarification") is not True:
+            raise CaptureError("SECTOR_PROXY_CLARIFICATION_NOT_ACCEPTED")
         instant=self.now().astimezone(UTC)
         if instant.date()>self.session or instant>=acquisition_clock(self.session).cutoff:
             raise CaptureError("FIXED_SESSION_EXPIRED")
