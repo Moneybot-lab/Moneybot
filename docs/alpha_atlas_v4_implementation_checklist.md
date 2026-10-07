@@ -1771,3 +1771,21 @@ immutable provenance. Performance comparison execution remains pending review.
   the defect. Merge/deploy this repair, then generate a new `.prepared.v2.json` file.
   Stage B remains `NOT_AUTHORIZED / NOT_EXECUTED`; readiness stays `COMPLETE —
   BLOCKED_STORAGE_AND_CACHE`; the pilot remains disabled.
+
+## Stage B single-run owner approval (2026-10-07)
+
+- [x] **Owner scope approval recorded.** One `OPERATIONAL_VERIFICATION_ONLY`
+  run is approved against the worker-generated prepared v2 authorization, with the
+  existing 18-attempt maximum, registered storage/S3 limits, and 55-minute runtime.
+  Pilot activity, training, scoring, and trading remain unauthorized.
+- [x] **Approval finalization is exact and offline.** The approval command requires
+  the independently obtained complete-canonical pin of the exact prepared v2 bytes,
+  validates every registered binding and the deployed source revision, and creates
+  a new file without overwriting either prepared or approved evidence.
+- [x] **Approved does not mean executed.** The output state is
+  `AUTHORIZED_NOT_EXECUTED`; it reads no credentials, creates no clients, reserves
+  no attempts, and retains the durable single-execution claim and cumulative ledgers.
+- [ ] **Worker artifact finalization remains.** Run the network-free approval command
+  on the normal worker with its actual prepared v2 pin. Stage B has not executed;
+  premarket timing and prospective eligibility remain `NOT_TESTED`, readiness stays
+  `COMPLETE — BLOCKED_STORAGE_AND_CACHE`, and the pilot remains disabled.
