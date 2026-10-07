@@ -1,0 +1,23 @@
+{
+  "schema_version": "alpha-atlas-v4-stage-a-implementation.v1",
+  "status": "AUTHORIZED_IMPLEMENTED_SYNTHETICALLY_TESTED",
+  "bound_documents": {
+    "alpha_atlas_v4_prospective_data_acquisition_amendment.v3.json": "767edcee6cb234302af0339187aaa49c25af6b2a6fd21b99f6a2342f42f929f9",
+    "alpha_atlas_v4_prospective_data_acquisition_amendment.v2.json": "35290cfa2338b4a82605fc8904ceea4fae11e4dd0ef56fe78d45f2c3d5122237",
+    "alpha_atlas_v4_prospective_snapshot_capture_contract.v1.json": "09bf4a7308533195df5a0be4277cba7a5a3bbcd15b5a6fd28abc4321380ad692",
+    "alpha_atlas_v4_prospective_snapshot_timing_clarification.v1.json": "f92a1d99856a35556abe2b89f6b7923fbcfaf3cd1bcdb05166125935a6efc66a"
+  },
+  "entry_point": "python -m scripts.run_alpha_atlas_v4_synthetic_acquisition --synthetic --output-dir <test-evidence-dir>",
+  "workflow": "Alpha Atlas V4 Stage A Synthetic Acquisition Only",
+  "mode": "SYNTHETIC_ONLY",
+  "live_provider_requests": 0,
+  "real_acquisition_available": false,
+  "stage_b": "NOT_AUTHORIZED_NOT_EXECUTED",
+  "pilot": "NOT_AUTHORIZED_NOT_EXECUTED",
+  "limitations": [
+    "fake transport only",
+    "temporary primary, backup, and restore storage only",
+    "simulated backup/restore does not prove operational retention",
+    "provider semantics, real manifests, worker storage, backup destination, account terms, and runtime capacity remain Stage B gates"
+  ]
+}
