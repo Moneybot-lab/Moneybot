@@ -254,8 +254,18 @@ def test_experimental_proxy_is_not_membership_and_requires_owner_acceptance(tmp_
                           fixture_file_sha256=sha256_bytes(fixture_path.read_bytes()),
                           fixture_content_sha256=fixture_hash,session=session,
                           now=lambda:datetime(2026,10,19,tzinfo=UTC))
-    with pytest.raises(CaptureError,match='SECTOR_PROXY_CLARIFICATION_NOT_ACCEPTED'):
+    with pytest.raises(CaptureError,match='SECTOR_PROXY_BINDING_NOT_ACCEPTED'):
         proposed.preflight(auth,proxy)
+    accepted=json.loads((REPO/'docs/reports/alpha_atlas_v4_stage_b_sector_proxy_binding.accepted.v2.json').read_text())
+    accepted_auth=changed(auth,sector_context_sha256=accepted['content_sha256'])
+    accepted_runner=StageBRunner(REPO,tmp_path/'accepted',offline=False,
+                                 approved_authorization_sha256=sha256_bytes(canonical_bytes(accepted_auth)),
+                                 operational_config_sha256='config-hash',fixture_name=fixture_name,
+                                 fixture_file_sha256=sha256_bytes(fixture_path.read_bytes()),
+                                 fixture_content_sha256=fixture_hash,session=session,
+                                 now=lambda:datetime(2026,10,19,tzinfo=UTC))
+    with pytest.raises(CaptureError,match='SECTOR_PROXY_CLARIFICATION_NOT_ACCEPTED'):
+        accepted_runner.preflight(accepted_auth,accepted)
 
 def test_owner_reported_config_exact_bindings_and_owner_binder(tmp_path):
     source=REPO/'docs/reports/alpha_atlas_v4_stage_b_runtime_config.v1.json'

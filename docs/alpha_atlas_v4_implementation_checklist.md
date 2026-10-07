@@ -1674,10 +1674,10 @@ immutable provenance. Performance comparison execution remains pending review.
   labels AAPL→XLK as an `EXPERIMENTAL_CONTEXT_PROXY`, makes no membership,
   classification, or identity claim, and preserves XLK history, alignment, formula,
   provenance, receipt, identity, timing, storage, and budget requirements.
-- [ ] **Owner acceptance is still required.** Operational proxy use requires an
-  `APPROVED` authorization binding the clarification and proxy contract with
-  `owner_accepts_sector_proxy_clarification=true`; the committed proposed
-  authorization is deliberately unusable and has `owner_approval: NOT_GIVEN`.
+- [x] **Owner proxy acceptance was subsequently recorded below.** Operational use
+  still requires an `APPROVED` execution authorization binding the accepted proxy
+  contract with `owner_accepts_sector_proxy_clarification=true`; the committed
+  proposed authorization remains deliberately unusable.
 - [ ] **One replacement proposal is prepared for 2026-10-20.** Its cutoff is 07:30
   America/New_York / 05:30 America/Denver / 11:30 UTC and its exact 75-session
   window is 2026-07-06–2026-10-19. It supersedes the unapproved October 26 proposal;
@@ -1687,7 +1687,30 @@ immutable provenance. Performance comparison execution remains pending review.
   operations, 4,067,328-byte primary and backup caps, 8,134,656 combined bytes,
   the owner-bound worker/root/bucket/prefix, finalization reserve, quarantine, and
   immutable actual receipt times.
-- [ ] Deployment, owner approval, and operational verification remain unperformed.
+- [ ] Deployment, execution approval, and operational verification remain unperformed.
   Stage B is `NOT_AUTHORIZED / NOT_EXECUTED`; readiness remains `COMPLETE —
   BLOCKED_STORAGE_AND_CACHE`; QQQ/SPY remains `PROPOSED_NOT_APPROVED`; training,
   scoring, and the pilot remain disabled and unauthorized.
+
+## Stage B proxy acceptance and deployment handoff (2026-10-07)
+
+- [x] **Owner accepted the experimental proxy for the fixed October 20 check.**
+  AAPL→XLK is accepted only as `EXPERIMENTAL_CONTEXT_PROXY`; the acceptance makes
+  no ETF-membership or sector-classification claim and does not replace request 4's
+  security-level identity gate.
+- [x] **Merge/deployment and post-deploy authorization preparation are authorized.**
+  The accepted scope is hash-bound to the v1 clarification and v3 fixture. Stage B
+  execution, the pilot, training, and scoring remain expressly unauthorized.
+- [ ] **Deployment has not been observed from this repository environment.** No
+  authenticated Render deployment/control-plane facility is available here. Do not
+  record a deployed revision or final authorization until `moneybot-market-stream`
+  actually reports the deployed immutable Git commit.
+- [x] **A post-deploy offline binder is available.** On the deployed checkout it
+  verifies the observed `HEAD`, fixture, owner-bound configuration, and accepted
+  proxy hashes, then emits `PREPARED_FOR_EXECUTION_APPROVAL_NOT_APPROVED` with
+  `execution_gate_usable: false`. It never reads credentials or contacts a service.
+- [ ] **Execution approval remains separate.** After deployment, the owner must
+  review the revision-bound output and separately approve/pin an executable
+  authorization. Until then Stage B remains `NOT_AUTHORIZED / NOT_EXECUTED`,
+  readiness remains `COMPLETE — BLOCKED_STORAGE_AND_CACHE`, QQQ/SPY remains
+  `PROPOSED_NOT_APPROVED`, and the ten-session pilot remains disabled.

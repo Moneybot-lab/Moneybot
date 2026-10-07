@@ -172,6 +172,21 @@ def validate_sector_context(repo: Path, evidence: Mapping[str, Any], fixture: Ma
             or clarification_claimed != binding.get("clarification_content_sha256")
             or value.get("clarification_content_sha256") != clarification_claimed):
         raise CaptureError("SECTOR_PROXY_CLARIFICATION_HASH_MISMATCH")
+    if value.get("status") == "OWNER_ACCEPTED_FOR_2026-10-20_STAGE_B_VERIFICATION":
+        acceptance_name = value.get("owner_acceptance_path")
+        acceptance_file_sha = value.get("owner_acceptance_file_sha256")
+        if not isinstance(acceptance_name, str) or not isinstance(acceptance_file_sha, str):
+            raise CaptureError("SECTOR_PROXY_OWNER_ACCEPTANCE_MISSING")
+        acceptance_path = repo / acceptance_name
+        if not acceptance_path.is_file() or sha256_bytes(acceptance_path.read_bytes()) != acceptance_file_sha:
+            raise CaptureError("SECTOR_PROXY_OWNER_ACCEPTANCE_HASH_MISMATCH")
+        acceptance = json.loads(acceptance_path.read_text())
+        acceptance_claimed = acceptance.pop("content_sha256", None)
+        if (sha256_bytes(canonical_bytes(acceptance)) != acceptance_claimed
+                or acceptance_claimed != value.get("owner_acceptance_content_sha256")
+                or acceptance.get("accepted_scope", {}).get("fixture_content_sha256") != fixture["content_sha256"]
+                or acceptance.get("authorization", {}).get("execute_stage_b") is not False):
+            raise CaptureError("SECTOR_PROXY_OWNER_ACCEPTANCE_HASH_MISMATCH")
     return str(claimed), "EXPERIMENTAL_CONTEXT_PROXY"
 
 
@@ -446,8 +461,11 @@ class StageBRunner:
         authorization_sector_hash = authorization.get("sector_context_sha256", authorization.get("sector_evidence_sha256"))
         if not self.offline and (authorization.get("operational_config_sha256")!=self.operational_config_sha256 or authorization_sector_hash!=sector_hash):
             raise CaptureError("AUTHORIZATION_OPERATIONAL_BINDING_MISMATCH")
-        if not self.offline and sector_kind == "EXPERIMENTAL_CONTEXT_PROXY" and authorization.get("owner_accepts_sector_proxy_clarification") is not True:
-            raise CaptureError("SECTOR_PROXY_CLARIFICATION_NOT_ACCEPTED")
+        if not self.offline and sector_kind == "EXPERIMENTAL_CONTEXT_PROXY":
+            if sector_evidence.get("status") != "OWNER_ACCEPTED_FOR_2026-10-20_STAGE_B_VERIFICATION":
+                raise CaptureError("SECTOR_PROXY_BINDING_NOT_ACCEPTED")
+            if authorization.get("owner_accepts_sector_proxy_clarification") is not True:
+                raise CaptureError("SECTOR_PROXY_CLARIFICATION_NOT_ACCEPTED")
         instant=self.now().astimezone(UTC)
         if instant.date()>self.session or instant>=acquisition_clock(self.session).cutoff:
             raise CaptureError("FIXED_SESSION_EXPIRED")
