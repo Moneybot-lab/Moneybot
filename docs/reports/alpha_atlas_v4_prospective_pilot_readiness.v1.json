@@ -1,0 +1,185 @@
+{
+  "cache_inspection": {
+    "cache_mutations": 0,
+    "families": [
+      {
+        "event_and_receipt": "Stream payloads contain genuine event_timestamp and received_timestamp; history-cache insertion time is not source receipt evidence.",
+        "fallback": "Normal MarketDataService/history and stream recovery paths can call providers; they are forbidden for cache-only inspection. TTLCache.get also deletes expired entries.",
+        "family": "symbol_daily",
+        "freshness": "maximum 3 XNYS sessions for supported completed-daily families",
+        "provenance_persistence": "Unavailable after TTL/process restart; Redis allkeys-lru may evict.",
+        "reason": "No read-only persisted daily-history cache with immutable receipt provenance.",
+        "required_fields_lookback": "split-consistent OHLCV and VWAP, up to 50 completed XNYS sessions",
+        "source": "MarketDataService.history_cache (process-local, 300-second TTL) and Redis stream latest A/AM/T/Q entries (120-second TTL)",
+        "status": "UNAVAILABLE",
+        "values": "Insufficient: latest stream events and five-minute process history cache do not establish a 50-session window."
+      },
+      {
+        "event_and_receipt": "Receipt exists only for retained stream event, not the required historical window.",
+        "fallback": "Provider-backed accessors and reconnect recovery are not cache-only.",
+        "family": "spy_context",
+        "freshness": "maximum 3 XNYS sessions",
+        "provenance_persistence": "Unavailable after TTL/process restart or eviction.",
+        "reason": "No persisted 21-session SPY window with receipt evidence.",
+        "required_fields_lookback": "SPY split-consistent OHLCV/VWAP, 21 completed returns/sessions",
+        "source": "Same process-local history cache / latest Redis stream state for SPY",
+        "status": "UNAVAILABLE",
+        "values": "Latest state is insufficient for return, beta, regime, and volatility calculations."
+      },
+      {
+        "event_and_receipt": "Original receipt evidence is not persisted.",
+        "fallback": "Normal miss paths may query providers/yfinance.",
+        "family": "sector_context",
+        "freshness": "maximum 3 XNYS sessions for daily ETF data; mapping availability must be proven",
+        "provenance_persistence": "Unavailable.",
+        "reason": "Required point-in-time mapping, history, and receipt lineage are absent.",
+        "required_fields_lookback": "effective-dated sector identity plus sector ETF OHLCV for at least 5 sessions",
+        "source": "MarketDataService.sector_cache (process-local, 3600-second TTL); no durable effective-dated sector-to-ETF cache",
+        "status": "UNAVAILABLE",
+        "values": "Repository configuration does not demonstrate both mapping and history in a read-only cache."
+      },
+      {
+        "event_and_receipt": "No genuine persisted receipt evidence at runtime.",
+        "fallback": "Reference/corporate-action provider access would violate zero-request mode.",
+        "family": "identity_and_splits_lineage",
+        "freshness": "availability by feature cutoff; no invented limit",
+        "provenance_persistence": "Unavailable.",
+        "reason": "UNKNOWN/INELIGIBLE until a receipt-bearing saved source exists.",
+        "required_fields_lookback": "point-in-time typed identity and split events known by cutoff",
+        "source": "Historical builder inputs only; no demonstrated prospective runtime cache",
+        "status": "UNAVAILABLE",
+        "values": "Typed IDs are absent for proposed members and prospective split lineage is not cached."
+      }
+    ],
+    "mode": "REPOSITORY_ONLY_READ_ONLY_NO_RUNTIME_CREDENTIALS",
+    "provider_requests": 0,
+    "scheduled_0745_0830_availability": "UNVERIFIED"
+  },
+  "collection_authorization": "NOT_AUTHORIZED",
+  "decision": "BLOCKED",
+  "hosted_synthetic_check": {
+    "assignments": 1,
+    "historical_artifact_mutated": false,
+    "mode": "SYNTHETIC_ONLY",
+    "provider_requests": 0,
+    "real_collection_available": false,
+    "run": "36457965993-1",
+    "scope": "Smoke test only; distinct from unit tests and not operational-readiness evidence.",
+    "status": "PASS",
+    "uploaded_report_json_sha256": "7cb11d7d811bf1b3248dae0919a18620d45fc61f0059a7637c52a1957616c9b4"
+  },
+  "manifest_approval": "PENDING_USER_REVIEW",
+  "manifest_preparation": "COMPLETE_PROPOSED_NOT_APPROVED",
+  "preserved_findings": {
+    "completed_investigations": "CLOSED",
+    "prior_scoring_run_35923707545_1": "COMPLETE \u2014 UNFAVORABLE FINDINGS",
+    "registered_regression": "NOT_EVALUABLE \u2014 INCOMPATIBLE_SAVED_TIMING_EVIDENCE, zero fits",
+    "shared_decision_feasibility": "COMPLETE \u2014 NOT_SUPPORTED_BY_SAVED_EVIDENCE"
+  },
+  "prohibitions_observed": {
+    "collection": false,
+    "deployment_changes": false,
+    "outcomes": false,
+    "production_mutation": false,
+    "provider_requests": 0,
+    "scoring": false,
+    "training": false
+  },
+  "proposed_universe": {
+    "approval_status": "PENDING_USER_REVIEW",
+    "content_sha256": "a5439b1fd85f4247ffc4b21f91ba1a3176e4839fc86c459daa70d6718cf0d56b",
+    "count": 2,
+    "members": [
+      "QQQ",
+      "SPY"
+    ],
+    "path": "docs/reports/alpha_atlas_v4_proposed_pilot_universe.v1.json",
+    "same_list_all_ten_sessions": true
+  },
+  "requirements": [
+    {
+      "evidence_source": "run 36457965993-1 report.json hash",
+      "limitation": "Not application runtime, cache, retention, or collection evidence.",
+      "next_action": "None; preserve unchanged.",
+      "requirement": "Hosted synthetic smoke evidence",
+      "status": "VERIFIED_SMOKE_ONLY",
+      "verification_time": "2026-09-28T00:00:00Z"
+    },
+    {
+      "evidence_source": "worker_config_from_env default and render.yaml omission of override",
+      "limitation": "User has not approved QQQ, SPY; typed IDs unavailable.",
+      "next_action": "User reviews and explicitly approves or rejects the proposed manifest.",
+      "requirement": "Proposed static universe",
+      "status": "PREPARED_NOT_APPROVED",
+      "verification_time": "2026-09-28T00:00:00Z"
+    },
+    {
+      "evidence_source": "render.yaml and environment-name inspection",
+      "limitation": "No Render disk/MONEYBOT_PERSISTENT_DATA_DIR or authenticated runtime evidence.",
+      "next_action": "Runtime owner attaches/configures a persistent disk and supplies read-only configuration/quota evidence.",
+      "requirement": "Explicit durable root and 250 MiB quota",
+      "status": "BLOCKED",
+      "verification_time": "2026-09-28T00:00:00Z"
+    },
+    {
+      "evidence_source": "focused local synthetic tests",
+      "limitation": "Not observed on intended runtime filesystem.",
+      "next_action": "After root configuration, run one isolated small runtime probe.",
+      "requirement": "Atomic write/read-back",
+      "status": "SYNTHETIC_ONLY",
+      "verification_time": "2026-09-28T00:00:00Z"
+    },
+    {
+      "evidence_source": "repository Render blueprint",
+      "limitation": "No lifecycle/backup/restore policy or restore test is available.",
+      "next_action": "Runtime owner provides retention/backup/access policy and performs a bounded restore test.",
+      "requirement": "Backup, restore, access control, 180-day retention",
+      "status": "UNKNOWN",
+      "verification_time": "2026-09-28T00:00:00Z"
+    },
+    {
+      "evidence_source": "feature registry, MarketDataService caches, Redis stream state, render.yaml",
+      "limitation": "No durable 50-session daily windows, effective sector mapping, split/identity lineage, or complete receipt evidence; provider-backed miss paths exist.",
+      "next_action": "Separately review a minimal non-collecting integration that exposes already-received daily objects and receipt manifests through a read-only, no-fallback interface.",
+      "requirement": "Cache-only required feature families",
+      "status": "BLOCKED",
+      "verification_time": "2026-09-28T00:00:00Z"
+    },
+    {
+      "evidence_source": "TTL and deployment configuration only",
+      "limitation": "No logs prove required families exist in-window; midday state would not prove it.",
+      "next_action": "After a read-only cache exists, inspect bounded premarket metadata without warming it.",
+      "requirement": "07:45-08:30 availability",
+      "status": "UNKNOWN",
+      "verification_time": "2026-09-28T00:00:00Z"
+    },
+    {
+      "evidence_source": "hash-bound clarification and implementation constants",
+      "limitation": "No pilot run authorized.",
+      "next_action": "No change.",
+      "requirement": "Timing and finite budgets",
+      "status": "PRESERVED",
+      "verification_time": "2026-09-28T00:00:00Z"
+    }
+  ],
+  "runtime": {
+    "access_controls": "PARTIAL_CONFIG_ONLY",
+    "atomic_and_immediate_readback": "SYNTHETICALLY_TESTED_NOT_RUNTIME_OBSERVED",
+    "authenticated_runtime_access_available_here": false,
+    "backup_retrieval": "UNKNOWN_NOT_TESTED",
+    "cleanup_conflict": "Render Key Value uses allkeys-lru and stream entries expire after 120 seconds; it is not the snapshot persistence root. GitHub artifact retention is not durable-runtime evidence.",
+    "configuration_inspected": true,
+    "eventual_execution": "Render moneybot web service or a separately authorized collector colocated with its persistent root; no collector is deployed.",
+    "persistent_root": "UNCONFIGURED_IN_REPOSITORY",
+    "quota_250_mib": "UNKNOWN",
+    "reason_no_probe": "No authenticated Render shell or MONEYBOT_PERSISTENT_DATA_DIR is available. The repository Render blueprint declares no disk or persistent-root variable; probing this isolated GitHub/container filesystem would not evidence application runtime storage.",
+    "research_namespace_writable": "UNKNOWN",
+    "retention_180_days": "UNKNOWN_NOT_EVIDENCED",
+    "runtime_behavior_observed": false,
+    "runtime_probe_performed": false
+  },
+  "schema_version": "alpha-atlas-v4-prospective-pilot-readiness.v1",
+  "smallest_next_action": "The runtime owner should attach/configure the intended Render persistent disk with MONEYBOT_PERSISTENT_DATA_DIR and provide read-only evidence of its mount, quota, access, backup, restore, cleanup, and retention settings; only then can the authorized isolated storage probe run.",
+  "technical_readiness": "BLOCKED_STORAGE_AND_CACHE",
+  "verified_at": "2026-09-28T00:00:00Z"
+}

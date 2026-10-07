@@ -1,0 +1,15 @@
+{
+  "claims_constituent_membership": false,
+  "claims_sector_classification": false,
+  "clarification_content_sha256": "8f793c3cecc189f294fc911a70c71ae393f95c623173474a5c69477227c07ddb",
+  "content_sha256": "43f3e472f4e97ee9d6c92a227cd9b1d2eb2c661c38461bb88185a2f306d8881e",
+  "context_proxy": "XLK",
+  "fixture_sha256": "b22907c9036e3f7476ffa35e6601caaefb810e311050f6457d7d5ff4b3041885",
+  "owner_acceptance_content_sha256": "a254c4f786d8dc725f5ab969080878868a8b15e20d7b7641a2ee4dc09fed41ba",
+  "owner_acceptance_file_sha256": "b4f12c0187617f5565d952321f4514d5fb7b54c477e2f482469af8259535de29",
+  "owner_acceptance_path": "docs/reports/alpha_atlas_v4_stage_b_owner_proxy_acceptance.v1.json",
+  "relationship_type": "EXPERIMENTAL_CONTEXT_PROXY",
+  "schema_version": "alpha-atlas-v4-stage-b-sector-proxy-binding.v2",
+  "status": "OWNER_ACCEPTED_FOR_2026-10-20_STAGE_B_VERIFICATION",
+  "ticker": "AAPL"
+}

@@ -1,0 +1,47 @@
+{
+  "clarification": "For Stage B only, effective sector mapping means the owner-approved experiment configuration selecting a context ETF for the bound session. It does not assert that the stock is an ETF constituent or establish an issuer/security sector classification. The configuration is immutable and hash-bound before request 1.",
+  "clarifies": [
+    "docs/reports/alpha_atlas_v4_prospective_data_acquisition_amendment.v3.json",
+    "docs/reports/alpha_atlas_v4_stage_b_setup_package.v1.json"
+  ],
+  "content_sha256": "8f793c3cecc189f294fc911a70c71ae393f95c623173474a5c69477227c07ddb",
+  "finding": "The registered feature consumes aligned returns from a configured context ETF. It does not test constituent membership or derive a sector classification.",
+  "non_changes": [
+    "XLK history remains required",
+    "six-date alignment remains required",
+    "feature formula is unchanged",
+    "request 4 identity remains required",
+    "budgets and deadlines are unchanged",
+    "the pilot contract is not amended"
+  ],
+  "operational_gate": "A final APPROVED authorization must bind this clarification, the fixture-specific proxy contract hash, and owner_accepts_sector_proxy_clarification=true. This document itself does not approve execution.",
+  "relationship": {
+    "claims_constituent_membership": false,
+    "claims_sector_classification": false,
+    "claims_security_identity": false,
+    "context_proxy": "XLK",
+    "purpose": "five-session relative-return context for the synthetic/operational fixture",
+    "ticker": "AAPL",
+    "type": "EXPERIMENTAL_CONTEXT_PROXY"
+  },
+  "schema_version": "alpha-atlas-v4-stage-b-sector-proxy-clarification.v1",
+  "source_trace": [
+    {
+      "requirement": "six aligned symbol/effective-sector-ETF dates for the five-session comparison",
+      "source": "docs/reports/alpha_atlas_v4_prospective_data_acquisition_amendment.v3.json"
+    },
+    {
+      "requirement": "planner treats stock_to_sector_etf values as context symbols and requests their history",
+      "source": "moneybot/services/alpha_atlas_v4_acquisition.py:84-107"
+    },
+    {
+      "requirement": "validator requires six aligned sector-context dates",
+      "source": "moneybot/services/alpha_atlas_v4_acquisition.py:317-323"
+    },
+    {
+      "requirement": "Request 4 separately resolves security-level identity",
+      "source": "moneybot/services/alpha_atlas_v4_stage_b.py"
+    }
+  ],
+  "status": "PREPARED_FOR_REVIEW_NOT_ACCEPTED"
+}

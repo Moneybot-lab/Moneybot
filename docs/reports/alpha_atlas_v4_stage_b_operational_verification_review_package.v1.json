@@ -1,0 +1,241 @@
+{
+  "bindings": {
+    "fixture": {
+      "content_sha256": "579013c85367c75f8a821aa30c75fe9cd261080a9c8060cfcd94af3d958499e9",
+      "file_sha256": "de6c1b13f978421947eb93ed64439fd50780ca20faa1741a10af4786b99dbb4e",
+      "path": "docs/reports/alpha_atlas_v4_stage_b_operational_verification_manifest.v1.json"
+    },
+    "owner_config": {
+      "content_sha256": "c33217363d3be4a0cee9107f18bc4b73ca0534814d25897a7cb9702fd28d9186",
+      "file_sha256": "0b7ef94a1a3ff023f01466a94e1b53d321608ff6c5e968e4a802d246b03c0f28",
+      "path": "docs/reports/alpha_atlas_v4_stage_b_runtime_config.owner-bound.v1.json"
+    },
+    "proposed_authorization": {
+      "content_sha256": "c9c3d85a4738299818cd4e45bb38720530f71a3d60e7fbfd32f399d63b0f3216",
+      "file_sha256": "cdaa0f323f36a32bc100320a93abda5dc99b5ffea3ff7b721d32edef4c88d021",
+      "path": "docs/reports/alpha_atlas_v4_stage_b_operational_execution_authorization.proposed.v1.json"
+    },
+    "proxy_acceptance": {
+      "content_sha256": "98aae81badb2bb6d5b43f600b6ee9fc70e49668e40cbc1e974db49b386e21a42",
+      "file_sha256": "9bef7795c582e40ce17f48963fd513a5a46b2ea0a6d25af656fb3da00aaee2e1",
+      "path": "docs/reports/alpha_atlas_v4_stage_b_operational_proxy_acceptance.v1.json"
+    },
+    "proxy_configuration": {
+      "content_sha256": "ba59fd773cd8be78816280e3a16a02bb3b83fcff8b3a92e5299eb78ceae28fc4",
+      "file_sha256": "9613f67239d0297cc148fbeb1260eed28bfd1b625ccc58c74061b156df5b84bf",
+      "path": "docs/reports/alpha_atlas_v4_stage_b_operational_sector_proxy_binding.accepted.v1.json"
+    },
+    "purpose_clarification": {
+      "content_sha256": "5aee330cf3aaab0c10c6b287bce1c5221100863891c536ca050f9b53e2e25661",
+      "file_sha256": "6bb84d9acfae889ee2be6ec3c9d202e079256b361f0d05f24dff5d92399361ef",
+      "path": "docs/reports/alpha_atlas_v4_stage_b_operational_purpose_clarification.v1.json"
+    }
+  },
+  "budgets": {
+    "backup_cap_bytes": 4067328,
+    "combined_cap_bytes": 8134656,
+    "cumulative_massive_cap": 3789,
+    "expected_massive_attempts": 5,
+    "maximum_massive_attempts": 18,
+    "primary_cap_bytes": 4067328,
+    "s3_operation_cap": 512
+  },
+  "consumption_boundary": {
+    "operational_handoff": "ISOLATED_STAGE_B_INSPECTION_ONLY",
+    "pilot_input_allowed": false,
+    "prospective_cache_boundary_rejection": "OPERATIONAL_HANDOFF_NOT_PROSPECTIVE_INPUT"
+  },
+  "content_sha256": "22a5a81ce94c897f7c5f856fb2a6916e876daf5bd52f0e4c2fb983b534c7672d",
+  "credentials_read": false,
+  "deployed": false,
+  "execution_location": "normal moneybot-market-stream worker with mounted /var/data; not GitHub Actions or a diskless one-off job",
+  "execution_purpose": "OPERATIONAL_VERIFICATION_ONLY",
+  "future_operational_command": "python -m scripts.run_alpha_atlas_v4_stage_b_operational --authorization <SEPARATELY_APPROVED_AUTHORIZATION.json> --approved-authorization-sha256 <EXTERNALLY_PINNED_SHA256> --sector-context docs/reports/alpha_atlas_v4_stage_b_operational_sector_proxy_binding.accepted.v1.json --config docs/reports/alpha_atlas_v4_stage_b_runtime_config.owner-bound.v1.json --fixture docs/reports/alpha_atlas_v4_stage_b_operational_verification_manifest.v1.json --fixture-file-sha256 de6c1b13f978421947eb93ed64439fd50780ca20faa1741a10af4786b99dbb4e --fixture-content-sha256 579013c85367c75f8a821aa30c75fe9cd261080a9c8060cfcd94af3d958499e9 --session 2026-10-06 --output /var/data/moneybot-stage-b/run/stage-b-operational-result.json",
+  "hard_runtime_minutes": 55,
+  "historical_window": {
+    "calendar": "repository ExchangeCalendar / XNYS",
+    "count": 75,
+    "from": "2026-06-22",
+    "inclusive_definition": "All 75 eligible XNYS sessions from 2026-06-22 through and including completed session 2026-10-06; excludes 2026-10-07 and all later sessions.",
+    "no_extension": true,
+    "no_runtime_roll": true,
+    "ordered_sessions": [
+      "2026-06-22",
+      "2026-06-23",
+      "2026-06-24",
+      "2026-06-25",
+      "2026-06-26",
+      "2026-06-29",
+      "2026-06-30",
+      "2026-07-01",
+      "2026-07-02",
+      "2026-07-06",
+      "2026-07-07",
+      "2026-07-08",
+      "2026-07-09",
+      "2026-07-10",
+      "2026-07-13",
+      "2026-07-14",
+      "2026-07-15",
+      "2026-07-16",
+      "2026-07-17",
+      "2026-07-20",
+      "2026-07-21",
+      "2026-07-22",
+      "2026-07-23",
+      "2026-07-24",
+      "2026-07-27",
+      "2026-07-28",
+      "2026-07-29",
+      "2026-07-30",
+      "2026-07-31",
+      "2026-08-03",
+      "2026-08-04",
+      "2026-08-05",
+      "2026-08-06",
+      "2026-08-07",
+      "2026-08-10",
+      "2026-08-11",
+      "2026-08-12",
+      "2026-08-13",
+      "2026-08-14",
+      "2026-08-17",
+      "2026-08-18",
+      "2026-08-19",
+      "2026-08-20",
+      "2026-08-21",
+      "2026-08-24",
+      "2026-08-25",
+      "2026-08-26",
+      "2026-08-27",
+      "2026-08-28",
+      "2026-08-31",
+      "2026-09-01",
+      "2026-09-02",
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-11",
+      "2026-09-14",
+      "2026-09-15",
+      "2026-09-16",
+      "2026-09-17",
+      "2026-09-18",
+      "2026-09-21",
+      "2026-09-22",
+      "2026-09-23",
+      "2026-09-24",
+      "2026-09-25",
+      "2026-09-28",
+      "2026-09-29",
+      "2026-09-30",
+      "2026-10-01",
+      "2026-10-02",
+      "2026-10-05",
+      "2026-10-06"
+    ],
+    "ordered_sessions_sha256": "6b1ad71f708834049f89f168bff3650c6b74dc15664111bc944e832e5343b663",
+    "to": "2026-10-06"
+  },
+  "implementation_source_sha256s": {
+    "moneybot/services/alpha_atlas_v4_acquisition.py": "bcdc41017ca1ec4aa8a04da5d214b74c98884c1104dc0f97b5a0975261609d5c",
+    "moneybot/services/alpha_atlas_v4_stage_b.py": "017e49e64896c3215b2cd786163d21376475ab8d936b492d07c7980daa54bac1",
+    "scripts/prepare_alpha_atlas_v4_stage_b_post_deploy_authorization.py": "3581a7da026c3063550fbcd9f8ac7841cdaf8b6d4458f2e9821ba7f7d8e3e035",
+    "scripts/run_alpha_atlas_v4_stage_b_offline.py": "bb82af852ba9f5150cf253baa412d57e8f5ac49e7c5468835579e7567cd67a9f",
+    "scripts/run_alpha_atlas_v4_stage_b_operational.py": "ac725babf5e6a29267bbef64d1cfb7cedab311bf074adc7fe38209a5ae2e6610"
+  },
+  "live_requests": 0,
+  "pilot_authorized": false,
+  "post_deploy_command": "python -m scripts.prepare_alpha_atlas_v4_stage_b_post_deploy_authorization --deployed-commit \"$(git rev-parse HEAD)\" --output /var/data/moneybot-stage-b/authorization/stage-b-operational-2026-10-06.prepared.json",
+  "recorded_at": "2026-10-07T04:30:00Z",
+  "remaining_action": "Merge/deploy this reviewed revision, then run the network-free binder on that deployed checkout. Do not run Stage B.",
+  "request_roster": [
+    {
+      "max_attempts": 3,
+      "number": 1,
+      "page_cap": 1,
+      "params": {
+        "adjusted": "false",
+        "limit": "50000",
+        "sort": "asc"
+      },
+      "path": "/v2/aggs/ticker/AAPL/range/1/day/2026-06-22/2026-10-06",
+      "request_id": "history:AAPL"
+    },
+    {
+      "max_attempts": 3,
+      "number": 2,
+      "page_cap": 1,
+      "params": {
+        "adjusted": "false",
+        "limit": "50000",
+        "sort": "asc"
+      },
+      "path": "/v2/aggs/ticker/SPY/range/1/day/2026-06-22/2026-10-06",
+      "request_id": "history:SPY"
+    },
+    {
+      "max_attempts": 3,
+      "number": 3,
+      "page_cap": 1,
+      "params": {
+        "adjusted": "false",
+        "limit": "50000",
+        "sort": "asc"
+      },
+      "path": "/v2/aggs/ticker/XLK/range/1/day/2026-06-22/2026-10-06",
+      "request_id": "history:XLK"
+    },
+    {
+      "max_attempts": 3,
+      "number": 4,
+      "page_cap": 1,
+      "params": {
+        "date": "2026-10-06"
+      },
+      "path": "/v3/reference/tickers/AAPL",
+      "request_id": "identity:AAPL"
+    },
+    {
+      "max_attempts": 6,
+      "number": 5,
+      "page_cap": 2,
+      "params": {
+        "execution_date.gte": "2026-06-22",
+        "execution_date.lte": "2026-10-06",
+        "limit": "5000",
+        "sort": "execution_date.asc"
+      },
+      "path": "/stocks/v1/splits",
+      "request_id": "splits:global"
+    }
+  ],
+  "safeguards": [
+    "persistent cumulative ledger; replacement is not a fresh allowance",
+    "durable execution claim blocks repeat invocation",
+    "single writer and uncertain-attempt blocking",
+    "pagination/retry/response caps",
+    "reserved finalization capacity and fail-closed byte caps",
+    "immutable actual receipt timestamps",
+    "identity quarantine until request 4",
+    "exact-version restore and S3 operation ledger"
+  ],
+  "schema_version": "alpha-atlas-v4-stage-b-operational-verification-review-package.v1",
+  "stage_b_executed": false,
+  "status": "PREPARED_FOR_REVIEW_NOT_AUTHORIZED_NOT_EXECUTED",
+  "supersedes_proposed_execution_path": "October 20 prospective-timed proposal only; all October 5/20/26 evidence remains unchanged.",
+  "timing_distinction": {
+    "execution_validity": {
+      "automatic_extension": false,
+      "from": "2026-10-13T14:00:00Z",
+      "owner_approved": false,
+      "until": "2026-10-15T22:00:00Z"
+    },
+    "historical_dates_are_not_receipt_times": true,
+    "pilot_readiness": "NOT_TESTED",
+    "premarket_timing_readiness": "NOT_TESTED",
+    "prospective_snapshot_eligibility": "NOT_TESTED"
+  }
+}
