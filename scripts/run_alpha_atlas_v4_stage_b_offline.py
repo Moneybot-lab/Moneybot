@@ -65,7 +65,9 @@ def main() -> int:
             run_now=datetime(2026,10,14,18,0,tzinfo=UTC)
             auth=synthetic_authorization(); auth.pop("content_sha256")
             auth.update({"fixture_sha256":fixture["content_sha256"],"session":"2026-10-06","execution_purpose":"OPERATIONAL_VERIFICATION_ONLY",
-                         "execution_valid_from":"2026-10-13T14:00:00Z","execution_valid_until":"2026-10-15T22:00:00Z"})
+                         "execution_valid_from":"2026-10-13T14:00:00Z","execution_valid_until":"2026-10-15T22:00:00Z",
+                         "historical_data_as_of":"2026-10-06","premarket_timing_readiness":"NOT_TESTED",
+                         "prospective_snapshot_eligibility":"NOT_TESTED"})
             auth["content_sha256"]=sha256_bytes(canonical_bytes(auth))
             runner=StageBRunner(repo,root,offline=True,fixture_name=fixture_name,
                                 fixture_file_sha256=sha256_bytes(fixture_path.read_bytes()),fixture_content_sha256=fixture["content_sha256"],

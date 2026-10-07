@@ -51,6 +51,11 @@ IAM_ACTIONS = {"HEAD_BUCKET":"s3:ListBucket","GET_BUCKET_LOCATION":"s3:GetBucket
 REQUIRED_BUCKET_ACTIONS = {"s3:ListBucket","s3:GetBucketLocation","s3:GetBucketVersioning","s3:GetBucketPublicAccessBlock","s3:GetEncryptionConfiguration","s3:GetBucketObjectLockConfiguration"}
 REQUIRED_OBJECT_ACTIONS = {"s3:PutObject","s3:PutObjectRetention","s3:GetObject","s3:GetObjectVersion","s3:GetObjectRetention"}
 FORBIDDEN_ACTIONS = {"s3:DeleteObject","s3:DeleteObjectVersion","s3:BypassGovernanceRetention","s3:PutBucketPolicy","s3:PutBucketVersioning"}
+LIVE_OWNER_APPROVAL = "APPROVED_FOR_SINGLE_STAGE_B_OPERATIONAL_VERIFICATION"
+REGISTERED_BUDGETS = {"expected_massive_attempts":5,"maximum_massive_attempts":18,
+                      "cumulative_massive_cap":3789,"s3_operation_cap":512,
+                      "primary_cap_bytes":PRIMARY_CAP,"backup_cap_bytes":BACKUP_CAP,
+                      "combined_cap_bytes":COMBINED_CAP}
 
 
 def validate_iam_policy_scope(bucket_actions: set[str], object_actions: set[str]) -> dict[str,Any]:
@@ -192,18 +197,42 @@ def validate_sector_context(repo: Path, evidence: Mapping[str, Any], fixture: Ma
     return str(claimed), "EXPERIMENTAL_CONTEXT_PROXY"
 
 
+def authorization_hashes(auth: Mapping[str,Any], *, file_bytes: bytes | None=None) -> dict[str,Any]:
+    without_content=dict(auth); claimed=without_content.pop("content_sha256",None)
+    internal=sha256_bytes(canonical_bytes(without_content))
+    return {"internal_content_sha256":internal,"claimed_content_sha256":claimed,
+            "internal_content_valid":claimed==internal,
+            "external_complete_canonical_sha256":sha256_bytes(canonical_bytes(dict(auth))),
+            "file_byte_sha256":sha256_bytes(file_bytes) if file_bytes is not None else None}
+
+
+def parse_utc_timestamp(value: Any, *, code: str="EXECUTION_VALIDITY_INVALID") -> datetime:
+    try: parsed=datetime.fromisoformat(str(value).replace("Z","+00:00"))
+    except ValueError as exc: raise CaptureError(code) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None: raise CaptureError(code)
+    return parsed.astimezone(UTC)
+
+
 def validate_authorization(auth: Mapping[str, Any], *, fixture_sha256: str, setup_sha256: str,
                            session: date = SESSION, offline: bool) -> None:
-    value = dict(auth); claimed = value.pop("content_sha256", None)
-    if sha256_bytes(canonical_bytes(value)) != claimed:
+    hashes=authorization_hashes(auth)
+    if not hashes["internal_content_valid"]:
         raise CaptureError("AUTHORIZATION_HASH_MISMATCH")
     wanted_status = "OFFLINE_SYNTHETIC_ONLY" if offline else "APPROVED"
-    if value.get("status") != wanted_status or value.get("mode") != ("OFFLINE" if offline else "LIVE"):
+    if auth.get("status") != wanted_status or auth.get("mode") != ("OFFLINE" if offline else "LIVE"):
         raise CaptureError("EXECUTION_NOT_AUTHORIZED")
-    if value.get("fixture_sha256") != fixture_sha256 or value.get("setup_package_sha256") != setup_sha256:
+    if auth.get("fixture_sha256") != fixture_sha256 or auth.get("setup_package_sha256") != setup_sha256:
         raise CaptureError("AUTHORIZATION_BINDING_MISMATCH")
-    if value.get("session") != session.isoformat() or value.get("maximum_attempts") != 18:
+    if auth.get("session") != session.isoformat() or auth.get("maximum_attempts") != 18:
         raise CaptureError("AUTHORIZATION_PLAN_MISMATCH")
+    if not offline:
+        if (auth.get("execution_gate_usable") is not True
+                or auth.get("owner_approval") != LIVE_OWNER_APPROVAL
+                or auth.get("stage_b_execution") != "AUTHORIZED_NOT_EXECUTED"
+                or auth.get("owner_accepts_sector_proxy_clarification") is not True):
+            raise CaptureError("EXECUTION_APPROVAL_STATE_INVALID")
+        if auth.get("budgets") != REGISTERED_BUDGETS or auth.get("hard_runtime_minutes") != 55:
+            raise CaptureError("AUTHORIZATION_BUDGET_MISMATCH")
 
 
 def plan_from_fixture(fixture: Mapping[str, Any], sector_evidence_sha256: str,
@@ -496,12 +525,16 @@ class StageBRunner:
             raise CaptureError("EXECUTION_PURPOSE_MISMATCH")
         if purpose == "OPERATIONAL_VERIFICATION_ONLY":
             validate_operational_window(fixture,self.session)
+            if (authorization.get("historical_data_as_of")!=self.session.isoformat()
+                    or authorization.get("premarket_timing_readiness")!="NOT_TESTED"
+                    or authorization.get("prospective_snapshot_eligibility")!="NOT_TESTED"):
+                raise CaptureError("AUTHORIZATION_OPERATIONAL_SCOPE_MISMATCH")
             try:
-                valid_from=datetime.fromisoformat(str(authorization["execution_valid_from"]).replace("Z","+00:00")).astimezone(UTC)
-                valid_until=datetime.fromisoformat(str(authorization["execution_valid_until"]).replace("Z","+00:00")).astimezone(UTC)
-            except (KeyError,ValueError) as exc:
+                valid_from=parse_utc_timestamp(authorization["execution_valid_from"])
+                valid_until=parse_utc_timestamp(authorization["execution_valid_until"])
+            except KeyError as exc:
                 raise CaptureError("EXECUTION_VALIDITY_INVALID") from exc
-            if valid_from>=valid_until or instant<valid_from or instant>valid_until:
+            if valid_from>=valid_until or instant<valid_from or instant>=valid_until:
                 raise CaptureError("EXECUTION_VALIDITY_INVALID")
             if not self.offline:
                 revision=authorization.get("deployed_revision",{})

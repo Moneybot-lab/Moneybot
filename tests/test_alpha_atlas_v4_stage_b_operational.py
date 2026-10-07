@@ -247,7 +247,10 @@ def test_experimental_proxy_is_not_membership_and_requires_owner_acceptance(tmp_
 
     auth=changed(synthetic_authorization(),status='APPROVED',mode='LIVE',fixture_sha256=fixture_hash,
                  session=session.isoformat(),operational_config_sha256='config-hash',
-                 sector_context_sha256=context_hash,owner_accepts_sector_proxy_clarification=False)
+                 sector_context_sha256=context_hash,owner_accepts_sector_proxy_clarification=True,
+                 execution_gate_usable=True,owner_approval=LIVE_OWNER_APPROVAL,
+                 stage_b_execution='AUTHORIZED_NOT_EXECUTED',budgets=REGISTERED_BUDGETS,
+                 hard_runtime_minutes=55)
     proposed=StageBRunner(REPO,tmp_path,offline=False,
                           approved_authorization_sha256=sha256_bytes(canonical_bytes(auth)),
                           operational_config_sha256='config-hash',fixture_name=fixture_name,
@@ -257,14 +260,14 @@ def test_experimental_proxy_is_not_membership_and_requires_owner_acceptance(tmp_
     with pytest.raises(CaptureError,match='SECTOR_PROXY_BINDING_NOT_ACCEPTED'):
         proposed.preflight(auth,proxy)
     accepted=json.loads((REPO/'docs/reports/alpha_atlas_v4_stage_b_sector_proxy_binding.accepted.v2.json').read_text())
-    accepted_auth=changed(auth,sector_context_sha256=accepted['content_sha256'])
+    accepted_auth=changed(auth,sector_context_sha256=accepted['content_sha256'],owner_accepts_sector_proxy_clarification=False)
     accepted_runner=StageBRunner(REPO,tmp_path/'accepted',offline=False,
                                  approved_authorization_sha256=sha256_bytes(canonical_bytes(accepted_auth)),
                                  operational_config_sha256='config-hash',fixture_name=fixture_name,
                                  fixture_file_sha256=sha256_bytes(fixture_path.read_bytes()),
                                  fixture_content_sha256=fixture_hash,session=session,
                                  now=lambda:datetime(2026,10,19,tzinfo=UTC))
-    with pytest.raises(CaptureError,match='SECTOR_PROXY_CLARIFICATION_NOT_ACCEPTED'):
+    with pytest.raises(CaptureError,match='EXECUTION_APPROVAL_STATE_INVALID'):
         accepted_runner.preflight(accepted_auth,accepted)
 
 
@@ -275,7 +278,9 @@ def operational_fixture():
     proxy=json.loads((REPO/'docs/reports/alpha_atlas_v4_stage_b_operational_sector_proxy_binding.accepted.v1.json').read_text())
     auth=changed(synthetic_authorization(),fixture_sha256=fixture['content_sha256'],session='2026-10-06',
                  execution_purpose='OPERATIONAL_VERIFICATION_ONLY',
-                 execution_valid_from='2026-10-13T14:00:00Z',execution_valid_until='2026-10-15T22:00:00Z')
+                 execution_valid_from='2026-10-13T14:00:00Z',execution_valid_until='2026-10-15T22:00:00Z',
+                 historical_data_as_of='2026-10-06',premarket_timing_readiness='NOT_TESTED',
+                 prospective_snapshot_eligibility='NOT_TESTED')
     return name,path,fixture,proxy,auth
 
 

@@ -1745,3 +1745,29 @@ immutable provenance. Performance comparison execution remains pending review.
   `NOT_AUTHORIZED / NOT_EXECUTED`; readiness remains `COMPLETE —
   BLOCKED_STORAGE_AND_CACHE`; QQQ/SPY remains `PROPOSED_NOT_APPROVED`; training,
   scoring, trading, and the pilot remain disabled and unauthorized.
+
+## Stage B post-deployment binder repair (2026-10-07)
+
+- [x] **Missing setup binding repaired.** The binder verifies the registered setup
+  package's exact bytes against `SETUP_PACKAGE_FILE_SHA256` and emits the same value
+  as `setup_package_sha256`, closing the demonstrated binder/consumer mismatch.
+- [x] **Live approval state is consistent and explicit.** Live preflight requires
+  `APPROVED`, `LIVE`, `execution_gate_usable=true`, owner approval value
+  `APPROVED_FOR_SINGLE_STAGE_B_OPERATIONAL_VERIFICATION`, proxy acceptance, exact
+  registered budgets, and `AUTHORIZED_NOT_EXECUTED`. Preparation never emits it.
+- [x] **Execution interval is explicit.** Both timezone-aware bounds are required,
+  normalized to UTC, positive, and unexpired at preparation. The runner rejects
+  before the start and at or after the end, before credential/client construction.
+- [x] **Authorization hashes are disambiguated.** Internal content hash, complete
+  canonical external runner pin, and exact file-byte hash are separately reported;
+  approval requires recomputing all applicable hashes and independently pinning the
+  complete-canonical value.
+- [x] **Actual binder-to-consumer regression passes offline.** The real unapproved
+  binder output fails live preflight; a test-only approved derivative with recomputed
+  hashes passes the real live preflight with only storage/resource probes isolated.
+  No credentials, clients, claims, ledger reservations, or network calls occur.
+- [ ] **Runtime repair is not deployed and the old prepared file is untouched.**
+  Observed deployed revision `e45184577233a2f5fdf4f825d50f58c8a445e407` still has
+  the defect. Merge/deploy this repair, then generate a new `.prepared.v2.json` file.
+  Stage B remains `NOT_AUTHORIZED / NOT_EXECUTED`; readiness stays `COMPLETE —
+  BLOCKED_STORAGE_AND_CACHE`; the pilot remains disabled.
