@@ -1844,6 +1844,11 @@ immutable provenance. Performance comparison execution remains pending review.
 
 ## Stage B provider-response normalization repair (2026-10-08)
 
+This section is the current closure assessment. Earlier dated Stage B entries are
+historical checkpoints, including superseded approval/deployment/pending states;
+they do not override the actual attempted execution and owner-reported replay below.
+The original repair reports and their checksum manifests remain unchanged.
+
 - [x] **Live response persistence recorded.** The authorized continuation persisted
   five Massive logical responses (5 RESERVED/TRANSMITTING/PERSISTED) and then failed
   `FEATURE_WINDOW_INVALID`; acquisition started but Stage B did not complete. The
@@ -1863,10 +1868,30 @@ immutable provenance. Performance comparison execution remains pending review.
   provider shape, DST conversion, malformed data, misalignment, multi-page
   provenance, splits, object-shaped identity, tampering, immutable replay inputs,
   and network/credential prohibition.
-- [ ] **Exact saved-input replay is pending.** `/var/data/moneybot-stage-b` is not
-  mounted in this checkout. Run the dedicated offline replay on the normal worker;
-  do not acquire again. The replay will also validate the actual 91-operation S3
-  ledger and saved backup inventory/completion/restore evidence.
+- [x] **Provider-normalization repair is closed.** Root-cause investigation and the
+  shared adapter repair are complete; the owner-reported Render replay demonstrates
+  successful saved-history feature-window processing for 75 rows each of AAPL,
+  SPY, and XLK. This closes the repair, not the original live execution.
+- [x] **Exact offline saved-evidence replay passed (owner-reported).** The owner
+  reports PR #656 merged, repair commit `e7f6d14` deployed, and replay `PASS` at
+  `2026-10-08T01:47:36.193443+00:00`, with zero live provider/AWS requests.
+  Runtime files are unavailable here; their bytes/hashes were not independently
+  verified. See the [closure report](reports/alpha_atlas_v4_stage_b_replay_closure.v1.md).
+- [x] **Saved accounting validated by reported replay.** Massive: 5 attempts,
+  15 states, all PERSISTED; S3: 91 operations, 273 states, all SUCCEEDED;
+  neither ledger has FAILED or UNCERTAIN states. No ledger was rewritten.
+- [x] **Saved backup/restore evidence validated within its scope.** 15 covered
+  objects, 169053 bytes, 15 receipts, 15 recorded restores, and 15 locally
+  available restored files; `SAVED_VERIFICATION_EVIDENCE_ONLY_NO_FRESH_AWS_CHECK`.
+  This does not establish fresh AWS read-back or ongoing retention.
+- [x] **Isolated replay handoff is eligible.** `ISOLATED_REPLAY_ONLY`, eligible
+  true, no reason codes; original live status is
+  `FAILED_FEATURE_WINDOW_INVALID_UNCHANGED`, and `pilot_input_allowed=false`.
+- [ ] **Next bounded gate: reconcile saved worker headroom/interference evidence.**
+  Review existing failed-run outcome/phase evidence and contemporaneous worker
+  logs against the registered resource/deadline/interference criteria offline.
+  Missing observations remain UNKNOWN; no rerun is authorized. The closure report
+  defines acceptance, evidence, and the separate prospective-observation boundary.
 - [ ] **Overall Stage B remains unresolved.** A derived replay cannot rewrite the
   failed live result or prove fresh remote retention, premarket timing, prospective
   eligibility, or pilot readiness. Pilot, training, scoring, and trading stay
