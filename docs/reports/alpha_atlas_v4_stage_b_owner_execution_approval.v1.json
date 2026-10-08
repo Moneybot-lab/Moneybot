@@ -1,0 +1,49 @@
+{
+  "artifact_finalization": {
+    "command": "python -m scripts.approve_alpha_atlas_v4_stage_b_authorization --prepared /var/data/moneybot-stage-b/authorization/stage-b-operational-2026-10-06.prepared.v2.json --prepared-external-sha256 <PREPARED_V2_EXTERNAL_COMPLETE_CANONICAL_SHA256> --output /var/data/moneybot-stage-b/authorization/stage-b-operational-2026-10-06.approved.v1.json",
+    "network_free": true,
+    "no_overwrite": true,
+    "output_state": "APPROVED / LIVE / AUTHORIZED_NOT_EXECUTED",
+    "reason": "The repository does not contain the worker-generated prepared.v2 bytes or their complete-canonical pin; an executable approval must be derived from and pin those exact bytes."
+  },
+  "content_sha256": "4279e73137b25830c62f5b7006d37562183f49aa8dd22a35cce21842463977cf",
+  "execution_purpose": "OPERATIONAL_VERIFICATION_ONLY",
+  "hash_contract": {
+    "approved_file_bytes": "SHA-256 of exact approved file bytes",
+    "approved_internal": "SHA-256 of canonical approved JSON excluding content_sha256",
+    "approved_runner_pin": "SHA-256 of complete canonical approved JSON including content_sha256",
+    "prepared_pin": "SHA-256 of complete canonical prepared v2 including content_sha256"
+  },
+  "owner_decision": {
+    "approved_activity": "ONE_STAGE_B_OPERATIONAL_VERIFICATION",
+    "hard_runtime_minutes": 55,
+    "maximum_massive_attempts": 18,
+    "pilot": false,
+    "prepared_authorization": "V2_ON_OWNER_WORKER",
+    "scoring": false,
+    "storage_and_s3_limits": "UNCHANGED_REGISTERED_LIMITS",
+    "trading": false,
+    "training": false
+  },
+  "premarket_timing_readiness": "NOT_TESTED",
+  "preserved_budgets": {
+    "backup_cap_bytes": 4067328,
+    "combined_cap_bytes": 8134656,
+    "cumulative_massive_cap": 3789,
+    "expected_massive_attempts": 5,
+    "maximum_massive_attempts": 18,
+    "primary_cap_bytes": 4067328,
+    "s3_operation_cap": 512
+  },
+  "prospective_snapshot_eligibility": "NOT_TESTED",
+  "recorded_at": "2026-10-07T00:00:00Z",
+  "safety": {
+    "credentials_accessed": false,
+    "deployment_performed": false,
+    "live_aws_requests": 0,
+    "live_provider_requests": 0,
+    "stage_b_executed": false
+  },
+  "schema_version": "alpha-atlas-v4-stage-b-owner-execution-approval.v1",
+  "status": "OWNER_APPROVED_SCOPE_ARTIFACT_FINALIZATION_REQUIRED"
+}

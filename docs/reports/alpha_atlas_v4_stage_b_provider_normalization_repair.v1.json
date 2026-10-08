@@ -1,0 +1,104 @@
+{
+  "activity": {
+    "acquisition_executed": false,
+    "continuation_created": false,
+    "credentials_read": false,
+    "deployment": false,
+    "new_aws_requests": 0,
+    "new_provider_requests": 0
+  },
+  "backup_restore": {
+    "exact_runtime_files_inspected": false,
+    "expected_inspection": [
+      "completion/inventory schema and mutual binding",
+      "covered local object hashes and byte counts",
+      "bucket/key/version/retention receipt fields",
+      "recorded restore count and available local restored bytes",
+      "91-operation S3 ledger chain"
+    ],
+    "limitation": "saved verification evidence is not a fresh AWS read-back and cannot prove ongoing retention",
+    "status": "PENDING_OFFLINE_REPLAY"
+  },
+  "content_sha256": "af762a2b01a18d0305d75e9f1a5be9dad5bae56ba09e91ac1f2321d53a45389a",
+  "official_source": {
+    "establishes": [
+      "t is Unix millisecond timestamp for start of aggregate window",
+      "o/h/l/c/v/vw/n field meanings",
+      "adjusted envelope indicates split adjustment and false requests unadjusted results",
+      "ticker/status/resultsCount/request_id envelope semantics"
+    ],
+    "payload_committed": false,
+    "publisher": "Massive",
+    "retrieved_at": "2026-10-08T00:00:00Z",
+    "retrieved_bytes": 1630905,
+    "retrieved_bytes_sha256": "8a5bd30b98a4f0421a09cfa09f99ed35c37832a2d596b33e9107295671899308",
+    "url": "https://massive.com/docs/rest/stocks/aggregates/custom-bars"
+  },
+  "offline_replay": {
+    "command": "python -m scripts.replay_alpha_atlas_v4_stage_b_saved_evidence --saved-evidence-root /var/data/moneybot-stage-b --output-dir /var/data/moneybot-stage-b/replay/alpha-atlas-v4-stage-b-normalization-repair.v1",
+    "live_aws_requests": 0,
+    "live_provider_requests": 0,
+    "mutates_original_evidence": false,
+    "original_live_result_changed": false,
+    "runtime_root_accessible_in_development": false,
+    "status": "PENDING_EXACT_SAVED_ARTIFACT_REPLAY"
+  },
+  "preserved": {
+    "historical_data_as_of": "2026-10-06",
+    "massive_persisted_attempts": 5,
+    "pilot": false,
+    "premarket_timing_readiness": "NOT_TESTED",
+    "prospective_eligibility": "NOT_TESTED",
+    "proxy": "AAPL->XLK EXPERIMENTAL_CONTEXT_PROXY",
+    "s3_reported_operations": 91,
+    "scoring": false,
+    "trading": false,
+    "training": false
+  },
+  "provenance": [
+    "all source-object SHA-256 values",
+    "receipt canonical identities and actual received_at",
+    "source row index",
+    "provider timestamp milliseconds",
+    "adapter version",
+    "calendar/timezone",
+    "provider-unadjusted basis",
+    "split source/receipt identities",
+    "split manifest and engine version",
+    "derived content hash"
+  ],
+  "recorded_at": "2026-10-08T00:00:00Z",
+  "repair": {
+    "adapter_version": "alpha-atlas-v4-massive-daily-bars.v1",
+    "all_source_pages_bound": true,
+    "calendar": "XNYS-rule-calendar.v1",
+    "contexts_adjusted_separately": true,
+    "duplicate_conflict_policy": "REJECT",
+    "envelope_adjusted_false_required": true,
+    "identity_object_shape_supported": true,
+    "missing_nonfinite_policy": "REJECT",
+    "non_session_or_out_of_window_policy": "REJECT",
+    "raw_mutated": false,
+    "timestamp_timezone": "America/New_York",
+    "window": "2026-06-22 through 2026-10-06 inclusive, exactly 75 sessions"
+  },
+  "root_cause": {
+    "affected_consumers": [
+      "feature-window validation",
+      "split adjustment",
+      "handoff eligibility"
+    ],
+    "broken_assumption": "consumers expected date/open/high/low/close/volume/vwap on raw rows",
+    "provider_shape": "daily aggregate rows use o,h,l,c,v,vw,n,t and envelope adjusted",
+    "runtime_failure": "FEATURE_WINDOW_INVALID"
+  },
+  "schema_version": "alpha-atlas-v4-stage-b-provider-normalization-repair.v1",
+  "source_sha256s": {
+    "moneybot/services/alpha_atlas_v4_acquisition.py": "81292b4a7a177a0a1cc31ae137ed567d1ab9f8c9a7b49076e2177a44628604d1",
+    "moneybot/services/alpha_atlas_v4_stage_b.py": "0014cd4f4c5eeacc8ef7f470d6f783d21e5e887bde5cb6dd052b7d3b8c767549",
+    "moneybot/services/alpha_atlas_v4_stage_b_replay.py": "f18662ddafb333874d8e61a05ba99a3fb5ac91b0042e4504b742fd79c910c82c",
+    "scripts/replay_alpha_atlas_v4_stage_b_saved_evidence.py": "a79fdf32f36b1c0deb6a15391831ec77bed5220e11448f683982aa5ef56cde79",
+    "scripts/run_alpha_atlas_v4_stage_b_offline.py": "c4980861772a0e240de452557fcb50fd2dbdb13f4d713f515d538aa969bf1cb4"
+  },
+  "status": "IMPLEMENTED_SYNTHETICALLY_VERIFIED_EXACT_REPLAY_PENDING"
+}

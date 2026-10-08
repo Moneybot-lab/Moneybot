@@ -1,0 +1,40 @@
+{
+  "contains_secret_values": false,
+  "content_sha256": "c33217363d3be4a0cee9107f18bc4b73ca0534814d25897a7cb9702fd28d9186",
+  "credential_environment_variables": {
+    "access_key_id": "MONEYBOT_STAGE_B_AWS_ACCESS_KEY_ID",
+    "secret_access_key": "MONEYBOT_STAGE_B_AWS_SECRET_ACCESS_KEY"
+  },
+  "disk_capacity_gb_decimal": 3,
+  "disk_mount": "/var/data",
+  "evidence_class": "OWNER_REPORTED_NOT_RUNTIME_VERIFIED",
+  "iam": {
+    "identity": "moneybot-stage-b-backup",
+    "inline_policy": "MoneyBotStageBBackupAccess",
+    "same_identity_for_backup_readback_restore": true,
+    "separate_roles_established": false
+  },
+  "max_rss_kib": 393216,
+  "persistent_root": "/var/data/moneybot-stage-b",
+  "render_service": "moneybot-market-stream",
+  "reported_bucket_controls": {
+    "encryption": "AES256",
+    "object_lock": {
+      "default_retention_days": 180,
+      "mode": "GOVERNANCE"
+    },
+    "public_access_blocks": {
+      "BlockPublicAcls": true,
+      "BlockPublicPolicy": true,
+      "IgnorePublicAcls": true,
+      "RestrictPublicBuckets": true
+    },
+    "versioning": "Enabled"
+  },
+  "s3_bucket": "moneybot-alpha-atlas-backup-20261006",
+  "s3_expected_owner": "223901279399",
+  "s3_prefix": "stage-b/",
+  "s3_region": "us-east-1",
+  "schema_version": "alpha-atlas-v4-stage-b-runtime-config.v1",
+  "status": "OWNER_BOUND_PENDING_AUTHORIZATION_AND_RUNTIME_VERIFICATION"
+}

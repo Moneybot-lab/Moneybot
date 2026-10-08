@@ -1,0 +1,55 @@
+{
+  "acquisition_cutoff": {
+    "America/Denver": "2026-10-20T05:30:00-06:00",
+    "America/New_York": "2026-10-20T07:30:00-04:00",
+    "utc": "2026-10-20T11:30:00Z"
+  },
+  "budgets": {
+    "backup_cap_bytes": 4067328,
+    "combined_cap_bytes": 8134656,
+    "cumulative_massive_cap": 3789,
+    "expected_massive_attempts": 5,
+    "maximum_massive_attempts": 18,
+    "primary_cap_bytes": 4067328,
+    "s3_operation_cap": 512
+  },
+  "content_sha256": "0f0839b18372e9435ddc51346d641fadc2039bf3feb3538ae7464bb025ab46aa",
+  "execution_gate_usable": false,
+  "fixture": {
+    "content_sha256": "b22907c9036e3f7476ffa35e6601caaefb810e311050f6457d7d5ff4b3041885",
+    "file_sha256": "c7d06f54aa18d4c3bd52c29e9c7423605e6919a076f29ba24dcfa7e61eecf113",
+    "path": "docs/reports/alpha_atlas_v4_stage_b_verification_manifest.v3.json"
+  },
+  "fixture_sha256": "b22907c9036e3f7476ffa35e6601caaefb810e311050f6457d7d5ff4b3041885",
+  "implementation_revision": {
+    "binding_rule": "The final authorization is created outside the deployed revision after deployment. It records the already-deployed immutable Git commit plus these reviewed source hashes; the runner receives the final authorization file and its independently pinned hash. The authorization is not committed into the revision it authorizes.",
+    "deployed_git_commit": null,
+    "source_file_sha256s": {
+      "moneybot/services/alpha_atlas_v4_stage_b.py": "9a1aced3ae5d34c570dd04a71f2dad701eb1871048420291ee19cb2d875da906",
+      "scripts/run_alpha_atlas_v4_stage_b_operational.py": "ac725babf5e6a29267bbef64d1cfb7cedab311bf074adc7fe38209a5ae2e6610"
+    }
+  },
+  "live_requests": 0,
+  "manual_location": "moneybot-market-stream normal worker runtime with mounted /var/data",
+  "maximum_attempts": 18,
+  "mode": "LIVE",
+  "operational_config": {
+    "content_sha256": "c33217363d3be4a0cee9107f18bc4b73ca0534814d25897a7cb9702fd28d9186",
+    "file_sha256": "0b7ef94a1a3ff023f01466a94e1b53d321608ff6c5e968e4a802d246b03c0f28",
+    "path": "docs/reports/alpha_atlas_v4_stage_b_runtime_config.owner-bound.v1.json"
+  },
+  "operational_config_sha256": "c33217363d3be4a0cee9107f18bc4b73ca0534814d25897a7cb9702fd28d9186",
+  "owner_accepts_sector_proxy_clarification": false,
+  "owner_approval": "NOT_GIVEN",
+  "schema_version": "alpha-atlas-v4-stage-b-execution-authorization.v2",
+  "sector_context": {
+    "content_sha256": "0cf664f7859881a3c11ae326e6c0f055616086f76a67585488d652839481d5c7",
+    "file_sha256": "9e6937103bfbec524536047d83b16fbd8f42c79c7843e5f7c05d97d36a92d079",
+    "path": "docs/reports/alpha_atlas_v4_stage_b_sector_proxy_binding.proposed.v1.json"
+  },
+  "sector_context_sha256": "0cf664f7859881a3c11ae326e6c0f055616086f76a67585488d652839481d5c7",
+  "session": "2026-10-20",
+  "setup_package_sha256": "3524360467fbd47a3eeb7dfbd4252d82dfda9b407354a2807268d6acb5ba5a79",
+  "stage_b_execution": "NOT_AUTHORIZED_NOT_EXECUTED",
+  "status": "PREPARED_FOR_REVIEW_NOT_APPROVED"
+}

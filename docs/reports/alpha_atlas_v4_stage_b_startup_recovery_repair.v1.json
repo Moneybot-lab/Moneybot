@@ -1,0 +1,103 @@
+{
+  "authorization_state": "RECOVERY_IMPLEMENTED; CONTINUATION_NOT_AUTHORIZED_NOT_EXECUTED",
+  "content_sha256": "273a9f10c21b364e5a349cd6c0cfaacf7e5343d20b0372ec79e80879bf7d21e9",
+  "inspection_requirements": [
+    "exact authorization canonical and file pins",
+    "original claim authorization binding",
+    "PROVIDER_CREDENTIAL_MISSING legacy failure shape",
+    "six exact S3 operation IDs with RESERVED/TRANSMITTING/SUCCEEDED transitions and valid chain",
+    "zero Massive ledger records",
+    "no continuation/acquisition/backup/restore/success evidence"
+  ],
+  "interval": {
+    "automatic_extension": false,
+    "expired": true,
+    "legacy_elapsed": "not fully recorded; disclosed as UNKNOWN and cannot be reconstructed",
+    "original_from": "2026-10-07T04:00:00Z",
+    "original_until_exclusive": "2026-10-08T04:00:00Z",
+    "replacement": "must be explicit and separately owner-approved in the prepared recovery document"
+  },
+  "limits": {
+    "backup_bytes": 4067328,
+    "combined_bytes": 8134656,
+    "massive_cumulative": 3789,
+    "massive_expected": 5,
+    "massive_maximum": 18,
+    "primary_bytes": 4067328,
+    "runtime_minutes_maximum": 55,
+    "s3_consumed_before_continuation": 6,
+    "s3_operations": 512
+  },
+  "live_activity": {
+    "aws_requests": 0,
+    "credentials_read": false,
+    "deployment": false,
+    "provider_requests": 0,
+    "stage_b_execution": false
+  },
+  "observed_incident": {
+    "error_code": "PROVIDER_CREDENTIAL_MISSING",
+    "legacy_order": [
+      "local preflight",
+      "execution claim",
+      "S3 client",
+      "six S3 configuration calls",
+      "Massive transport failure"
+    ],
+    "owner_reported_massive_environment_variable_configured": true,
+    "runtime_configuration_independently_verified": false
+  },
+  "operational_status": {
+    "backup_restore": "NOT_COMPLETED",
+    "massive_acquisition": "NOT_REACHED_IN_DEMONSTRATED_LEGACY_PATH",
+    "overall_stage_b": "INCOMPLETE",
+    "s3_configuration": "OWNER_SUMMARY_REPORTS_6_SUCCEEDED_PENDING_ACTUAL_LEDGER_INSPECTION"
+  },
+  "preserved_runtime_evidence": {
+    "authorization_file_sha256": "20d8537ac18085ee7ee8ef539385a553c7a7f05ed0000edad4280ecbabd56ac2",
+    "authorization_pin": "45b196c97e55a2f7d81256f641c48471a7fe1fe1fbaa0c0636a88680f302b214",
+    "mutated_by_this_task": false,
+    "raw_evidence_committed": false,
+    "root": "/var/data/moneybot-stage-b"
+  },
+  "preserved_scope": {
+    "historical_data_as_of": "2026-10-06",
+    "pilot": false,
+    "premarket_timing_readiness": "NOT_TESTED",
+    "prospective_eligibility": "NOT_TESTED",
+    "purpose": "OPERATIONAL_VERIFICATION_ONLY",
+    "scoring": false,
+    "symbols": [
+      "AAPL",
+      "SPY",
+      "XLK"
+    ],
+    "trading": false,
+    "training": false,
+    "window": "2026-06-22..2026-10-06 exactly 75 XNYS sessions"
+  },
+  "recorded_at": "2026-10-08T00:00:00Z",
+  "repair": {
+    "cli_no_overwrite": true,
+    "consumed_s3_operations": 6,
+    "continuation": "same authorization lineage, append-only atomic one-use claim, no fresh allowance",
+    "credential_order": "all local gates, then explicit credential presence, then claim/clients",
+    "credential_variables": [
+      "ALPHA_ATLAS_V4_MASSIVE_API_KEY",
+      "MONEYBOT_STAGE_B_AWS_ACCESS_KEY_ID",
+      "MONEYBOT_STAGE_B_AWS_SECRET_ACCESS_KEY"
+    ],
+    "legacy_incident_inspector": "read-only and hash-chain validating",
+    "phase_aware_failures": true,
+    "secret_values_persisted": false
+  },
+  "schema_version": "alpha-atlas-v4-stage-b-startup-recovery-repair.v1",
+  "source_sha256s": {
+    "moneybot/services/alpha_atlas_v4_stage_b.py": "302dc4f14b6a0a699b7e79e426a098e9acc0e9453e25f433f260c1234e64eeb4",
+    "moneybot/services/alpha_atlas_v4_stage_b_recovery.py": "2dbffb9982d1cede72d22dc165d2a245f431ae3c92f2acf187090d3b0a41ec5f",
+    "scripts/inspect_alpha_atlas_v4_stage_b_recovery.py": "0398f272bd39d46347720e55aad610ddc8935b2e2b5d189426ee43095b21e1f5",
+    "scripts/prepare_alpha_atlas_v4_stage_b_recovery.py": "2a8495af120f34e86e309a9100f2e26f897b91d7e085f72a923abf5d8767a0bc",
+    "scripts/run_alpha_atlas_v4_stage_b_operational.py": "8cbe17aec68485c2c67a7552568bde82bd297a80dfd7f26d1b3ef1d4afbcf405"
+  },
+  "status": "IMPLEMENTED_AND_SYNTHETICALLY_VERIFIED_NOT_DEPLOYED_NOT_EXECUTED"
+}
