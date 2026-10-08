@@ -1819,3 +1819,25 @@ immutable provenance. Performance comparison execution remains pending review.
   and overall Stage B success remain unverified; premarket readiness and prospective
   eligibility are `NOT_TESTED`; readiness stays `COMPLETE —
   BLOCKED_STORAGE_AND_CACHE`; pilot, training, scoring, and trading remain disabled.
+
+## Stage B bounded continuation owner approval (2026-10-08)
+
+- [x] **One continuation approved in scope.** The owner accepts the unknown legacy
+  startup elapsed time and approves at most 55 minutes for the same single
+  `OPERATIONAL_VERIFICATION_ONLY` check, ending before 2026-10-09T04:00:00Z
+  (10:00 p.m. MDT in Utah on October 8). No automatic extension is permitted.
+- [x] **Existing accounting is preserved.** Six prior S3 operations remain consumed
+  against 512; Massive remains 5 expected/18 maximum within the persistent 3,789
+  cap; primary, backup, combined, and finalization reserves are unchanged. This is
+  not a separate run or a fresh allowance.
+- [x] **Approval finalization is exact and network-free.** The finalizer requires the
+  complete-canonical pin of the actual deployed-revision-bound prepared recovery,
+  verifies its source hashes, interval, budgets, and scope, and emits a new
+  no-clobber `AUTHORIZED_CONTINUATION_NOT_EXECUTED` artifact.
+- [ ] **Runtime evidence and executable artifact remain pending.** Deploy the repair,
+  pass the read-only recovery inspection, prepare the bound recovery, and run the
+  offline approval finalizer. The continuation has not executed; AWS/provider calls,
+  backup/restore completion, and overall Stage B success remain unverified.
+- [ ] Premarket readiness and prospective eligibility remain `NOT_TESTED`; readiness
+  remains `COMPLETE — BLOCKED_STORAGE_AND_CACHE`; pilot, training, scoring, and
+  trading remain disabled.

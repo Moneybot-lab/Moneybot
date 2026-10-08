@@ -19,6 +19,9 @@ ORIGINAL_AUTHORIZATION_PIN="45b196c97e55a2f7d81256f641c48471a7fe1fe1fbaa0c0636a8
 ORIGINAL_AUTHORIZATION_FILE_SHA256="20d8537ac18085ee7ee8ef539385a553c7a7f05ed0000edad4280ecbabd56ac2"
 EXPECTED_S3_CONFIGURATION_OPERATIONS=["HEAD_BUCKET","GET_BUCKET_LOCATION","GET_BUCKET_VERSIONING","GET_PUBLIC_ACCESS_BLOCK","GET_BUCKET_ENCRYPTION","GET_OBJECT_LOCK"]
 RECOVERY_OWNER_APPROVAL="APPROVED_FOR_SINGLE_STAGE_B_CONTINUATION"
+OWNER_APPROVED_CONTINUATION_CUTOFF=datetime(2026,10,9,4,0,tzinfo=UTC)
+RECOVERY_APPROVAL_SCOPE={"single_continuation":True,"maximum_runtime_minutes":55,
+                         "pilot":False,"training":False,"scoring":False,"trading":False}
 
 
 def _load_object(path: Path) -> tuple[dict[str,Any],bytes]:
@@ -124,10 +127,13 @@ def validate_recovery_authorization(value: Mapping[str,Any], *, expected_pin: st
             or value.get("single_continuation") is not True or value.get("independent_second_run") is not False
             or value.get("owner_accepts_unknown_legacy_elapsed") is not True):
         raise CaptureError("RECOVERY_NOT_AUTHORIZED")
+    if value.get("approval_scope")!=RECOVERY_APPROVAL_SCOPE or value.get("maximum_total_runtime_minutes")!=55:
+        raise CaptureError("RECOVERY_NOT_AUTHORIZED")
     if value.get("budgets")!=REGISTERED_BUDGETS or value.get("consumed_s3_operations")!=6 or value.get("massive_attempts_consumed")!=0:
         raise CaptureError("RECOVERY_BUDGET_MISMATCH")
     start=parse_utc_timestamp(value.get("execution_valid_from")); end=parse_utc_timestamp(value.get("execution_valid_until")); instant=now.astimezone(UTC)
-    if start>=end or instant<start or instant>=end: raise CaptureError("RECOVERY_INTERVAL_INVALID")
+    if start>=end or instant<start or instant>=end or end>OWNER_APPROVED_CONTINUATION_CUTOFF:
+        raise CaptureError("RECOVERY_INTERVAL_INVALID")
     revision=value.get("repaired_revision",{}); head=subprocess.run(["git","rev-parse","HEAD"],cwd=repo,check=True,text=True,capture_output=True).stdout.strip()
     if revision.get("git_commit")!=head: raise CaptureError("RECOVERY_REVISION_MISMATCH")
     for name,wanted in revision.get("source_file_sha256s",{}).items():

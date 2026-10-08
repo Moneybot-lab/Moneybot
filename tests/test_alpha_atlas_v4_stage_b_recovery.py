@@ -1,5 +1,5 @@
 from __future__ import annotations
-import hashlib,json,subprocess
+import hashlib,json,os,subprocess,sys
 from datetime import date,datetime,timezone
 from pathlib import Path
 import pytest
@@ -9,6 +9,7 @@ from moneybot.services.alpha_atlas_v4_stage_b import *
 from moneybot.services.alpha_atlas_v4_stage_b_recovery import *
 from scripts.approve_alpha_atlas_v4_stage_b_authorization import approve
 from scripts.prepare_alpha_atlas_v4_stage_b_post_deploy_authorization import prepare
+from scripts.approve_alpha_atlas_v4_stage_b_recovery import approve_recovery
 from scripts.run_alpha_atlas_v4_stage_b_offline import OfflineS3,OfflineTransport
 
 REPO=Path(__file__).resolve().parents[1]; UTC=timezone.utc
@@ -68,16 +69,16 @@ def test_prior_massive_or_continuation_blocks_and_claim_is_one_use(tmp_path):
         inspect_runtime_evidence(root,auth_path,fail,authorization_pin=pin,authorization_file_sha256=hashlib.sha256(raw).hexdigest(),now=RECOVERY_NOW)
     (root/'primary/acquisition_attempts.jsonl').unlink()
     report=inspect_runtime_evidence(root,auth_path,fail,authorization_pin=pin,authorization_file_sha256=hashlib.sha256(raw).hexdigest(),now=RECOVERY_NOW)
-    recovery=prepare_recovery_binding(REPO,report,valid_from='2026-10-08T11:00:00Z',valid_until='2026-10-09T12:00:00Z',now=RECOVERY_NOW)
-    recovery.pop('content_sha256'); recovery.update(status='APPROVED',execution_gate_usable=True,owner_approval=RECOVERY_OWNER_APPROVAL,stage_b_execution='AUTHORIZED_CONTINUATION_NOT_EXECUTED',owner_accepts_unknown_legacy_elapsed=True); recovery['content_sha256']=hashlib.sha256(canonical_bytes(recovery)).hexdigest()
+    recovery=prepare_recovery_binding(REPO,report,valid_from='2026-10-08T11:00:00Z',valid_until='2026-10-09T03:00:00Z',now=RECOVERY_NOW)
+    recovery.pop('content_sha256'); recovery.update(status='APPROVED',execution_gate_usable=True,owner_approval=RECOVERY_OWNER_APPROVAL,stage_b_execution='AUTHORIZED_CONTINUATION_NOT_EXECUTED',owner_accepts_unknown_legacy_elapsed=True,approval_scope=dict(RECOVERY_APPROVAL_SCOPE),owner_approved_until=OWNER_APPROVED_CONTINUATION_CUTOFF.isoformat()); recovery['content_sha256']=hashlib.sha256(canonical_bytes(recovery)).hexdigest()
     publish_continuation_claim(primary,recovery,now=RECOVERY_NOW)
     with pytest.raises(CaptureError,match='CONTINUATION_ALREADY_CLAIMED'): publish_continuation_claim(primary,recovery,now=RECOVERY_NOW)
 
 def test_end_to_end_preparation_and_guarded_synthetic_continuation(tmp_path,monkeypatch):
     root,auth_path,fail,auth,raw,pin=incident(tmp_path)
     report=inspect_runtime_evidence(root,auth_path,fail,authorization_pin=pin,authorization_file_sha256=hashlib.sha256(raw).hexdigest(),now=RECOVERY_NOW)
-    recovery=prepare_recovery_binding(REPO,report,valid_from='2026-10-08T11:00:00Z',valid_until='2026-10-09T12:00:00Z',now=RECOVERY_NOW)
-    recovery.pop('content_sha256'); recovery.update(status='APPROVED',execution_gate_usable=True,owner_approval=RECOVERY_OWNER_APPROVAL,stage_b_execution='AUTHORIZED_CONTINUATION_NOT_EXECUTED',owner_accepts_unknown_legacy_elapsed=True); recovery['content_sha256']=hashlib.sha256(canonical_bytes(recovery)).hexdigest()
+    recovery=prepare_recovery_binding(REPO,report,valid_from='2026-10-08T11:00:00Z',valid_until='2026-10-09T03:00:00Z',now=RECOVERY_NOW)
+    recovery.pop('content_sha256'); recovery.update(status='APPROVED',execution_gate_usable=True,owner_approval=RECOVERY_OWNER_APPROVAL,stage_b_execution='AUTHORIZED_CONTINUATION_NOT_EXECUTED',owner_accepts_unknown_legacy_elapsed=True,approval_scope=dict(RECOVERY_APPROVAL_SCOPE),owner_approved_until=OWNER_APPROVED_CONTINUATION_CUTOFF.isoformat()); recovery['content_sha256']=hashlib.sha256(canonical_bytes(recovery)).hexdigest()
     recovery_pin=authorization_hashes(recovery)['external_complete_canonical_sha256']; fixture=json.loads(FIXTURE_PATH.read_text())
     monkeypatch.setattr(stage_b,'REQUIRED_ROOT',str(root)); monkeypatch.setenv('MONEYBOT_PERSISTENT_DATA_DIR',str(root)); monkeypatch.setattr(stage_b,'storage_preflight',lambda root:{'root':str(root),'free_bytes':99999999})
     runner=StageBRunner(REPO,root,offline=False,approved_authorization_sha256=pin,operational_config_sha256=CONFIG['content_sha256'],fixture_name=FIXTURE_NAME,fixture_file_sha256=hashlib.sha256(FIXTURE_PATH.read_bytes()).hexdigest(),fixture_content_sha256=fixture['content_sha256'],session=date(2026,10,6),runtime_guard=lambda p:{'phase':p},now=lambda:RECOVERY_NOW)
@@ -89,8 +90,8 @@ def test_end_to_end_preparation_and_guarded_synthetic_continuation(tmp_path,monk
 def test_recovery_wrong_pin_revision_interval_and_no_overwrite(tmp_path):
     root,auth_path,fail,_,raw,pin=incident(tmp_path); report=inspect_runtime_evidence(root,auth_path,fail,authorization_pin=pin,authorization_file_sha256=hashlib.sha256(raw).hexdigest(),now=RECOVERY_NOW)
     with pytest.raises(CaptureError,match='RECOVERY_INTERVAL_INVALID'): prepare_recovery_binding(REPO,report,valid_from='2026-10-09T00:00:00Z',valid_until='2026-10-08T00:00:00Z',now=RECOVERY_NOW)
-    recovery=prepare_recovery_binding(REPO,report,valid_from='2026-10-08T11:00:00Z',valid_until='2026-10-09T12:00:00Z',now=RECOVERY_NOW)
-    recovery.pop('content_sha256'); recovery.update(status='APPROVED',execution_gate_usable=True,owner_approval=RECOVERY_OWNER_APPROVAL,stage_b_execution='AUTHORIZED_CONTINUATION_NOT_EXECUTED',owner_accepts_unknown_legacy_elapsed=True); recovery['content_sha256']=hashlib.sha256(canonical_bytes(recovery)).hexdigest()
+    recovery=prepare_recovery_binding(REPO,report,valid_from='2026-10-08T11:00:00Z',valid_until='2026-10-09T03:00:00Z',now=RECOVERY_NOW)
+    recovery.pop('content_sha256'); recovery.update(status='APPROVED',execution_gate_usable=True,owner_approval=RECOVERY_OWNER_APPROVAL,stage_b_execution='AUTHORIZED_CONTINUATION_NOT_EXECUTED',owner_accepts_unknown_legacy_elapsed=True,approval_scope=dict(RECOVERY_APPROVAL_SCOPE),owner_approved_until=OWNER_APPROVED_CONTINUATION_CUTOFF.isoformat()); recovery['content_sha256']=hashlib.sha256(canonical_bytes(recovery)).hexdigest()
     with pytest.raises(CaptureError,match='HASH_MISMATCH'): validate_recovery_authorization(recovery,expected_pin='0'*64,now=RECOVERY_NOW,repo=REPO)
 
 def test_initialization_failure_reports_completed_s3_without_masking(tmp_path):
@@ -107,3 +108,54 @@ def test_initialization_failure_reports_completed_s3_without_masking(tmp_path):
     assert report['failing_phase']=='MASSIVE_TRANSPORT_INITIALIZATION'
     assert report['execution_claim_exists'] is True and report['acquisition_started'] is False
     assert report['activity']['s3']['RESERVED']==6 and report['activity']['massive']['RESERVED']==0
+
+def test_owner_approved_recovery_finalizer_binds_cutoff_scope_and_real_preflight(tmp_path,monkeypatch):
+    root,auth_path,fail,auth,raw,pin=incident(tmp_path)
+    report=inspect_runtime_evidence(root,auth_path,fail,authorization_pin=pin,
+                                    authorization_file_sha256=hashlib.sha256(raw).hexdigest(),now=RECOVERY_NOW)
+    prepared=prepare_recovery_binding(REPO,report,valid_from='2026-10-08T13:00:00Z',
+                                      valid_until='2026-10-09T04:00:00Z',now=RECOVERY_NOW)
+    prepared_pin=authorization_hashes(prepared)['external_complete_canonical_sha256']
+    approved=approve_recovery(REPO,canonical_bytes(prepared),expected_prepared_pin=prepared_pin,now=RECOVERY_NOW)
+    prepared_path=tmp_path/'recovery.prepared.json'; prepared_path.write_text(json.dumps(prepared,indent=2,sort_keys=True)+'\n')
+    cli_output=tmp_path/'recovery.approved.json'; env=os.environ.copy(); env.pop('PYTHONPATH',None)
+    cli=subprocess.run([sys.executable,'-m','scripts.approve_alpha_atlas_v4_stage_b_recovery',
+        '--prepared-recovery',str(prepared_path),'--prepared-recovery-sha256',prepared_pin,
+        '--output',str(cli_output)],cwd=REPO,env=env,text=True,capture_output=True,check=True)
+    assert json.loads(cli.stdout)['status']=='APPROVED' and json.loads(cli_output.read_text())['stage_b_execution']=='AUTHORIZED_CONTINUATION_NOT_EXECUTED'
+    approved_pin=authorization_hashes(approved)['external_complete_canonical_sha256']
+    assert approved['approval_scope']==RECOVERY_APPROVAL_SCOPE
+    assert approved['owner_accepts_unknown_legacy_elapsed'] is True
+    assert approved['execution_valid_until']=='2026-10-09T04:00:00+00:00'
+    fixture=json.loads(FIXTURE_PATH.read_text())
+    monkeypatch.setattr(stage_b,'REQUIRED_ROOT',str(root)); monkeypatch.setenv('MONEYBOT_PERSISTENT_DATA_DIR',str(root))
+    monkeypatch.setattr(stage_b,'storage_preflight',lambda root:{'root':str(root),'free_bytes':99999999})
+    runner=StageBRunner(REPO,root,offline=False,approved_authorization_sha256=pin,
+                        operational_config_sha256=CONFIG['content_sha256'],fixture_name=FIXTURE_NAME,
+                        fixture_file_sha256=hashlib.sha256(FIXTURE_PATH.read_bytes()).hexdigest(),
+                        fixture_content_sha256=fixture['content_sha256'],session=date(2026,10,6),
+                        runtime_guard=lambda p:{'phase':p},now=lambda:datetime(2026,10,8,14,tzinfo=UTC))
+    plan,_=runner.preflight_continuation(auth,approved,approved_pin,PROXY)
+    assert plan['hard_runtime_minutes']==55
+
+def test_owner_approval_rejects_later_cutoff_and_wrong_pin(tmp_path):
+    root,auth_path,fail,_,raw,pin=incident(tmp_path)
+    report=inspect_runtime_evidence(root,auth_path,fail,authorization_pin=pin,
+                                    authorization_file_sha256=hashlib.sha256(raw).hexdigest(),now=RECOVERY_NOW)
+    prepared=prepare_recovery_binding(REPO,report,valid_from='2026-10-08T13:00:00Z',
+                                      valid_until='2026-10-09T05:00:00Z',now=RECOVERY_NOW)
+    prepared_pin=authorization_hashes(prepared)['external_complete_canonical_sha256']
+    with pytest.raises(CaptureError,match='OUTSIDE_OWNER_APPROVAL'):
+        approve_recovery(REPO,canonical_bytes(prepared),expected_prepared_pin=prepared_pin,now=RECOVERY_NOW)
+    with pytest.raises(CaptureError,match='PIN_MISMATCH'):
+        approve_recovery(REPO,canonical_bytes(prepared),expected_prepared_pin='0'*64,now=RECOVERY_NOW)
+
+def test_recovery_approval_cli_never_overwrites(tmp_path):
+    prepared=tmp_path/'prepared.json'; prepared.write_text('{}')
+    output=tmp_path/'approved.json'; output.write_text('preserve')
+    env=os.environ.copy(); env.pop('PYTHONPATH',None)
+    run=subprocess.run([sys.executable,'-m','scripts.approve_alpha_atlas_v4_stage_b_recovery',
+        '--prepared-recovery',str(prepared),'--prepared-recovery-sha256','0'*64,
+        '--output',str(output)],cwd=REPO,env=env,text=True,capture_output=True)
+    assert run.returncode!=0 and 'RECOVERY_OUTPUT_EXISTS' in run.stderr
+    assert output.read_text()=='preserve'
