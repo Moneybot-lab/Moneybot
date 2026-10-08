@@ -337,10 +337,10 @@ def test_adapter_only_get_with_retries_disabled(monkeypatch):
             return canonical_bytes(healthy()[0])
         def close(self):
             pass
-    def create(url, **kwargs):
-        config.update(kwargs)
+    def create(*, connection_pool):
+        config.update(connection_pool.connection_kwargs)
         return Client()
-    monkeypatch.setattr(redis.Redis, 'from_url', create)
+    monkeypatch.setattr(redis, 'Redis', create)
     reader = m.RedisHealthReader('redis://test-only.invalid')
     assert reader()['schema_version'] == m.STREAM_SCHEMA_VERSION
     assert reads == [m.HEALTH_KEY]
@@ -356,7 +356,7 @@ def test_adapter_errors_are_redacted_and_snapshot_size_is_bounded(monkeypatch):
     class Client:
         def get(self, key):
             return b'x' * (m.MAX_SNAPSHOT+1)
-    monkeypatch.setattr(redis.Redis, 'from_url', lambda *a, **kw: Client())
+    monkeypatch.setattr(redis, 'Redis', lambda **kw: Client())
     with pytest.raises(CaptureError, match='HEALTH_READ_ERROR'):
         m.RedisHealthReader('redis://password@example.invalid')()
 
@@ -398,3 +398,118 @@ def test_schema_validation_rejects_wrong_version_even_with_matching_checksums(tm
     (output/'SHA256SUMS').write_text('\n'.join(lines)+'\n')
     with pytest.raises(CaptureError, match='INTEGRITY'):
         m.verify_evidence(output)
+
+
+@pytest.mark.parametrize('option', [
+    'socket_timeout=99', 'socket_connect_timeout=99', 'retry_on_timeout=true',
+    'retry_on_error=ConnectionError', 'retry=anything', 'health_check_interval=5',
+    'lib_name=foo', 'lib_version=foo', 'client_name=foo', 'protocol=3',
+    'socket_keepalive=true', 'socket_keepalive_options=anything', 'max_connections=99',
+    'connection_class=anything', 'credential_provider=anything', 'parser_class=anything',
+    'ssl_validate_ocsp=true', 'ssl_validate_ocsp_stapled=true', 'host=other.invalid',
+    'port=9999', 'path=/tmp/redis.sock', 'socket_timeout=2', 'health_check_interval=0',
+    '%73ocket_timeout=99', 'socket_timeout=', 'unknown_option=anything',
+    'db=1&db=2', 'db=1&%64b=1', 'db=-1', 'db=nope', 'db=',
+    'ssl_cert_reqs=none', 'ssl_cert_reqs=optional', 'ssl_check_hostname=false',
+    'ssl_certfile=/tmp/cert-only', 'ssl_keyfile=/tmp/key-only',
+    'password=query-auth-not-supported', 'username=query-auth-not-supported',
+])
+def test_redis_unsafe_url_options_rejected_before_any_construction(monkeypatch, option):
+    import redis
+    def forbidden(*args, **kwargs):
+        pytest.fail('client/pool construction occurred before unsafe option rejection')
+    monkeypatch.setattr(redis, 'Redis', forbidden)
+    monkeypatch.setattr(redis, 'ConnectionPool', forbidden)
+    with pytest.raises(CaptureError, match='MONITOR_REDIS_CONFIGURATION_INVALID'):
+        m.RedisHealthReader('rediss://owner:SECRET@test-only.invalid/?'+option)
+
+
+@pytest.mark.parametrize('url', [
+    'unix:///tmp/redis.sock', 'http://test-only.invalid', 'redis://',
+    'redis://test-only.invalid/1?db=2', 'redis://test-only.invalid/not-a-db',
+    'redis://test-only.invalid/#fragment', 'redis://test-only.invalid/?ssl_ca_certs=/tmp/ca',
+    'redis://test-only.invalid\n?db=1',
+])
+def test_redis_ambiguous_or_unsupported_urls_are_rejected(url):
+    with pytest.raises(CaptureError, match='MONITOR_REDIS_CONFIGURATION_INVALID'):
+        m.RedisHealthReader(url)
+
+
+def test_actual_redis_py_url_precedence_reproduces_original_p1_without_network():
+    import redis
+    pool = redis.ConnectionPool.from_url(
+        'redis://test-only.invalid?socket_timeout=99&socket_connect_timeout=98&health_check_interval=5&lib_name=foo&protocol=3',
+        socket_timeout=2, socket_connect_timeout=2, health_check_interval=0, lib_name=None, protocol=2)
+    options = pool.connection_kwargs
+    assert options['socket_timeout'] == 99 and options['socket_connect_timeout'] == 98
+    assert options['health_check_interval'] == 5 and options['lib_name'] == 'foo'
+    assert options['protocol'] == '3'
+    with pytest.raises(CaptureError, match='CONFIGURATION_INVALID'):
+        m.RedisHealthReader('redis://test-only.invalid?socket_timeout=99&socket_connect_timeout=98&health_check_interval=5&lib_name=foo&protocol=3')
+
+
+@pytest.mark.parametrize('url', [
+    'redis://user:p%40ss@test-only.invalid:6380/3',
+    'redis://user:p%40ss@test-only.invalid:6380/?db=3',
+    'rediss://user:p%40ss@test-only.invalid:6380/3?ssl_cert_reqs=required&ssl_check_hostname=true',
+    'rediss://user:p%40ss@test-only.invalid:6380/3?ssl_ca_certs=%2Ftmp%2Fca.pem&ssl_certfile=%2Ftmp%2Fcert.pem&ssl_keyfile=%2Ftmp%2Fkey.pem',
+])
+def test_real_pool_retains_auth_tls_db_and_enforces_bounds_without_network(url):
+    from redis.connection import SSLConnection
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    reader = m.RedisHealthReader(url)
+    pool = reader.client.connection_pool
+    options = pool.connection_kwargs
+    assert options['username'] == 'user' and options['password'] == 'p@ss'
+    assert options['host'] == 'test-only.invalid' and options['port'] == 6380 and options['db'] == 3
+    assert options['socket_timeout'] == options['socket_connect_timeout'] == 2
+    assert options['retry_on_timeout'] is False and options['retry_on_error'] == []
+    assert options['health_check_interval'] == 0 and options['protocol'] == 2
+    assert options['client_name'] is options['lib_name'] is options['lib_version'] is None
+    assert pool.max_connections == 1
+    if url.startswith('rediss:'):
+        assert pool.connection_class is SSLConnection
+        assert options['ssl_cert_reqs'] == 'required' and options['ssl_check_hostname'] is True
+    connection = pool.make_connection()  # Constructs only, never connects.
+    calls = []
+    assert connection.retry.call_with_retry(lambda: calls.append('once') or 'ok', lambda _: None) == 'ok'
+    assert calls == ['once']
+    attempts = []
+    def fail():
+        attempts.append('attempt')
+        raise RedisConnectionError('synthetic failure')
+    with pytest.raises(RedisConnectionError):
+        connection.retry.call_with_retry(fail, lambda _: None)
+    assert len(attempts) == 1
+    reader.close()
+
+
+def test_real_redis_connection_handshake_only_auth_select_no_ping_or_client_commands(monkeypatch):
+    reader = m.RedisHealthReader('redis://user:pass@test-only.invalid/3')
+    connection = reader.client.connection_pool.make_connection()
+    commands = []
+    class Parser:
+        def on_connect(self, connection):
+            pass
+    connection._parser = Parser()
+    monkeypatch.setattr(connection, 'send_command', lambda *args, **kwargs: commands.append(args))
+    monkeypatch.setattr(connection, 'read_response', lambda: b'OK')
+    connection.on_connect_check_health()
+    connection.check_health()
+    assert commands == [('AUTH', 'user', 'pass'), ('SELECT', 3)]
+    reader.close()
+
+
+def test_rejected_redis_url_exception_never_exposes_credentials():
+    secret = 'MY_SECRET_VALUE'
+    with pytest.raises(CaptureError) as error:
+        m.RedisHealthReader(f'redis://owner:{secret}@test-only.invalid?socket_timeout=99')
+    assert secret not in str(error.value) and 'test-only.invalid' not in str(error.value)
+
+
+def test_reader_closes_its_explicit_pool_without_network(monkeypatch):
+    reader = m.RedisHealthReader('redis://test-only.invalid')
+    closed = []
+    monkeypatch.setattr(reader.pool, 'disconnect', lambda: closed.append(True))
+    reader.close()
+    assert closed == [True]
