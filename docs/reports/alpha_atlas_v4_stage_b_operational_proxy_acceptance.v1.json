@@ -1,0 +1,30 @@
+{
+  "accepted_scope": {
+    "clarification_content_sha256": "5aee330cf3aaab0c10c6b287bce1c5221100863891c536ca050f9b53e2e25661",
+    "context_proxy": "XLK",
+    "fixture_content_sha256": "579013c85367c75f8a821aa30c75fe9cd261080a9c8060cfcd94af3d958499e9",
+    "historical_data_as_of": "2026-10-06",
+    "relationship_type": "EXPERIMENTAL_CONTEXT_PROXY",
+    "ticker": "AAPL"
+  },
+  "authorization": {
+    "aws_requests": false,
+    "deployment": false,
+    "execute_stage_b": false,
+    "pilot": false,
+    "prepare_package": true,
+    "provider_requests": false
+  },
+  "content_sha256": "98aae81badb2bb6d5b43f600b6ee9fc70e49668e40cbc1e974db49b386e21a42",
+  "execution_purpose": "OPERATIONAL_VERIFICATION_ONLY",
+  "preserved_requirements": [
+    "No ETF constituent-membership claim",
+    "No verified sector-classification claim",
+    "Six aligned stock/context observations and unchanged formula",
+    "Request 4 security-level identity; CIK alone insufficient",
+    "History remains quarantined until identity resolution"
+  ],
+  "recorded_date": "2026-10-07",
+  "schema_version": "alpha-atlas-v4-stage-b-operational-proxy-acceptance.v1",
+  "status": "OWNER_ACCEPTED_FOR_OPERATIONAL_VERIFICATION_ONLY"
+}

@@ -1,0 +1,46 @@
+{
+  "acquisition_cutoff": {
+    "America/Denver": "2026-10-26T05:30:00-06:00",
+    "America/New_York": "2026-10-26T07:30:00-04:00",
+    "utc": "2026-10-26T11:30:00Z"
+  },
+  "budgets": {
+    "backup_cap_bytes": 4067328,
+    "combined_cap_bytes": 8134656,
+    "cumulative_massive_cap": 3789,
+    "expected_massive_attempts": 5,
+    "maximum_massive_attempts": 18,
+    "primary_cap_bytes": 4067328,
+    "s3_operation_cap": 512
+  },
+  "content_sha256": "1e2f41109071c1b3e9cf27a6fe3547500bed569b9d969ea4f0a3d0c2f246eb56",
+  "execution_gate_usable": false,
+  "fixture": {
+    "content_sha256": "f9bea723771f2156674c45a7e035a2dae1b70f53324128ec7092f9aa9f30ebd7",
+    "file_sha256": "f2d1ed7817123656930a4d36560f5e2c6f9d9a87e70cd22d4aeaabeca045ef88",
+    "path": "docs/reports/alpha_atlas_v4_stage_b_verification_manifest.v2.json"
+  },
+  "implementation_revision": {
+    "base_git_commit": "21b8c42",
+    "files": {
+      "moneybot/services/alpha_atlas_v4_stage_b.py": "4d5cc00a8e958619591ad052794a49d1310a4a5b98d1070b3b1644b9475ac4c2",
+      "scripts/run_alpha_atlas_v4_stage_b_operational.py": "00a9cf1a939a1c5d65467b209ec302b98bfde6b3e7c31cdd734f75b3778900fc"
+    }
+  },
+  "live_requests": 0,
+  "mode": "LIVE",
+  "operational_config": {
+    "content_sha256": "c33217363d3be4a0cee9107f18bc4b73ca0534814d25897a7cb9702fd28d9186",
+    "file_sha256": "0b7ef94a1a3ff023f01466a94e1b53d321608ff6c5e968e4a802d246b03c0f28",
+    "path": "docs/reports/alpha_atlas_v4_stage_b_runtime_config.owner-bound.v1.json"
+  },
+  "owner_approval": "NOT_GIVEN",
+  "required_manual_location": "Render service moneybot-market-stream using its mounted /var/data disk; not GitHub Actions and not a diskless one-off job.",
+  "schema_version": "alpha-atlas-v4-stage-b-execution-authorization.v1",
+  "sector_evidence_sha256": null,
+  "sector_gate": "BLOCKED: obtain authoritative evidence applicable to 2026-10-26 before approval; do not extrapolate 2026-10-05 holdings.",
+  "session": "2026-10-26",
+  "setup_package_sha256": "3524360467fbd47a3eeb7dfbd4252d82dfda9b407354a2807268d6acb5ba5a79",
+  "stage_b_execution": "NOT_AUTHORIZED_NOT_EXECUTED",
+  "status": "PREPARED_FOR_REVIEW_NOT_APPROVED"
+}

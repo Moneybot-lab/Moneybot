@@ -1,0 +1,29 @@
+{
+  "accepted_scope": {
+    "clarification_content_sha256": "8f793c3cecc189f294fc911a70c71ae393f95c623173474a5c69477227c07ddb",
+    "context_proxy": "XLK",
+    "fixture_content_sha256": "b22907c9036e3f7476ffa35e6601caaefb810e311050f6457d7d5ff4b3041885",
+    "relationship_type": "EXPERIMENTAL_CONTEXT_PROXY",
+    "session": "2026-10-20",
+    "ticker": "AAPL"
+  },
+  "authorization": {
+    "deploy_to": "moneybot-market-stream",
+    "execute_stage_b": false,
+    "merge": true,
+    "pilot": false,
+    "prepare_post_deploy_authorization": true,
+    "scoring": false,
+    "training": false
+  },
+  "content_sha256": "a254c4f786d8dc725f5ab969080878868a8b15e20d7b7641a2ee4dc09fed41ba",
+  "limitations": [
+    "Acceptance does not assert XLK constituent membership or AAPL sector classification.",
+    "Deployment must preserve the worker start command and schedules.",
+    "The final execution authorization must bind the observed deployed Git revision and remains separately unapproved until owner review."
+  ],
+  "owner_statement": "I accept AAPL\u2192XLK as the experimental context proxy for the October 20 Stage B verification. I authorize merging and deploying the reviewed package to moneybot-market-stream, then preparing the final authorization bound to the actual deployed revision. Do not execute Stage B yet.",
+  "recorded_date": "2026-10-07",
+  "schema_version": "alpha-atlas-v4-stage-b-owner-proxy-acceptance.v1",
+  "status": "OWNER_ACCEPTED_PROXY_AND_AUTHORIZED_DEPLOYMENT_NOT_EXECUTION"
+}

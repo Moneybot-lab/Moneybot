@@ -1,0 +1,274 @@
+{
+  "budget": {
+    "allocation_formula": "3 histories*3 + 1 identity*3 + 2 split pages*3 = 18",
+    "automatic_repeat": false,
+    "backup_cap_bytes": 4067328,
+    "combined_cap_bytes": 8134656,
+    "cumulative_ledger_cap": 3789,
+    "expected_attempts": 5,
+    "maximum_attempts": 18,
+    "primary_cap_bytes": 4067328,
+    "stage_b_evidence_cap_bytes_each_copy": 4067328
+  },
+  "content_sha256": "579013c85367c75f8a821aa30c75fe9cd261080a9c8060cfcd94af3d958499e9",
+  "context_symbols": [
+    "SPY",
+    "XLK"
+  ],
+  "deadline": {
+    "historical_premarket_deadlines": "NOT_TESTED_NOT_APPLICABLE_TO_OPERATIONAL_EXECUTION",
+    "operational_execution_validity": "BOUND_BY_SEPARATE_UNAPPROVED_AUTHORIZATION",
+    "prospective_rules_preserved": "07:30 acquisition; 07:30-07:45 validation; 07:45 bind; 07:45-08:30 assembly; 08:40 ready; 08:45 decision"
+  },
+  "does_not_supersede_historical_evidence": [
+    "alpha_atlas_v4_stage_b_verification_manifest.v1.json",
+    "alpha_atlas_v4_stage_b_verification_manifest.v2.json",
+    "alpha_atlas_v4_stage_b_verification_manifest.v3.json"
+  ],
+  "execution_purpose": "OPERATIONAL_VERIFICATION_ONLY",
+  "historical_data_as_of": "2026-10-06",
+  "history_window": {
+    "calendar": "repository ExchangeCalendar / XNYS",
+    "count": 75,
+    "from": "2026-06-22",
+    "inclusive_definition": "All 75 eligible XNYS sessions from 2026-06-22 through and including completed session 2026-10-06; excludes 2026-10-07 and all later sessions.",
+    "no_extension": true,
+    "no_runtime_roll": true,
+    "ordered_sessions": [
+      "2026-06-22",
+      "2026-06-23",
+      "2026-06-24",
+      "2026-06-25",
+      "2026-06-26",
+      "2026-06-29",
+      "2026-06-30",
+      "2026-07-01",
+      "2026-07-02",
+      "2026-07-06",
+      "2026-07-07",
+      "2026-07-08",
+      "2026-07-09",
+      "2026-07-10",
+      "2026-07-13",
+      "2026-07-14",
+      "2026-07-15",
+      "2026-07-16",
+      "2026-07-17",
+      "2026-07-20",
+      "2026-07-21",
+      "2026-07-22",
+      "2026-07-23",
+      "2026-07-24",
+      "2026-07-27",
+      "2026-07-28",
+      "2026-07-29",
+      "2026-07-30",
+      "2026-07-31",
+      "2026-08-03",
+      "2026-08-04",
+      "2026-08-05",
+      "2026-08-06",
+      "2026-08-07",
+      "2026-08-10",
+      "2026-08-11",
+      "2026-08-12",
+      "2026-08-13",
+      "2026-08-14",
+      "2026-08-17",
+      "2026-08-18",
+      "2026-08-19",
+      "2026-08-20",
+      "2026-08-21",
+      "2026-08-24",
+      "2026-08-25",
+      "2026-08-26",
+      "2026-08-27",
+      "2026-08-28",
+      "2026-08-31",
+      "2026-09-01",
+      "2026-09-02",
+      "2026-09-03",
+      "2026-09-04",
+      "2026-09-08",
+      "2026-09-09",
+      "2026-09-10",
+      "2026-09-11",
+      "2026-09-14",
+      "2026-09-15",
+      "2026-09-16",
+      "2026-09-17",
+      "2026-09-18",
+      "2026-09-21",
+      "2026-09-22",
+      "2026-09-23",
+      "2026-09-24",
+      "2026-09-25",
+      "2026-09-28",
+      "2026-09-29",
+      "2026-09-30",
+      "2026-10-01",
+      "2026-10-02",
+      "2026-10-05",
+      "2026-10-06"
+    ],
+    "ordered_sessions_sha256": "6b1ad71f708834049f89f168bff3650c6b74dc15664111bc944e832e5343b663",
+    "to": "2026-10-06"
+  },
+  "requests_in_order": [
+    {
+      "expected_attempts": 1,
+      "family": "history",
+      "max_attempts": 3,
+      "method": "GET",
+      "number": 1,
+      "page_cap": 1,
+      "params": {
+        "adjusted": "false",
+        "limit": "50000",
+        "sort": "asc"
+      },
+      "path": "/v2/aggs/ticker/AAPL/range/1/day/2026-06-22/2026-10-06",
+      "request_id": "history:AAPL",
+      "response_limit_bytes": 262144
+    },
+    {
+      "expected_attempts": 1,
+      "family": "history",
+      "max_attempts": 3,
+      "method": "GET",
+      "number": 2,
+      "page_cap": 1,
+      "params": {
+        "adjusted": "false",
+        "limit": "50000",
+        "sort": "asc"
+      },
+      "path": "/v2/aggs/ticker/SPY/range/1/day/2026-06-22/2026-10-06",
+      "request_id": "history:SPY",
+      "response_limit_bytes": 262144
+    },
+    {
+      "expected_attempts": 1,
+      "family": "history",
+      "max_attempts": 3,
+      "method": "GET",
+      "number": 3,
+      "page_cap": 1,
+      "params": {
+        "adjusted": "false",
+        "limit": "50000",
+        "sort": "asc"
+      },
+      "path": "/v2/aggs/ticker/XLK/range/1/day/2026-06-22/2026-10-06",
+      "request_id": "history:XLK",
+      "response_limit_bytes": 262144
+    },
+    {
+      "expected_attempts": 1,
+      "family": "identity",
+      "max_attempts": 3,
+      "method": "GET",
+      "number": 4,
+      "page_cap": 1,
+      "params": {
+        "date": "2026-10-06"
+      },
+      "path": "/v3/reference/tickers/AAPL",
+      "request_id": "identity:AAPL",
+      "response_limit_bytes": 32768
+    },
+    {
+      "attempts_per_page": 3,
+      "expected_attempts": 1,
+      "family": "splits",
+      "filter_symbols": [
+        "AAPL",
+        "SPY",
+        "XLK"
+      ],
+      "incomplete_rule": "next_url after page 2 => INCOMPLETE_PAGINATION and stop",
+      "max_attempts": 6,
+      "method": "GET",
+      "number": 5,
+      "page_cap": 2,
+      "params": {
+        "execution_date.gte": "2026-06-22",
+        "execution_date.lte": "2026-10-06",
+        "limit": "5000",
+        "sort": "execution_date.asc"
+      },
+      "path": "/stocks/v1/splits",
+      "request_id": "splits:global",
+      "response_limit_bytes": 262144
+    }
+  ],
+  "schema_version": "alpha-atlas-v4-stage-b-operational-verification-manifest.v1",
+  "scope": "ONE_STOCK_OPERATIONAL_FIXTURE_NOT_PILOT_UNIVERSE",
+  "sector_context": {
+    "AAPL": {
+      "claims_constituent_membership": false,
+      "claims_sector_classification": false,
+      "clarification_content_sha256": "5aee330cf3aaab0c10c6b287bce1c5221100863891c536ca050f9b53e2e25661",
+      "clarification_file_sha256": "6bb84d9acfae889ee2be6ec3c9d202e079256b361f0d05f24dff5d92399361ef",
+      "clarification_path": "docs/reports/alpha_atlas_v4_stage_b_operational_purpose_clarification.v1.json",
+      "context_proxy": "XLK",
+      "relationship_type": "EXPERIMENTAL_CONTEXT_PROXY",
+      "status": "OWNER_ACCEPTANCE_REQUIRED_FOR_REPLACEMENT_SCOPE"
+    }
+  },
+  "selection_limitations": [
+    "outcome-independent and deterministic",
+    "not selected by score, return, access result, or current availability",
+    "one stock cannot establish representativeness or approve the later <=50-stock pilot universe",
+    "This proposed 2026-10-20 session must not run unless a final authorization approves this exact fixture and accepts the bound proxy clarification."
+  ],
+  "selection_rule": "From moneybot.services.alpha_atlas_v4_phase1.probe_plan(), select the lexically first symbol whose pre-registered case is active_security; do not inspect probe results. This yields AAPL. Use the pre-registered market context SPY and sector_etf XLK as shared context only.",
+  "source_attribution": {
+    "issuer_identity": {
+      "observed": "CIK 0000320193; Common Stock; ticker AAPL; Nasdaq",
+      "scope": "issuer/listing support only; not a permanent share-class identifier",
+      "source": "Apple Inc. 2025 Form 10-K filed with SEC",
+      "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019325000079/aapl-20250927.htm"
+    },
+    "saved_access_evidence": {
+      "path": "docs/reports/alpha_atlas_v4_phase1_preflight.json",
+      "sha256": "558e754a6a9b9ab28cdaf593083ba7706de88762e466660880804e146506db91",
+      "use": "context only; not used to select the stock"
+    },
+    "sector_mapping": {
+      "clarification": "docs/reports/alpha_atlas_v4_stage_b_sector_proxy_clarification.v1.json",
+      "clarification_file_sha256": "35109bd3b4836bf73cd39f785b0142c587f61fd5295a2fdf8295d62c6ba6c2e6",
+      "scope": "XLK is a fixed context proxy only; no membership, classification, or identity claim",
+      "source": "Owner-selected Stage B experiment configuration"
+    },
+    "selection_definition": {
+      "function": "probe_plan",
+      "path": "moneybot/services/alpha_atlas_v4_phase1.py",
+      "registered_cases": [
+        "active_security:AAPL",
+        "spy_context:SPY",
+        "sector_etf:XLK"
+      ],
+      "sha256": "fd66fe6fff38bbe8cbe524c21de09072fd5615095ef820054c398a596bc0f725"
+    }
+  },
+  "status": "PREPARED_FOR_REVIEW_NOT_AUTHORIZED_NOT_EXECUTED",
+  "stocks": [
+    "AAPL"
+  ],
+  "supersedes_proposal": "docs/reports/alpha_atlas_v4_stage_b_verification_manifest.v2.json",
+  "supersedes_proposed_execution_path": "docs/reports/alpha_atlas_v4_stage_b_verification_manifest.v3.json",
+  "timezone": "America/New_York",
+  "typed_identities": {
+    "AAPL": {
+      "gate": "Request 4 must return an unambiguous provider security identity consistent with AAPL/Common Stock/Nasdaq; issuer CIK alone is insufficient.",
+      "issuer_id": {
+        "type": "SEC_CIK",
+        "value": "0000320193"
+      },
+      "security_id": null,
+      "status": "PENDING_REQUEST_4"
+    }
+  },
+  "verification_session": "2026-10-06"
+}
