@@ -1,0 +1,74 @@
+{
+  "authorization": "NONE_CREATED_OR_APPROVED",
+  "confirmed_defect": "The prior binder omitted setup_package_sha256 although validate_authorization requires its equality to SETUP_PACKAGE_FILE_SHA256, so an approved derivative would fail AUTHORIZATION_BINDING_MISMATCH.",
+  "content_sha256": "0f07ad280438be540497c18c6ab4b929bdc2d15dac73ffd65b0a0dc095f6ede5",
+  "deployed": false,
+  "existing_runtime_prepared_file": {
+    "inspected_or_modified": false,
+    "path": "/var/data/moneybot-stage-b/authorization/stage-b-operational-2026-10-06.prepared.json",
+    "preserved_unchanged": true
+  },
+  "hash_semantics": {
+    "A_internal_content_sha256": "SHA-256 of canonical JSON after removing content_sha256.",
+    "B_external_approved_authorization_pin": "SHA-256 of complete canonical authorization including content_sha256; StageBRunner compares this value.",
+    "C_file_byte_sha256": "SHA-256 of exact saved file bytes; formatting-sensitive and not interchangeable with B.",
+    "approval_effect": "Approval changes document content, so A, B, and C must be recomputed and the new B independently pinned."
+  },
+  "implementation_source_sha256s": {
+    "moneybot/services/alpha_atlas_v4_stage_b.py": "91b545358d79574972a7bb3fbe10165535122a92cb04ffd86a1b47571e45a61a",
+    "scripts/inspect_alpha_atlas_v4_stage_b_authorization.py": "aceed5d80875b8c5cacae0f3c1bbc5bd6dc99ea0008c73bb7baf100c096207c0",
+    "scripts/prepare_alpha_atlas_v4_stage_b_post_deploy_authorization.py": "51e8f9140d2fa2706181d1e6986e86c885a02805504de5a996af59a19223a41d"
+  },
+  "live_requests": 0,
+  "observed_deployed_revision": "e45184577233a2f5fdf4f825d50f58c8a445e407",
+  "offline_regression": {
+    "credential_reads": 0,
+    "execution_claims": 0,
+    "ledger_reservations": 0,
+    "network_clients_created": 0,
+    "real_binder_output_unapproved": true,
+    "test_only_approved_copy_actual_live_preflight_passed": true,
+    "unapproved_live_preflight_rejected": true
+  },
+  "preserved": {
+    "budgets": {
+      "backup_cap_bytes": 4067328,
+      "combined_cap_bytes": 8134656,
+      "cumulative_massive_cap": 3789,
+      "expected_massive_attempts": 5,
+      "maximum_massive_attempts": 18,
+      "primary_cap_bytes": 4067328,
+      "s3_operation_cap": 512
+    },
+    "execution_purpose": "OPERATIONAL_VERIFICATION_ONLY",
+    "fixture_content_sha256": "579013c85367c75f8a821aa30c75fe9cd261080a9c8060cfcd94af3d958499e9",
+    "historical_data_as_of": "2026-10-06",
+    "premarket_timing_readiness": "NOT_TESTED",
+    "prospective_snapshot_eligibility": "NOT_TESTED",
+    "proxy_content_sha256": "ba59fd773cd8be78816280e3a16a02bb3b83fcff8b3a92e5299eb78ceae28fc4",
+    "runtime_config_file_sha256": "0b7ef94a1a3ff023f01466a94e1b53d321608ff6c5e968e4a802d246b03c0f28"
+  },
+  "recorded_at": "2026-10-07T12:00:00Z",
+  "repair": {
+    "approved_state_schema": {
+      "execution_gate_usable": true,
+      "mode": "LIVE",
+      "owner_accepts_sector_proxy_clarification": true,
+      "owner_approval": "APPROVED_FOR_SINGLE_STAGE_B_OPERATIONAL_VERIFICATION",
+      "stage_b_execution": "AUTHORIZED_NOT_EXECUTED",
+      "status": "APPROVED"
+    },
+    "explicit_interval_arguments": [
+      "--execution-valid-from",
+      "--execution-valid-until"
+    ],
+    "no_overwrite": true,
+    "prepared_state": "PREPARED_FOR_EXECUTION_APPROVAL_NOT_APPROVED",
+    "setup_bytes_verified_before_emit": true,
+    "setup_hash_semantics": "SHA-256 of exact registered setup-package file bytes, matching SETUP_PACKAGE_FILE_SHA256.",
+    "setup_package_sha256": "3524360467fbd47a3eeb7dfbd4252d82dfda9b407354a2807268d6acb5ba5a79"
+  },
+  "schema_version": "alpha-atlas-v4-stage-b-binder-repair.v1",
+  "stage_b_executed": false,
+  "status": "IMPLEMENTED_AND_OFFLINE_VERIFIED_NOT_DEPLOYED_NOT_EXECUTED"
+}

@@ -1,0 +1,54 @@
+{
+  "accounting": {
+    "backup_cap_bytes": 4067328,
+    "combined_cap_bytes": 8134656,
+    "massive_attempts_already_consumed": 0,
+    "massive_cumulative_cap": 3789,
+    "massive_expected_attempts": 5,
+    "massive_maximum_attempts": 18,
+    "primary_cap_bytes": 4067328,
+    "s3_operation_cap": 512,
+    "s3_operations_already_consumed": 6
+  },
+  "approval": {
+    "independent_second_run": false,
+    "local_deadline": "2026-10-08T22:00:00-06:00 America/Denver (Utah)",
+    "maximum_continuation_runtime_minutes": 55,
+    "owner_accepts_unknown_legacy_elapsed": true,
+    "pilot": false,
+    "scope": "SAME_SINGLE_STAGE_B_OPERATIONAL_VERIFICATION_CONTINUATION",
+    "scoring": false,
+    "single_continuation": true,
+    "trading": false,
+    "training": false,
+    "valid_until_exclusive": "2026-10-09T04:00:00Z"
+  },
+  "artifact_finalization": {
+    "command": "python -m scripts.approve_alpha_atlas_v4_stage_b_recovery --prepared-recovery /var/data/moneybot-stage-b/authorization/stage-b-operational-2026-10-06.recovery.prepared.v1.json --prepared-recovery-sha256 <PREPARED_RECOVERY_EXTERNAL_COMPLETE_CANONICAL_SHA256> --output /var/data/moneybot-stage-b/authorization/stage-b-operational-2026-10-06.recovery.approved.v1.json",
+    "network_free": true,
+    "no_overwrite": true,
+    "output_state": "APPROVED / AUTHORIZED_CONTINUATION_NOT_EXECUTED",
+    "requires_exact_prepared_recovery_pin": true,
+    "requires_successful_runtime_inspection": true
+  },
+  "content_sha256": "fdebc6d643ad6aff101b86e596e6c1d768b9271451fd755f273230cf2906da68",
+  "live_activity": {
+    "aws_requests": 0,
+    "continuation_executed": false,
+    "credentials_read": false,
+    "deployed": false,
+    "provider_requests": 0
+  },
+  "preserved": {
+    "execution_purpose": "OPERATIONAL_VERIFICATION_ONLY",
+    "historical_data_as_of": "2026-10-06",
+    "original_authorization_preserved": true,
+    "original_claim_preserved": true,
+    "premarket_timing_readiness": "NOT_TESTED",
+    "prospective_eligibility": "NOT_TESTED"
+  },
+  "reason_no_approved_file_in_git": "The actual runtime inspection and deployed-revision-bound prepared recovery bytes do not exist in this repository; approval finalization must verify and transform those exact worker artifacts.",
+  "recorded_at": "2026-10-08T00:00:00Z",
+  "schema_version": "alpha-atlas-v4-stage-b-continuation-owner-approval.v1",
+  "status": "OWNER_APPROVED_SINGLE_CONTINUATION_ARTIFACT_FINALIZATION_REQUIRED"
+}

@@ -1,0 +1,187 @@
+{
+  "budget": {
+    "allocation_formula": "3 histories*3 + 1 identity*3 + 2 split pages*3 = 18",
+    "automatic_repeat": false,
+    "backup_cap_bytes": 4067328,
+    "combined_cap_bytes": 8134656,
+    "cumulative_ledger_cap": 3789,
+    "expected_attempts": 5,
+    "maximum_attempts": 18,
+    "primary_cap_bytes": 4067328,
+    "stage_b_evidence_cap_bytes_each_copy": 4067328
+  },
+  "content_sha256": "f9bea723771f2156674c45a7e035a2dae1b70f53324128ec7092f9aa9f30ebd7",
+  "context_symbols": [
+    "SPY",
+    "XLK"
+  ],
+  "deadline": {
+    "assembly": "07:45-08:30",
+    "decision": "08:45",
+    "durable_ready": "08:40 inclusive",
+    "requests_stop": "2026-10-26 07:30 America/New_York (11:30 UTC; 05:30 America/Denver)",
+    "universe_binding": "07:45",
+    "validation_handoff": "07:30-07:45"
+  },
+  "history_window": {
+    "calendar": "repository ExchangeCalendar / XNYS",
+    "count": 75,
+    "from": "2026-07-10",
+    "no_extension": true,
+    "rule": "exactly 75 prior eligible sessions ending at immediately previous completed session",
+    "to": "2026-10-23"
+  },
+  "requests_in_order": [
+    {
+      "expected_attempts": 1,
+      "family": "history",
+      "max_attempts": 3,
+      "method": "GET",
+      "number": 1,
+      "page_cap": 1,
+      "params": {
+        "adjusted": "false",
+        "limit": "50000",
+        "sort": "asc"
+      },
+      "path": "/v2/aggs/ticker/AAPL/range/1/day/2026-07-10/2026-10-23",
+      "request_id": "history:AAPL",
+      "response_limit_bytes": 262144
+    },
+    {
+      "expected_attempts": 1,
+      "family": "history",
+      "max_attempts": 3,
+      "method": "GET",
+      "number": 2,
+      "page_cap": 1,
+      "params": {
+        "adjusted": "false",
+        "limit": "50000",
+        "sort": "asc"
+      },
+      "path": "/v2/aggs/ticker/SPY/range/1/day/2026-07-10/2026-10-23",
+      "request_id": "history:SPY",
+      "response_limit_bytes": 262144
+    },
+    {
+      "expected_attempts": 1,
+      "family": "history",
+      "max_attempts": 3,
+      "method": "GET",
+      "number": 3,
+      "page_cap": 1,
+      "params": {
+        "adjusted": "false",
+        "limit": "50000",
+        "sort": "asc"
+      },
+      "path": "/v2/aggs/ticker/XLK/range/1/day/2026-07-10/2026-10-23",
+      "request_id": "history:XLK",
+      "response_limit_bytes": 262144
+    },
+    {
+      "expected_attempts": 1,
+      "family": "identity",
+      "max_attempts": 3,
+      "method": "GET",
+      "number": 4,
+      "page_cap": 1,
+      "params": {
+        "date": "2026-10-26"
+      },
+      "path": "/v3/reference/tickers/AAPL",
+      "request_id": "identity:AAPL",
+      "response_limit_bytes": 32768
+    },
+    {
+      "attempts_per_page": 3,
+      "expected_attempts": 1,
+      "family": "splits",
+      "filter_symbols": [
+        "AAPL",
+        "SPY",
+        "XLK"
+      ],
+      "incomplete_rule": "next_url after page 2 => INCOMPLETE_PAGINATION and stop",
+      "max_attempts": 6,
+      "method": "GET",
+      "number": 5,
+      "page_cap": 2,
+      "params": {
+        "execution_date.gte": "2026-07-10",
+        "execution_date.lte": "2026-10-26",
+        "limit": "5000",
+        "sort": "execution_date.asc"
+      },
+      "path": "/stocks/v1/splits",
+      "request_id": "splits:global",
+      "response_limit_bytes": 262144
+    }
+  ],
+  "schema_version": "alpha-atlas-v4-stage-b-verification-manifest.v2",
+  "scope": "ONE_STOCK_OPERATIONAL_FIXTURE_NOT_PILOT_UNIVERSE",
+  "sector_mapping": {
+    "AAPL": {
+      "covers_verification_session": false,
+      "gate": "Before approval and before request 1, preserve and hash authoritative evidence that AAPL->XLK applies to 2026-10-26; the dated 2026-10-05 holding is not extrapolated.",
+      "last_supported_as_of": "2026-10-05",
+      "sector_etf": "XLK",
+      "status": "PENDING_FUTURE_APPLICABILITY_EVIDENCE"
+    }
+  },
+  "selection_limitations": [
+    "outcome-independent and deterministic",
+    "not selected by score, return, access result, or current availability",
+    "one stock cannot establish representativeness or approve the later <=50-stock pilot universe",
+    "This proposed 2026-10-26 session must not run unless separately approved with a matching fixture hash and fresh sector applicability evidence."
+  ],
+  "selection_rule": "From moneybot.services.alpha_atlas_v4_phase1.probe_plan(), select the lexically first symbol whose pre-registered case is active_security; do not inspect probe results. This yields AAPL. Use the pre-registered market context SPY and sector_etf XLK as shared context only.",
+  "source_attribution": {
+    "issuer_identity": {
+      "observed": "CIK 0000320193; Common Stock; ticker AAPL; Nasdaq",
+      "scope": "issuer/listing support only; not a permanent share-class identifier",
+      "source": "Apple Inc. 2025 Form 10-K filed with SEC",
+      "url": "https://www.sec.gov/Archives/edgar/data/320193/000032019325000079/aapl-20250927.htm"
+    },
+    "saved_access_evidence": {
+      "path": "docs/reports/alpha_atlas_v4_phase1_preflight.json",
+      "sha256": "558e754a6a9b9ab28cdaf593083ba7706de88762e466660880804e146506db91",
+      "use": "context only; not used to select the stock"
+    },
+    "sector_mapping": {
+      "observed": "Apple Inc. appears in XLK holdings; XLK CUSIP 81369Y803 and ISIN US81369Y8030",
+      "observed_as_of": "2026-10-05",
+      "scope": "supports AAPL->XLK only for the dated observation; does not establish applicability on 2026-10-26",
+      "source": "State Street Technology Select Sector SPDR Fund holdings",
+      "url": "https://www.ssga.com/us/en/intermediary/etfs/state-street-technology-select-sector-spdr-etf-xlk"
+    },
+    "selection_definition": {
+      "function": "probe_plan",
+      "path": "moneybot/services/alpha_atlas_v4_phase1.py",
+      "registered_cases": [
+        "active_security:AAPL",
+        "spy_context:SPY",
+        "sector_etf:XLK"
+      ],
+      "sha256": "fd66fe6fff38bbe8cbe524c21de09072fd5615095ef820054c398a596bc0f725"
+    }
+  },
+  "status": "PREPARED_FOR_REVIEW_NOT_APPROVED_BLOCKED_PENDING_SECTOR_APPLICABILITY",
+  "stocks": [
+    "AAPL"
+  ],
+  "timezone": "America/New_York",
+  "typed_identities": {
+    "AAPL": {
+      "gate": "Request 4 must return an unambiguous provider security identity consistent with AAPL/Common Stock/Nasdaq; issuer CIK alone is insufficient.",
+      "issuer_id": {
+        "type": "SEC_CIK",
+        "value": "0000320193"
+      },
+      "security_id": null,
+      "status": "PENDING_REQUEST_4"
+    }
+  },
+  "verification_session": "2026-10-26"
+}
