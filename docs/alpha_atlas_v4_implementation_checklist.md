@@ -1896,9 +1896,36 @@ The original repair reports and their checksum manifests remain unchanged.
   guard compliance, complete operational runtime, historical stream continuity,
   and stream-interference acceptance remain UNKNOWN. No formal resource criterion
   is closed by approximate service graphs. The smallest next check is review of
-  already-preserved timestamped stream metrics/baseline, if available; no new
-  observation, acquisition, continuation, replay, deployment, or code is authorized.
+  already-preserved timestamped stream metrics/baseline, if available. The monitoring
+  implementation below is separately authorized; real observation, acquisition,
+  continuation, replay and deployment remain unauthorized.
 - [ ] **Overall Stage B remains unresolved.** A derived replay cannot rewrite the
   failed live result or prove fresh remote retention, premarket timing, prospective
   eligibility, or pilot readiness. Pilot, training, scoring, and trading stay
   disabled.
+
+## Stage B bounded passive monitoring implementation (2026-10-08)
+
+- [x] **Manual-only monitor implemented and verified offline.** A separate observer
+  and thin CLI read only the existing Redis health key after distinct hash-bound
+  owner authorization. Offline fixtures exercise missing/stale data, identity gaps,
+  restarts/resets, phase comparisons, resource isolation and bounded persistence;
+  56 focused tests pass with network blocked. See the
+  [implementation report](reports/alpha_atlas_v4_stage_b_monitoring_implementation.v1.md)
+  and its clearly labeled synthetic evidence example.
+- [x] **Evidence integrity and overhead controls implemented.** No-clobber output,
+  fsynced samples, atomic finalization/relative SHA256SUMS, incomplete dispositions,
+  duration/sample/storage/timeouts and reserve checks are separate from original
+  Stage B evidence. Stream startup, subscriptions, routing and resource guards are
+  unchanged. Owner-declared identity, process and mount attribution remain explicit.
+- [ ] **Live passive monitoring remains NOT_EXECUTED and unauthorized.** Future use
+  requires owner-approved purpose/revision/worker/window/phases/read scope/output,
+  independently pinned authorization, persistent filesystem and resource bindings.
+  No background hook, scheduling, deployment or operational test occurred.
+- [ ] **Stage B acceptance remains OPEN.** Historical continuity/interference and
+  process guard compliance remain UNKNOWN; original live execution is
+  FAILED_UNCHANGED; premarket timing/prospective eligibility are NOT_TESTED.
+  PROVIDER_NORMALIZATION_REPAIR remains CLOSED, OFFLINE_SAVED_EVIDENCE_REPLAY PASS,
+  ISOLATED_REPLAY_HANDOFF ELIGIBLE, and historical review COMPLETED_WITH_LIMITATIONS.
+  Pilot consumption remains PROHIBITED; training, fitting, scoring, trading,
+  promotion, production V4 routing and Stage C remain disabled/unauthorized.
