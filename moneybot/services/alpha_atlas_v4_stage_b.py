@@ -56,6 +56,27 @@ REGISTERED_BUDGETS = {"expected_massive_attempts":5,"maximum_massive_attempts":1
                       "cumulative_massive_cap":3789,"s3_operation_cap":512,
                       "primary_cap_bytes":PRIMARY_CAP,"backup_cap_bytes":BACKUP_CAP,
                       "combined_cap_bytes":COMBINED_CAP}
+MASSIVE_KEY_ENV = "ALPHA_ATLAS_V4_MASSIVE_API_KEY"
+
+
+class StageBPhaseFailure(CaptureError):
+    """A Stage B error carrying a sanitized, persistence-aware incident report."""
+    def __init__(self, original: Exception, report: Mapping[str, Any]):
+        code = original.code if isinstance(original, CaptureError) else type(original).__name__
+        super().__init__(code, str(original))
+        self.report = dict(report)
+
+
+def validate_explicit_credentials(environ: Mapping[str, str]) -> dict[str, str]:
+    """Read only the three Stage B variables and return opaque in-memory values."""
+    names = (MASSIVE_KEY_ENV, AWS_ACCESS_KEY_ENV, AWS_SECRET_KEY_ENV)
+    values = {name: str(environ.get(name, "")) for name in names}
+    missing = [name for name, value in values.items() if not value.strip()]
+    if missing:
+        code = "PROVIDER_CREDENTIAL_MISSING" if MASSIVE_KEY_ENV in missing else "AWS_CREDENTIAL_MISSING"
+        # Variable names are configuration, but values/fragments/hashes are never reported.
+        raise CaptureError(code, ",".join(missing))
+    return values
 
 
 def validate_iam_policy_scope(bucket_actions: set[str], object_actions: set[str]) -> dict[str,Any]:
@@ -569,10 +590,10 @@ class StageBRunner:
     def _publish_outcome(primary: ImmutableStore, status: str, now: datetime, error: Exception | None=None) -> dict[str,Any]:
         value={"schema_version":"alpha-atlas-v4-stage-b-outcome.v1","status":status,"recorded_at":now.astimezone(UTC).isoformat(),
                "error_code":error.code if isinstance(error,CaptureError) else type(error).__name__ if error else None,
-               "error_detail":str(error) if error else None}
+               "error_detail":error.code if isinstance(error,CaptureError) else type(error).__name__ if error else None}
         digest=sha256_bytes(canonical_bytes(value)); return primary.publish(f"run/outcome-{digest}.json",canonical_bytes(value))
 
-    def _backup_checkpoint(self, primary: ImmutableStore, backup: S3EvidenceBackup, measurements: list[dict[str,Any]]) -> dict[str,Any]:
+    def _backup_checkpoint(self, primary: ImmutableStore, backup: S3EvidenceBackup, measurements: list[dict[str,Any]], *, prior_s3_operations: int=0) -> dict[str,Any]:
         # Freeze primary evidence exactly once. The S3 ledger lives outside primary,
         # preventing recursive inventory growth.
         entries=[]
@@ -602,7 +623,7 @@ class StageBRunner:
         completion_receipt=backup.publish(completion_path,completion_bytes); backup_bytes+=len(completion_bytes)
         primary_bytes=sum(p.stat().st_size for p in primary.root.rglob("*") if p.is_file())
         if primary_bytes>PRIMARY_CAP or backup_bytes>BACKUP_CAP or primary_bytes+backup_bytes>COMBINED_CAP: raise CaptureError("STAGE_B_EVIDENCE_LIMIT")
-        expected=s3_operation_budget(len(frozen))["total"]
+        expected=prior_s3_operations+s3_operation_budget(len(frozen))["total"]
         if backup.ledger.operation_count()!=expected: raise CaptureError("S3_OPERATION_ACCOUNTING_MISMATCH",f"{backup.ledger.operation_count()}!={expected}")
         return {"inventory_path":inventory_path,"inventory_sha256":inventory_hash,"covered_objects":len(frozen),
                 "primary_bytes":primary_bytes,"backup_bytes":backup_bytes,"receipts":receipts,
@@ -651,42 +672,140 @@ class StageBRunner:
         published=primary.publish("handoff/handoff.json",payload); primary.verify(published["path"],published["sha256"],published["bytes"])
         return {"runner":runner,"identity":identity,"quarantined":sorted(quarantined),"handoff_sha256":handoff["handoff_sha256"]}
 
-    def execute(self, authorization: Mapping[str,Any], sector_evidence: Mapping[str,Any],
-                transport_factory: Callable[[],Any], backup_factory: Callable[[ImmutableStore],S3EvidenceBackup]) -> dict[str,Any]:
-        started=self.now(); plan,preflight=self.preflight(authorization,sector_evidence)
+    def _activity_counts(self, primary: ImmutableStore) -> dict[str, Any]:
+        massive_path=primary.root/"acquisition_attempts.jsonl"
+        s3_store=ImmutableStore(self.root/"s3-operation-ledger")
+        try:
+            massive=AttemptLedger(primary,synthetic=self.offline).records() if massive_path.exists() else []
+            massive_counts={state:sum(r.get("event")==state for r in massive) for state in ("RESERVED","TRANSMITTING","PERSISTED","FAILED","UNCERTAIN")}
+        except CaptureError:
+            massive_counts={"status":"UNKNOWN_CORRUPT"}
+        try:
+            s3=S3OperationLedger(s3_store).records()
+            s3_counts={state:sum(r.get("event")==state for r in s3) for state in ("RESERVED","TRANSMITTING","SUCCEEDED","FAILED","UNCERTAIN")}
+        except CaptureError:
+            s3_counts={"status":"UNKNOWN_CORRUPT"}
+        return {"massive":massive_counts,"s3":s3_counts}
+
+    def _phase_failure(self, primary: ImmutableStore, *, completed: list[str], failing: str,
+                       error: Exception, acquisition_started: bool, outcome_status: str="PHASE_FAILURE",
+                       preservation_error: Exception|None=None) -> StageBPhaseFailure:
+        report={"status":"FAIL","schema_version":"alpha-atlas-v4-stage-b-phase-failure.v1",
+                "error_code":error.code if isinstance(error,CaptureError) else type(error).__name__,
+                "error_detail":error.code if isinstance(error,CaptureError) else type(error).__name__,"last_completed_phase":completed[-1] if completed else None,
+                "failing_phase":failing,"execution_claim_exists":(primary.root/"run/execution-claim.json").is_file(),
+                "acquisition_started":acquisition_started,"activity":self._activity_counts(primary),
+                "evidence_preservation_error":None if preservation_error is None else {
+                    "error_code":preservation_error.code if isinstance(preservation_error,CaptureError) else type(preservation_error).__name__,
+                    "detail":preservation_error.code if isinstance(preservation_error,CaptureError) else type(preservation_error).__name__},"stage_b_completed":False,"stage_b_executed":acquisition_started}
+        try:
+            self._publish_outcome(primary,outcome_status,self.now(),error)
+        except Exception as preserve:
+            report["evidence_preservation_error"]={"error_code":preserve.code if isinstance(preserve,CaptureError) else type(preserve).__name__,
+                                                   "detail":preserve.code if isinstance(preserve,CaptureError) else type(preserve).__name__}
+        return StageBPhaseFailure(error,report)
+
+    def preflight_continuation(self, authorization: Mapping[str,Any], recovery: Mapping[str,Any],
+                               recovery_pin: str, sector_evidence: Mapping[str,Any]) -> tuple[dict[str,Any],dict[str,Any]]:
+        """Validate a repaired-revision continuation without rewriting legacy approval."""
+        from moneybot.services.alpha_atlas_v4_stage_b_recovery import validate_recovery_authorization,validate_s3_incident_ledger
+        bound=verify_stage_b_documents(self.repo,fixture_name=self.fixture_name,fixture_file_sha256=self.fixture_file_sha256)
+        fixture=load_fixture(self.repo,fixture_name=self.fixture_name,fixture_content_sha256=self.fixture_content_sha256,session=self.session)
+        validate_authorization(authorization,fixture_sha256=self.fixture_content_sha256,
+                               setup_sha256=SETUP_PACKAGE_FILE_SHA256,session=self.session,offline=False)
+        original_pin=sha256_bytes(canonical_bytes(authorization))
+        if original_pin!=recovery.get("original_authorization_pin") or original_pin!=self.approved_authorization_sha256:
+            raise CaptureError("RECOVERY_ORIGINAL_AUTHORIZATION_MISMATCH")
+        validate_recovery_authorization(recovery,expected_pin=recovery_pin,now=self.now(),repo=self.repo)
+        if str(self.root)!=REQUIRED_ROOT or os.environ.get("MONEYBOT_PERSISTENT_DATA_DIR")!=REQUIRED_ROOT:
+            raise CaptureError("PERSISTENT_ROOT_MISMATCH")
+        s3_state=validate_s3_incident_ledger(S3OperationLedger(ImmutableStore(self.root/"s3-operation-ledger")))
+        if s3_state["ledger_head_sha256"]!=recovery.get("s3_ledger_head_sha256"):
+            raise CaptureError("RECOVERY_S3_LEDGER_HEAD_MISMATCH")
+        primary=ImmutableStore(self.root/"primary")
+        if (primary.root/"acquisition_attempts.jsonl").exists() and AttemptLedger(primary,synthetic=False).records():
+            raise CaptureError("RECOVERY_MASSIVE_ACTIVITY_PRESENT")
+        if (primary.root/"run/continuation-claim.json").exists(): raise CaptureError("CONTINUATION_ALREADY_CLAIMED")
+        sector_hash,sector_kind=validate_sector_context(self.repo,sector_evidence,fixture,session=self.session)
+        if sector_kind!="EXPERIMENTAL_CONTEXT_PROXY" or recovery.get("execution_purpose","OPERATIONAL_VERIFICATION_ONLY")!="OPERATIONAL_VERIFICATION_ONLY":
+            raise CaptureError("RECOVERY_SCOPE_MISMATCH")
+        storage=storage_preflight(self.root); self.runtime_guard("LOCAL_RECOVERY_PREFLIGHT")
+        plan=plan_from_fixture(fixture,sector_hash,session=self.session)
+        plan.update(execution_purpose="OPERATIONAL_VERIFICATION_ONLY",historical_data_as_of=fixture.get("historical_data_as_of"),
+                    execution_valid_from=parse_utc_timestamp(recovery["execution_valid_from"]).isoformat(),
+                    execution_valid_until=parse_utc_timestamp(recovery["execution_valid_until"]).isoformat(),hard_runtime_minutes=55)
+        return plan,{"bound_documents":bound,"storage":storage,"execution_purpose":"OPERATIONAL_VERIFICATION_ONLY",
+                     "continuation":True,"consumed_s3_operations":6}
+
+    def _execute_preflighted(self, plan: dict[str,Any], preflight: dict[str,Any], *,
+                             authorization: Mapping[str,Any], transport_factory: Callable[...,Any],
+                             backup_factory: Callable[...,S3EvidenceBackup], credential_loader: Callable[[],Mapping[str,str]]|None,
+                             started: datetime, recovery: Mapping[str,Any]|None=None) -> dict[str,Any]:
+        import inspect
         if plan["execution_purpose"]=="OPERATIONAL_VERIFICATION_ONLY":
             validity_end=datetime.fromisoformat(plan["execution_valid_until"])
             plan["runtime_deadline"]=min(validity_end,started.astimezone(UTC)+timedelta(minutes=55)).isoformat()
-        primary=ImmutableStore(self.root/"primary"); measurements=[]
-        claim={"schema_version":"alpha-atlas-v4-stage-b-execution-claim.v1","authorization_sha256":sha256_bytes(canonical_bytes(authorization)),
-               "execution_purpose":plan["execution_purpose"],"claimed_at":self.now().astimezone(UTC).isoformat()}
-        if (primary.root/"run/execution-claim.json").exists():
-            raise CaptureError("EXECUTION_ALREADY_CLAIMED")
-        primary.publish("run/execution-claim.json",canonical_bytes(claim))
-        # Client/credential creation occurs only after all local gates above.
-        backup=backup_factory(primary); backup.verify_configuration(); transport=transport_factory()
+        primary=ImmutableStore(self.root/"primary"); measurements=[]; completed=["LOCAL_PREFLIGHT"]
+        credentials: Mapping[str,str]={}
+        if not self.offline:
+            if credential_loader is None: raise CaptureError("CREDENTIAL_LOADER_REQUIRED")
+            credentials=credential_loader(); completed.append("CREDENTIAL_PRESENCE_VALIDATED")
+        if recovery is None:
+            claim={"schema_version":"alpha-atlas-v4-stage-b-execution-claim.v1","authorization_sha256":sha256_bytes(canonical_bytes(authorization)),
+                   "execution_purpose":plan["execution_purpose"],"claimed_at":self.now().astimezone(UTC).isoformat()}
+            if (primary.root/"run/execution-claim.json").exists(): raise CaptureError("EXECUTION_ALREADY_CLAIMED")
+            primary.publish("run/execution-claim.json",canonical_bytes(claim))
+        else:
+            from moneybot.services.alpha_atlas_v4_stage_b_recovery import publish_continuation_claim
+            publish_continuation_claim(primary,recovery,now=self.now())
+        completed.append("CONTINUATION_CLAIM_PUBLISHED" if recovery is not None else "EXECUTION_CLAIM_PUBLISHED")
+        acquisition_started=False
+        def invoke(factory: Callable[...,Any], *args: Any) -> Any:
+            return factory(*args,credentials) if len(inspect.signature(factory).parameters)==len(args)+1 else factory(*args)
         try:
-            acquired=self._acquire(plan,primary,transport,measurements)
+            backup=invoke(backup_factory,primary); completed.append("S3_CLIENT_CONSTRUCTED")
+            backup.verify_configuration(); completed.append("S3_CONFIGURATION_VERIFIED")
+            transport=invoke(transport_factory); completed.append("MASSIVE_TRANSPORT_CONSTRUCTED"); acquisition_started=True
+            acquired=self._acquire(plan,primary,transport,measurements); completed.append("ACQUISITION_COMPLETED")
             self._publish_outcome(primary,"ACQUISITION_COMPLETE",self.now())
         except Exception as exc:
-            self._publish_outcome(primary,"ACQUISITION_FAILED",self.now(),exc)
-            try: self._backup_checkpoint(primary,backup,measurements)
-            except Exception as backup_exc:
-                self._publish_outcome(primary,"PARTIAL_BACKUP_FAILED",self.now(),backup_exc); raise backup_exc from exc
-            raise
-        try: checkpoint=self._backup_checkpoint(primary,backup,measurements)
+            failing=("ACQUISITION" if acquisition_started else "MASSIVE_TRANSPORT_INITIALIZATION" if "S3_CONFIGURATION_VERIFIED" in completed else "S3_CONFIGURATION" if "S3_CLIENT_CONSTRUCTED" in completed else "S3_CLIENT_INITIALIZATION")
+            if acquisition_started:
+                self._publish_outcome(primary,"ACQUISITION_FAILED",self.now(),exc)
+                try:
+                    self._backup_checkpoint(primary,backup,measurements,prior_s3_operations=int(preflight.get("consumed_s3_operations",0)))
+                except Exception as preserve:
+                    raise self._phase_failure(primary,completed=completed,failing="FAILURE_EVIDENCE_BACKUP",
+                                              error=preserve,acquisition_started=True,outcome_status="PARTIAL_BACKUP_FAILED",
+                                              preservation_error=exc) from exc
+            raise self._phase_failure(primary,completed=completed,failing=failing,error=exc,acquisition_started=acquisition_started) from exc
+        try: checkpoint=self._backup_checkpoint(primary,backup,measurements,prior_s3_operations=int(preflight.get("consumed_s3_operations",0)))
         except Exception as backup_exc:
-            self._publish_outcome(primary,"PARTIAL_BACKUP_FAILED",self.now(),backup_exc); raise
+            raise self._phase_failure(primary,completed=completed,failing="BACKUP_OR_RESTORE",error=backup_exc,
+                                      acquisition_started=True,outcome_status="PARTIAL_BACKUP_FAILED") from backup_exc
         ended=self.now(); runner=acquired["runner"]
         return {"status":"PASS","mode":"OFFLINE_SYNTHETIC" if self.offline else "LIVE_STAGE_B","session":self.session.isoformat(),
-                "execution_purpose":plan["execution_purpose"],"premarket_timing_readiness":"NOT_TESTED" if plan["execution_purpose"]=="OPERATIONAL_VERIFICATION_ONLY" else "TESTED_BY_PROSPECTIVE_RULES",
-                "prospective_snapshot_eligibility":"NOT_TESTED" if plan["execution_purpose"]=="OPERATIONAL_VERIFICATION_ONLY" else "EVALUATED",
-                "runtime_deadline":plan.get("runtime_deadline"),"hard_runtime_minutes":plan["hard_runtime_minutes"],
+                "execution_purpose":plan["execution_purpose"],"continuation":recovery is not None,"premarket_timing_readiness":"NOT_TESTED",
+                "prospective_snapshot_eligibility":"NOT_TESTED","runtime_deadline":plan.get("runtime_deadline"),"hard_runtime_minutes":55,
                 "synthetic_transport_attempts":len([x for x in runner.ledger.records() if x["event"]=="RESERVED"]) if self.offline else 0,
                 "live_provider_requests":0 if self.offline else len([x for x in runner.ledger.records() if x["event"]=="RESERVED"]),
                 "real_acquisition_authorized":not self.offline,"preflight":preflight,"identity":acquired["identity"],
                 "quarantined_then_released":acquired["quarantined"],"handoff_sha256":acquired["handoff_sha256"],
                 "primary":{"bytes_accounted":checkpoint["primary_bytes"],"cap":PRIMARY_CAP,"read_back":True},
                 "backup":{"objects":checkpoint["covered_objects"]+1,"covered_objects":checkpoint["covered_objects"],"bytes_accounted":checkpoint["backup_bytes"],"cap":BACKUP_CAP,"completion_path":checkpoint["completion_path"]},
-                "restore":{"objects":checkpoint["restored_objects"],"verified":True},
-                "s3_operations":checkpoint["operations"],"resource_measurements":measurements,"telemetry":telemetry(started,ended)}
+                "restore":{"objects":checkpoint["restored_objects"],"verified":True},"s3_operations":checkpoint["operations"],
+                "resource_measurements":measurements,"telemetry":telemetry(started,ended)}
+
+    def execute(self, authorization: Mapping[str,Any], sector_evidence: Mapping[str,Any],
+                transport_factory: Callable[...,Any], backup_factory: Callable[...,S3EvidenceBackup],
+                credential_loader: Callable[[],Mapping[str,str]] | None=None) -> dict[str,Any]:
+        started=self.now(); plan,preflight=self.preflight(authorization,sector_evidence)
+        return self._execute_preflighted(plan,preflight,authorization=authorization,transport_factory=transport_factory,
+                                         backup_factory=backup_factory,credential_loader=credential_loader,started=started)
+
+    def execute_continuation(self, authorization: Mapping[str,Any], recovery: Mapping[str,Any], recovery_pin: str,
+                             sector_evidence: Mapping[str,Any], transport_factory: Callable[...,Any],
+                             backup_factory: Callable[...,S3EvidenceBackup], credential_loader: Callable[[],Mapping[str,str]]) -> dict[str,Any]:
+        started=self.now(); plan,preflight=self.preflight_continuation(authorization,recovery,recovery_pin,sector_evidence)
+        return self._execute_preflighted(plan,preflight,authorization=authorization,transport_factory=transport_factory,
+                                         backup_factory=backup_factory,credential_loader=credential_loader,started=started,recovery=recovery)

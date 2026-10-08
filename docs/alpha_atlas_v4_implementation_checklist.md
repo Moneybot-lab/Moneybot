@@ -1789,3 +1789,33 @@ immutable provenance. Performance comparison execution remains pending review.
   on the normal worker with its actual prepared v2 pin. Stage B has not executed;
   premarket timing and prospective eligibility remain `NOT_TESTED`, readiness stays
   `COMPLETE — BLOCKED_STORAGE_AND_CACHE`, and the pilot remains disabled.
+
+## Stage B initialization incident and bounded continuation repair (2026-10-08)
+
+- [x] **Attempt status corrected.** Stage B was attempted and stopped during
+  initialization. The original execution claim is preserved. The owner reports six
+  successful S3 configuration operations (18 ledger events), pending read-only
+  validation of the actual ledger chain and operation IDs. The demonstrated source
+  path did not enter `_acquire`, so no Massive attempt was made in that path.
+- [x] **Credential startup order repaired.** After every local gate, all explicit
+  Massive/AWS variables must be nonblank before a claim, ledger reservation, or
+  client construction. The Massive variable is owner-reported configured but has
+  not been inspected. Values, fragments, and hashes are never persisted.
+- [x] **Partial activity is reported precisely.** Phase-aware failure evidence records
+  completed/failing phases, claim and acquisition state, readable attempt/operation
+  counts, the original error code, and any distinct preservation failure. CLI output
+  is no-clobber and retains the detailed report.
+- [x] **Continuation is evidence-bound and one-use.** The read-only inspector verifies
+  the original authorization/claim/failure, S3 chain and exact six completed
+  operations, zero Massive activity, and absence of later-phase evidence. An atomic
+  append-only continuation claim preserves the original claim and all ledgers; the
+  six operations remain charged and repeated checks cost additional operations.
+- [ ] **Continuation remains unapproved and unexecuted.** The original interval ended
+  at 2026-10-08T04:00:00Z. No extension or backdating occurred. A deployed repaired
+  revision, successful runtime inspection, explicit replacement interval, review of
+  the prepared recovery binding, and owner continuation approval remain required.
+  Legacy active elapsed time was not fully recorded and is disclosed as unknown.
+- [ ] **Operational verification remains incomplete.** Acquisition, backup, restore,
+  and overall Stage B success remain unverified; premarket readiness and prospective
+  eligibility are `NOT_TESTED`; readiness stays `COMPLETE —
+  BLOCKED_STORAGE_AND_CACHE`; pilot, training, scoring, and trading remain disabled.
