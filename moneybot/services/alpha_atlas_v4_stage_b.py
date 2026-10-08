@@ -25,7 +25,7 @@ from moneybot.services.alpha_atlas_v4_acquisition import (
     ADJUSTMENT_ENGINE_VERSION, ALLOWED_HOST, AcquisitionRunner, AttemptLedger,
     AcquisitionClock, RequestSpec, TransportResponse, acquisition_clock, adjust_unadjusted_bars,
     build_handoff, cache_only_handoff, validate_feature_window,
-    prior_sessions,
+    normalize_massive_daily_history, prior_sessions, validate_feature_rows,
 )
 from moneybot.services.alpha_atlas_v4_prospective_snapshot import (
     CaptureError, ImmutableStore, canonical_bytes, sha256_bytes,
@@ -344,7 +344,10 @@ class MassiveStageBTransport:
 
 
 def resolve_identity(result: Mapping[str, Any]) -> dict[str, str]:
-    rows=[row for obj in result.get("objects",[]) for row in obj.get("payload",{}).get("results",[])]
+    rows=[]
+    for obj in result.get("objects",[]):
+        raw=obj.get("payload",{}).get("results",[])
+        rows.extend([raw] if isinstance(raw,Mapping) else raw if isinstance(raw,list) else [])
     if len(rows)!=1: raise CaptureError("IDENTITY_AMBIGUOUS")
     row=rows[0]
     # composite/share-class FIGI is security-level; CIK alone is explicitly rejected.
@@ -649,13 +652,25 @@ class StageBRunner:
             if spec.family=="identity": identity=resolve_identity(results[spec.request_id])
             measurements.append(dict(self.runtime_guard(f"AFTER_{spec.request_id}")))
         if identity is None: raise CaptureError("IDENTITY_UNRESOLVED")
-        rows={key:[r for obj in value["objects"] for r in obj["payload"]["results"]] for key,value in results.items() if key.startswith("history:")}
-        dates=lambda values:[str(x.get("date")) for x in values if x.get("date")]
-        reasons=validate_feature_window(dates(rows["history:AAPL"]),dates(rows["history:SPY"]),dates(rows["history:XLK"]))
+        window=prior_sessions(self.session+timedelta(days=1),75)
+        def receipt_loader(path:str)->Mapping[str,Any]:
+            try:return json.loads((primary.root/path).read_text())
+            except (OSError,json.JSONDecodeError) as exc: raise CaptureError("HISTORY_RECEIPT_MISMATCH",path) from exc
+        normalized={symbol:normalize_massive_daily_history(results[f"history:{symbol}"],expected_symbol=symbol,
+                    window_sessions=window,receipt_loader=receipt_loader) for symbol in ("AAPL","SPY","XLK")}
+        reasons=validate_feature_rows(normalized["AAPL"]["rows"],normalized["SPY"]["rows"],normalized["XLK"]["rows"],window)
         if reasons: raise CaptureError("FEATURE_WINDOW_INVALID",",".join(reasons))
         split_rows=[r for obj in results["splits:global"]["objects"] for r in obj["payload"]["results"] if r.get("ticker") in {"AAPL","SPY","XLK"}]
-        adjusted=adjust_unadjusted_bars(rows["history:AAPL"],split_rows,self.session,source_sha256=results["history:AAPL"]["objects"][0]["sha256"])
-        handoff=build_handoff(plan,results,generated_at=self.now(),timing=timing,adjustment_bindings={"AAPL":adjusted["binding"]})
+        split_objects=results["splits:global"]["objects"]
+        split_receipt_hashes=[sha256_bytes(canonical_bytes(receipt_loader(obj["receipt_path"]))) for obj in split_objects]
+        adjusted={symbol:adjust_unadjusted_bars(normalized[symbol]["rows"],[row for row in split_rows if row.get("ticker")==symbol],self.session,
+                  source_object_sha256s=normalized[symbol]["source_object_sha256s"],
+                  normalized_history_sha256=normalized[symbol]["derived_content_sha256"],
+                  split_source_object_sha256s=[obj["sha256"] for obj in split_objects],
+                  split_receipt_sha256s=split_receipt_hashes) for symbol in ("AAPL","SPY","XLK")}
+        handoff=build_handoff(plan,results,generated_at=self.now(),timing=timing,
+                              adjustment_bindings={symbol:value["binding"] for symbol,value in adjusted.items()},
+                              normalized_histories=normalized)
         if not handoff["eligible"]: raise CaptureError("HANDOFF_INELIGIBLE",",".join(handoff["reason_codes"]))
         handoff["resolved_identity"]=identity; handoff["quarantine_released"]=sorted(quarantined)
         handoff["execution_purpose"]=plan.get("execution_purpose","PROSPECTIVE_PREMARKET")

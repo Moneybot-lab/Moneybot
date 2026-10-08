@@ -1841,3 +1841,33 @@ immutable provenance. Performance comparison execution remains pending review.
 - [ ] Premarket readiness and prospective eligibility remain `NOT_TESTED`; readiness
   remains `COMPLETE — BLOCKED_STORAGE_AND_CACHE`; pilot, training, scoring, and
   trading remain disabled.
+
+## Stage B provider-response normalization repair (2026-10-08)
+
+- [x] **Live response persistence recorded.** The authorized continuation persisted
+  five Massive logical responses (5 RESERVED/TRANSMITTING/PERSISTED) and then failed
+  `FEATURE_WINDOW_INVALID`; acquisition started but Stage B did not complete. The
+  original result, claims, ledgers, raw responses, receipts, and backups remain
+  immutable.
+- [x] **Root cause confirmed and repaired.** Massive daily aggregates use abbreviated
+  `o/h/l/c/v/vw/n/t` rows and response-level adjustment provenance. Three consumers
+  incorrectly expected canonical fields on raw rows. One strict adapter now supplies
+  the shared canonical representation without rewriting raw payloads.
+- [x] **Derivation and feature gates remain fail-closed.** Millisecond timestamps use
+  America/New_York/XNYS session conversion; the fixed 75-session window, envelope
+  ticker/status/unadjusted basis, finite OHLCV/VWAP, duplicates, alignment, warm-up,
+  identity, split lineage, and exactly-once adjustment are all validated. Every
+  source page, receipt/acquisition time, row index, adapter, basis, and derived hash
+  is bound.
+- [x] **Repair is synthetically verified.** Tests reproduce the 75-row/no-`date`
+  provider shape, DST conversion, malformed data, misalignment, multi-page
+  provenance, splits, object-shaped identity, tampering, immutable replay inputs,
+  and network/credential prohibition.
+- [ ] **Exact saved-input replay is pending.** `/var/data/moneybot-stage-b` is not
+  mounted in this checkout. Run the dedicated offline replay on the normal worker;
+  do not acquire again. The replay will also validate the actual 91-operation S3
+  ledger and saved backup inventory/completion/restore evidence.
+- [ ] **Overall Stage B remains unresolved.** A derived replay cannot rewrite the
+  failed live result or prove fresh remote retention, premarket timing, prospective
+  eligibility, or pilot readiness. Pilot, training, scoring, and trading stay
+  disabled.

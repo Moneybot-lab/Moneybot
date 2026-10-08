@@ -1,12 +1,12 @@
 """Offline-only Stage B end-to-end synthetic validation. No live mode exists."""
 from __future__ import annotations
 import argparse, hashlib, io, json, tempfile
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Any
 
 from moneybot.services.alpha_atlas_v4_acquisition import TransportResponse, prior_sessions
-from moneybot.services.alpha_atlas_v4_prospective_snapshot import canonical_bytes, sha256_bytes, ImmutableStore
+from moneybot.services.alpha_atlas_v4_prospective_snapshot import NY, canonical_bytes, sha256_bytes, ImmutableStore
 from moneybot.services.alpha_atlas_v4_stage_b import (
     S3EvidenceBackup, S3OperationLedger, StageBRunner, effective_sector_fixture,
     synthetic_authorization,
@@ -19,12 +19,15 @@ class OfflineTransport:
     def send(self,request,*,page_url,timeout_seconds):
         self.calls.append(request.request_id)
         if request.family=="history":
-            dates=self.sessions or [d.isoformat() for d in prior_sessions(__import__("datetime").date(2026,10,5),75)]
-            results=[{"date":d,"open":100+n,"high":101+n,"low":99+n,"close":100+n,"vwap":100+n,"volume":1000+n,"adjusted":False} for n,d in enumerate(dates)]
+            dates=self.sessions or [d.isoformat() for d in prior_sessions(__import__("datetime").date(2026,10,6),75)]
+            results=[{"o":100+n,"h":101+n,"l":99+n,"c":100+n,"vw":100+n,"v":1000+n,"n":10+n,
+                      "t":int(datetime.combine(date.fromisoformat(d),time(0),NY).timestamp()*1000)} for n,d in enumerate(dates)]
         elif request.family=="identity":
             results=[{"ticker":"AAPL","type":"CS","cik":"0000320193","share_class_figi":"BBG001S5N8V8","synthetic":True}]
         else: results=[]
-        return TransportResponse(200,canonical_bytes({"request_id":f"synthetic-{len(self.calls)}","results":results}),self.now)
+        envelope={"request_id":f"synthetic-{len(self.calls)}","results":results,"status":"OK"}
+        if request.family=="history": envelope.update(ticker=request.symbol,adjusted=False,resultsCount=len(results),queryCount=len(results),count=len(results))
+        return TransportResponse(200,canonical_bytes(envelope),self.now)
 
 class OfflineS3:
     def __init__(self): self.objects={}; self.n=0

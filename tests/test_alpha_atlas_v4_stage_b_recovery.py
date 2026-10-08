@@ -83,7 +83,9 @@ def test_end_to_end_preparation_and_guarded_synthetic_continuation(tmp_path,monk
     monkeypatch.setattr(stage_b,'REQUIRED_ROOT',str(root)); monkeypatch.setenv('MONEYBOT_PERSISTENT_DATA_DIR',str(root)); monkeypatch.setattr(stage_b,'storage_preflight',lambda root:{'root':str(root),'free_bytes':99999999})
     runner=StageBRunner(REPO,root,offline=False,approved_authorization_sha256=pin,operational_config_sha256=CONFIG['content_sha256'],fixture_name=FIXTURE_NAME,fixture_file_sha256=hashlib.sha256(FIXTURE_PATH.read_bytes()).hexdigest(),fixture_content_sha256=fixture['content_sha256'],session=date(2026,10,6),runtime_guard=lambda p:{'phase':p},now=lambda:RECOVERY_NOW)
     def backup(primary,credentials): return S3EvidenceBackup(OfflineS3(),BOUND_BUCKET,BOUND_PREFIX,S3OperationLedger(ImmutableStore(root/'s3-operation-ledger')),expected_owner='123456789012',now=lambda:RECOVERY_NOW)
-    result=runner.execute_continuation(auth,recovery,recovery_pin,PROXY,lambda credentials:OfflineTransport(),backup,lambda:{MASSIVE_KEY_ENV:'secret',AWS_ACCESS_KEY_ENV:'id',AWS_SECRET_KEY_ENV:'secret'})
+    result=runner.execute_continuation(auth,recovery,recovery_pin,PROXY,
+        lambda credentials:OfflineTransport(sessions=fixture['history_window']['ordered_sessions']),backup,
+        lambda:{MASSIVE_KEY_ENV:'secret',AWS_ACCESS_KEY_ENV:'id',AWS_SECRET_KEY_ENV:'secret'})
     assert result['status']=='PASS' and result['continuation'] is True and result['s3_operations']>6
     assert (root/'primary/run/execution-claim.json').exists() and (root/'primary/run/continuation-claim.json').exists()
 

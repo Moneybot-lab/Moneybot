@@ -26,6 +26,7 @@ AMENDMENT_V2_SHA256 = "35290cfa2338b4a82605fc8904ceea4fae11e4dd0ef56fe78d45f2c3d
 CONTRACT_SHA256 = "09bf4a7308533195df5a0be4277cba7a5a3bbcd15b5a6fd28abc4321380ad692"
 TIMING_SHA256 = "f92a1d99856a35556abe2b89f6b7923fbcfaf3cd1bcdb05166125935a6efc66a"
 ADJUSTMENT_ENGINE_VERSION = "alpha-atlas-v4-local-unadjusted-split-basis.v1"
+HISTORY_ADAPTER_VERSION = "alpha-atlas-v4-massive-daily-bars.v1"
 ALLOWED_HOST = "api.massive.com"
 PRIMARY_LIMIT = BACKUP_LIMIT = 768 * 1024 * 1024
 COMBINED_LIMIT = 1536 * 1024 * 1024
@@ -35,6 +36,84 @@ PAGE_LIMITS = {"operational_verification": 2, "bootstrap": 5, "recurring": 2}
 RETRIES = 2
 RESPONSE_LIMITS = {"history": 262144, "identity": 32768, "splits": 262144}
 UTC = timezone.utc
+
+
+def _finite_number(value: Any, field: str, *, positive: bool=False, nonnegative: bool=False) -> float:
+    if isinstance(value,bool): raise CaptureError("HISTORY_ROW_INVALID",field)
+    try: result=float(value)
+    except (TypeError,ValueError) as exc: raise CaptureError("HISTORY_ROW_INVALID",field) from exc
+    if not math.isfinite(result) or (positive and result<=0) or (nonnegative and result<0):
+        raise CaptureError("HISTORY_ROW_INVALID",field)
+    return result
+
+
+def normalize_massive_daily_history(result: Mapping[str,Any], *, expected_symbol: str,
+                                    window_sessions: list[date],
+                                    receipt_loader: Callable[[str],Mapping[str,Any]]) -> dict[str,Any]:
+    """Derive strict canonical daily bars while preserving raw objects unchanged.
+
+    Massive documents ``t`` as the Unix-millisecond start of an aggregate window;
+    daily stock bars are interpreted in the XNYS America/New_York calendar.
+    """
+    if result.get("complete") is not True: raise CaptureError("HISTORY_PAGINATION_INCOMPLETE",expected_symbol)
+    allowed={day.isoformat() for day in window_sessions}; calendar=ExchangeCalendar(); rows=[]; provenance=[]; seen={}
+    source_objects=[]; receipt_ids=[]; received=[]
+    objects=result.get("objects")
+    if not isinstance(objects,list) or not objects: raise CaptureError("HISTORY_SOURCE_MISSING",expected_symbol)
+    for object_index,source in enumerate(objects):
+        payload=source.get("payload")
+        if not isinstance(payload,Mapping): raise CaptureError("HISTORY_ENVELOPE_INVALID",expected_symbol)
+        values=payload.get("results")
+        if (payload.get("status")!="OK" or payload.get("ticker")!=expected_symbol
+                or payload.get("adjusted") is not False or not isinstance(values,list)):
+            raise CaptureError("HISTORY_ENVELOPE_INVALID",expected_symbol)
+        has_next=bool(payload.get("next_url"))
+        if (object_index<len(objects)-1 and not has_next) or (object_index==len(objects)-1 and has_next):
+            raise CaptureError("HISTORY_PAGINATION_INCOMPLETE",expected_symbol)
+        for count_name in ("resultsCount","count"):
+            if count_name in payload and payload[count_name] != len(values): raise CaptureError("HISTORY_ENVELOPE_COUNT_MISMATCH",expected_symbol)
+        receipt=receipt_loader(str(source.get("receipt_path")))
+        if (receipt.get("response_sha256")!=source.get("sha256") or receipt.get("response_bytes")!=source.get("bytes")
+                or receipt.get("request_id")!=result.get("request_id") or receipt.get("late") is True):
+            raise CaptureError("HISTORY_RECEIPT_MISMATCH",expected_symbol)
+        receipt_identity=sha256_bytes(canonical_bytes(receipt)); receipt_ids.append(receipt_identity)
+        received_at=str(receipt.get("received_at"));
+        try: parsed_received=datetime.fromisoformat(received_at.replace("Z","+00:00"))
+        except (ValueError,AttributeError) as exc: raise CaptureError("HISTORY_RECEIPT_MISMATCH",expected_symbol) from exc
+        if parsed_received.tzinfo is None or parsed_received.utcoffset() is None: raise CaptureError("HISTORY_RECEIPT_MISMATCH",expected_symbol)
+        received.append(received_at); source_objects.append(str(source.get("sha256")))
+        for index,raw in enumerate(values):
+            if not isinstance(raw,Mapping): raise CaptureError("HISTORY_ROW_INVALID","not object")
+            timestamp=raw.get("t")
+            if isinstance(timestamp,bool) or not isinstance(timestamp,int) or timestamp<1_000_000_000_000 or timestamp>=100_000_000_000_000:
+                raise CaptureError("HISTORY_TIMESTAMP_UNIT_INVALID",str(timestamp))
+            try: started=datetime.fromtimestamp(timestamp/1000,tz=UTC)
+            except (OverflowError,OSError,ValueError) as exc: raise CaptureError("HISTORY_TIMESTAMP_INVALID") from exc
+            local=started.astimezone(NY)
+            if (local.hour,local.minute,local.second,local.microsecond)!=(0,0,0,0): raise CaptureError("HISTORY_DAILY_ANCHOR_INVALID",str(timestamp))
+            session=calendar.local_date(started); day=session.isoformat()
+            if not calendar.is_trading_day(session): raise CaptureError("HISTORY_NON_SESSION",day)
+            if day not in allowed: raise CaptureError("HISTORY_OUT_OF_WINDOW",day)
+            canonical={"date":day,"source_timestamp_ms":timestamp,"source_timestamp_utc":started.isoformat(),
+                       "open":_finite_number(raw.get("o"),"open",positive=True),"high":_finite_number(raw.get("h"),"high",positive=True),
+                       "low":_finite_number(raw.get("l"),"low",positive=True),"close":_finite_number(raw.get("c"),"close",positive=True),
+                       "volume":_finite_number(raw.get("v"),"volume",nonnegative=True),"vwap":_finite_number(raw.get("vw"),"vwap",positive=True),
+                       "adjusted":False,"adjustment_basis":"PROVIDER_UNADJUSTED"}
+            if raw.get("n") is not None:
+                if isinstance(raw.get("n"),bool) or not isinstance(raw.get("n"),int) or raw["n"]<0: raise CaptureError("HISTORY_ROW_INVALID","transactions")
+                canonical["transactions"]=raw["n"]
+            if canonical["high"]<max(canonical["open"],canonical["close"],canonical["low"]) or canonical["low"]>min(canonical["open"],canonical["close"],canonical["high"]):
+                raise CaptureError("HISTORY_OHLC_INCONSISTENT",day)
+            if day in seen: raise CaptureError("HISTORY_DUPLICATE_SESSION",day)
+            seen[day]=canonical; rows.append(canonical)
+            provenance.append({"date":day,"source_object_sha256":source["sha256"],"receipt_sha256":receipt_identity,
+                               "received_at":received_at,"source_row_index":index,"provider_timestamp_ms":timestamp})
+    rows.sort(key=lambda row:row["date"]); provenance.sort(key=lambda row:row["date"])
+    value={"schema_version":"alpha-atlas-v4-normalized-history.v1","adapter_version":HISTORY_ADAPTER_VERSION,
+           "symbol":expected_symbol,"calendar":"XNYS-rule-calendar.v1","timezone":"America/New_York",
+           "adjustment_basis":"PROVIDER_UNADJUSTED","source_object_sha256s":source_objects,
+           "receipt_sha256s":receipt_ids,"source_received_at":received,"rows":rows,"row_provenance":provenance}
+    value["derived_content_sha256"]=sha256_bytes(canonical_bytes(value)); return value
 
 
 def verify_acquisition_documents(root: Path) -> dict[str, str]:
@@ -295,7 +374,11 @@ def validate_request_spec(spec: RequestSpec) -> None:
         raise CaptureError("UNSUPPORTED_REQUEST_FAMILY")
 
 
-def adjust_unadjusted_bars(bars: list[Mapping[str,Any]], splits: list[Mapping[str,Any]], as_of: date, *, source_sha256: str) -> dict[str,Any]:
+def adjust_unadjusted_bars(bars: list[Mapping[str,Any]], splits: list[Mapping[str,Any]], as_of: date, *,
+                           source_sha256: str|None=None, source_object_sha256s: list[str]|None=None,
+                           normalized_history_sha256: str|None=None,
+                           split_source_object_sha256s: list[str]|None=None,
+                           split_receipt_sha256s: list[str]|None=None) -> dict[str,Any]:
     normalized=canonical_splits(splits); result=[]
     for raw in bars:
         if raw.get("adjusted") not in {False,None}: raise CaptureError("INCOMPATIBLE_ADJUSTMENT_BASIS")
@@ -308,9 +391,16 @@ def adjust_unadjusted_bars(bars: list[Mapping[str,Any]], splits: list[Mapping[st
         for field in ("open","high","low","close","vwap"):
             if row.get(field) is not None: row[field]=float(row[field])*factor
         if row.get("volume") is not None: row["volume"]=float(row["volume"])/factor
-        row["applied_split_ids"]=ids; result.append(row)
+        row["applied_split_ids"]=ids; row["adjusted"]=True; row["adjustment_basis"]=as_of.isoformat(); row["adjustment_engine_version"]=ADJUSTMENT_ENGINE_VERSION; result.append(row)
     split_hash=split_source_hash(normalized)
-    binding={"engine_version":ADJUSTMENT_ENGINE_VERSION,"source_object_sha256":source_sha256,"split_manifest_sha256":split_hash,"adjustment_basis":as_of.isoformat()}
+    sources=list(source_object_sha256s or ([source_sha256] if source_sha256 else []))
+    if not sources: raise CaptureError("ADJUSTMENT_SOURCE_BINDING_MISSING")
+    binding={"engine_version":ADJUSTMENT_ENGINE_VERSION,"source_object_sha256s":sources,
+             "source_object_sha256":sources[0] if len(sources)==1 else None,
+             "normalized_history_sha256":normalized_history_sha256,"split_manifest_sha256":split_hash,
+             "split_source_object_sha256s":list(split_source_object_sha256s or []),
+             "split_receipt_sha256s":list(split_receipt_sha256s or []),
+             "adjustment_basis":as_of.isoformat(),"application":"EXACTLY_ONCE_FROM_PROVIDER_UNADJUSTED"}
     return {"bars":result,"binding":binding,"window_sha256":sha256_bytes(canonical_bytes({"bars":result,"binding":binding}))}
 
 
@@ -320,6 +410,27 @@ def validate_feature_window(symbol_dates: list[str], spy_dates: list[str], secto
     if len(set(symbol_dates)&set(spy_dates))<21: reasons.append("CONTEXT_ALIGNMENT_FAILED:SPY")
     if len(set(symbol_dates)&set(sector_dates))<6: reasons.append("CONTEXT_ALIGNMENT_FAILED:SECTOR")
     return reasons
+
+
+def validate_feature_rows(symbol_rows: list[Mapping[str,Any]], spy_rows: list[Mapping[str,Any]],
+                          sector_rows: list[Mapping[str,Any]], expected_sessions: list[date]) -> list[str]:
+    """Validate the registered feature warm-up and aligned-session requirements."""
+    expected=[x.isoformat() for x in expected_sessions]; positions={day:n for n,day in enumerate(expected)}
+    dates=lambda rows:[str(row["date"]) for row in rows]
+    symbol,spy,sector=dates(symbol_rows),dates(spy_rows),dates(sector_rows); reasons=[]
+    if len(symbol)<50: reasons.append("INSUFFICIENT_VALID_HISTORY")
+    if len(symbol)<34: reasons.append("INSUFFICIENT_MACD_HISTORY")
+    def consecutive(values:list[str],count:int)->bool:
+        if len(values)<count:return False
+        tail=values[-count:]
+        return all(day in positions for day in tail) and [positions[x] for x in tail]==list(range(positions[tail[0]],positions[tail[0]]+count))
+    if not consecutive(symbol,21): reasons.append("RETURN_VOLATILITY_WARMUP_FAILED")
+    if not consecutive(symbol,29): reasons.append("VWAP_SLOPE_WARMUP_FAILED")
+    pair_spy=sorted(set(symbol)&set(spy),key=positions.get); pair_sector=sorted(set(symbol)&set(sector),key=positions.get)
+    latest=symbol[-1] if symbol else None
+    if not consecutive(pair_spy,21) or not pair_spy or pair_spy[-1]!=latest: reasons.append("CONTEXT_ALIGNMENT_FAILED:SPY")
+    if not consecutive(pair_sector,6) or not pair_sector or pair_sector[-1]!=latest: reasons.append("CONTEXT_ALIGNMENT_FAILED:SECTOR")
+    return sorted(set(reasons))
 
 
 class EvidenceStorage:
@@ -363,24 +474,31 @@ class EvidenceStorage:
         return copied
 
 
-def build_handoff(plan: Mapping[str,Any], results: Mapping[str,Mapping[str,Any]], *, generated_at: datetime, timing: AcquisitionClock, adjustment_bindings: Mapping[str,Mapping[str,Any]] | None = None) -> dict[str,Any]:
+def build_handoff(plan: Mapping[str,Any], results: Mapping[str,Mapping[str,Any]], *, generated_at: datetime, timing: AcquisitionClock,
+                  adjustment_bindings: Mapping[str,Mapping[str,Any]] | None = None,
+                  normalized_histories: Mapping[str,Mapping[str,Any]] | None = None) -> dict[str,Any]:
     expected=[x.request_id for x in plan["requests"]]; missing=sorted(set(expected)-set(results)); reasons=[]
     if missing: reasons.append("MISSING_DEPENDENCIES")
     if any(not results[x].get("complete") for x in results): reasons.append("INCOMPLETE_PAGINATION")
     if any(obj.get("late") for result in results.values() for obj in result.get("objects",[])): reasons.append("LATE_SOURCE")
     dispositions=[]
     adjustment_bindings=adjustment_bindings or {}
+    normalized_histories=normalized_histories or {}
     for stock in plan["stocks"]:
         stock_reasons=[]; history=results.get(f"history:{stock}",{}); identity=results.get(f"identity:{stock}",{})
-        history_rows=[row for obj in history.get("objects",[]) for row in obj.get("payload",{}).get("results",[])]
-        identity_rows=[row for obj in identity.get("objects",[]) for row in obj.get("payload",{}).get("results",[])]
+        history_rows=list(normalized_histories.get(stock,{}).get("rows",[]))
+        if stock not in normalized_histories:
+            history_rows=[row for obj in history.get("objects",[]) for row in obj.get("payload",{}).get("results",[]) if isinstance(row,Mapping)]
+        identity_rows=[]
+        for obj in identity.get("objects",[]):
+            raw=obj.get("payload",{}).get("results",[]); identity_rows.extend([raw] if isinstance(raw,Mapping) else raw if isinstance(raw,list) else [])
         if len({str(x.get('date')) for x in history_rows if x.get('date')})<50: stock_reasons.append("INSUFFICIENT_VALID_HISTORY")
         if not identity_rows: stock_reasons.append("IDENTITY_MISSING")
         if not results.get("splits:global",{}).get("complete"): stock_reasons.append("SPLIT_LINEAGE_INCOMPLETE")
         if stock not in adjustment_bindings: stock_reasons.append("ADJUSTMENT_BINDING_MISSING")
         dispositions.append({"ticker":stock,"disposition":"ELIGIBLE" if not stock_reasons else "INVALID","reason_codes":stock_reasons})
     if any(x["disposition"]!="ELIGIBLE" for x in dispositions): reasons.append("TICKER_DEPENDENCY_FAILURE")
-    handoff={"schema_version":"alpha-atlas-v4-acquisition-handoff.v1","contract_sha256":CONTRACT_SHA256,"amendment_sha256":AMENDMENT_V3_SHA256,"universe_sha256":plan["universe_sha256"],"sector_mapping_sha256":plan["sector_mapping_sha256"],"session":plan["session"],"generated_at":generated_at.astimezone(UTC).isoformat(),"acquisition_deadline":timing.cutoff.isoformat(),"required_request_ids":expected,"source_objects":sorted([{"request_id":key,"sha256":obj["sha256"],"receipt_path":obj["receipt_path"]} for key,value in results.items() for obj in value.get("objects",[])],key=lambda x:(x["request_id"],x["sha256"])),"adjustment_bindings":{key:dict(adjustment_bindings[key]) for key in sorted(adjustment_bindings)},"missing_request_ids":missing,"dispositions":dispositions,"reason_codes":sorted(set(reasons)),"eligible":not reasons}
+    handoff={"schema_version":"alpha-atlas-v4-acquisition-handoff.v1","contract_sha256":CONTRACT_SHA256,"amendment_sha256":AMENDMENT_V3_SHA256,"universe_sha256":plan["universe_sha256"],"sector_mapping_sha256":plan["sector_mapping_sha256"],"session":plan["session"],"generated_at":generated_at.astimezone(UTC).isoformat(),"acquisition_deadline":timing.cutoff.isoformat(),"required_request_ids":expected,"source_objects":sorted([{"request_id":key,"sha256":obj["sha256"],"receipt_path":obj["receipt_path"]} for key,value in results.items() for obj in value.get("objects",[])],key=lambda x:(x["request_id"],x["sha256"])),"normalized_history_bindings":{key:{"derived_content_sha256":value.get("derived_content_sha256"),"source_object_sha256s":value.get("source_object_sha256s",[])} for key,value in sorted(normalized_histories.items())},"adjustment_bindings":{key:dict(adjustment_bindings[key]) for key in sorted(adjustment_bindings)},"missing_request_ids":missing,"dispositions":dispositions,"reason_codes":sorted(set(reasons)),"eligible":not reasons}
     handoff["handoff_sha256"]=sha256_bytes(canonical_bytes(handoff)); return handoff
 
 
