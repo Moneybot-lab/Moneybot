@@ -33,6 +33,16 @@ already publishes `moneybot:market:v1:health` with a default 30-second TTL.
 The new adapter uses only GET of that key; it does not instantiate the state class,
 which also exposes writes/scans. Connection authentication/Redis database selection
 may be required by the existing URL; key operations are strictly GET only.
+URL configuration is validated before pool/client construction. Only `redis://`
+and `rediss://` with userinfo authentication, an unambiguous database path or `db`
+query, and verified TLS certificate/CA options are supported. Query options are
+allowlisted; unknown, duplicate, blank, operational or conflicting options are
+rejected with sanitized errors, even if they match observer defaults. TLS requires
+certificate validation and hostname checking; client certificate/key must be paired.
+Unix sockets, query authentication, OCSP and protocol/client-identification options
+are unsupported. An explicit pool receives parsed settings followed by fixed safety
+options; redis-py's URL-over-keyword precedence cannot override them. RESP2 is
+fixed, so connection setup uses only necessary AUTH/SELECT (when configured).
 Redis library client-identification/health-check commands and retries are disabled.
 Connect/read timeouts are two seconds each, and new reads do not start in the
 last four seconds of the authorized window.
@@ -231,3 +241,26 @@ checklist item and original stream/Stage B code and closure reports. Original
 normalization repair, setup/manifest and owner-bound runtime-config checksum
 manifests passed; synthetic output checksums/schema/count/footprint passed.
 `git diff --check` passed. No unrelated test suite or operational test was run.
+
+
+## Redis URL safety repair after PR #659
+
+The [P1 review finding](https://github.com/Moneybot-lab/Moneybot/pull/659#discussion_r4225198551)
+identified redis-py's `from_url` precedence: URL query parameters override keyword
+settings. The repaired adapter never forwards an untrusted URL to `from_url`.
+It rejects unsafe/conflicting options before construction, builds an explicit
+validated pool with fixed two-second timeouts, zero retries/health checks, RESP2,
+no client-identification commands and one connection, and explicitly closes the
+owned pool. Authentication, database selection, verified TLS custom CAs and paired
+client certificates remain supported without widening health-key GET scope.
+
+110 focused monitor tests pass with actual socket connections and DNS blocked,
+including subprocesses. Regressions reproduce URL precedence with real redis-py
+6.4.0 pool parsing without connecting, reject malicious/encoded/duplicate options
+before construction, inspect effective real pool settings, exercise zero retries
+with redis-py connection errors and check the real handshake's AUTH/SELECT-only
+command sequence using in-memory stubs. Original synthetic evidence remains
+immutable evidence of the earlier implementation; its recorded module hash is
+historical, not the fixed module's hash. Fresh synthetic evidence was generated
+only in scratch storage and integrity-checked. This repair does not authorize any
+live observation, deployment or workload, or change UNKNOWN acceptance/Stage B OPEN.

@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
+from urllib.parse import parse_qsl, urlsplit
 
 from .alpha_atlas_v4_prospective_snapshot import CaptureError, canonical_bytes, sha256_bytes
 from .alpha_atlas_v4_stage_b import COMBINED_CAP, REQUIRED_ROOT
@@ -162,15 +163,71 @@ def validate_authorization(auth: Mapping[str, Any], pin: str, *, now: datetime,
         raise CaptureError('MONITOR_AUTH_INVALID') from None
 
 
+def redis_connection_options(url: str) -> dict[str, Any]:
+    """Validate URL options before any client/pool construction; never echo secrets.
+
+    redis-py URL queries override from_url kwargs, including unknown connection
+    options. Only auth in userinfo, database and verified TLS configuration are
+    supported here. All operational options are imposed after URL parsing.
+    """
+    from redis.connection import parse_url
+    from redis.retry import Retry
+    from redis.backoff import NoBackoff
+
+    tls_options = {'ssl_ca_certs', 'ssl_ca_path', 'ssl_ca_data', 'ssl_certfile',
+                   'ssl_keyfile', 'ssl_password', 'ssl_cert_reqs', 'ssl_check_hostname'}
+    try:
+        if (not isinstance(url, str) or len(url) > 16384 or
+                any(ord(char) < 32 or ord(char) == 127 for char in url)):
+            raise ValueError()
+        parts = urlsplit(url)
+        if parts.scheme not in ('redis', 'rediss') or not parts.hostname or parts.fragment:
+            raise ValueError()
+        pairs = parse_qsl(parts.query, keep_blank_values=True, strict_parsing=True)
+        names = [key for key, _ in pairs]
+        # Unknown, duplicate and blank options are rejected, even equal-to-default
+        # operational values. No path can forward hidden options to redis-py.
+        if len(names) != len(set(names)) or set(names)-({'db'} | tls_options):
+            raise ValueError()
+        if any(not value for _, value in pairs):
+            raise ValueError()
+        if parts.scheme != 'rediss' and set(names) & tls_options:
+            raise ValueError()
+        if parts.path not in ('', '/') and not re.fullmatch(r'/[0-9]+', parts.path):
+            raise ValueError()
+        options = parse_url(url)
+        path_db = int(parts.path[1:]) if parts.path not in ('', '/') else None
+        db = integer(options.get('db', 0), maximum=2**31-1)
+        if path_db is not None and path_db != db:
+            raise ValueError()
+        if options.get('ssl_cert_reqs', 'required') != 'required' or options.get('ssl_check_hostname', True) is not True:
+            raise ValueError()
+        if bool(options.get('ssl_certfile')) != bool(options.get('ssl_keyfile')):
+            raise ValueError()
+        allowed = {'host', 'port', 'username', 'password', 'db', 'connection_class'} | tls_options
+        if set(options)-allowed:
+            raise ValueError()
+        options['db'] = db
+        if parts.scheme == 'rediss':
+            options.update(ssl_cert_reqs='required', ssl_check_hostname=True)
+        # Build a pool explicitly; from_url is never given the untrusted URL.
+        options.update(decode_responses=False, socket_timeout=2, socket_connect_timeout=2,
+                       socket_keepalive=False, retry_on_timeout=False, retry_on_error=[],
+                       retry=Retry(NoBackoff(), 0), health_check_interval=0, protocol=2,
+                       client_name=None, lib_name=None, lib_version=None, max_connections=1)
+        return options
+    except (ValueError, TypeError, CaptureError):
+        raise CaptureError('MONITOR_REDIS_CONFIGURATION_INVALID') from None
+
+
 class RedisHealthReader:
     """Only GET of the existing key; no scans, health writes, reconnect loops or retries."""
     def __init__(self, url: str):
+        options = redis_connection_options(url)  # Reject before constructing client/pool.
         import redis  # Lazy, only after live authorization gates.
-        from redis.retry import Retry
-        from redis.backoff import NoBackoff
-        self.client = redis.Redis.from_url(url, decode_responses=False, socket_timeout=2,
-                                           socket_connect_timeout=2, retry_on_timeout=False, retry=Retry(NoBackoff(), 0),
-                                           health_check_interval=0, lib_name=None, lib_version=None)
+        pool = redis.ConnectionPool(**options)
+        self.pool = pool
+        self.client = redis.Redis(connection_pool=pool)
 
     def __call__(self) -> dict[str, Any] | None:
         try:
@@ -184,7 +241,10 @@ class RedisHealthReader:
             raise CaptureError('HEALTH_READ_ERROR') from None
 
     def close(self) -> None:
-        self.client.close()
+        try:
+            self.client.close()
+        finally:
+            self.pool.disconnect()
 
 
 def health_observation(raw: Any, observed: datetime, expected_instance: str | None) -> dict[str, Any]:
