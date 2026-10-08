@@ -1887,11 +1887,17 @@ The original repair reports and their checksum manifests remain unchanged.
 - [x] **Isolated replay handoff is eligible.** `ISOLATED_REPLAY_ONLY`, eligible
   true, no reason codes; original live status is
   `FAILED_FEATURE_WINDOW_INVALID_UNCHANGED`, and `pilot_input_allowed=false`.
-- [ ] **Next bounded gate: reconcile saved worker headroom/interference evidence.**
-  Review existing failed-run outcome/phase evidence and contemporaneous worker
-  logs against the registered resource/deadline/interference criteria offline.
-  Missing observations remain UNKNOWN; no rerun is authorized. The closure report
-  defines acceptance, evidence, and the separate prospective-observation boundary.
+- [x] **Historical worker resource/interference review completed with limitations.**
+  Owner-reported Render observations for October 7, 18:55–19:15 MDT show no visible
+  sustained CPU/memory saturation or disk exhaustion. Deployment/restart preceded
+  authentication and 65-symbol subscription activation; silence afterward does not
+  prove continuity. See the [reconciliation report](reports/alpha_atlas_v4_stage_b_resource_interference_reconciliation.v1.md).
+- [ ] **Resource/interference acceptance remains open.** Process-level RSS/free-byte
+  guard compliance, complete operational runtime, historical stream continuity,
+  and stream-interference acceptance remain UNKNOWN. No formal resource criterion
+  is closed by approximate service graphs. The smallest next check is review of
+  already-preserved timestamped stream metrics/baseline, if available; no new
+  observation, acquisition, continuation, replay, deployment, or code is authorized.
 - [ ] **Overall Stage B remains unresolved.** A derived replay cannot rewrite the
   failed live result or prove fresh remote retention, premarket timing, prospective
   eligibility, or pilot readiness. Pilot, training, scoring, and trading stay
