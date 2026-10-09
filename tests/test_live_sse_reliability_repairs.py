@@ -305,4 +305,3 @@ def test_initial_enrichment_metadata_uses_existing_quote_and_fails_closed_withou
     assert metadata["price"] == 101 and metadata["age_ms"] == 1000 and quote == before
     missing = api._initial_live_quote_metadata("AAPL", {"price": 101, "quote_source": "massive", "live_data_available": True})
     assert missing["is_stale"] and missing["event_timestamp"] is None and missing["age_ms"] is None
-

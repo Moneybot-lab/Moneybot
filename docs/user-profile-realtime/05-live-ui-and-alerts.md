@@ -83,6 +83,20 @@ These remain operational checks rather than code-complete claims:
 5. Add durable sent/failed/opened/acted-on alert analytics before enabling push delivery from live triggers.
 6. Keep `LIVE_ALERTS_EMERGENCY_DISABLED=true` until the Page 4 shadow-data gates pass in production.
 
+## Offline price/status investigation — October 9, 2026
+
+- [x] Trace REST/stream selection, freshness, cache behavior, SSE emission and actual portfolio JavaScript with synthetic inputs.
+- [x] Reproduce selected-price timestamp errors, frozen cache freshness, withheld status updates and misleading source/heartbeat/partial-update labels.
+- [x] Cover the eight requested connection/source/freshness scenarios and document a compatible correction proposal in [the investigation report](../reports/moneybot_stream_portfolio_offline_investigation_2026-10-09.md).
+- [x] Owner authorized code-only C1–C5 implementation and synthetic regression tests; C6 remains excluded.
+- [ ] Separately authorized validation of portfolio production correctness and provider/browser connection reporting.
+
+The original investigation changed no resolver, API, SSE or frontend behavior. The subsequent owner-authorized C3–C5 repairs bind freshness to selected-price time, age cache copies, preserve connection-scoped delivery ordering, publish meaningful status changes and separate browser/provider/row quality; see [the implementation and validation record](../reports/moneybot_stream_portfolio_reliability_repairs_2026-10-09.md). Production exit gates remain open, and Stage B UNKNOWN acceptance statuses and overall OPEN status are preserved.
+
+- [x] Implement provider/cache/resolver, SSE and portfolio UI corrections with network-blocked synthetic validation, including grouped-lot accounting and advice isolation.
+- [x] Keep absent or expired provider health UNKNOWN and unavailable initial quotes distinct from purchase-cost accounting values.
+- [ ] Owner review of the repair PR before any separately authorized operational action.
+
 ## Decision log
 
 - Use server-sent events instead of a second browser WebSocket. The backend owns the provider connection and credentials; browsers receive a constrained, authenticated, one-way stream.
