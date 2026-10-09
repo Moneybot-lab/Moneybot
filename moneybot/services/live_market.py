@@ -10,19 +10,28 @@ from threading import Lock
 from typing import Any, Callable, Iterable
 
 from .market_stream import MarketStreamStateRepository
-from .market_data_providers import ExchangeCalendar
+from .market_data_providers import ExchangeCalendar, quote_freshness
 
 LIVE_SCHEMA_VERSION = "live-market.v1"
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except (ValueError, OverflowError):
+            return None
+    else:
+        return None
+    # A local-machine timezone is not evidence of a source event's timezone.
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
         return None
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
         return None
-    return parsed.astimezone(timezone.utc)
 
 
 def _number(value: Any) -> float | None:
@@ -30,9 +39,14 @@ def _number(value: Any) -> float | None:
         return None
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return number if math.isfinite(number) else None
+
+
+def _positive_price(value: Any) -> float | None:
+    number = _number(value)
+    return number if number is not None and number > 0 else None
 
 
 @dataclass(frozen=True)
@@ -54,6 +68,8 @@ class LiveQuote:
     event_type: str | None
     event_id: str
     schema_version: str = LIVE_SCHEMA_VERSION
+    price_source: str | None = None
+    market_session_context: str | None = None
 
     def payload(self) -> dict[str, Any]:
         data = asdict(self)
@@ -72,28 +88,51 @@ class LiveQuoteResolver:
     def _stream_price(event_type: str, event: dict[str, Any]) -> tuple[float | None, float | None, float | None, float | None]:
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         if event_type == "T":
-            return _number(payload.get("price")), None, None, None
+            return _positive_price(payload.get("price")), None, None, None
         if event_type in {"A", "AM"}:
-            return _number(payload.get("close")), None, None, None
-        bid, ask = _number(payload.get("bid")), _number(payload.get("ask"))
-        midpoint = _number(payload.get("midpoint"))
+            return _positive_price(payload.get("close")), None, None, None
+        bid, ask = _positive_price(payload.get("bid")), _positive_price(payload.get("ask"))
+        midpoint = _positive_price(payload.get("midpoint"))
+        if ((payload.get("bid") is not None and bid is None)
+                or (payload.get("ask") is not None and ask is None)
+                or (bid is not None and ask is not None and ask < bid)):
+            midpoint = None
+        # Recovery's selected price may be a trade or aggregate close. Retain
+        # the genuine NBBO fields without reclassifying that price as midpoint.
+        if event.get("source_mode") == "rest" and "recovery_price" in payload:
+            return _positive_price(payload.get("recovery_price")), bid, ask, midpoint
         return midpoint, bid, ask, midpoint
 
+    def _session_context(self, now: datetime, session: str) -> str:
+        return f"{self.calendar.local_date(now).isoformat()}:{session}"
+
     def _freshest_stream(self, symbol: str) -> LiveQuote | None:
-        candidates: list[tuple[datetime, LiveQuote]] = []
+        candidates: list[tuple[datetime | None, LiveQuote]] = []
         now = self.clock()
         for event_type in ("T", "Q", "A", "AM"):
             event = self.state.get_latest(symbol, event_type)
             if not event:
                 continue
-            event_time = _parse_timestamp(event.get("event_timestamp"))
+            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+            recovery = event.get("source_mode") == "rest" and "recovery_price" in payload
+            event_time = _parse_timestamp(payload.get("recovery_price_timestamp") if recovery else event.get("event_timestamp"))
             received = _parse_timestamp(event.get("received_timestamp"))
             price, bid, ask, midpoint = self._stream_price(event_type, event)
-            flags = tuple(str(flag) for flag in event.get("quality_flags") or [])
-            session = self.calendar.session_at(event_time or now)
-            age_ms = max(0, int((now - event_time).total_seconds() * 1000)) if event_time else None
-            threshold_ms = 15_000 if session == "regular" else (60_000 if session in {"pre", "after"} else 86_400_000)
-            stale = bool(event.get("is_stale")) or event_time is None or (age_ms is not None and age_ms > threshold_ms)
+            age_ms, session, aged_stale, freshness_flags = quote_freshness(event_time, now, calendar=self.calendar)
+            flags = [str(flag) for flag in event.get("quality_flags") or []]
+            flags.extend(freshness_flags)
+            price_source = (
+                str(payload.get("recovery_price_source") or "rest_recovery_price") if recovery
+                else {"T": "last_trade", "Q": "nbbo_midpoint", "A": "aggregate_close", "AM": "minute_close"}[event_type]
+            )
+            daily_close = price_source in {"day_close", "daily_close", "previous_close"} or "daily_close_not_realtime" in flags
+            stale = bool(event.get("is_stale")) or aged_stale or daily_close or price is None
+            if daily_close:
+                flags.append("daily_close_not_realtime")
+            if price is None:
+                flags.append("data_missing")
+            if stale:
+                flags.append("stale")
             sequence = (event.get("sequence_number") or event.get("provider_event_id") or int(event_time.timestamp() * 1000)) if event_time else 0
             live = LiveQuote(
                 symbol=symbol, price=price, bid=bid, ask=ask, midpoint=midpoint,
@@ -101,14 +140,19 @@ class LiveQuoteResolver:
                 received_timestamp=received.isoformat() if received else None,
                 age_ms=age_ms, market_session=session, source=str(event.get("source") or "massive"),
                 source_mode=str(event.get("source_mode") or "websocket"), is_stale=stale,
-                is_degraded=stale, quality_flags=flags, event_type=event_type,
+                is_degraded=stale, quality_flags=tuple(dict.fromkeys(flags)), event_type=event_type,
                 event_id=f"{symbol}:{event_type}:{sequence}",
+                price_source=price_source, market_session_context=self._session_context(now, session),
             )
-            if event_time and price is not None:
+            if price is not None:
                 candidates.append((event_time, live))
         if not candidates:
             return None
-        return max(candidates, key=lambda item: item[0])[1]
+        # Eligible fresh observations win before comparing timestamps. Among
+        # those, newest price-event time wins; ties preserve T, Q, A, AM order.
+        # A stale or unknown-time candidate remains diagnostic fallback only.
+        eligible = [candidate for candidate in candidates if not candidate[1].is_stale]
+        return max(eligible or candidates, key=lambda item: item[0] or datetime.min.replace(tzinfo=timezone.utc))[1]
 
     def resolve(self, symbol: str) -> LiveQuote:
         symbol = str(symbol).strip().upper()
@@ -117,22 +161,34 @@ class LiveQuoteResolver:
             return stream
 
         rest = self.rest_quote(symbol) or {}
+        now = self.clock()
         rest_event_time = _parse_timestamp(rest.get("event_timestamp"))
-        rest_stale = bool(rest.get("is_stale", not rest.get("live_data_available")))
-        rest_price = _number(rest.get("price"))
+        age_ms, session, aged_stale, freshness_flags = quote_freshness(rest_event_time, now, calendar=self.calendar)
+        rest_price = _positive_price(rest.get("price"))
         rest_flags = [str(flag) for flag in rest.get("quality_flags") or []]
+        rest_flags.extend(freshness_flags)
+        price_source = str(rest.get("price_source")) if rest.get("price_source") else None
+        daily_close = price_source in {"day_close", "daily_close", "previous_close"} or "daily_close_not_realtime" in rest_flags
+        rest_stale = bool(rest.get("is_stale", not rest.get("live_data_available"))) or aged_stale or daily_close or rest_price is None
+        if daily_close:
+            rest_flags.append("daily_close_not_realtime")
+        if rest_price is None:
+            rest_flags.append("data_missing")
+        if rest_stale:
+            rest_flags.append("stale")
         if stream is not None:
             rest_flags.append("stream_stale_rest_fallback")
-        event_id_value = int(rest_event_time.timestamp() * 1000) if rest_event_time else int(self.clock().timestamp() * 1000)
+        event_id_value = int(rest_event_time.timestamp() * 1000) if rest_event_time else int(now.timestamp() * 1000)
         return LiveQuote(
-            symbol=symbol, price=rest_price, bid=_number(rest.get("bid")), ask=_number(rest.get("ask")),
-            midpoint=_number(rest.get("midpoint")), event_timestamp=rest.get("event_timestamp"),
-            received_timestamp=rest.get("received_timestamp"), age_ms=rest.get("age_ms"),
-            market_session=rest.get("market_session"), source=str(rest.get("source") or rest.get("quote_source") or "none"),
+            symbol=symbol, price=rest_price, bid=_positive_price(rest.get("bid")), ask=_positive_price(rest.get("ask")),
+            midpoint=_positive_price(rest.get("midpoint")), event_timestamp=rest_event_time.isoformat() if rest_event_time else None,
+            received_timestamp=rest.get("received_timestamp"), age_ms=age_ms,
+            market_session=session, source=str(rest.get("source") or rest.get("quote_source") or "none"),
             source_mode=str(rest.get("source_mode") or (rest.get("diagnostics") or {}).get("source_mode") or "fallback"),
             is_stale=rest_stale, is_degraded=stream is not None or rest_stale,
             quality_flags=tuple(dict.fromkeys(rest_flags)), event_type=None,
             event_id=f"{symbol}:REST:{event_id_value}",
+            price_source=price_source, market_session_context=self._session_context(now, session),
         )
 
 

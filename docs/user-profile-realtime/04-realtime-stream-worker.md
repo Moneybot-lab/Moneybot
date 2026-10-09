@@ -89,6 +89,20 @@ Implementation is complete. These production shadow gates remain to be measured 
 4. **Reconnect, gap recovery, and staleness controls**
 5. **Shadow metrics and load-test tooling**
 
+## Offline reliability investigation — October 9, 2026
+
+- [x] Trace parsing, ordering, Redis writes, shadow comparisons, keepalive and recovery with synthetic inputs and network access blocked.
+- [x] Reproduce inline Redis scheduling, serial shadow receive delays, library backpressure, discontinuity counting and overlapping recovery budgets.
+- [x] Prepare a bounded correction proposal in [the investigation report](../reports/moneybot_stream_portfolio_offline_investigation_2026-10-09.md).
+- [x] Owner authorized code-only C1–C5 implementation and synthetic regression tests; C6 remains excluded.
+- [ ] Separately authorized production validation of reliability, latency, recovery and resource limits.
+
+The original investigation changed no worker behavior. The subsequent owner-authorized C1/C2 repairs offload ordered Redis work and bound background comparison/recovery scheduling; see [the implementation and validation record](../reports/moneybot_stream_portfolio_reliability_repairs_2026-10-09.md). Offline code completion does not establish the production ping-timeout cause or close the exit gates above. Existing Stage B UNKNOWN acceptance statuses and overall OPEN status are preserved.
+
+- [x] Implement ordered, bounded worker offloading and background REST scheduling with synthetic delayed-operation, ordering, reconnect and shutdown regressions.
+- [x] Reconcile queue documentation to the existing default of 1024 and clarify that shadow mode governs worker comparison; the resolver still selects fresh eligible Redis state first.
+- [ ] Owner review of the repair PR before any separately authorized operational action.
+
 ## Decision log
 
 - **June 7, 2026:** Chose one bounded worker connection, a 250-symbol global cap, 100 quote cap, 50 trade cap, and no wildcard subscriptions.

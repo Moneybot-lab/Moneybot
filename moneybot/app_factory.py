@@ -1461,7 +1461,7 @@ def create_app() -> Flask:
                 <div style="background:#dcfce7;padding:10px;border-radius:8px"><small>Realized Gain/Loss</small><strong id="realizedPnl" style="display:block">$0.00</strong></div>
                 <div style="background:#dcfce7;padding:10px;border-radius:8px"><small>Lifetime Gain/Loss</small><strong id="lifetimePnl" style="display:block">$0.00</strong></div>
               </section>
-              <div id="portfolioLiveStatus" role="status" style="margin:0 0 12px;padding:9px 12px;border-radius:10px;background:#ecfccb;border:1px solid #bef264;color:#3f6212;font-size:13px;font-weight:700">Live prices: connecting…</div>
+              <div id="portfolioLiveStatus" role="status" style="margin:0 0 12px;padding:9px 12px;border-radius:10px;background:#ecfccb;border:1px solid #bef264;color:#3f6212;font-size:13px;font-weight:700">Browser price feed: connecting · Provider status unknown</div>
               <div id="loadingState" style="display:none;align-items:center;justify-content:center;gap:10px;position:fixed;top:16px;right:16px;background:rgba(236,252,203,.95);border:1px solid #bef264;border-radius:999px;padding:10px 14px;z-index:40;color:#14532d;font-weight:700;font-size:.95rem;pointer-events:none">
                 <span style="width:34px;height:34px;border:4px solid #86efac;border-top-color:#16a34a;border-radius:999px;display:inline-block;animation:spin .8s linear infinite"></span>
                 Loading latest portfolio stock data...
@@ -1562,6 +1562,9 @@ def create_app() -> Flask:
               let currentAdviceContext = null;
               let portfolioEventSource = null;
               let portfolioReconnectTimer = null;
+              let portfolioBrowserState = 'idle';
+              let portfolioProviderHealth = null;
+              let portfolioProviderHealthReceivedAt = 0;
               document.getElementById('addForm').addEventListener('submit', addItem);
 
               async function logout(){ await apiFetch('/api/auth/logout',{method:'POST'}); sessionStorage.removeItem(TAB_SESSION_KEY); localStorage.removeItem(TAB_SESSION_KEY); location.href='/'; }
@@ -1591,13 +1594,52 @@ def create_app() -> Flask:
               function formatMoney(v){
                 return (typeof v === 'number' && isFinite(v)) ? ('$' + v.toLocaleString(undefined,{maximumFractionDigits:2})) : 'n/a';
               }
-              function livePriceCell(item){
-                const price = formatMoney(item.current_price);
+              function validPortfolioPrice(value){
+                return typeof value === 'number' && Number.isFinite(value) && value > 0;
+              }
+              function portfolioPriceQuality(item){
                 const live = item.live_market || {};
-                const state = live.is_stale ? 'Stale' : (live.is_degraded ? 'REST fallback' : 'Live');
-                const color = live.is_stale ? '#b45309' : (live.is_degraded ? '#4d7c0f' : '#15803d');
-                const asOf = live.event_timestamp ? new Date(live.event_timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : 'unknown';
-                return `<div id="live-price-${escapeHtml(item.symbol)}"><strong>${price}</strong><div style="font-size:11px;color:${color};margin-top:3px">${state} · ${escapeHtml(live.market_session || 'session n/a')} · ${escapeHtml(asOf)}</div></div>`;
+                const flags = live.quality_flags || [];
+                if(flags.includes('entry_price_fallback')) return {key:'unavailable', label:'Price unavailable', color:'#b45309'};
+                if(!validPortfolioPrice(item.current_price)) return {key:'unavailable', label:'Price unavailable', color:'#b45309'};
+                const source = String(live.source_mode || '').toLowerCase();
+                if(live.price === null && flags.includes('price_unavailable') && !live.event_timestamp){
+                  return {key:'unavailable', label:'Price unavailable', color:'#b45309'};
+                }
+                if(source === 'last_known') return {key:'stale', label:'Last known · Stale', color:'#b45309'};
+                if(typeof live.is_stale !== 'boolean'){
+                  return {key:'unknown', label:'Last known · Status unknown', color:'#71717a'};
+                }
+                const rest = source === 'rest' || (source === 'fallback' && ['finnhub', 'twelve_data', 'yfinance'].includes(String(live.source || '').toLowerCase()));
+                const eventTime = live.event_timestamp ? Date.parse(live.event_timestamp) : NaN;
+                const age = live.age_ms;
+                const elapsed = typeof item._portfolioQuoteReceivedAt === 'number' ? Math.max(0, Date.now() - item._portfolioQuoteReceivedAt) : 0;
+                const limit = ({regular:15000, pre:60000, after:60000, closed:86400000})[live.market_session];
+                const timed = Number.isFinite(eventTime) && typeof age === 'number' && Number.isFinite(age) && age >= 0 && typeof limit === 'number';
+                const dailyClose = flags.includes('daily_close_not_realtime') || ['day_close', 'daily_close', 'previous_close'].includes(live.price_source);
+                const stale = live.is_stale || dailyClose || (timed && age + elapsed > limit);
+                if(!stale && !timed){
+                  return {key:'unknown', label:rest ? 'REST · Status unknown' : 'Last known · Status unknown', color:'#71717a'};
+                }
+                if(rest) return {key:stale ? 'stale' : 'fresh', label:stale ? 'REST · Stale' : 'REST · Fresh', color:stale ? '#b45309' : '#15803d'};
+                if(source === 'websocket') return {key:stale ? 'stale' : 'fresh', label:stale ? 'Last known · Stale' : 'WebSocket · Live', color:stale ? '#b45309' : '#15803d'};
+                return {key:'unknown', label:'Last known · Status unknown', color:'#71717a'};
+              }
+              function livePriceCell(item){
+                const live = item.live_market || {};
+                const quality = portfolioPriceQuality(item);
+                const entryFallback = (live.quality_flags || []).includes('entry_price_fallback');
+                const price = validPortfolioPrice(item.current_price) ? (entryFallback ? `Cost basis: ${formatMoney(item.current_price)}` : (quality.key === 'unavailable' ? 'n/a' : formatMoney(item.current_price))) : 'n/a';
+                const degraded = live.is_degraded && quality.key === 'fresh' ? ' · Degraded fallback' : '';
+                const unavailable = (live.quality_flags || []).includes('price_unavailable') && quality.key !== 'unavailable' ? ' · Price unavailable' : '';
+                const asOf = live.event_timestamp && Number.isFinite(Date.parse(live.event_timestamp)) ? new Date(live.event_timestamp).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}) : 'unknown';
+                return `<div id="live-price-${escapeHtml(item.symbol)}"><strong>${price}</strong><div style="font-size:11px;color:${quality.color};margin-top:3px">${quality.label}${degraded}${unavailable} · ${escapeHtml(live.market_session || 'session n/a')} · ${escapeHtml(asOf)}</div></div>`;
+              }
+              function refreshPortfolioPriceCells(){
+                currentPortfolioItems.forEach((item) => {
+                  const cell = document.getElementById('live-price-' + item.symbol);
+                  if(cell) cell.outerHTML = livePriceCell(item);
+                });
               }
               function setPortfolioLiveStatus(text, mode){
                 const el = document.getElementById('portfolioLiveStatus');
@@ -1606,41 +1648,101 @@ def create_app() -> Flask:
                 el.style.background = mode === 'live' ? '#dcfce7' : (mode === 'stale' ? '#fef3c7' : '#ecfccb');
                 el.style.borderColor = mode === 'live' ? '#86efac' : (mode === 'stale' ? '#f59e0b' : '#bef264');
               }
+              function receivePortfolioProviderHealth(health){
+                portfolioProviderHealth = health || null;
+                portfolioProviderHealthReceivedAt = Date.now();
+              }
+              function portfolioProviderStatus(){
+                const health = portfolioProviderHealth || {};
+                const ttl = Number(health.ttl_seconds);
+                const age = health.age_ms;
+                const elapsed = Math.max(0, Date.now() - portfolioProviderHealthReceivedAt);
+                if(health.schema_version !== 'provider-stream-health.v1' || health.provider !== 'massive' || health.verified !== true ||
+                   !health.observed_at_utc || !Number.isFinite(Date.parse(health.observed_at_utc)) ||
+                   typeof age !== 'number' || !Number.isFinite(age) || age < 0 || !Number.isFinite(ttl) || ttl <= 0 || age + elapsed > ttl * 1000){
+                  return 'Provider status unknown';
+                }
+                return ({connected:'Provider stream connected', reconnecting:'Provider stream reconnecting', disconnected:'Provider stream disconnected'})[health.connection_state] || 'Provider status unknown';
+              }
+              function updatePortfolioLiveStatus(){
+                const counts = {fresh:0, stale:0, unavailable:0, unknown:0};
+                let degraded = 0;
+                currentPortfolioItems.forEach((item) => {
+                  const quality = portfolioPriceQuality(item);
+                  counts[quality.key] += 1;
+                  if(quality.key === 'stale' || quality.key === 'unavailable' || (item.live_market && item.live_market.is_degraded)) degraded += 1;
+                });
+                const qualityParts = Object.entries(counts).filter(([, count]) => count).map(([key, count]) => `${count} ${key === 'unknown' ? 'status unknown' : key}`);
+                const quality = qualityParts.length ? `Prices: ${qualityParts.join(', ')}${degraded ? `; ${degraded} degraded` : ''}` : 'No portfolio prices';
+                const browser = ({idle:'Browser price feed: waiting for positions', connecting:'Browser price feed: connecting', connected:'Browser price feed connected', reconnecting:'Browser price feed reconnecting; keeping last known values. Manual Refresh Portfolio remains available'})[portfolioBrowserState];
+                const mixed = Object.values(counts).filter((count) => count).length > 1;
+                setPortfolioLiveStatus(`${browser} · ${portfolioProviderStatus()} · ${mixed ? 'Mixed quality · ' : ''}${quality}`, counts.stale || counts.unavailable ? 'stale' : (counts.unknown || degraded || portfolioBrowserState !== 'connected' ? 'idle' : 'live'));
+              }
               function applyPortfolioLiveQuotes(quotes){
                 let changed = false;
                 (quotes || []).forEach((quote) => {
                   const item = currentPortfolioItems.find((row) => String(row.symbol).toUpperCase() === String(quote.symbol).toUpperCase());
-                  if(!item || typeof quote.price !== 'number') return;
-                  item.current_price = quote.price;
-                  const shares = typeof item.shares === 'number' ? item.shares : 1;
-                  if(typeof item.entry_price === 'number' && item.entry_price > 0){
-                    item.performance_amount = (quote.price - item.entry_price) * shares;
-                    item.performance_percent = ((quote.price - item.entry_price) / item.entry_price) * 100;
+                  if(!item) return;
+                  item._portfolioQuoteReceivedAt = Date.now();
+                  if(validPortfolioPrice(quote.price)){
+                    item.current_price = quote.price;
+                    const shares = typeof item.shares === 'number' ? item.shares : 1;
+                    if(typeof item.entry_price === 'number' && item.entry_price > 0){
+                      item.performance_amount = (quote.price - item.entry_price) * shares;
+                      item.performance_percent = ((quote.price - item.entry_price) / item.entry_price) * 100;
+                    }
+                    item.live_market = quote;
+                  } else {
+                    const priorLive = item.live_market || {};
+                    item.live_market = {...quote, source_mode:validPortfolioPrice(item.current_price) ? 'last_known' : quote.source_mode, observed_source_mode:quote.observed_source_mode || quote.source_mode,
+                      observed_event_timestamp:quote.observed_event_timestamp || quote.event_timestamp, event_timestamp:priorLive.event_timestamp || null,
+                      is_stale:true, is_degraded:true, live_data_available:false,
+                      quality_flags:Array.from(new Set([...(quote.quality_flags || []), 'price_unavailable', ...(validPortfolioPrice(item.current_price) ? ['last_known_price_retained'] : [])]))};
                   }
-                  item.live_market = quote;
                   changed = true;
                 });
                 if(changed) renderRows(currentPortfolioItems);
-                const stale = (quotes || []).some((quote) => quote.is_stale || quote.is_degraded);
-                setPortfolioLiveStatus(stale ? 'Live connection is degraded; showing the last known value or REST fallback.' : 'Live prices connected.', stale ? 'stale' : 'live');
+                updatePortfolioLiveStatus();
               }
               function startPortfolioLive(){
                 const symbols = currentPortfolioItems.map((item) => String(item.symbol || '').toUpperCase()).filter(Boolean);
                 if(portfolioEventSource){ portfolioEventSource.close(); portfolioEventSource = null; }
                 if(portfolioReconnectTimer){ clearTimeout(portfolioReconnectTimer); portfolioReconnectTimer = null; }
-                if(!symbols.length){ setPortfolioLiveStatus('Live prices will connect after you add a position.', 'idle'); return; }
-                setPortfolioLiveStatus('Live prices: connecting…', 'idle');
+                receivePortfolioProviderHealth(null);
+                currentPortfolioItems.forEach((item) => { if(typeof item._portfolioQuoteReceivedAt !== 'number') item._portfolioQuoteReceivedAt = Date.now(); });
+                portfolioBrowserState = symbols.length ? 'connecting' : 'idle';
+                updatePortfolioLiveStatus();
+                if(!symbols.length) return;
                 portfolioEventSource = new EventSource('/api/live-market-stream?scope=portfolio&symbols=' + encodeURIComponent(symbols.join(',')));
+                portfolioEventSource.addEventListener('open', () => { portfolioBrowserState = 'connected'; updatePortfolioLiveStatus(); });
                 portfolioEventSource.addEventListener('quotes', (event) => {
-                  try { applyPortfolioLiveQuotes((JSON.parse(event.data) || {}).quotes || []); } catch(_err) { setPortfolioLiveStatus('Live update could not be read; REST refresh remains available.', 'stale'); }
+                  try {
+                    const payload = JSON.parse(event.data) || {};
+                    portfolioBrowserState = 'connected';
+                    receivePortfolioProviderHealth(payload.provider_health);
+                    applyPortfolioLiveQuotes(payload.quotes || []);
+                  } catch(_err) { setPortfolioLiveStatus('Price update could not be read. Keeping last known values; manual Refresh Portfolio remains available.', 'stale'); }
                 });
-                portfolioEventSource.addEventListener('heartbeat', () => setPortfolioLiveStatus('Live prices connected.', 'live'));
+                portfolioEventSource.addEventListener('heartbeat', (event) => {
+                  portfolioBrowserState = 'connected';
+                  try { receivePortfolioProviderHealth((JSON.parse(event.data) || {}).provider_health); } catch(_err) { receivePortfolioProviderHealth(null); }
+                  refreshPortfolioPriceCells();
+                  updatePortfolioLiveStatus();
+                });
                 portfolioEventSource.addEventListener('recommendation_refresh', () => {
                   setPortfolioLiveStatus('Market boundary changed. Refreshing recommendation without generating a new AI narrative…', 'idle');
                   if(!portfolioReconnectTimer) portfolioReconnectTimer = setTimeout(() => { portfolioReconnectTimer = null; load(); }, 1200);
                 });
                 portfolioEventSource.onerror = () => {
-                  setPortfolioLiveStatus('Live connection interrupted. Keeping last known values and using REST refresh while reconnecting…', 'stale');
+                  portfolioBrowserState = 'reconnecting';
+                  currentPortfolioItems.forEach((item) => {
+                    if(!validPortfolioPrice(item.current_price)) return;
+                    const live = item.live_market || {};
+                    item.live_market = {...live, source_mode:'last_known', observed_source_mode:live.observed_source_mode || live.source_mode, is_stale:true, is_degraded:true, live_data_available:false,
+                      quality_flags:Array.from(new Set([...(live.quality_flags || []), 'browser_feed_interrupted', 'last_known_price_retained']))};
+                  });
+                  renderRows(currentPortfolioItems);
+                  updatePortfolioLiveStatus();
                 };
               }
               window.addEventListener('beforeunload', () => { if(portfolioEventSource) portfolioEventSource.close(); });
@@ -1882,6 +1984,7 @@ def create_app() -> Flask:
                   return;
                 }
                 currentPortfolioItems = safeItems;
+                currentPortfolioItems.forEach((item) => { if(typeof item._portfolioQuoteReceivedAt !== 'number') item._portfolioQuoteReceivedAt = Date.now(); });
                 items = safeItems;
                 const totalValue = items.reduce((sum, item) => {
                   const price = typeof item.current_price === 'number' ? item.current_price : 0;

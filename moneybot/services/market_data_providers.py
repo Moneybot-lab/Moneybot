@@ -4,6 +4,7 @@ import math
 import time
 from abc import ABC, abstractmethod
 from collections import Counter
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, time as dt_time, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -263,6 +264,46 @@ class ExchangeCalendar:
         return "closed"
 
 
+def quote_freshness(
+    event_timestamp: datetime | None,
+    now: datetime,
+    *,
+    calendar: ExchangeCalendar | None = None,
+    regular_stale_seconds: float = 15.0,
+    extended_stale_seconds: float = 60.0,
+    closed_stale_seconds: float = 86400.0,
+) -> tuple[int | None, str, bool, tuple[str, ...]]:
+    """Age the actual price event, never a receipt or ticker-update timestamp.
+
+    Freshness cannot grow when the session changes. An event from another
+    exchange date/session remains last-known until a current-context event is
+    available. Missing, naive and future event times cannot establish freshness.
+    """
+    calendar = calendar or ExchangeCalendar()
+    session = calendar.session_at(now)
+    if event_timestamp is None or event_timestamp.tzinfo is None:
+        return None, session, True, ("missing_event_timestamp", "freshness_unknown", "stale")
+    age = (now - event_timestamp).total_seconds()
+    age_ms = max(0, int(age * 1000))
+    flags: list[str] = []
+    if age < 0:
+        flags.append("future_event_timestamp")
+    event_session = calendar.session_at(event_timestamp)
+    if event_session != session or calendar.local_date(event_timestamp) != calendar.local_date(now):
+        flags.append("market_session_mismatch")
+    thresholds = {
+        "regular": max(0.0, regular_stale_seconds),
+        "pre": max(0.0, extended_stale_seconds),
+        "after": max(0.0, extended_stale_seconds),
+        "closed": max(0.0, closed_stale_seconds),
+    }
+    threshold = min(thresholds[session], thresholds[event_session])
+    stale = bool(flags) or age > threshold
+    if stale:
+        flags.append("stale")
+    return age_ms, session, stale, tuple(flags)
+
+
 class ProviderMetrics:
     def __init__(self) -> None:
         self._lock = Lock()
@@ -319,6 +360,7 @@ class MassiveRestClient(MarketDataProvider):
         quote_cache_seconds: float = 2.0,
         reference_cache_seconds: float = 86400.0,
         negative_cache_seconds: float = 30.0,
+        unusable_snapshot_cache_seconds: float = 5.0,
         regular_stale_seconds: float = 15.0,
         extended_stale_seconds: float = 60.0,
         closed_stale_seconds: float = 86400.0,
@@ -336,6 +378,10 @@ class MassiveRestClient(MarketDataProvider):
         self.quote_cache_seconds = max(0.0, quote_cache_seconds)
         self.reference_cache_seconds = max(0.0, reference_cache_seconds)
         self.negative_cache_seconds = max(0.0, negative_cache_seconds)
+        # Successful HTTP responses with no usable price are not transient
+        # transport failures. Avoid retry amplification while allowing recovery
+        # promptly; do not change the established HTTP-error/backoff policy.
+        self.unusable_snapshot_cache_seconds = min(30.0, max(0.1, unusable_snapshot_cache_seconds))
         self.regular_stale_seconds = max(0.0, regular_stale_seconds)
         self.extended_stale_seconds = max(0.0, extended_stale_seconds)
         self.closed_stale_seconds = max(0.0, closed_stale_seconds)
@@ -360,7 +406,7 @@ class MassiveRestClient(MarketDataProvider):
             return None
         try:
             number = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
         return number if math.isfinite(number) else None
 
@@ -368,6 +414,11 @@ class MassiveRestClient(MarketDataProvider):
     def _integer(value: Any) -> int | None:
         number = MassiveRestClient._number(value)
         return int(number) if number is not None else None
+
+    @staticmethod
+    def _positive_price(value: Any) -> float | None:
+        number = MassiveRestClient._number(value)
+        return number if number is not None and number > 0 else None
 
     @staticmethod
     def normalize_timestamp(value: Any) -> datetime | None:
@@ -399,14 +450,14 @@ class MassiveRestClient(MarketDataProvider):
             raise entry.value
         result = entry.value
         return ProviderResult(
-            data=result.data,
+            data=deepcopy(result.data),
             provider=result.provider,
             endpoint=result.endpoint,
             request_id=result.request_id,
             received_timestamp=result.received_timestamp,
             latency_ms=result.latency_ms,
             cache_status="hit",
-            diagnostics=result.diagnostics,
+            diagnostics=deepcopy(result.diagnostics),
         )
 
     def _cache_set(self, key: str, value: ProviderResult | ProviderError, ttl: float) -> None:
@@ -441,8 +492,12 @@ class MassiveRestClient(MarketDataProvider):
             return ProviderUnavailableError(message, status_code=status or None)
         return ProviderResponseError(message, status_code=status)
 
+    @staticmethod
+    def _request_cache_key(endpoint: str, path: str, params: Mapping[str, Any] | None = None) -> str:
+        return f"{NORMALIZED_MARKET_DATA_SCHEMA}:{endpoint}:{path}:{sorted((params or {}).items())}"
+
     def _request(self, endpoint: str, path: str, *, params: Mapping[str, Any] | None = None, cache_ttl: float = 0.0) -> ProviderResult:
-        cache_key = f"{NORMALIZED_MARKET_DATA_SCHEMA}:{endpoint}:{path}:{sorted((params or {}).items())}"
+        cache_key = self._request_cache_key(endpoint, path, params)
         cached = self._cache_get(cache_key)
         if cached:
             self.metrics.record(endpoint=endpoint, latency_ms=0.0, cache_status="hit")
@@ -513,6 +568,14 @@ class MassiveRestClient(MarketDataProvider):
             return self.extended_stale_seconds
         return self.closed_stale_seconds
 
+    def _quote_freshness(self, event_timestamp: datetime | None, now: datetime) -> tuple[int | None, str, bool, tuple[str, ...]]:
+        return quote_freshness(
+            event_timestamp, now, calendar=self.calendar,
+            regular_stale_seconds=self.regular_stale_seconds,
+            extended_stale_seconds=self.extended_stale_seconds,
+            closed_stale_seconds=self.closed_stale_seconds,
+        )
+
     def _normalize_snapshot(self, symbol: str, result: ProviderResult) -> NormalizedQuote:
         payload = result.data if isinstance(result.data, dict) else {}
         ticker = payload.get("ticker") if isinstance(payload.get("ticker"), dict) else {}
@@ -522,65 +585,59 @@ class MassiveRestClient(MarketDataProvider):
         day = ticker.get("day") if isinstance(ticker.get("day"), dict) else {}
         previous = ticker.get("prevDay") if isinstance(ticker.get("prevDay"), dict) else {}
 
-        bid = self._number(quote.get("p"))
-        ask = self._number(quote.get("P"))
+        bid = self._positive_price(quote.get("p"))
+        ask = self._positive_price(quote.get("P"))
         bid_size = self._number(quote.get("s"))
         ask_size = self._number(quote.get("S"))
-        midpoint = (bid + ask) / 2 if bid and ask and bid > 0 and ask > 0 and ask >= bid else None
-        trade_price = self._number(trade.get("p"))
+        midpoint = self._positive_price(bid / 2 + ask / 2) if bid and ask and ask >= bid else None
+        trade_price = self._positive_price(trade.get("p"))
         trade_size = self._number(trade.get("s") or trade.get("ds"))
 
         quote_ts = self.normalize_timestamp(quote.get("t") or quote.get("y") or quote.get("f"))
         trade_ts = self.normalize_timestamp(trade.get("t") or trade.get("y") or trade.get("f"))
         minute_ts = self.normalize_timestamp(minute.get("t"))
-        updated_ts = self.normalize_timestamp(ticker.get("updated"))
-        event_timestamp = max((stamp for stamp in (quote_ts, trade_ts, minute_ts, updated_ts) if stamp), default=None)
         received = result.received_timestamp
-        age_ms = max(0, int((received - event_timestamp).total_seconds() * 1000)) if event_timestamp else None
-        session = self.calendar.session_at(event_timestamp or received)
+        now = self.clock()
         flags: list[str] = []
-        if event_timestamp is None:
-            flags.append("missing_event_timestamp")
         if bid is not None and ask is not None and ask < bid:
             flags.append("crossed_market")
         if bid is None or ask is None:
             flags.append("incomplete_nbbo")
 
-        threshold = self._stale_threshold(session)
-        is_stale = event_timestamp is None or (age_ms is not None and age_ms > threshold * 1000)
-        if is_stale:
-            flags.append("stale")
-
         candidates: list[tuple[str, float | None, datetime | None, str]] = [
             ("last_trade", trade_price, trade_ts, "latest qualifying trade"),
             ("nbbo_midpoint", midpoint, quote_ts, "midpoint of the latest valid NBBO"),
-            ("minute_close", self._number(minute.get("c")), minute_ts, "latest minute aggregate close"),
-            ("day_close", self._number(day.get("c")), None, "current-session daily aggregate close"),
+            ("minute_close", self._positive_price(minute.get("c")), minute_ts, "latest minute aggregate close"),
+            ("day_close", self._positive_price(day.get("c")), None, "daily aggregate close"),
         ]
         price = None
         price_source = None
+        event_timestamp = None
         price_reason = "No valid positive price was present in the snapshot."
         for source, candidate, timestamp, reason in candidates:
-            if candidate is None or candidate <= 0:
+            if candidate is None:
                 continue
-            candidate_age = max(0.0, (received - timestamp).total_seconds()) if timestamp else None
-            if source in {"last_trade", "nbbo_midpoint", "minute_close"} and timestamp is not None and candidate_age is not None:
-                candidate_session = self.calendar.session_at(timestamp)
-                if candidate_age > self._stale_threshold(candidate_session):
-                    continue
-            if source == "day_close":
-                flags.append("daily_close_not_realtime")
-                if session in {"pre", "regular", "after"}:
-                    continue
-            price, price_source, price_reason = candidate, source, reason
+            _, _, candidate_stale, _ = self._quote_freshness(timestamp, now)
+            # Preserve the established price precedence when the provider
+            # supplies an undated trade. It remains an explicitly unknown,
+            # stale value; another field's timestamp cannot make it live.
+            if source == "day_close" or (timestamp is not None and candidate_stale):
+                continue
+            price, price_source, event_timestamp, price_reason = candidate, source, timestamp, reason
             break
         if price is None:
-            for source, candidate, _timestamp, reason in candidates:
-                if candidate is not None and candidate > 0:
-                    price, price_source = candidate, source
+            for source, candidate, timestamp, reason in candidates:
+                if candidate is not None:
+                    price, price_source, event_timestamp = candidate, source, timestamp
                     price_reason = f"Stale fallback: {reason}."
                     flags.append("stale_price_fallback")
                     break
+
+        age_ms, session, is_stale, freshness_flags = self._quote_freshness(event_timestamp, now)
+        flags.extend(freshness_flags)
+        if price_source == "day_close":
+            is_stale = True
+            flags.extend(("daily_close_not_realtime", "stale"))
 
         previous_close = self._number(previous.get("c"))
         change_percent = None
@@ -618,14 +675,19 @@ class MassiveRestClient(MarketDataProvider):
 
     def get_quote(self, symbol: str) -> ProviderResult:
         symbol = self._symbol(symbol)
+        path = f"/v2/snapshot/locale/us/markets/stocks/tickers/{symbol}"
         raw = self._request(
             "single_ticker_snapshot",
-            f"/v2/snapshot/locale/us/markets/stocks/tickers/{symbol}",
+            path,
             cache_ttl=self.quote_cache_seconds,
         )
         quote = self._normalize_snapshot(symbol, raw)
         if quote.price is None:
             error = ProviderResponseError("Massive snapshot did not contain a usable positive price")
+            self._cache_set(
+                self._request_cache_key("single_ticker_snapshot", path),
+                error, self.unusable_snapshot_cache_seconds,
+            )
             self.metrics.record(endpoint="normalized_quote", latency_ms=raw.latency_ms, cache_status=raw.cache_status, error_code=error.code, stale=True)
             raise error
         self.metrics.record(endpoint="normalized_quote", latency_ms=raw.latency_ms, cache_status=raw.cache_status, stale=quote.is_stale)
@@ -741,17 +803,14 @@ def normalized_fallback_quote(
 ) -> dict[str, Any]:
     received = received_timestamp or datetime.now(timezone.utc)
     event = event_timestamp
-    session = (calendar or ExchangeCalendar()).session_at(event or received)
-    numeric_price = MassiveRestClient._number(price)
+    numeric_price = MassiveRestClient._positive_price(price)
     numeric_change = MassiveRestClient._number(change_percent)
-    age_ms = max(0, int((received - event).total_seconds() * 1000)) if event else None
     flags = list(quality_flags)
-    thresholds = {"regular": 15_000, "pre": 60_000, "after": 60_000, "closed": 86_400_000}
-    is_stale = event is None or (age_ms is not None and age_ms > thresholds[session])
-    if event is None:
-        flags.extend(("missing_event_timestamp", "freshness_unknown"))
-    elif is_stale:
-        flags.append("stale")
+    age_ms, session, is_stale, freshness_flags = quote_freshness(event, received, calendar=calendar)
+    flags.extend(freshness_flags)
+    if numeric_price is None:
+        is_stale = True
+        flags.extend(("invalid_price", "data_missing", "stale"))
     quote = NormalizedQuote(
         symbol=symbol.upper(), bid=None, ask=None, bid_size=None, ask_size=None, midpoint=None,
         last_trade_price=None, last_trade_size=None, price=numeric_price,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import smtplib
 import subprocess
@@ -9,6 +10,7 @@ import sys
 import time
 import uuid
 import hmac
+import hashlib
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -62,8 +64,9 @@ from .services.model_metadata import load_artifact_history, load_artifact_metada
 from .services.production_servability import validate_certification
 from .services.decision_snapshot import build_decision_snapshot
 from .services.suitability_policy import UserDecisionContext
-from .services.market_stream import register_demand_safely
+from .services.market_stream import STREAM_SCHEMA_VERSION, register_demand_safely
 from .services.live_market import LiveQuoteResolver, sse_encode
+from .services.market_data_providers import ExchangeCalendar, quote_freshness
 from .services.outcome_tracking import (
     OutcomeHistoryCache,
     close_values,
@@ -471,6 +474,200 @@ def _live_quote_payload(symbol: str) -> dict[str, Any] | None:
     if resolver is None:
         return None
     return resolver.resolve(symbol).payload()
+
+
+def _trusted_quote_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if stamp.tzinfo is None or stamp.utcoffset() is None:
+            return None
+        return stamp.astimezone(timezone.utc)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _valid_quote_price(value: Any) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value) and value > 0
+    except OverflowError:
+        return False
+
+
+def _quote_delivery_fingerprint(quote: dict[str, Any]) -> str:
+    """One bounded signature per permitted symbol; age and receipt are not events."""
+    serialized = json.dumps({
+        key: quote.get(key)
+        for key in (
+            "price", "source", "source_mode", "is_stale", "is_degraded", "event_type",
+            "market_session", "market_session_context", "price_source", "event_timestamp", "bid", "ask", "midpoint",
+            "observed_source", "observed_source_mode", "observed_price", "observed_event_type",
+        )
+    } | {
+        "unavailable": not _valid_quote_price(quote.get("price")),
+        "quality_flags": sorted(set(str(flag) for flag in quote.get("quality_flags") or [])),
+    }, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+class _SSEQuoteDelivery:
+    """Price ordering is private to one SSE connection, never a pricing cache.
+
+    Equal-time changed prices have no trustworthy correction marker in the
+    current contract. They remain last-known/stale until a newer observation.
+    A current market-session boundary invalidates the comparison watermark,
+    while preserving a numeric last-known value until a fresh replacement.
+    """
+
+    def __init__(self) -> None:
+        self.previous: dict[str, dict[str, Any]] = {}
+        self.contexts: dict[str, str] = {}
+        self.fingerprints: dict[str, str] = {}
+
+    @staticmethod
+    def _retained(previous: dict[str, Any], incoming: dict[str, Any], reason: str, *, now: datetime) -> dict[str, Any]:
+        outgoing = dict(incoming)
+        prior_stamp = _trusted_quote_timestamp(previous.get("event_timestamp"))
+        # Preserve incoming diagnostics separately from the displayed value's
+        # provenance, including a null price that still changes its quality.
+        outgoing.update({
+            "observed_price": incoming.get("price") if _valid_quote_price(incoming.get("price")) else None,
+            "observed_source": incoming.get("source"),
+            "observed_source_mode": incoming.get("source_mode"),
+            "observed_event_timestamp": incoming.get("event_timestamp"),
+            "observed_event_type": incoming.get("event_type"),
+            "observed_age_ms": incoming.get("age_ms"),
+            "price": previous["price"],
+            "event_timestamp": previous.get("event_timestamp"),
+            "event_type": previous.get("event_type"),
+            "age_ms": max(0, int((now - prior_stamp).total_seconds() * 1000)) if prior_stamp else None,
+            "source": previous.get("source"),
+            "source_mode": "last_known",
+            "price_source": previous.get("price_source"),
+            "bid": previous.get("bid"), "ask": previous.get("ask"),
+            "midpoint": previous.get("midpoint"),
+            "is_stale": True, "is_degraded": True,
+            "quality_flags": list(dict.fromkeys([
+                *(incoming.get("quality_flags") or []), "last_known_price", reason,
+            ])),
+        })
+        return outgoing
+
+    def apply(self, incoming: dict[str, Any], *, now: datetime, calendar: ExchangeCalendar) -> tuple[dict[str, Any], bool]:
+        quote = dict(incoming)
+        symbol = str(quote["symbol"])
+        context = f"{now.astimezone(calendar.timezone).date().isoformat()}:{calendar.session_at(now)}"
+        quote["market_session_context"] = context
+        previous = self.previous.get(symbol)
+        prior_context = self.contexts.get(symbol)
+        boundary = previous is not None and prior_context != context
+        stamp = _trusted_quote_timestamp(quote.get("event_timestamp"))
+        valid = _valid_quote_price(quote.get("price"))
+        trusted = stamp is not None and stamp <= now
+        event_context = (
+            f"{stamp.astimezone(calendar.timezone).date().isoformat()}:{calendar.session_at(stamp)}"
+            if trusted else None
+        )
+        if not valid or not trusted:
+            reason = "price_unavailable" if not valid else "untrusted_price_timestamp"
+            if not valid:
+                quote["price"] = None
+            quote["is_stale"] = quote["is_degraded"] = True
+            quote["quality_flags"] = list(dict.fromkeys([*(quote.get("quality_flags") or []), reason]))
+            if previous is not None:
+                quote = self._retained(previous, quote, reason, now=now)
+            elif valid:
+                quote["observed_event_timestamp"] = quote.get("event_timestamp")
+                quote["event_timestamp"] = None
+                quote["age_ms"] = None
+                self.previous[symbol] = dict(quote)
+                self.contexts[symbol] = context
+            return quote, False
+        if boundary:
+            if quote.get("is_stale") or event_context != context:
+                return self._retained(previous, quote, "session_ordering_reset", now=now), False
+            # A fresh, timestamped observation in the new context may have a
+            # split-adjusted price. Numeric direction is never an ordering rule.
+            self.previous[symbol] = dict(quote)
+            self.contexts[symbol] = context
+            return quote, True
+        prior_stamp = _trusted_quote_timestamp(previous.get("event_timestamp")) if previous else None
+        if prior_stamp is not None and stamp < prior_stamp:
+            return self._retained(previous, quote, "older_observation_retained", now=now), False
+        if prior_stamp is not None and stamp == prior_stamp and quote["price"] != previous["price"]:
+            return self._retained(previous, quote, "unresolved_equal_timestamp_correction", now=now), False
+        market_change = previous is None or stamp != prior_stamp or quote["price"] != previous["price"]
+        self.previous[symbol] = dict(quote)
+        self.contexts[symbol] = context
+        return quote, market_change
+
+    def changed(self, quote: dict[str, Any]) -> bool:
+        symbol = str(quote["symbol"])
+        fingerprint = _quote_delivery_fingerprint(quote)
+        if fingerprint == self.fingerprints.get(symbol):
+            return False
+        self.fingerprints[symbol] = fingerprint
+        return True
+
+
+def _verified_provider_stream_health(*, now: datetime, worker: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Verify only the existing timestamped worker health key, without INFO."""
+    config = current_app.config.get("MASSIVE_STREAM_CONFIG")
+    ttl = max(1, int(getattr(config, "health_ttl_seconds", 30)))
+    health = _market_stream_health_payload() if worker is None else worker
+    if not isinstance(health, dict):
+        health = {}
+    stamp = _trusted_quote_timestamp(health.get("updated_at"))
+    age_ms = int((now - stamp).total_seconds() * 1000) if stamp is not None else None
+    states = {"connected", "reconnecting", "disconnected", "authenticating", "stopped", "disabled"}
+    verified = (
+        health.get("schema_version") == STREAM_SCHEMA_VERSION
+        and age_ms is not None and 0 <= age_ms < ttl * 1000
+        and health.get("connection_state") in states
+    )
+    return {
+        "schema_version": "provider-stream-health.v1", "provider": "massive",
+        "connection_state": health["connection_state"] if verified else "unknown",
+        "verified": verified, "observed_at_utc": stamp.isoformat() if stamp else None,
+        "age_ms": age_ms, "ttl_seconds": ttl,
+    }
+
+
+def _initial_live_quote_metadata(symbol: str, quote: dict[str, Any], *, displayed_price: Any = None) -> dict[str, Any]:
+    """Reuse initial enrichment's existing quote; never fetch for a status label."""
+    now = datetime.now(timezone.utc)
+    stamp = _trusted_quote_timestamp(quote.get("event_timestamp"))
+    age_ms, market_session, stale, flags = quote_freshness(stamp, now)
+    price = quote.get("price") if _valid_quote_price(quote.get("price")) else None
+    quality_flags = list(dict.fromkeys([*(quote.get("quality_flags") or []), *flags]))
+    if price is None:
+        quality_flags.append("price_unavailable")
+    stale = stale or price is None or bool(quote.get("is_stale")) or "daily_close_not_realtime" in quality_flags
+    source = str(quote.get("source") or quote.get("quote_source") or "none")
+    source_mode = str(quote.get("source_mode") or (quote.get("diagnostics") or {}).get("source_mode") or ("rest" if source != "none" else "fallback"))
+    metadata = {
+        "schema_version": "live-market.v1", "symbol": symbol, "price": price,
+        "source": source, "source_mode": source_mode,
+        "event_timestamp": stamp.isoformat() if stamp else None,
+        "received_timestamp": quote.get("received_timestamp"), "age_ms": age_ms,
+        "market_session": market_session, "is_stale": stale,
+        "is_degraded": stale or bool(quote.get("is_degraded")),
+        "price_source": quote.get("price_source"), "quality_flags": quality_flags,
+    }
+    if price is None and _valid_quote_price(displayed_price):
+        # Existing accounting uses entry basis when no quote is available.
+        # That bookkeeping amount must never inherit provider provenance.
+        metadata.update({
+            "source": "portfolio_entry_price", "source_mode": "last_known", "price_source": "entry_price",
+            "observed_source": source, "observed_source_mode": source_mode,
+            "observed_event_timestamp": metadata["event_timestamp"],
+            "event_timestamp": None, "age_ms": None,
+            "quality_flags": list(dict.fromkeys([*quality_flags, "entry_price_fallback"])),
+        })
+    return metadata
 
 
 def _clear_stream_demand(source: str) -> None:
@@ -1713,6 +1910,7 @@ def user_watchlist():
                 "score": signal.get("score") if signal.get("score") is not None else signal.get("hybrid_score"),
                 "sentiment": sentiment,
                 "current_price": current_price,
+                "live_market": _initial_live_quote_metadata(item["symbol"], quote, displayed_price=current_price),
                 "today_change_percent": round(today_change_percent, 2) if isinstance(today_change_percent, (int, float)) else None,
                 "today_change_amount": round(today_change_amount, 2) if today_change_amount is not None else None,
                 "performance_percent": round(performance_percent, 2) if performance_percent is not None else None,
@@ -2232,46 +2430,55 @@ def live_market_stream():
 
     @stream_with_context
     def generate():
-        last_ids: dict[str, str] = {}
+        delivery = _SSEQuoteDelivery()
         last_minute_bar_ids: dict[str, str] = {}
         last_heartbeat = 0.0
+        worker_health: dict[str, Any] = {}
         iterations = 0
         try:
             yield sse_encode(event="ready", event_id=f"ready:{g.request_id}", retry_ms=3000, data={"schema_version": "live-market.v1", "symbols": symbols, "resume_from": request.headers.get("Last-Event-ID")})
             while True:
                 updates = []
+                calendar = resolver.calendar if resolver is not None else ExchangeCalendar()
                 if resolver is not None:
                     for symbol in symbols:
-                        quote = resolver.resolve(symbol).payload()
-                        if quote["event_id"] != last_ids.get(symbol):
-                            last_ids[symbol] = quote["event_id"]
+                        resolved_quote = resolver.resolve(symbol).payload()
+                        quote, market_change = delivery.apply(resolved_quote, now=resolver.clock(), calendar=calendar)
+                        if delivery.changed(quote):
                             updates.append(quote)
-                            if trigger_engine is not None:
-                                minute_bar = current_app.extensions["market_stream_state"].get_latest(symbol, "AM")
-                                minute_bar_id = None
-                                if minute_bar:
-                                    minute_bar_id = str(minute_bar.get("sequence_number") or minute_bar.get("provider_event_id") or minute_bar.get("event_timestamp"))
-                                trigger_event_type = quote.get("event_type")
-                                if minute_bar_id and minute_bar_id != last_minute_bar_ids.get(symbol):
-                                    last_minute_bar_ids[symbol] = minute_bar_id
-                                    trigger_event_type = "AM"
-                                trigger = trigger_engine.evaluate(
-                                    user_id=user_id, symbol=symbol, event_type=trigger_event_type, price=quote.get("price"),
-                                    market_session=quote.get("market_session"), after_hours_allowed=live_context.after_hours_alerts,
-                                    recommendation_state=None, price_threshold=None,
-                                    spread_bps=(abs((quote.get("ask") or 0) - (quote.get("bid") or 0)) / quote["price"] * 10000 if quote.get("price") and quote.get("bid") and quote.get("ask") else None),
-                                    profile_version=live_context.profile_version,
-                                    market_data_version=quote.get("schema_version") or "live-market.v1",
-                                )
-                                if trigger.get("fire"):
-                                    yield sse_encode(event="recommendation_refresh", event_id=f"trigger:{symbol}:{trigger['reason']}:{int(time.time()*1000)}", data=trigger)
-                if updates:
-                    yield sse_encode(event="quotes", event_id=updates[-1]["event_id"], data={"schema_version": "live-market.v1", "quotes": updates})
+                        # Quality/status changes are delivery events, not new
+                        # market observations or advice-refresh triggers.
+                        if market_change and trigger_engine is not None:
+                            minute_bar = current_app.extensions["market_stream_state"].get_latest(symbol, "AM")
+                            minute_bar_id = None
+                            if minute_bar:
+                                minute_bar_id = str(minute_bar.get("sequence_number") or minute_bar.get("provider_event_id") or minute_bar.get("event_timestamp"))
+                            trigger_event_type = quote.get("event_type")
+                            if minute_bar_id and minute_bar_id != last_minute_bar_ids.get(symbol):
+                                last_minute_bar_ids[symbol] = minute_bar_id
+                                trigger_event_type = "AM"
+                            trigger = trigger_engine.evaluate(
+                                user_id=user_id, symbol=symbol, event_type=trigger_event_type, price=quote.get("price"),
+                                market_session=quote.get("market_session"), after_hours_allowed=live_context.after_hours_alerts,
+                                recommendation_state=None, price_threshold=None,
+                                spread_bps=(abs((quote.get("ask") or 0) - (quote.get("bid") or 0)) / quote["price"] * 10000 if quote.get("price") and quote.get("bid") and quote.get("ask") else None),
+                                profile_version=live_context.profile_version,
+                                market_data_version=quote.get("schema_version") or "live-market.v1",
+                            )
+                            if trigger.get("fire"):
+                                yield sse_encode(event="recommendation_refresh", event_id=f"trigger:{symbol}:{trigger['reason']}:{int(time.time()*1000)}", data=trigger)
+                quote_now = resolver.clock() if resolver is not None else datetime.now(timezone.utc)
                 now = time.time()
-                if now - last_heartbeat >= heartbeat_seconds:
+                heartbeat_due = now - last_heartbeat >= heartbeat_seconds
+                if heartbeat_due:
+                    worker_health = _market_stream_health_payload()
+                provider_health = _verified_provider_stream_health(now=quote_now, worker=worker_health) if updates or heartbeat_due else None
+                if updates:
+                    yield sse_encode(event="quotes", event_id=updates[-1]["event_id"], data={"schema_version": "live-market.v1", "quotes": updates, "provider_health": provider_health})
+                if heartbeat_due:
                     _register_stream_demand(demand_source, symbols)
                     last_heartbeat = now
-                    yield sse_encode(event="heartbeat", event_id=f"heartbeat:{int(now * 1000)}", data={"symbols": symbols, "ts": datetime.now(timezone.utc).isoformat()})
+                    yield sse_encode(event="heartbeat", event_id=f"heartbeat:{int(now * 1000)}", data={"symbols": symbols, "ts": quote_now.isoformat(), "provider_health": provider_health})
                 iterations += 1
                 if max_iterations is not None and iterations >= max_iterations:
                     break
