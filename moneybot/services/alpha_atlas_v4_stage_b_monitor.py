@@ -19,7 +19,7 @@ from urllib.parse import parse_qsl, urlsplit
 
 from .alpha_atlas_v4_prospective_snapshot import CaptureError, canonical_bytes, sha256_bytes
 from .alpha_atlas_v4_stage_b import COMBINED_CAP, REQUIRED_ROOT
-from .market_stream import STREAM_SCHEMA_VERSION
+from .market_stream import STREAM_SCHEMA_VERSION, normalize_source_revision
 
 UTC = timezone.utc
 VERSION = 'alpha-atlas-v4-stage-b-monitor.v1'
@@ -247,7 +247,8 @@ class RedisHealthReader:
             self.pool.disconnect()
 
 
-def health_observation(raw: Any, observed: datetime, expected_instance: str | None) -> dict[str, Any]:
+def health_observation(raw: Any, observed: datetime, expected_instance: str | None,
+                       expected_revision: str | None = None) -> dict[str, Any]:
     """Whitelist only metrics; never archive raw health payload, URLs, symbols or errors."""
     result: dict[str, Any] = {'status': 'UNKNOWN', 'reasons': [], 'snapshot': None}
     if raw is None or raw == {}:
@@ -273,7 +274,20 @@ def health_observation(raw: Any, observed: datetime, expected_instance: str | No
         if identity is None or expected_instance is None:
             result['reasons'].append('UNKNOWN_SOURCE_IDENTITY')
         elif identity != expected_instance:
-            raise CaptureError('WORKER_IDENTITY_MISMATCH')
+            result['reasons'].append('WORKER_IDENTITY_MISMATCH')
+        worker_started = None
+        try:
+            worker_started = stamp(raw.get('worker_started_at'))
+            if worker_started > connected or worker_started > observed:
+                raise CaptureError('WORKER_START_TIME_INVALID')
+        except CaptureError:
+            worker_started = None
+            result['reasons'].append('WORKER_START_UNKNOWN')
+        source_revision = normalize_source_revision(raw.get('source_revision'))
+        if source_revision is None or expected_revision is None:
+            result['reasons'].append('SOURCE_REVISION_UNKNOWN')
+        elif source_revision != expected_revision:
+            result['reasons'].append('SOURCE_REVISION_MISMATCH')
         metrics = raw['metrics']
         counters = {key: integer(metrics[key]) for key in COUNTERS}
         messages = metrics['messages_received']
@@ -297,6 +311,9 @@ def health_observation(raw: Any, observed: datetime, expected_instance: str | No
         result['snapshot'] = {'schema_version': STREAM_SCHEMA_VERSION, 'updated_at': updated.isoformat(),
                               'connected_at': connected.isoformat(), 'last_message_at': last.isoformat(),
                               'connection_state': state, 'worker_instance_id': identity,
+                              'worker_started_at': worker_started.isoformat() if worker_started else None,
+                              'source_revision': source_revision,
+                              'metadata_binding': 'SELF_REPORTED_CLAIM_NOT_ATTESTATION',
                               'health_age_seconds': age, 'messages_received': counts, **counters, **latencies}
         result['status'] = 'VALID' if not result['reasons'] else 'UNKNOWN'
     except (CaptureError, KeyError, TypeError, ValueError) as exc:
@@ -488,12 +505,16 @@ def compare_observations(rows: list[dict[str, Any]]) -> dict[str, Any]:
             old = last_snapshot
             reset = (old['connected_at'] != snap['connected_at'] or
                      old['worker_instance_id'] != snap['worker_instance_id'] or
+                     old.get('worker_started_at') != snap.get('worker_started_at') or
+                     old.get('source_revision') != snap.get('source_revision') or
                      any(snap[k] < old[k] for k in COUNTERS) or
                      any(snap['messages_received'].get(k, 0) < old['messages_received'].get(k, 0)
                          for k in set(old['messages_received']) | set(snap['messages_received'])))
             if reset:
                 boundaries.append({'observation_index': i, 'observed_at': row['observed_at'],
-                                   'reason': 'APPARENT_RESTART_OR_COUNTER_RESET'})
+                                   'reason': ('WORKER_LIFECYCLE_CHANGED' if old['worker_instance_id'] != snap['worker_instance_id'] or old.get('worker_started_at') != snap.get('worker_started_at') else
+                                              'SOURCE_REVISION_CHANGED' if old.get('source_revision') != snap.get('source_revision') else
+                                              'APPARENT_RESTART_OR_COUNTER_RESET')})
                 row['quality'] = 'UNKNOWN'
         if snap:
             last_snapshot = snap
@@ -519,12 +540,28 @@ def compare_observations(rows: list[dict[str, Any]]) -> dict[str, Any]:
         previous = row, snap
     for phase, target in comparisons.items():
         relevant = [r for r in rows if r['phase'] == phase]
+        epochs = {(r['health']['snapshot']['worker_instance_id'], r['health']['snapshot'].get('worker_started_at'),
+                   r['health']['snapshot'].get('source_revision'), r['health']['snapshot']['connected_at'])
+                  for r in relevant if r['health']['snapshot']}
+        mixed = len(epochs) > 1 or any(b['observation_index'] in [i for i,r in enumerate(rows) if r['phase']==phase]
+                                     for b in boundaries)
+        target['source_epoch_count'] = len(epochs)
+        if mixed:
+            target['counter_changes'] = None; target['message_changes'] = None
+            target['elapsed_seconds'] = 0.0
+            target['last_latency_percentiles'] = None
+            target['comparison_limit'] = 'MULTIPLE_SOURCE_OR_RESET_BOUNDARIES_NO_AGGREGATION'
         if target['elapsed_seconds']:
             target['messages_per_second'] = sum(target['message_changes'].values())/target['elapsed_seconds']
         else:
             target['counter_changes'] = None; target['message_changes'] = None
-        if target['intervals'] and all(r['quality'] == 'VALID' for r in relevant):
+        if not mixed and target['intervals'] and all(r['quality'] == 'VALID' for r in relevant):
             target['status'] = 'DESCRIPTIVE_ONLY'
+    def epochs_for(phases: tuple[str, ...]) -> set[tuple[Any, ...]]:
+        return {(snap['worker_instance_id'], snap.get('worker_started_at'),
+                 snap.get('source_revision'), snap['connected_at'])
+                for row in rows if row['phase'] in phases
+                for snap in [row['health']['snapshot']] if snap}
     baseline = comparisons['BASELINE_BEFORE']
     versus_baseline = {}
     for phase, target in comparisons.items():
@@ -541,7 +578,8 @@ def compare_observations(rows: list[dict[str, Any]]) -> dict[str, Any]:
             'continuity': 'UNKNOWN'}
         if phase != 'BASELINE_BEFORE':
             versus_baseline[phase] = {'status': 'UNKNOWN'}
-            if baseline['intervals'] and target['intervals']:
+            if (baseline.get('messages_per_second') is not None and target.get('messages_per_second') is not None
+                    and len(epochs_for(('BASELINE_BEFORE', phase))) == 1):
                 versus_baseline[phase] = {
                     'status': 'DESCRIPTIVE_KNOWN_INTERVALS_ONLY',
                     'messages_per_second_difference': target['messages_per_second']-baseline['messages_per_second'],
@@ -591,7 +629,7 @@ def run_monitor(auth: Mapping[str, Any], output: Path, *, mode: str,
             observed = clock()
             if observed >= end:
                 raise CaptureError('READ_CROSSED_AUTHORIZATION_END')
-            health = health_observation(raw, observed, auth['source_binding']['worker_instance_id'])
+            health = health_observation(raw, observed, auth['source_binding']['worker_instance_id'], auth['source_revision'])
             phase = phase_at(auth, observed)
             resource = resources()
             resource['observed_at'] = clock().isoformat()
@@ -609,7 +647,7 @@ def run_monitor(auth: Mapping[str, Any], output: Path, *, mode: str,
             # Detect/reset label before persistence; comparisons must not mutate archived rows later.
             trial = compare_observations([*rows, row])
             if trial['boundaries'] and trial['boundaries'][-1]['observation_index'] == len(rows):
-                row['quality'] = 'UNKNOWN'; row['health']['reasons'].append('APPARENT_RESTART_OR_COUNTER_RESET')
+                row['quality'] = 'UNKNOWN'; row['health']['reasons'].append(trial['boundaries'][-1]['reason'])
             writer.append(row); rows.append(row)
             next_sample = observed+timedelta(seconds=auth['sampling_interval_seconds'])
     except KeyboardInterrupt:
@@ -703,6 +741,7 @@ def synthetic_fixture() -> list[dict[str, Any] | None]:
         now = start+timedelta(seconds=10*i)
         count = i*100 if i < 7 else (i-7)*100
         fixture.append({'schema_version': STREAM_SCHEMA_VERSION, 'worker_instance_id': 'synthetic-worker',
+                        'source_revision': 'a'*40, 'worker_started_at': start.isoformat(),
                         'updated_at': now.isoformat(), 'connected_at': (start if i < 7 else start+timedelta(seconds=70)).isoformat(),
                         'last_message_at': now.isoformat(), 'connection_state': 'disconnected' if i == 10 else 'connected',
                         'metrics': {'messages_received': {'T': count}, **{k: (1 if k == 'reconnect_count' and i >= 7 else 0) for k in COUNTERS},
@@ -721,7 +760,7 @@ def run_synthetic(repo: Path, output: Path) -> dict[str, Any]:
         value = fixture[index[0]]; index[0] += 1; return value
     def advance(seconds: float) -> None:
         current[0] += timedelta(seconds=seconds)
-    auth = {'authorization_id': 'SYNTHETIC_ONLY_NOT_AUTHORIZATION', 'source_revision': 'SYNTHETIC_FIXTURE',
+    auth = {'authorization_id': 'SYNTHETIC_ONLY_NOT_AUTHORIZATION', 'source_revision': 'a'*40,
             'ends_at': (start+timedelta(seconds=120)).isoformat(), 'max_duration_seconds': 120,
             'sampling_interval_seconds': 10, 'max_samples': 12, 'storage_limit_bytes': MAX_STORAGE,
             'source_binding': {'worker_instance_id': 'synthetic-worker'},

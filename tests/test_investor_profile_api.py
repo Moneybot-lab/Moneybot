@@ -1,5 +1,7 @@
 import os
 
+import pytest
+
 from moneybot.app_factory import create_app
 
 
@@ -428,12 +430,16 @@ def test_quick_ask_uses_rest_snapshot_and_only_portfolio_registers_stream_demand
     assert any(symbols == {"MSFT"} for source, symbols in demand.items() if source.startswith("portfolio:"))
 
 
-def test_market_stream_health_requires_auth_and_returns_shadow_status():
+@pytest.mark.parametrize('metadata', [{}, {
+    'worker_instance_id': 'd9bdf352-8b4e-4a9a-acec-33c14fe5d891',
+    'worker_started_at': '2026-10-09T00:00:00+00:00', 'source_revision': 'a'*40,
+}])
+def test_market_stream_health_requires_auth_and_returns_shadow_status(metadata):
     client = _client()
     assert client.get("/api/market-stream-health").status_code == 401
     _signup(client, email="stream-health@example.com", username="stream_health")
     state = client.application.extensions["market_stream_state"]
-    state.set_health({"connection_state": "connected", "metrics": {"parse_failures": 0}}, ttl_seconds=30)
+    state.set_health({"connection_state": "connected", "metrics": {"parse_failures": 0}, **metadata}, ttl_seconds=30)
 
     response = client.get("/api/market-stream-health")
 
@@ -443,3 +449,4 @@ def test_market_stream_health_requires_auth_and_returns_shadow_status():
     assert data["worker_state"] == "connected"
     assert "no market event has arrived yet" in data["diagnosis"]
     assert data["worker"]["connection_state"] == "connected"
+    assert all(data["worker"][key] == value for key, value in metadata.items())

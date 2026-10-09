@@ -1929,3 +1929,27 @@ The original repair reports and their checksum manifests remain unchanged.
   ISOLATED_REPLAY_HANDOFF ELIGIBLE, and historical review COMPLETED_WITH_LIMITATIONS.
   Pilot consumption remains PROHIBITED; training, fitting, scoring, trading,
   promotion, production V4 routing and Stage C remain disabled/unauthorized.
+
+## Stage B worker identity and source-revision metadata (2026-10-08)
+
+- [x] **Worker lifecycle metadata implementation is complete and verified offline.**
+  Additive market-stream.v1 UUID4/start-time/revision fields remain stable across
+  snapshots and ordinary reconnects, with a new UUID for each worker replacement.
+  Startup passes validated RENDER_GIT_COMMIT; invalid/missing revision stays null.
+  The monitor preserves self-reported claims and rejects or marks unknown identity/
+  revision bindings, suppressing comparisons across lifecycle/connection/revision
+  boundaries. 143 focused offline tests pass with network blocked; authenticated
+  legacy/new health API compatibility and PR #660 safety restrictions are preserved.
+  See the [updated monitoring report](reports/alpha_atlas_v4_stage_b_monitoring_implementation.v1.md).
+- [ ] **Deployment, identity discovery and real monitoring remain unauthorized.**
+  Adding metadata does not authorize the first Redis discovery read. A separately
+  approved read-only identity discovery or trusted deployment/source record must
+  independently establish the binding before a distinct hash-pinned observation
+  authorization. Matching metadata text is not process/source attestation.
+- [ ] **Operational acceptance remains OPEN / UNKNOWN.** Process resource compliance,
+  historical continuity and stream-interference acceptance remain UNKNOWN; live
+  passive observation is NOT_EXECUTED. Original live execution remains FAILED_UNCHANGED,
+  premarket/prospective readiness NOT_TESTED, pilot consumption PROHIBITED and
+  overall Stage B OPEN. Existing normalization/replay/historical-review milestones
+  stay closed. No deployment, provider/AWS access, operational test, training,
+  scoring, trading, promotion, production V4 routing or Stage C is authorized.
