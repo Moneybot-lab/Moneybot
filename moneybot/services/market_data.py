@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 import os
 import threading
 import time
@@ -8,7 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from dataclasses import dataclass
 from urllib.parse import quote_plus
 from xml.etree import ElementTree as ET
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 import requests
@@ -16,7 +17,7 @@ import yfinance as yf
 
 from trade_signal import analyze_ticker
 from .deterministic_advisor import DeterministicQuickAdvisor
-from .market_data_providers import MassiveRestClient, NormalizedQuote, ProviderError, normalized_fallback_quote
+from .market_data_providers import MassiveRestClient, NormalizedQuote, ProviderError, normalized_fallback_quote, quote_freshness
 
 
 @dataclass
@@ -50,11 +51,13 @@ class MarketDataService:
         retries: int = 2,
         deterministic_quick_advisor: DeterministicQuickAdvisor | None = None,
         deterministic_momentum_enabled: bool = True,
+        clock: Callable[[], datetime] | None = None,
     ):
         self.timeout_s = timeout_s
         self.retries = retries
         self.deterministic_quick_advisor = deterministic_quick_advisor
         self.deterministic_momentum_enabled = bool(deterministic_momentum_enabled)
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.quote_cache = TTLCache(ttl_seconds=20)
         self.signal_cache = TTLCache(ttl_seconds=20)
         self.sector_cache = TTLCache(ttl_seconds=3600)
@@ -1472,10 +1475,11 @@ class MarketDataService:
     @staticmethod
     def _compatible_quote_payload(quote: NormalizedQuote, *, key_source: str | None = None, diagnostics: dict[str, Any] | None = None) -> Dict[str, Any]:
         payload = quote.payload()
+        numeric_price = MassiveRestClient._positive_price(quote.price)
         payload.update({
-            "price": float(quote.price) if quote.price is not None else "DATA_MISSING",
+            "price": numeric_price if numeric_price is not None else "DATA_MISSING",
             "change_percent": float(quote.change_percent) if quote.change_percent is not None else "DATA_MISSING",
-            "live_data_available": quote.price is not None and not quote.is_stale,
+            "live_data_available": numeric_price is not None and not quote.is_stale,
             "quote_source": quote.source,
             "diagnostics": {
                 "provider": quote.source,
@@ -1490,7 +1494,7 @@ class MarketDataService:
         return payload
 
     def _normalized_fallback_payload(self, *, symbol: str, price: Any, change_percent: Any, source: str, event_timestamp: datetime | None = None, diagnostics: dict[str, Any] | None = None) -> Dict[str, Any]:
-        normalized = normalized_fallback_quote(symbol=symbol, price=price, change_percent=change_percent, source=source, event_timestamp=event_timestamp)
+        normalized = normalized_fallback_quote(symbol=symbol, price=price, change_percent=change_percent, source=source, event_timestamp=event_timestamp, received_timestamp=self.clock())
         numeric_price = normalized.get("price")
         numeric_change = normalized.get("change_percent")
         normalized.update({
@@ -1503,16 +1507,47 @@ class MarketDataService:
         self._fallback_counts[source] = self._fallback_counts.get(source, 0) + 1
         return normalized
 
+    def _aged_quote_payload(self, cached: Dict[str, Any]) -> Dict[str, Any]:
+        """Return an independent view aged at read time, without a provider call."""
+        payload = deepcopy(cached)
+        event_raw = payload.get("event_timestamp")
+        event_timestamp = event_raw if isinstance(event_raw, datetime) else None
+        if isinstance(event_raw, str):
+            try:
+                event_timestamp = datetime.fromisoformat(event_raw.replace("Z", "+00:00"))
+            except ValueError:
+                pass
+        provider = self._massive_client_instance if payload.get("source") == "massive" else None
+        age_ms, session, stale, flags = (
+            provider._quote_freshness(event_timestamp, self.clock()) if provider is not None
+            else quote_freshness(event_timestamp, self.clock())
+        )
+        quality_flags = list(dict.fromkeys([*payload.get("quality_flags", []), *flags]))
+        price = MassiveRestClient._positive_price(payload.get("price"))
+        if price is None:
+            quality_flags.extend(("invalid_price", "data_missing"))
+        daily_close = payload.get("price_source") == "day_close" or "daily_close_not_realtime" in quality_flags
+        stale = bool(payload.get("is_stale")) or stale or price is None or daily_close
+        if stale:
+            quality_flags.append("stale")
+        payload.update({
+            "price": price if price is not None else "DATA_MISSING",
+            "age_ms": age_ms, "market_session": session, "is_stale": stale,
+            "live_data_available": price is not None and not stale,
+            "quality_flags": list(dict.fromkeys(quality_flags)),
+        })
+        return payload
+
     def get_quote(self, symbol: str) -> Dict[str, Any]:
         cache_key = symbol.upper()
         cached = self.quote_cache.get(cache_key)
         if cached:
-            return cached
+            return self._aged_quote_payload(cached)
         with self._lock_for_key(self._quote_locks, cache_key):
             cached = self.quote_cache.get(cache_key)
             if cached:
-                return cached
-            return self._fetch_quote_uncached(cache_key)
+                return self._aged_quote_payload(cached)
+            return self._aged_quote_payload(self._fetch_quote_uncached(cache_key))
 
     def _fetch_quote_uncached(self, cache_key: str) -> Dict[str, Any]:
         def _yfinance_quote() -> Dict[str, Any]:
@@ -1522,6 +1557,7 @@ class MarketDataService:
                     ticker = yf.Ticker(cache_key)
                     info = ticker.info or {}
                     price = info.get("regularMarketPrice") or info.get("currentPrice")
+                    used_daily_history = False
                     prev = info.get("regularMarketPreviousClose") or info.get("previousClose")
                     change = info.get("regularMarketChangePercent")
 
@@ -1532,6 +1568,7 @@ class MarketDataService:
                         hist = ticker.history(period="5d", interval="1d")
                         if hist is not None and not hist.empty:
                             price = float(hist["Close"].iloc[-1])
+                            used_daily_history = True
                             if len(hist.index) > 1:
                                 prev = float(hist["Close"].iloc[-2])
                             if prev not in (None, 0):
@@ -1539,11 +1576,20 @@ class MarketDataService:
 
                     event_timestamp = None
                     market_time = info.get("regularMarketTime")
-                    if isinstance(market_time, (int, float)):
+                    if not used_daily_history and isinstance(market_time, (int, float)):
                         event_timestamp = datetime.fromtimestamp(float(market_time), tz=timezone.utc)
                     payload = self._normalized_fallback_payload(
                         symbol=cache_key, price=price, change_percent=change, source="yfinance", event_timestamp=event_timestamp,
                     )
+                    if used_daily_history:
+                        payload.update({
+                            "price_source": "day_close", "is_stale": True,
+                            "live_data_available": False,
+                            "price_reason": "Last-known daily history close; not a realtime price.",
+                            "quality_flags": list(dict.fromkeys([
+                                *payload.get("quality_flags", []), "daily_close_not_realtime", "stale",
+                            ])),
+                        })
                     payload["previous_close"] = float(prev) if isinstance(prev, (int, float)) else None
                     return payload
                 except Exception as exc:  # noqa: BLE001
