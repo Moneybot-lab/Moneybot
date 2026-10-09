@@ -10,7 +10,9 @@ import re
 import uuid
 import time
 from collections import Counter, defaultdict, deque
-from dataclasses import asdict, dataclass, field
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
@@ -36,7 +38,7 @@ def _number(value: Any) -> float | None:
         return None
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return number if math.isfinite(number) else None
 
@@ -56,6 +58,16 @@ def _condition_values(value: Any) -> list[Any]:
 
 def _event_time(value: Any) -> datetime | None:
     return MassiveRestClient.normalize_timestamp(value)
+
+
+def _stored_event_time(value: Any) -> datetime | None:
+    if isinstance(value, str):
+        try:
+            timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return timestamp.astimezone(timezone.utc) if timestamp.tzinfo is not None else None
+    return _event_time(value)
 
 
 def _bounded_reconnect_delay(*, attempt: int, min_seconds: float, max_seconds: float, jitter: float) -> float:
@@ -408,6 +420,10 @@ class StreamMetrics:
     event_lag_ms: deque[float] = field(default_factory=lambda: deque(maxlen=10000))
     shadow_comparisons: int = 0
     shadow_discrepancies: int = 0
+    shadow_skipped: int = 0
+    shadow_budget_exhausted: int = 0
+    rest_recovery_rejected: int = 0
+    stale_state_writes_rejected: int = 0
     slow_consumer_events: int = 0
 
     @staticmethod
@@ -436,6 +452,9 @@ class StreamMetrics:
             "event_to_redis_lag_ms": {"p50": self._percentile(self.event_lag_ms, .50), "p95": self._percentile(self.event_lag_ms, .95), "p99": self._percentile(self.event_lag_ms, .99)},
             "redis_write_latency_ms": {"p50": self._percentile(self.redis_write_latency_ms, .50), "p95": self._percentile(self.redis_write_latency_ms, .95), "p99": self._percentile(self.redis_write_latency_ms, .99)},
             "shadow_comparisons": self.shadow_comparisons, "shadow_discrepancies": self.shadow_discrepancies,
+            "shadow_skipped": self.shadow_skipped, "shadow_budget_exhausted": self.shadow_budget_exhausted,
+            "rest_recovery_rejected": self.rest_recovery_rejected,
+            "stale_state_writes_rejected": self.stale_state_writes_rejected,
             "slow_consumer_events": self.slow_consumer_events,
         }
 
@@ -461,7 +480,10 @@ class WorkerConfig:
     acknowledgement_timeout_seconds: float = 10.0
     rest_shadow_tolerance_bps: float = 50.0
     shadow_compare_seconds: float = 30.0
+    shadow_batch_timeout_seconds: float = 10.0
+    shadow_batch_symbol_limit: int = 50
     slow_consumer_lag_ms: float = 2000.0
+    health_update_seconds: float = 5.0
     recovery_concurrency: int = 2
     recovery_queue_max: int = 512
     recovery_cooldown_seconds: float = 30.0
@@ -512,6 +534,88 @@ class MassiveWebSocketWorker:
         self._recovery_tasks: set[asyncio.Task[None]] = set()
         self._recovery_inflight: set[str] = set()
         self._last_recovery_monotonic: dict[str, float] = {}
+        # One admitted operation at a time: neither Redis ordering nor the
+        # executor queue depends on the number of callers waiting for admission.
+        self._state_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="market-stream-state")
+        self._state_lock = asyncio.Lock()
+        self._processing_lock = asyncio.Lock()
+        self._pending_stale: dict[str, tuple[str, int]] = {}
+        self._recovery_generation: dict[str, int] = {}
+        self._last_health_monotonic = float("-inf")
+        self._closed = False
+        self._rest_executor = ThreadPoolExecutor(max_workers=max(1, config.recovery_concurrency), thread_name_prefix="market-stream-rest")
+        self._rest_slots = asyncio.Semaphore(max(1, config.recovery_concurrency))
+        self._rest_futures: dict[str, asyncio.Future[Any]] = {}
+        self._shadow_task: asyncio.Task[None] | None = None
+        self._symbol_generation: Counter[str] = Counter()
+        self._stored_timestamps: dict[tuple[str, str], datetime | None] = {}
+        self._shadow_offset = 0
+
+    async def _state_call(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        async with self._state_lock:
+            future = asyncio.get_running_loop().run_in_executor(self._state_executor, partial(function, *args, **kwargs))
+            # Canceling an await cannot cancel an already-running Redis write.
+            # Keep admission locked until it finishes, then propagate cancellation.
+            cancelled = False
+            while True:
+                try:
+                    result = await asyncio.shield(future)
+                    break
+                except asyncio.CancelledError:
+                    if future.cancelled():
+                        raise
+                    cancelled = True
+            if cancelled:
+                raise asyncio.CancelledError
+            return result
+
+    async def _publish_health(self, plan: SubscriptionPlan | None = None, *, force: bool = False) -> None:
+        interval = min(max(.1, self.config.health_update_seconds), max(.1, self.config.health_ttl_seconds / 2))
+        if not force and time.monotonic() - self._last_health_monotonic < interval:
+            return
+        # Copy the bounded samples on the loop; sorting/calculation and Redis
+        # INFO/SET run off-loop without iterating concurrently-mutated samples.
+        metrics = replace(self.metrics, messages_received=Counter(self.metrics.messages_received),
+                          redis_write_latency_ms=tuple(self.metrics.redis_write_latency_ms),
+                          event_lag_ms=tuple(self.metrics.event_lag_ms))
+        def publish() -> None:
+            self.state.set_health(self.health_payload(plan, metrics=metrics), ttl_seconds=self.config.health_ttl_seconds)
+        await self._state_call(publish)
+        self._last_health_monotonic = time.monotonic()
+
+    async def _flush_pending_stale(self) -> None:
+        pending, self._pending_stale = self._pending_stale, {}
+        for symbol, (reason, generation) in pending.items():
+            def mark_if_unchanged() -> None:
+                if self._symbol_generation[symbol] == generation:
+                    self.state.mark_symbols_stale([symbol], reason=reason, ttl_seconds=self.config.stale_ttl_seconds)
+            await self._state_call(mark_if_unchanged)
+
+    async def aclose(self) -> None:
+        """Join owned tasks and admitted state work before releasing resources."""
+        if self._closed:
+            return
+        self.stop()
+        tasks = list(self._recovery_tasks)
+        if self._shadow_task is not None:
+            tasks.append(self._shadow_task)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        # Cancellation does not release slots occupied by synchronous provider
+        # calls. Join those calls (provider timeout/retry remains unchanged).
+        futures = list(self._rest_futures.values())
+        if futures:
+            await asyncio.gather(*(asyncio.shield(future) for future in futures), return_exceptions=True)
+        self._rest_executor.shutdown(wait=False, cancel_futures=True)
+        while not self._recovery_queue.empty():
+            symbol, _reason = self._recovery_queue.get_nowait()
+            self._recovery_inflight.discard(symbol)
+            self._recovery_generation.pop(symbol, None)
+            self._recovery_queue.task_done()
+        await self._flush_pending_stale()
+        async with self._state_lock:
+            self._state_executor.shutdown(wait=False, cancel_futures=True)
+        self._closed = True
 
     def _record_websocket_frame(self) -> None:
         self._last_message_at = self.clock()
@@ -529,7 +633,7 @@ class MassiveWebSocketWorker:
                 raise RuntimeError(f"Massive WebSocket {action} acknowledgement timed out")
             raw = await asyncio.wait_for(websocket.recv(), timeout=remaining)
             self._record_websocket_frame()
-            responses = self.parser.parse_message(raw, received_at=self.clock())
+            responses = await self._state_call(self.parser.parse_message, raw, received_at=self.clock())
             statuses = [item for item in responses if isinstance(item, dict) and item.get("event_type") == "status"]
             if any(item.get("status") == "success" for item in statuses):
                 return
@@ -547,7 +651,7 @@ class MassiveWebSocketWorker:
                 raise RuntimeError(f"Massive WebSocket authentication timed out: {observed}")
             raw = await asyncio.wait_for(websocket.recv(), timeout=remaining)
             self._record_websocket_frame()
-            responses = self.parser.parse_message(raw, received_at=self.clock())
+            responses = await self._state_call(self.parser.parse_message, raw, received_at=self.clock())
             statuses = [item for item in responses if isinstance(item, dict)]
             observed.extend(statuses)
             if any(item.get("status") == "auth_success" for item in statuses):
@@ -558,13 +662,13 @@ class MassiveWebSocketWorker:
     async def _refresh_external_demand(self) -> None:
         if self.demand_loader is None:
             return
-        loaded = await asyncio.to_thread(self.demand_loader)
+        loaded = await self._state_call(self.demand_loader)
         for source, symbols in loaded.items():
-            self.state.register_demand(source, symbols, ttl_seconds=self.config.demand_ttl_seconds)
+            await self._state_call(self.state.register_demand, source, symbols, ttl_seconds=self.config.demand_ttl_seconds)
 
     async def reconcile(self, websocket: Any, *, check_ack: bool = False) -> SubscriptionPlan:
         await self._refresh_external_demand()
-        plan = self.subscriptions.plan(self.state.desired_demand())
+        plan = self.subscriptions.plan(await self._state_call(self.state.desired_demand))
         subscribe, unsubscribe = self.subscriptions.commands(self.actual, plan)
         await self._send_action(websocket, "unsubscribe", unsubscribe, check_ack=check_ack)
         await self._send_action(websocket, "subscribe", subscribe, check_ack=check_ack)
@@ -596,20 +700,99 @@ class MassiveWebSocketWorker:
         self._last_event[key] = (event.event_timestamp, event.sequence_number, event.provider_event_id)
         return True, gap
 
+    async def _rest_call(self, symbol: str, *, reserved: bool = False) -> Any:
+        """Shared bounded admission for every comparison and recovery request."""
+        if not reserved:
+            now = time.monotonic()
+            last = self._last_recovery_monotonic.get(symbol)
+            if symbol in self._recovery_inflight or (last is not None and now - last < self.config.recovery_cooldown_seconds):
+                return None
+            self._recovery_inflight.add(symbol)
+            self._last_recovery_monotonic[symbol] = now
+        submitted = False
+        try:
+            await self._rest_slots.acquire()
+            if self._stop:
+                self._rest_slots.release()
+                return None
+            future = asyncio.get_running_loop().run_in_executor(self._rest_executor, self.rest_client.get_quote, symbol)
+            self._rest_futures[symbol] = future
+            submitted = True
+            def finished(done: asyncio.Future[Any]) -> None:
+                if self._rest_futures.get(symbol) is done:
+                    self._rest_futures.pop(symbol, None)
+                # Queued recovery owns the symbol through its guarded state
+                # store. If canceled, its worker removes the generation claim
+                # and this callback releases the remaining active-call claim.
+                if not reserved or symbol not in self._recovery_generation:
+                    self._recovery_inflight.discard(symbol)
+                self._rest_slots.release()
+                # Also retrieve exceptions when a timed-out/canceled batch no
+                # longer awaits this uncancelable synchronous provider call.
+                if not done.cancelled():
+                    done.exception()
+            future.add_done_callback(finished)
+            return await asyncio.shield(future)
+        finally:
+            if not submitted:
+                self._recovery_inflight.discard(symbol)
+
     async def _recover_symbol(self, symbol: str, *, reason: str) -> None:
         started = time.perf_counter(); self.metrics.rest_recovery_count += 1
-        self.state.mark_symbols_stale([symbol], reason=reason, ttl_seconds=self.config.stale_ttl_seconds)
+        admission_generation = self._recovery_generation.get(symbol, self._symbol_generation[symbol])
+        def mark_and_capture() -> int | None:
+            if self._symbol_generation[symbol] != admission_generation:
+                return None
+            self.state.mark_symbols_stale([symbol], reason=reason, ttl_seconds=self.config.stale_ttl_seconds)
+            return self._symbol_generation[symbol]
+        generation = await self._state_call(mark_and_capture)
+        if generation is None:
+            self.metrics.rest_recovery_rejected += 1
+            return
         try:
-            result = await asyncio.to_thread(self.rest_client.get_quote, symbol)
+            result = await self._rest_call(symbol, reserved=symbol in self._recovery_inflight)
+            if result is None:
+                return
             quote: NormalizedQuote = result.data
+            price = _number(quote.price)
+            if price is None or price <= 0:
+                self.metrics.rest_recovery_failures += 1
+                return
+            event_time = quote.event_timestamp
+            now = self.clock()
+            # An untrustworthy source time must not establish a persistent
+            # watermark that later rejects correctly dated stream quotes.
+            if (not isinstance(event_time, datetime) or event_time.tzinfo is None
+                    or not isinstance(now, datetime) or now.tzinfo is None or event_time > now):
+                self.metrics.rest_recovery_rejected += 1
+                return
             event = StreamEvent(
-                event_type="Q", symbol=symbol, event_timestamp=quote.event_timestamp or result.received_timestamp,
+                event_type="Q", symbol=symbol, event_timestamp=event_time,
                 received_timestamp=result.received_timestamp, sequence_number=quote.sequence_number,
                 provider_event_id=quote.provider_event_id,
-                payload={"bid": quote.bid, "ask": quote.ask, "bid_size": quote.bid_size, "ask_size": quote.ask_size, "midpoint": quote.midpoint, "recovery_price": quote.price},
+                payload={"bid": quote.bid, "ask": quote.ask, "bid_size": quote.bid_size, "ask_size": quote.ask_size,
+                         "midpoint": quote.midpoint, "recovery_price": price,
+                         "recovery_price_source": getattr(quote, "price_source", None),
+                         "recovery_price_timestamp": event_time.isoformat()},
                 quality_flags=("rest_recovery", reason), source_mode="rest",
             )
-            self.state.set_latest(event, ttl_seconds=self.config.state_ttl_seconds, stale=quote.is_stale)
+            def store_if_current() -> bool:
+                # Fail closed on missing source time, any accepted event during
+                # the request, or a newer stored observation on any channel.
+                if event_time is None or generation != self._symbol_generation[symbol]:
+                    return False
+                for event_type in ALLOWED_EVENT_TYPES:
+                    existing = self.state.get_latest(symbol, event_type)
+                    existing_time = _stored_event_time(existing.get("event_timestamp")) if existing else None
+                    if existing_time is not None and (existing_time > event_time or (event_type == "Q" and existing_time == event_time)):
+                        # An equal-time replacement of the same Q channel has
+                        # no verified correction semantics; preserve its value.
+                        return False
+                self.state.set_latest(event, ttl_seconds=self.config.state_ttl_seconds, stale=quote.is_stale)
+                self._stored_timestamps[("Q", symbol)] = event_time
+                return True
+            if not await self._state_call(store_if_current):
+                self.metrics.rest_recovery_rejected += 1
         except (ProviderError, RuntimeError, ValueError):
             self.metrics.rest_recovery_failures += 1
             logging.exception("REST recovery failed for %s", symbol)
@@ -617,13 +800,11 @@ class MassiveWebSocketWorker:
             self.metrics.rest_recovery_duration_ms += (time.perf_counter() - started) * 1000
 
     async def _recover_symbols(self, symbols: Iterable[str], *, reason: str) -> None:
-        semaphore = asyncio.Semaphore(max(1, self.config.recovery_concurrency))
-
-        async def recover(symbol: str) -> None:
-            async with semaphore:
-                await self._recover_symbol(symbol, reason=reason)
-
-        await asyncio.gather(*(recover(symbol) for symbol in symbols))
+        # Compatibility helper for explicit synthetic callers; production
+        # reconnect only enqueues the bounded work and resumes reconnecting.
+        for symbol in sorted(set(symbols)):
+            self._queue_recovery(symbol, reason=reason)
+        await self.drain_recoveries()
 
     def _ensure_recovery_workers(self) -> None:
         live_tasks = {task for task in self._recovery_tasks if not task.done()}
@@ -639,8 +820,13 @@ class MassiveWebSocketWorker:
             symbol, reason = await self._recovery_queue.get()
             try:
                 await self._recover_symbol(symbol, reason=reason)
+            except Exception:  # Keep bounded workers alive after repository failures.
+                self.metrics.rest_recovery_failures += 1
+                logging.exception("Recovery job failed for %s", symbol)
             finally:
-                self._recovery_inflight.discard(symbol)
+                if symbol not in self._rest_futures:
+                    self._recovery_inflight.discard(symbol)
+                self._recovery_generation.pop(symbol, None)
                 self._recovery_queue.task_done()
 
     def _queue_recovery(self, symbol: str, *, reason: str) -> None:
@@ -657,9 +843,10 @@ class MassiveWebSocketWorker:
             self._recovery_queue.put_nowait((normalized, reason))
         except asyncio.QueueFull:
             self.metrics.rest_recovery_queue_drops += 1
-            self.state.mark_symbols_stale([normalized], reason=reason, ttl_seconds=self.config.stale_ttl_seconds)
+            self._pending_stale[normalized] = (reason, self._symbol_generation[normalized])
             return
         self._recovery_inflight.add(normalized)
+        self._recovery_generation[normalized] = self._symbol_generation[normalized]
         self._last_recovery_monotonic[normalized] = now
         self.metrics.rest_recovery_queued += 1
 
@@ -669,34 +856,52 @@ class MassiveWebSocketWorker:
     def _cancel_recovery_workers(self) -> None:
         for task in list(self._recovery_tasks):
             task.cancel()
-        self._recovery_tasks.clear()
 
     async def process_raw_message(self, raw: str | bytes) -> None:
-        try:
-            items = self.parser.parse_message(raw, received_at=self.clock())
-        except StreamParseError:
-            self.metrics.parse_failures += 1
-            return
-        for item in items:
-            if isinstance(item, dict):
-                continue
-            self.metrics.messages_received[item.event_type] += 1
-            accepted, gap = self._accept_event(item)
-            if not accepted:
-                continue
-            write_latency = self.state.set_latest(item, ttl_seconds=self.config.state_ttl_seconds)
-            self.metrics.redis_write_latency_ms.append(write_latency)
-            total_lag = item.lag_ms + write_latency
-            self.metrics.event_lag_ms.append(total_lag)
-            if total_lag > self.config.slow_consumer_lag_ms:
-                self.metrics.slow_consumer_events += 1
-            key = (item.event_type, item.symbol)
-            if key in self._pending_updates:
-                self.metrics.coalesced_events += 1
-            self._pending_updates[key] = {"event_type": item.event_type, "symbol": item.symbol, "event_timestamp": item.event_timestamp.isoformat()}
-            if gap:
-                self._queue_recovery(item.symbol, reason="sequence_gap")
-        await self.flush_updates_if_due()
+        # Parsing large frames and the unchanged sequence policy share the
+        # ordered state executor. Each event awaits admission, yielding the loop.
+        async with self._processing_lock:
+            try:
+                items = await self._state_call(self.parser.parse_message, raw, received_at=self.clock())
+            except StreamParseError:
+                self.metrics.parse_failures += 1
+                return
+            for item in items:
+                if isinstance(item, dict):
+                    continue
+                self.metrics.messages_received[item.event_type] += 1
+                def accept_and_store() -> tuple[bool, bool, float, bool]:
+                    accepted, gap = self._accept_event(item)
+                    if not accepted:
+                        return accepted, gap, 0.0, False
+                    key = (item.event_type, item.symbol)
+                    if key not in self._stored_timestamps:
+                        existing = self.state.get_latest(item.symbol, item.event_type)
+                        self._stored_timestamps[key] = _stored_event_time(existing.get("event_timestamp")) if existing else None
+                    existing_time = self._stored_timestamps[key]
+                    if existing_time is not None and item.event_timestamp < existing_time:
+                        self.metrics.stale_state_writes_rejected += 1
+                        return accepted, gap, 0.0, False
+                    latency = self.state.set_latest(item, ttl_seconds=self.config.state_ttl_seconds)
+                    self._symbol_generation[item.symbol] += 1
+                    self._stored_timestamps[key] = item.event_timestamp
+                    return accepted, gap, latency, True
+                accepted, gap, write_latency, stored = await self._state_call(accept_and_store)
+                if accepted and gap:
+                    self._queue_recovery(item.symbol, reason="sequence_gap")
+                if not stored:
+                    continue
+                self.metrics.redis_write_latency_ms.append(write_latency)
+                total_lag = item.lag_ms + write_latency
+                self.metrics.event_lag_ms.append(total_lag)
+                if total_lag > self.config.slow_consumer_lag_ms:
+                    self.metrics.slow_consumer_events += 1
+                key = (item.event_type, item.symbol)
+                if key in self._pending_updates:
+                    self.metrics.coalesced_events += 1
+                self._pending_updates[key] = {"event_type": item.event_type, "symbol": item.symbol, "event_timestamp": item.event_timestamp.isoformat()}
+            await self._flush_pending_stale()
+            await self.flush_updates_if_due()
 
     async def flush_updates_if_due(self, *, force: bool = False) -> None:
         elapsed_ms = (time.monotonic() - self._last_publish_monotonic) * 1000
@@ -704,36 +909,100 @@ class MassiveWebSocketWorker:
             return
         updates = list(self._pending_updates.values())
         if updates:
-            self.state.publish_updates(updates)
+            await self._state_call(self.state.publish_updates, updates)
             self._pending_updates.clear()
         self._last_publish_monotonic = time.monotonic()
 
+    def _start_shadow_compare(self, symbols: Iterable[str]) -> None:
+        if self._stop or (self._shadow_task is not None and not self._shadow_task.done()):
+            return
+        # Stable rotation prevents the work cap from permanently excluding the
+        # tail of a capped subscription plan. Only one batch task is created.
+        ordered = sorted(set(symbols))[: self.config.symbol_cap]
+        if not ordered:
+            return
+        offset = self._shadow_offset % len(ordered)
+        rotated = ordered[offset:] + ordered[:offset]
+        limit = min(len(ordered), max(1, self.config.shadow_batch_symbol_limit))
+        self._shadow_offset = (offset + limit) % len(ordered)
+        self._shadow_task = asyncio.create_task(self.shadow_compare(rotated[:limit]))
+        def completed(task: asyncio.Task[None]) -> None:
+            if not task.cancelled() and task.exception() is not None:
+                logging.error("Shadow comparison batch failed", exc_info=task.exception())
+        self._shadow_task.add_done_callback(completed)
+
     async def shadow_compare(self, symbols: Iterable[str]) -> None:
-        for symbol in symbols:
-            stream = self.state.get_latest(symbol, "T") or self.state.get_latest(symbol, "A") or self.state.get_latest(symbol, "AM")
-            if not stream:
-                continue
-            stream_price = _number((stream.get("payload") or {}).get("price") or (stream.get("payload") or {}).get("close"))
-            if stream_price is None or stream_price <= 0:
+        deadline = time.monotonic() + max(.01, self.config.shadow_batch_timeout_seconds)
+        limit = max(1, min(self.config.symbol_cap, self.config.shadow_batch_symbol_limit))
+        calendar = ExchangeCalendar()
+        for index, symbol in enumerate(symbols):
+            remaining = deadline - time.monotonic()
+            if index >= limit or remaining <= 0:
+                self.metrics.shadow_budget_exhausted += 1
+                return
+            def candidate() -> tuple[datetime, float] | None:
+                now = self.clock()
+                session = calendar.session_at(now)
+                # A closed market is not a meaningful live shadow comparison.
+                if session == "closed":
+                    return None
+                threshold = 15 if session == "regular" else 60
+                candidates = []
+                for event_type in ("T", "A", "AM"):
+                    stored = self.state.get_latest(symbol, event_type)
+                    if not stored or stored.get("is_stale") or stored.get("source_mode") != "websocket":
+                        continue
+                    timestamp = _stored_event_time(stored.get("event_timestamp"))
+                    payload = stored.get("payload") or {}
+                    price = _number(payload.get("price") if event_type == "T" else payload.get("close"))
+                    if timestamp is None or price is None or price <= 0 or not 0 <= (now - timestamp).total_seconds() <= threshold:
+                        continue
+                    candidates.append((timestamp, price))
+                return max(candidates, default=None, key=lambda item: item[0])
+            try:
+                comparison = await asyncio.wait_for(self._state_call(candidate), timeout=remaining)
+            except asyncio.TimeoutError:
+                self.metrics.shadow_budget_exhausted += 1
+                return
+            if comparison is None:
+                self.metrics.shadow_skipped += 1
                 continue
             try:
-                result = await asyncio.to_thread(self.rest_client.get_quote, symbol)
-            except ProviderError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self.metrics.shadow_budget_exhausted += 1
+                    return
+                result = await asyncio.wait_for(self._rest_call(symbol), timeout=remaining)
+            except asyncio.TimeoutError:
+                self.metrics.shadow_budget_exhausted += 1
+                return
+            except (ProviderError, RuntimeError, ValueError):
+                self.metrics.shadow_skipped += 1
                 continue
-            rest_price = result.data.price
-            if rest_price is None or rest_price <= 0:
+            rest_price = _number(result.data.price) if result is not None else None
+            rest_time = getattr(result.data, "event_timestamp", None) if result is not None else None
+            session = calendar.session_at(self.clock())
+            threshold = 15 if session == "regular" else 60
+            trustworthy_rest = (isinstance(rest_time, datetime) and rest_time.tzinfo is not None
+                                and 0 <= (self.clock() - rest_time).total_seconds() <= threshold
+                                and not getattr(result.data, "is_stale", True)
+                                and getattr(result.data, "price_source", None) != "daily_close") if result is not None else False
+            if rest_price is None or rest_price <= 0 or not trustworthy_rest:
+                self.metrics.shadow_skipped += 1
                 continue
             self.metrics.shadow_comparisons += 1
-            difference_bps = abs(stream_price - rest_price) / rest_price * 10_000
+            difference_bps = abs(comparison[1] - rest_price) / rest_price * 10_000
             if difference_bps > self.config.rest_shadow_tolerance_bps:
                 self.metrics.shadow_discrepancies += 1
 
-    def health_payload(self, plan: SubscriptionPlan | None = None) -> dict[str, Any]:
+    def health_payload(self, plan: SubscriptionPlan | None = None, *, metrics: StreamMetrics | None = None) -> dict[str, Any]:
         actual_counts = {event: len(symbols) for event, symbols in self.actual.items()}
         desired_counts = {event: len(symbols) for event, symbols in (plan.desired_by_event.items() if plan else [])}
-        metrics = self.metrics.snapshot()
+        metrics = (metrics or self.metrics).snapshot()
         metrics["rest_recovery_queue_depth"] = self._recovery_queue.qsize()
         metrics["rest_recovery_inflight"] = len(self._recovery_inflight)
+        metrics["rest_request_active"] = len(self._rest_futures)
+        metrics["shadow_batch_active"] = bool(self._shadow_task is not None and not self._shadow_task.done())
         return {
             "worker_instance_id": self.worker_instance_id,
             "worker_started_at": self.worker_started_at.isoformat(),
@@ -764,7 +1033,7 @@ class MassiveWebSocketWorker:
             {event: len(symbols) for event, symbols in plan.desired_by_event.items()},
             self.config.shadow_mode,
         )
-        self.state.set_health(self.health_payload(plan), ttl_seconds=self.config.health_ttl_seconds)
+        await self._publish_health(plan, force=True)
         next_reconcile = time.monotonic() + self.config.reconcile_seconds
         next_shadow_compare = time.monotonic() + self.config.shadow_compare_seconds
         while not self._stop:
@@ -785,22 +1054,28 @@ class MassiveWebSocketWorker:
                 next_reconcile = time.monotonic() + self.config.reconcile_seconds
             await self.flush_updates_if_due()
             if self.config.shadow_mode and time.monotonic() >= next_shadow_compare:
-                await self.shadow_compare(plan.symbols)
+                self._start_shadow_compare(plan.symbols)
                 next_shadow_compare = time.monotonic() + self.config.shadow_compare_seconds
-            self.state.set_health(self.health_payload(plan), ttl_seconds=self.config.health_ttl_seconds)
+            await self._publish_health(plan)
 
     async def run(self) -> None:
+        try:
+            await self._run()
+        finally:
+            await self.aclose()
+
+    async def _run(self) -> None:
         if not self.config.enabled:
             self._connection_state = "disabled"
-            self.state.set_health(self.health_payload(), ttl_seconds=self.config.health_ttl_seconds)
+            await self._publish_health(force=True)
             return
         attempt = 0
         while not self._stop:
             await self._refresh_external_demand()
-            plan = self.subscriptions.plan(self.state.desired_demand())
+            plan = self.subscriptions.plan(await self._state_call(self.state.desired_demand))
             if not plan.symbols:
                 self._connection_state = "idle_no_demand"
-                self.state.set_health(self.health_payload(plan), ttl_seconds=self.config.health_ttl_seconds)
+                await self._publish_health(plan)
                 await self.sleep(self.config.reconcile_seconds)
                 continue
             try:
@@ -820,9 +1095,10 @@ class MassiveWebSocketWorker:
                 self._last_error = f"{type(exc).__name__}: {exc}"
                 logging.exception("Massive WebSocket connection failed; reconnecting symbols=%s", sorted(plan.symbols))
                 self.actual = {event: set() for event in ALLOWED_EVENT_TYPES}
-                self.state.mark_symbols_stale(plan.symbols, reason="stream_disconnected", ttl_seconds=self.config.stale_ttl_seconds)
-                await self._recover_symbols(plan.symbols, reason="stream_reconnect")
-                self.state.set_health(self.health_payload(plan), ttl_seconds=self.config.health_ttl_seconds)
+                await self._state_call(self.state.mark_symbols_stale, plan.symbols, reason="stream_disconnected", ttl_seconds=self.config.stale_ttl_seconds)
+                for symbol in sorted(plan.symbols):
+                    self._queue_recovery(symbol, reason="stream_reconnect")
+                await self._publish_health(plan, force=True)
                 delay = _bounded_reconnect_delay(
                     attempt=attempt,
                     min_seconds=self.config.reconnect_min_seconds,
@@ -835,6 +1111,8 @@ class MassiveWebSocketWorker:
     def stop(self) -> None:
         self._stop = True
         self._cancel_recovery_workers()
+        if self._shadow_task is not None:
+            self._shadow_task.cancel()
 
 
 def worker_config_from_env(env: Mapping[str, str]) -> WorkerConfig:
