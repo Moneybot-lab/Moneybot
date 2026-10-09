@@ -456,3 +456,70 @@ def test_reconnect_backoff_caps_attempt_before_float_overflow():
 
     jittered = _bounded_reconnect_delay(attempt=2048, min_seconds=1, max_seconds=30, jitter=1.2)
     assert jittered == 36
+
+
+def test_worker_lifecycle_metadata_stable_unique_utc_and_secret_free():
+    import uuid
+    first, second = worker(), worker()
+    before, after = first.health_payload(), first.health_payload()
+    assert uuid.UUID(before['worker_instance_id']).version == 4
+    assert before['worker_instance_id'] == after['worker_instance_id'] != second.worker_instance_id
+    assert before['worker_started_at'] == after['worker_started_at'] == NOW.isoformat()
+    assert datetime.fromisoformat(before['worker_started_at']).utcoffset().total_seconds() == 0
+    assert before['source_revision'] is None
+    assert before['schema_version'] == 'market-stream.v1'
+    assert 'secret' not in json.dumps(before)
+
+
+@pytest.mark.parametrize('value,expected', [('A'*40, 'a'*40), (None, None), ('', None),
+                                         ('abc', None), ('g'*40, None), ('a'*41, None),
+                                         (' '+('a'*40), None), (123, None)])
+def test_worker_source_revision_validated_once_without_affecting_processing(value, expected):
+    instance = MassiveWebSocketWorker(api_key='secret', state=InMemoryMarketStreamState(),
+                                     rest_client=FakeRestClient(), config=WorkerConfig(),
+                                     connect_factory=lambda *a, **kw: None, clock=lambda: NOW,
+                                     source_revision=value)
+    assert instance.health_payload()['source_revision'] == expected
+    assert instance.health_payload()['metrics']['messages_received'] == {}
+
+
+def test_worker_reconnect_keeps_lifecycle_but_changes_connection_epoch():
+    async def scenario():
+        from datetime import timedelta
+        instance = worker()
+        now = [NOW]
+        instance.clock = lambda: now[0]
+        original = instance.health_payload()
+        async def auth(socket):
+            pass
+        async def reconcile(socket, **kwargs):
+            return instance.subscriptions.plan({})
+        class EndOfFixture:
+            async def recv(self):
+                raise RuntimeError('synthetic connection ended')
+        instance.authenticate = auth
+        instance.reconcile = reconcile
+        for seconds in (1, 2):
+            now[0] = NOW+timedelta(seconds=seconds)
+            with pytest.raises(RuntimeError, match='synthetic connection ended'):
+                await instance.run_connection(EndOfFixture())
+            health = instance.health_payload()
+            assert health['worker_instance_id'] == original['worker_instance_id']
+            assert health['worker_started_at'] == original['worker_started_at']
+            assert health['connected_at'] == now[0].isoformat()
+            assert health['metrics']['reconnect_count'] == 0  # Accounting untouched by metadata.
+    asyncio.run(scenario())
+
+
+def test_stream_startup_passes_only_render_commit_metadata():
+    source = (Path(__file__).resolve().parents[1]/'scripts/run_market_stream.py').read_text()
+    assert 'source_revision=os.environ.get("RENDER_GIT_COMMIT")' in source
+
+
+def test_worker_lifecycle_timestamp_normalizes_timezone_to_utc():
+    from datetime import timedelta
+    clock = lambda: datetime(2026, 10, 9, 5, tzinfo=timezone(timedelta(hours=5)))
+    instance = MassiveWebSocketWorker(api_key='secret', state=InMemoryMarketStreamState(),
+                                     rest_client=FakeRestClient(), config=WorkerConfig(),
+                                     connect_factory=lambda *a, **kw: None, clock=clock)
+    assert instance.health_payload()['worker_started_at'] == '2026-10-09T00:00:00+00:00'

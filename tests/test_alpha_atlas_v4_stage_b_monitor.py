@@ -114,7 +114,8 @@ def test_valid_health_and_three_phase_comparisons(tmp_path):
 def test_malformed_or_mismatched_health_is_unknown(change, reason):
     value = healthy()[0]; change(value)
     result = m.health_observation(value, START, 'synthetic-worker')
-    assert result['status'] == 'UNKNOWN' and result['snapshot'] is None
+    assert result['status'] == 'UNKNOWN'
+    assert (result['snapshot'] is not None) if reason == 'WORKER_IDENTITY_MISMATCH' else (result['snapshot'] is None)
     assert reason in result['reasons']
 
 
@@ -513,3 +514,81 @@ def test_reader_closes_its_explicit_pool_without_network(monkeypatch):
     monkeypatch.setattr(reader.pool, 'disconnect', lambda: closed.append(True))
     reader.close()
     assert closed == [True]
+
+
+def test_legacy_metadata_unknown_without_fabrication():
+    value = healthy()[0]
+    for key in ('worker_instance_id', 'worker_started_at', 'source_revision'):
+        value.pop(key)
+    result = m.health_observation(value, START, None, SHA)
+    assert result['status'] == 'UNKNOWN'
+    assert {'UNKNOWN_SOURCE_IDENTITY', 'WORKER_START_UNKNOWN', 'SOURCE_REVISION_UNKNOWN'} <= set(result['reasons'])
+    assert all(result['snapshot'][key] is None for key in ('worker_instance_id', 'worker_started_at', 'source_revision'))
+
+
+@pytest.mark.parametrize('revision', [None, 'bad', 'z'*40, 'a'*39])
+def test_missing_invalid_revision_never_verified(revision):
+    value = healthy()[0]; value['source_revision'] = revision
+    result = m.health_observation(value, START, 'synthetic-worker', SHA)
+    assert result['status'] == 'UNKNOWN' and result['snapshot']['source_revision'] is None
+    assert 'SOURCE_REVISION_UNKNOWN' in result['reasons']
+
+
+def test_matching_metadata_is_self_reported_not_attestation():
+    value = healthy()[0]; value['source_revision'] = SHA.upper()
+    result = m.health_observation(value, START, 'synthetic-worker', SHA)
+    assert result['status'] == 'VALID'
+    assert result['snapshot']['source_revision'] == SHA
+    assert result['snapshot']['worker_started_at'] == START.isoformat()
+    assert result['snapshot']['metadata_binding'] == 'SELF_REPORTED_CLAIM_NOT_ATTESTATION'
+
+
+@pytest.mark.parametrize('change,reason', [
+    (lambda v: v.update(worker_instance_id='replacement-worker'), 'WORKER_LIFECYCLE_CHANGED'),
+    (lambda v: v.update(worker_started_at=(START-timedelta(seconds=30)).isoformat()), 'WORKER_LIFECYCLE_CHANGED'),
+    (lambda v: v.update(source_revision='b'*40), 'SOURCE_REVISION_CHANGED'),
+])
+def test_lifecycle_or_revision_boundary_blocks_phase_and_cross_phase_averaging(tmp_path, change, reason):
+    values = healthy()
+    for v in values:
+        v['worker_started_at'] = (START-timedelta(seconds=60)).isoformat()
+    for i in range(2, 12):
+        change(values[i])
+        values[i]['metrics']['messages_received']['T'] = (i-2)*100
+    result = run(tmp_path, health=values)
+    assert any(b['reason'] == reason for b in result['comparisons']['boundaries'])
+    baseline = result['comparisons']['phases']['BASELINE_BEFORE']
+    assert baseline['status'] == 'UNKNOWN' and baseline['counter_changes'] is None
+    assert 'messages_per_second' not in baseline
+    assert result['comparisons']['versus_baseline']['AFTER_TEST']['status'] == 'UNKNOWN'
+    if reason == 'SOURCE_REVISION_CHANGED':
+        rows = [json.loads(line) for line in (tmp_path/'evidence/observations.jsonl').read_text().splitlines()]
+        assert rows[2]['health']['snapshot']['source_revision'] == 'b'*40
+        assert 'SOURCE_REVISION_MISMATCH' in rows[2]['health']['reasons']
+    assert result['overall_stage_b'] == 'OPEN'
+
+
+def test_revision_change_at_phase_boundary_does_not_allow_cross_revision_comparison(tmp_path):
+    values = healthy()
+    for v in values[4:]:
+        v['source_revision'] = 'b'*40
+    result = run(tmp_path, health=values)
+    assert result['comparisons']['versus_baseline']['DURING_AUTHORIZED_TEST']['status'] == 'UNKNOWN'
+    assert result['comparisons']['phases']['DURING_AUTHORIZED_TEST']['status'] == 'UNKNOWN'
+
+
+@pytest.mark.parametrize('value', [None, 'not-a-time', '2026-10-09T00:00:00Z'])
+def test_invalid_worker_start_remains_unknown(value):
+    health = healthy()[0]; health['worker_started_at'] = value
+    result = m.health_observation(health, START, 'synthetic-worker', SHA)
+    assert result['status'] == 'UNKNOWN' and result['snapshot']['worker_started_at'] is None
+    assert 'WORKER_START_UNKNOWN' in result['reasons']
+
+
+def test_present_but_unbound_identity_and_invalid_revision_do_not_certify_or_leak():
+    health = healthy()[0]
+    health.update(source_revision='SECRET_INVALID_REVISION', api_key='SECRET_API_KEY', last_error='SECRET_ERROR')
+    result = m.health_observation(health, START, None, SHA)
+    assert result['snapshot']['worker_instance_id'] == 'synthetic-worker'
+    assert {'UNKNOWN_SOURCE_IDENTITY', 'SOURCE_REVISION_UNKNOWN'} <= set(result['reasons'])
+    assert 'SECRET' not in json.dumps(result)

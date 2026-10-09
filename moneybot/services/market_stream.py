@@ -6,6 +6,8 @@ import json
 import logging
 import math
 import random
+import re
+import uuid
 import time
 from collections import Counter, defaultdict, deque
 from dataclasses import asdict, dataclass, field
@@ -18,6 +20,11 @@ STREAM_SCHEMA_VERSION = "market-stream.v1"
 REDIS_KEY_VERSION = "v1"
 ALLOWED_EVENT_TYPES = frozenset({"A", "AM", "Q", "T"})
 EVENT_PREFIXES = {"A": "A", "AM": "AM", "Q": "Q", "T": "T"}
+
+
+def normalize_source_revision(value: Any) -> str | None:
+    """Deployment metadata is a claim, not attestation; invalid input stays absent."""
+    return value.lower() if isinstance(value, str) and re.fullmatch(r'[0-9a-fA-F]{40}', value) else None
 
 
 def _utc_now() -> datetime:
@@ -474,6 +481,7 @@ class MassiveWebSocketWorker:
         sleep: Callable[[float], Any] = asyncio.sleep,
         rng: random.Random | None = None,
         demand_loader: Callable[[], Mapping[str, Iterable[str]]] | None = None,
+        source_revision: str | None = None,
     ) -> None:
         self.api_key = api_key
         self.state = state
@@ -481,6 +489,10 @@ class MassiveWebSocketWorker:
         self.config = config
         self.connect_factory = connect_factory
         self.clock = clock
+        self.worker_instance_id = str(uuid.uuid4())
+        started = clock()
+        self.worker_started_at = (started if started.tzinfo is not None else _utc_now()).astimezone(timezone.utc)
+        self.source_revision = normalize_source_revision(source_revision)
         self.sleep = sleep
         self.rng = rng or random.Random()
         self.demand_loader = demand_loader
@@ -723,6 +735,9 @@ class MassiveWebSocketWorker:
         metrics["rest_recovery_queue_depth"] = self._recovery_queue.qsize()
         metrics["rest_recovery_inflight"] = len(self._recovery_inflight)
         return {
+            "worker_instance_id": self.worker_instance_id,
+            "worker_started_at": self.worker_started_at.isoformat(),
+            "source_revision": self.source_revision,
             "schema_version": STREAM_SCHEMA_VERSION, "enabled": self.config.enabled, "shadow_mode": self.config.shadow_mode,
             "connection_state": self._connection_state, "last_message_at": self._last_message_at.isoformat() if self._last_message_at else None,
             "connected_at": self._connected_at.isoformat() if self._connected_at else None,

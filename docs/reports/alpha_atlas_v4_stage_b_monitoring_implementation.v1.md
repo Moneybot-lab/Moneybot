@@ -87,13 +87,12 @@ filesystem compliance remains UNKNOWN unless separately reviewed. Missing/mismat
 mount attribution is explicit. These limitations do not require changing the stream
 loop for this implementation.
 
-Current production health has no worker instance ID, PID or source-revision field.
-Its source remains `OWNER_BOUND_HEALTH_KEY`, not independently verified worker
-identity. Such snapshots are archived with `UNKNOWN_SOURCE_IDENTITY`; conclusive
-counter-rate comparison is withheld. Connected timestamp/counter changes still
-record apparent restart boundaries. A future independently established identity
-binding is required before interpreting valid-source deltas. We do not add an
-unrequested production instrumentation change to manufacture that identity.
+The worker identity/source metadata addition is implemented but not deployed by this
+task. New workers publish a lifecycle UUID4, stable UTC `worker_started_at` and a
+validated self-reported source revision. Legacy deployed payloads may still lack
+these fields. Source remains `OWNER_BOUND_HEALTH_KEY`, not cryptographic attestation;
+process PID mapping and namespace sharing remain separate UNKNOWN requirements.
+Missing/unbound metadata stays UNKNOWN and cannot establish valid-source deltas.
 
 ## Evidence schema and comparisons
 
@@ -173,8 +172,9 @@ No deployment or secret/environment changes occur here.
 The following is a structural example **not an authorization**. Replace placeholders,
 review source/mount/process attribution and approve explicitly. All listed fields
 are required; extra fields are rejected. A null PID means unavailable process
-measurements. The production payload currently lacks worker-instance identity, so
-`worker_instance_id=null` is honest and produces UNKNOWN identity.
+measurements. An absent independently established worker ID must remain
+`worker_instance_id=null`, which produces UNKNOWN identity. Adding metadata does
+not authorize a Redis read to discover that ID.
 
 ```json
 {
@@ -264,3 +264,67 @@ immutable evidence of the earlier implementation; its recorded module hash is
 historical, not the fixed module's hash. Fresh synthetic evidence was generated
 only in scratch storage and integrity-checked. This repair does not authorize any
 live observation, deployment or workload, or change UNKNOWN acceptance/Stage B OPEN.
+
+
+## Worker lifecycle and source-revision metadata — implementation only
+
+`market-stream.v1` gains three additive fields: `worker_instance_id` (UUID4 generated
+once at `MassiveWebSocketWorker` initialization), `worker_started_at` (stable UTC
+initialization time), and `source_revision` (lowercase 40-hex Git SHA or null).
+The optional constructor argument preserves existing callers. `run_market_stream`
+passes only Render's `RENDER_GIT_COMMIT` via that argument; no Git command, credential
+lookup or network discovery is added. No earlier explicit revision wiring was
+present in the stream startup path. Invalid/missing revision is null and never
+blocks normal streaming. UUID/start time are not derived from API keys or identifiers.
+Ordinary reconnects keep lifecycle metadata and update only the existing connection
+epoch. Worker replacement generates a fresh lifecycle UUID/time.
+
+Existing health key, TTL, cadence, metric/connection semantics, subscriptions,
+recovery and V3/V3.1/Track B routing remain unchanged. The authenticated health API
+passes through additive worker fields; legacy and expanded responses both pass
+compatibility checks without a schema-version change.
+
+The monitor preserves sanitized observed UUID, start time and revision, compares
+against the independently supplied owner binding and exact approved revision, and
+records `UNKNOWN_SOURCE_IDENTITY`, `WORKER_IDENTITY_MISMATCH`, `WORKER_START_UNKNOWN`,
+`SOURCE_REVISION_UNKNOWN` or `SOURCE_REVISION_MISMATCH` where applicable. Valid
+metadata can be structurally VALID without being independently attested: evidence
+explicitly records `SELF_REPORTED_CLAIM_NOT_ATTESTATION`, and overall source binding
+remains owner-declared. Matching text is not proof of the writer/process behind Redis.
+
+Lifecycle/start changes record `WORKER_LIFECYCLE_CHANGED`; revision changes record
+`SOURCE_REVISION_CHANGED`. Reconnect/counter-reset boundaries remain distinct.
+No delta crosses a boundary. A phase containing multiple source/connection epochs
+or a reset gets no combined throughput/counter average, and baseline comparisons
+across epochs/revisions are withheld. Legacy snapshots without metadata stay
+UNKNOWN, with null fields; no IDs or revisions are fabricated. Missing phase or
+resource measurements still prevent certification. PR #660's URL allowlist, pool,
+timeouts, retry/protocol/command restrictions and authorization gates are unchanged.
+
+143 focused offline tests passed with actual socket connections and DNS blocked:
+141 monitor/selected synthetic stream cases and two authenticated API compatibility
+cases. These cover UUID uniqueness/stability, UTC formatting, reconnect behavior,
+revision validation, legacy/missing metadata, mismatches, lifecycle/start/revision
+boundaries, counter resets, absence of cross-epoch averages, secret suppression and
+all existing Redis safety regressions. Sixteen unrelated stream cases were excluded
+from the final targeted run; broader synthetic stream runs were interrupted after
+stalling in existing fake-connection waits. No live integration suite was run.
+Existing committed synthetic evidence was verified unchanged; new fixtures ran only
+in temporary test storage. Its original module hash remains historical.
+
+Before any real observation, the owner must separately authorize deployment of an
+exact revision and **separately authorize read-only identity discovery**, or supply
+an approved source/deployment record that independently establishes the current
+lifecycle UUID and revision. Any discovery must specify target/source/key, revision,
+finite window/read budget, output and stop conditions; it does not reuse acquisition
+or monitoring approval to authorize its first read. Correlate freshly timestamped
+health metadata with trusted deployment/process evidence; bind the resulting UUID
+and exact deployed revision in the distinct hash-pinned monitoring authorization.
+A source revision record alone does not independently establish lifecycle UUID or
+Redis writer identity. Worker replacement invalidates that lifecycle binding;
+rebind/reapprove without automatic rediscovery. No discovery or deployment occurred.
+
+Only identity-metadata implementation is closed. Process resource compliance,
+historical stream continuity, interference acceptance and workload association remain
+UNKNOWN; live monitoring NOT_EXECUTED, premarket/prospective readiness NOT_TESTED,
+pilot consumption PROHIBITED and overall Stage B OPEN. Stop after PR publication.

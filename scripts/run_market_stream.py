@@ -66,6 +66,7 @@ def main() -> int:
         config=config,
         connect_factory=connect,
         demand_loader=database_demand,
+        source_revision=os.environ.get("RENDER_GIT_COMMIT"),
     )
     asyncio.run(worker.run())
     return 0
