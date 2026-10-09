@@ -534,6 +534,8 @@ class MassiveWebSocketWorker:
         self._recovery_tasks: set[asyncio.Task[None]] = set()
         self._recovery_inflight: set[str] = set()
         self._last_recovery_monotonic: dict[str, float] = {}
+        self._shadow_inflight: dict[str, asyncio.Future[None]] = {}
+        self._last_shadow_monotonic: dict[str, float] = {}
         # One admitted operation at a time: neither Redis ordering nor the
         # executor queue depends on the number of callers waiting for admission.
         self._state_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="market-stream-state")
@@ -700,17 +702,43 @@ class MassiveWebSocketWorker:
         self._last_event[key] = (event.event_timestamp, event.sequence_number, event.provider_event_id)
         return True, gap
 
-    async def _rest_call(self, symbol: str, *, reserved: bool = False) -> Any:
+    async def _rest_call(self, symbol: str, *, reserved: bool = False, recovery: bool = False) -> Any:
         """Shared bounded admission for every comparison and recovery request."""
         if not reserved:
             now = time.monotonic()
             last = self._last_recovery_monotonic.get(symbol)
             if symbol in self._recovery_inflight or (last is not None and now - last < self.config.recovery_cooldown_seconds):
                 return None
-            self._recovery_inflight.add(symbol)
-            self._last_recovery_monotonic[symbol] = now
+            if recovery:
+                self._recovery_inflight.add(symbol)
+                self._last_recovery_monotonic[symbol] = now
+        shadow_claim = None
+        if not recovery:
+            now = time.monotonic()
+            last = self._last_shadow_monotonic.get(symbol)
+            if symbol in self._shadow_inflight or (last is not None and now - last < self.config.recovery_cooldown_seconds):
+                return None
+            # Claim before waiting for a shared slot, so a recovery cannot
+            # overtake even a shadow request that has not been submitted yet.
+            shadow_claim = asyncio.get_running_loop().create_future()
+            self._shadow_inflight[symbol] = shadow_claim
+            self._last_shadow_monotonic[symbol] = now
+
+        def finish_shadow() -> None:
+            if self._shadow_inflight.get(symbol) is shadow_claim:
+                self._shadow_inflight.pop(symbol, None)
+            if shadow_claim is not None and not shadow_claim.done():
+                shadow_claim.set_result(None)
+
         submitted = False
         try:
+            if recovery:
+                shadow = self._shadow_inflight.get(symbol)
+                if shadow is not None:
+                    # Completion conveys no provider result/exception: a failed
+                    # comparison must not abort the queued real recovery. Do not
+                    # occupy a shared slot or cancel the shadow while waiting.
+                    await asyncio.shield(shadow)
             await self._rest_slots.acquire()
             if self._stop:
                 self._rest_slots.release()
@@ -724,7 +752,9 @@ class MassiveWebSocketWorker:
                 # Queued recovery owns the symbol through its guarded state
                 # store. If canceled, its worker removes the generation claim
                 # and this callback releases the remaining active-call claim.
-                if not reserved or symbol not in self._recovery_generation:
+                if shadow_claim is not None:
+                    finish_shadow()
+                elif symbol not in self._recovery_generation:
                     self._recovery_inflight.discard(symbol)
                 self._rest_slots.release()
                 # Also retrieve exceptions when a timed-out/canceled batch no
@@ -735,7 +765,10 @@ class MassiveWebSocketWorker:
             return await asyncio.shield(future)
         finally:
             if not submitted:
-                self._recovery_inflight.discard(symbol)
+                if shadow_claim is not None:
+                    finish_shadow()
+                else:
+                    self._recovery_inflight.discard(symbol)
 
     async def _recover_symbol(self, symbol: str, *, reason: str) -> None:
         started = time.perf_counter(); self.metrics.rest_recovery_count += 1
@@ -750,7 +783,7 @@ class MassiveWebSocketWorker:
             self.metrics.rest_recovery_rejected += 1
             return
         try:
-            result = await self._rest_call(symbol, reserved=symbol in self._recovery_inflight)
+            result = await self._rest_call(symbol, reserved=symbol in self._recovery_inflight, recovery=True)
             if result is None:
                 return
             quote: NormalizedQuote = result.data
@@ -824,7 +857,7 @@ class MassiveWebSocketWorker:
                 self.metrics.rest_recovery_failures += 1
                 logging.exception("Recovery job failed for %s", symbol)
             finally:
-                if symbol not in self._rest_futures:
+                if symbol not in self._rest_futures or symbol in self._shadow_inflight:
                     self._recovery_inflight.discard(symbol)
                 self._recovery_generation.pop(symbol, None)
                 self._recovery_queue.task_done()

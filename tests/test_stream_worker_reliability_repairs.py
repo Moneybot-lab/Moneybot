@@ -389,12 +389,19 @@ def test_shadow_deadline_cancels_wait_but_keeps_provider_slot_until_completion(m
         await worker.shadow_compare(("AAA", "BBB"))
         assert worker.metrics.shadow_budget_exhausted == 1
         assert len(worker._rest_futures) == 1 and worker._rest_slots.locked()
-        assert "AAA" in worker._recovery_inflight
+        assert "AAA" in worker._shadow_inflight
+        assert "AAA" not in worker._recovery_inflight
         worker._queue_recovery("AAA", reason="stream_reconnect")
-        assert worker.metrics.rest_recovery_deduped == 1
+        assert worker.metrics.rest_recovery_queued == 1
+        assert worker.metrics.rest_recovery_deduped == 0
+        close = asyncio.create_task(worker.aclose())
+        await asyncio.sleep(0)
         release.set()
-        await worker.aclose()
+        await close
         assert rest.calls == ["AAA"] and not worker._rest_futures
+        assert not worker._shadow_inflight and not worker._recovery_inflight
+        assert not worker._recovery_generation
+        await worker.drain_recoveries()
 
     asyncio.run(scenario())
 
@@ -543,5 +550,122 @@ def test_queue_overflow_stale_marker_cannot_invalidate_newer_frame():
         await worker.drain_recoveries()
         assert rest.calls == ["AAA", "BBB"]
         await worker.aclose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("reason", ["sequence_gap", "stream_reconnect"])
+def test_failed_shadow_does_not_consume_actual_recovery_cooldown(reason):
+    async def scenario():
+        calls = []
+        rest = RestStub()
+        def provider(symbol):
+            calls.append(symbol)
+            if len(calls) == 1:
+                raise stream.ProviderError("synthetic failed shadow")
+            result = quote_result(symbol)
+            result.data.price = 110
+            return result
+        rest.get_quote = provider
+        state = stream.InMemoryMarketStreamState()
+        state.set_latest(trade(), ttl_seconds=120)
+        worker = make_worker(state=state, rest=rest)
+        try:
+            await worker.shadow_compare(("AAA",))
+            assert "AAA" not in worker._last_recovery_monotonic
+            worker._queue_recovery("AAA", reason=reason)
+            await worker.drain_recoveries()
+            assert calls == ["AAA", "AAA"]
+            assert state.get_latest("AAA", "Q")["payload"]["recovery_price"] == 110
+            cooldown = worker._last_recovery_monotonic["AAA"]
+            worker._queue_recovery("AAA", reason=reason)
+            await worker.shadow_compare(("AAA",))
+            assert calls == ["AAA", "AAA"]
+            assert worker._last_recovery_monotonic["AAA"] == cooldown
+            assert worker.metrics.rest_recovery_queued == worker.metrics.rest_recovery_deduped == 1
+        finally:
+            await worker.aclose()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("shadow_fails,waiting_for_slot", [(False, False), (True, False), (True, True)])
+def test_inflight_shadow_retains_one_queued_recovery_without_future_overwrite(shadow_fails, waiting_for_slot):
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        shadow_entered, recovery_entered, stale_marked = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        shadow_release, recovery_release = threading.Event(), threading.Event()
+        calls = []
+        rest = RestStub()
+        def provider(symbol):
+            calls.append(symbol)
+            if len(calls) == 1:
+                loop.call_soon_threadsafe(shadow_entered.set)
+                shadow_release.wait()
+                if shadow_fails:
+                    raise stream.ProviderError("synthetic failed active shadow")
+            else:
+                loop.call_soon_threadsafe(recovery_entered.set)
+                recovery_release.wait()
+            result = quote_result(symbol)
+            result.data.price = 110 if len(calls) > 1 else 100
+            return result
+        rest.get_quote = provider
+        class State(stream.InMemoryMarketStreamState):
+            def mark_symbols_stale(self, *args, **kwargs):
+                super().mark_symbols_stale(*args, **kwargs)
+                loop.call_soon_threadsafe(stale_marked.set)
+        state = State()
+        state.set_latest(trade(), ttl_seconds=120)
+        worker = make_worker(state=state, rest=rest)
+        held_slots = 0
+        try:
+            waiting = asyncio.Event()
+            if waiting_for_slot:
+                # Synthetic competing work occupies the unchanged two slots.
+                await worker._rest_slots.acquire()
+                await worker._rest_slots.acquire()
+                held_slots = 2
+                acquire = worker._rest_slots.acquire
+                async def admission():
+                    waiting.set()
+                    return await acquire()
+                worker._rest_slots.acquire = admission
+            worker._start_shadow_compare(("AAA",))
+            await (waiting.wait() if waiting_for_slot else shadow_entered.wait())
+            shadow_future = worker._rest_futures.get("AAA")
+            worker._queue_recovery("AAA", reason="sequence_gap")
+            assert worker.metrics.rest_recovery_queued == 1
+            worker._queue_recovery("AAA", reason="stream_reconnect")
+            await stale_marked.wait()
+            assert state.get_latest("AAA", "T")["is_stale"]
+            assert worker._rest_futures.get("AAA") is shadow_future
+            if waiting_for_slot:
+                assert calls == [] and "AAA" in worker._shadow_inflight
+                for _ in range(held_slots):
+                    worker._rest_slots.release()
+                held_slots = 0
+                await shadow_entered.wait()
+                shadow_future = worker._rest_futures["AAA"]
+            assert calls == ["AAA"] and not recovery_entered.is_set()
+            assert worker.config.recovery_concurrency == 2 and worker._rest_slots._value == 1
+            shadow_release.set()
+            await recovery_entered.wait()
+            assert worker._rest_futures["AAA"] is not shadow_future
+            worker._queue_recovery("AAA", reason="sequence_gap")
+            assert worker.metrics.rest_recovery_deduped == 2
+            recovery_release.set()
+            await worker.drain_recoveries()
+            await worker._shadow_task
+            assert calls == ["AAA", "AAA"]
+            assert state.get_latest("AAA", "Q")["payload"]["recovery_price"] == 110
+            assert not worker._rest_futures and not worker._shadow_inflight
+            assert not worker._recovery_inflight and not worker._recovery_generation
+        finally:
+            for _ in range(held_slots):
+                worker._rest_slots.release()
+            shadow_release.set()
+            recovery_release.set()
+            await worker.aclose()
 
     asyncio.run(scenario())
