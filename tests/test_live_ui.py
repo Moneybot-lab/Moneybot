@@ -45,3 +45,9 @@ def test_portfolio_has_live_price_pnl_reconnect_and_controlled_refresh_ui():
     assert "item.performance_amount = (quote.price - item.entry_price) * shares" in html
     assert "recommendation_refresh" in html
     assert "without generating a new AI narrative" in html
+    assert "WebSocket · Live" in html and "REST · Fresh" in html and "REST · Stale" in html
+    assert "Provider status unknown" in html
+    assert "Browser price feed reconnecting" in html
+    assert "manual Refresh Portfolio remains available" in html
+    assert "using REST refresh while reconnecting" not in html
+    assert "portfolioProviderStatus" in html and "portfolioPriceQuality" in html
