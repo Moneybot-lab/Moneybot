@@ -1830,9 +1830,9 @@ def user_watchlist():
                 if deterministic_advice in {"BUY", "HOLD", "SELL"}:
                     advice = deterministic_advice
                     deterministic_locked = True
-                deterministic_reason = str((deterministic_portfolio or {}).get("advice_reason") or "").strip()
-                if deterministic_reason:
-                    advice_reason = deterministic_reason
+                    # A reason belongs to the decision that supplied the action.
+                    deterministic_reason = str((deterministic_portfolio or {}).get("advice_reason") or "").strip()
+                    advice_reason = deterministic_reason or f"{advice}: Selected by the existing deterministic portfolio rules."
             except Exception:  # noqa: BLE001
                 deterministic_portfolio = None
 
@@ -1849,9 +1849,10 @@ def user_watchlist():
                 ai_advice = str((ai_portfolio or {}).get("advice") or "").upper()
                 if (not deterministic_locked) and ai_advice in {"BUY", "HOLD", "SELL"}:
                     advice = ai_advice
-                ai_reason = str((ai_portfolio or {}).get("advice_reason") or "").strip()
-                if ai_reason:
-                    advice_reason = ai_reason
+                    # AI and application fallback reasons can accompany only their
+                    # own accepted action, never a locked deterministic decision.
+                    ai_reason = str((ai_portfolio or {}).get("advice_reason") or "").strip()
+                    advice_reason = ai_reason or f"{advice}: Portfolio advice selected {advice}; no supporting explanation was available."
             except Exception:  # noqa: BLE001
                 ai_portfolio = None
 
@@ -1868,13 +1869,13 @@ def user_watchlist():
         if quick_alignment_recommendation in {"BUY", "STRONG BUY"} and advice == "SELL":
             advice = "HOLD"
             advice_reason = (
-                f"{advice_reason} Consistency adjustment: Quick Ask currently reads "
+                "HOLD. Consistency adjustment: Quick Ask currently reads "
                 f"{quick_alignment_recommendation}, so SELL was softened to HOLD."
             )
         elif quick_alignment_recommendation == "HOLD OFF FOR NOW" and advice == "BUY":
             advice = "HOLD"
             advice_reason = (
-                f"{advice_reason} Consistency adjustment: Quick Ask currently reads HOLD OFF FOR NOW, "
+                "HOLD. Consistency adjustment: Quick Ask currently reads HOLD OFF FOR NOW, "
                 "so BUY was softened to HOLD."
             )
 
@@ -1902,7 +1903,8 @@ def user_watchlist():
         advice = personalized_decision.action
         if suitability["changed"]:
             policy_messages = " ".join(rule["message"] for rule in suitability["applied_rules"])
-            advice_reason = f"{advice_reason} Profile adjustment: {policy_messages}"
+            # The final policy outcome supersedes the earlier action's reason.
+            advice_reason = f"{advice}. Profile adjustment: {policy_messages}"
 
         enriched_items.append(
             {
