@@ -93,6 +93,7 @@ def portfolio(monkeypatch, tmp_path):
             assert row["deterministic_portfolio"]["confidence"] == 71.0
         return row
 
+    fetch.client = client
     return fetch
 
 
