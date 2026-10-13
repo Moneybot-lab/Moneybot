@@ -1771,8 +1771,13 @@ def create_app() -> Flask:
                 const mode = String(aiPortfolio.mode || 'rule_based').replaceAll('_', ' ');
                 const riskNotes = Array.isArray(aiPortfolio.risk_notes) ? aiPortfolio.risk_notes : [];
                 const nextChecks = Array.isArray(aiPortfolio.next_checks) ? aiPortfolio.next_checks : [];
-                const topRisk = riskNotes[0] || 'Keep strict risk controls and position sizing.';
-                const topCheck = nextChecks[0] || 'Recheck trend and sentiment before changing your position size.';
+                // Independent model text has no verified association with the final
+                // action, including after model, consistency or suitability rules.
+                // Retain only explicitly approved, action-independent guidance.
+                const compatibleRisks = new Set(['Momentum can reverse quickly.', 'Keep strict risk controls and position sizing.']);
+                const compatibleChecks = new Set(['Watch RSI and volume.', 'Reassess after earnings.']);
+                const topRisk = compatibleRisks.has(riskNotes[0]) ? riskNotes[0] : 'Market conditions and prices can change; review your risk limits.';
+                const topCheck = compatibleChecks.has(nextChecks[0]) ? nextChecks[0] : 'Monitor verified market data and review the final recommendation when conditions change.';
                 currentAdviceContext = { symbol, advice, reason };
                 document.getElementById('adviceTitle').textContent = `${symbol} · ${advice} rationale`;
                 document.getElementById('adviceReason').innerHTML = `

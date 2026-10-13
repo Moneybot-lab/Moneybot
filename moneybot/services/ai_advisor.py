@@ -475,14 +475,32 @@ class AIAdvisorService:
                         reason="empty_or_unparseable_provider_response",
                     )
                 parsed = json.loads(raw)
+                model_advice = str(parsed.get("advice") or "HOLD").strip().upper()
                 advice = self._post_process_portfolio_advice(
-                    advice=str(parsed.get("advice") or "HOLD").strip().upper(),
+                    advice=model_advice,
                     score=score,
                     drawdown_pct=drawdown_pct,
                     sentiment_score=sentiment_score,
                     rsi=rsi,
                 )
-                advice_reason = str(parsed.get("advice_reason") or "Hold until signals are clearer.").strip()
+                provider_reason = parsed.get("advice_reason")
+                if advice != model_advice:
+                    # The model reason describes its original action. Replace it
+                    # with the existing rule responsible for the selected action.
+                    adjustment_reasons = {
+                        ("BUY", "HOLD"): "HOLD: The existing recovery/sentiment guard prevented buying.",
+                        ("SELL", "HOLD"): "HOLD: The existing strong-recovery drawdown rule prevented selling.",
+                        ("HOLD", "BUY"): "BUY: The existing strong-recovery, drawdown and bullish-sentiment rule selected buying.",
+                        ("HOLD", "SELL"): "SELL: The existing RSI and position-profit rule selected selling.",
+                    }
+                    advice_reason = adjustment_reasons.get(
+                        (model_advice, advice),
+                        f"{advice}: Selected by the existing portfolio advice rules after an invalid provider action.",
+                    )
+                elif parsed.get("advice") and isinstance(provider_reason, str) and provider_reason.strip():
+                    advice_reason = provider_reason.strip()
+                else:
+                    advice_reason = f"{advice}: Portfolio advice selected {advice}; no supporting provider explanation was available."
                 risk_notes = parsed.get("risk_notes") if isinstance(parsed.get("risk_notes"), list) else []
                 next_checks = parsed.get("next_checks") if isinstance(parsed.get("next_checks"), list) else []
                 return {
