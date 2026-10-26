@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from moneybot.services.ops_runtime import atomic_write_text
 from moneybot.services.historical_validation import (
     build_dataset_manifest,
     build_historical_validation_report,
@@ -75,7 +76,7 @@ def main() -> int:
     )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic_write_text(output, json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(json.dumps({
         "output": str(output),
         "evaluated_rows": report["metrics"]["evaluated_rows"],

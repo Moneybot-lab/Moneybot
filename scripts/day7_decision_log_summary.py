@@ -10,6 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from moneybot.services.ops_runtime import atomic_write_text
 from moneybot.services.decision_log import summarize_decision_events
 from moneybot.services.runtime_paths import resolve_runtime_dir
 
@@ -40,7 +41,7 @@ def main() -> None:
     print(payload)
     if args.output:
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(payload, encoding="utf-8")
+        atomic_write_text(Path(args.output), payload)
 
 
 if __name__ == "__main__":

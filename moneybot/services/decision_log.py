@@ -12,31 +12,40 @@ from typing import Any, Dict
 from .forecast_horizon import resolve_forecast_horizon
 
 
-def read_decision_events(path: str, *, limit: int | None = None) -> list[Dict[str, Any]]:
+def iter_decision_events(path: str, *, limit: int | None = None):
+    """Decode one JSONL record at a time; limit counts physical lines, as before.
+
+    Keep only byte offsets during selection, never a tail of large JSON strings.
+    The open file and captured end offset give a stable append-only snapshot.
+    """
+    from collections import deque
+
     file_path = Path(path)
     if not file_path.exists():
-        return []
+        return
+    with file_path.open("rb") as fh:
+        end = fh.seek(0, 2)
+        fh.seek(0)
+        if limit is not None:
+            offsets = deque(maxlen=max(0, int(limit)))
+            while fh.tell() < end:
+                offsets.append(fh.tell())
+                fh.readline()
+            if not offsets:
+                return
+            fh.seek(offsets[0])
+        while fh.tell() < end:
+            raw = fh.readline(end - fh.tell())
+            try:
+                record = json.loads(raw)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                continue
+            if isinstance(record, dict):
+                yield record
 
-    with file_path.open("r", encoding="utf-8") as fh:
-        if limit is None:
-            lines = fh.readlines()
-        else:
-            from collections import deque
 
-            lines = list(deque(fh, maxlen=max(0, int(limit))))
-
-    events: list[Dict[str, Any]] = []
-    for line in lines:
-        raw = line.strip()
-        if not raw:
-            continue
-        try:
-            record = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict):
-            events.append(record)
-    return events
+def read_decision_events(path: str, *, limit: int | None = None) -> list[Dict[str, Any]]:
+    return list(iter_decision_events(path, limit=limit))
 
 
 def summarize_decision_events(path: str, *, limit: int = 200) -> Dict[str, Any]:

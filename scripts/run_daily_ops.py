@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import json
+import time
 import subprocess
 import sys
 import tempfile
@@ -13,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from moneybot.services.ops_runtime import atomic_write_text, run_bounded, read_status, peak_rss_mib
 from moneybot.services.runtime_paths import (
     day13_calibration_report_path,
     day13_recalibration_plan_path,
@@ -41,24 +44,23 @@ def _tail_text(path: Path, *, max_bytes: int = 12000) -> str:
 def _run_daily_ops_command(command: list[str], *, script_name: str, log_dir: Path) -> subprocess.CompletedProcess[str]:
     stdout_path = log_dir / f"{script_name}.stdout.log"
     stderr_path = log_dir / f"{script_name}.stderr.log"
-    with stdout_path.open("w", encoding="utf-8") as stdout_fh, stderr_path.open("w", encoding="utf-8") as stderr_fh:
-        completed = subprocess.run(command, stdout=stdout_fh, stderr=stderr_fh, text=True, check=False)
-
-    stdout_tail = _tail_text(stdout_path)
-    stderr_tail = _tail_text(stderr_path)
-    if stdout_tail:
-        LOGGER.info("Script stdout tail (%s): %s", script_name, stdout_tail)
+    completed = run_bounded(command, timeout=600, log_paths=(stdout_path, stderr_path))
     if completed.returncode != 0:
-        if stderr_tail:
-            LOGGER.error("Script stderr tail (%s): %s", script_name, stderr_tail)
-        raise subprocess.CalledProcessError(
-            returncode=completed.returncode,
-            cmd=command,
-            output=stdout_tail,
-            stderr=stderr_tail,
-        )
-    if stderr_tail:
-        LOGGER.warning("Script stderr tail (%s): %s", script_name, stderr_tail)
+        # Never forward report bodies or private decision records to logs/API.
+        raise subprocess.CalledProcessError(completed.returncode, command,
+                                            output="", stderr="stage subprocess failed")
+    if script_name == "day13_calibration_report.py":
+        try:
+            metrics = json.loads(completed.stdout)
+            safe = {key: value for key, value in metrics.items()
+                    if isinstance(value, (int, float)) and key in {
+                        "rows_scanned", "calibration_eligible_rows", "mature_fitted_rows",
+                        "history_requests", "history_cache_size", "history_cache_points",
+                        "history_cache_hits", "history_cache_misses", "history_cache_evictions",
+                        "duration_seconds", "peak_rss_mib"}}
+            LOGGER.info("CALIBRATION_METRICS %s", json.dumps(safe))
+        except (ValueError, AttributeError):
+            pass
     return completed
 
 
@@ -188,30 +190,59 @@ def main() -> None:
 
     log_dir = base_dir / "daily_ops_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
+    results = []
+    dependencies = {
+        "day13_recalibrate.py": {"day13_calibration_report.py"},
+        "autofill_daily_report.py": {"day7_decision_log_summary.py", "day12_materialize_outcomes.py",
+                                    "day13_calibration_report.py", "day13_recalibrate.py"},
+    }
+    status_path = base_dir / "daily_ops_status.json"
+    started = time.time()
     with tempfile.TemporaryDirectory(prefix="daily-ops-", dir=str(log_dir)) as tmp_log_dir:
-        command_log_dir = Path(tmp_log_dir)
         for command in commands:
-            script_name = Path(command[1]).name if len(command) > 1 else "unknown"
-            LOGGER.info("Running daily ops script=%s command=%s", script_name, " ".join(command))
-            try:
-                _run_daily_ops_command(command, script_name=script_name, log_dir=command_log_dir)
-            except subprocess.CalledProcessError as exc:
-                LOGGER.error("DAILY_OPS_FAILED script=%s returncode=%s", script_name, exc.returncode)
-                LOGGER.error(
-                    "failed_script=%s\nfailed_command=%s\nreturncode=%s\nstdout_tail=%s\nstderr_tail=%s",
-                    script_name,
-                    " ".join(str(part) for part in exc.cmd),
-                    exc.returncode,
-                    exc.stdout or "",
-                    exc.stderr or "",
-                )
-                raise SystemExit(exc.returncode) from None
-
-            if script_name == "day13_calibration_report.py":
-                _log_file_state("After day13_calibration_report", calibration_report)
-            if script_name == "day13_recalibrate.py":
-                _log_file_state("After day13_recalibrate calibration_report", calibration_report)
-                _log_file_state("After day13_recalibrate recalibration_plan", recalibration_plan)
+            script_name = Path(command[1]).name
+            failed_dependencies = [r["stage"] for r in results if r["status"] not in {"success", "insufficient_data"}
+                                   and r["stage"] in dependencies.get(script_name, set())]
+            result = {"stage": script_name, "status": "skipped" if failed_dependencies else "success",
+                      "artifact_status": "stale_artifact", "returncode": None}
+            output = Path(command[command.index("--output") + 1]) if "--output" in command else None
+            if output is None:
+                result["artifact_status"] = "not_applicable"
+            before = output.stat().st_mtime_ns if output and output.exists() else None
+            stage_started = time.monotonic()
+            if failed_dependencies:
+                result["reason"] = "prerequisite_failed"
+            else:
+                try:
+                    _run_daily_ops_command(command, script_name=script_name, log_dir=Path(tmp_log_dir))
+                    result["returncode"] = 0
+                    if output:
+                        after = output.stat().st_mtime_ns if output.exists() else None
+                        if after is None or after == before:
+                            result["status"] = "stale_artifact"
+                        else:
+                            result["artifact_status"] = "fresh"
+                            result["artifact_modified_at"] = output.stat().st_mtime
+                            if script_name == "day13_calibration_report.py" and read_status(output).get("rows", 0) < 30:
+                                result["status"] = "insufficient_data"
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+                    result.update(status="failure", returncode=getattr(exc, "returncode", None),
+                                  reason="timeout" if isinstance(exc, subprocess.TimeoutExpired) else "subprocess_failed")
+                    result["signal"] = -exc.returncode if getattr(exc, "returncode", 0) < 0 else None
+                    LOGGER.error("DAILY_OPS_FAILED script=%s returncode=%s", script_name, result["returncode"])
+                    LOGGER.error("failed_script=%s failed_command=%s stdout_tail=%s stderr_tail=%s",
+                                 script_name, " ".join(command), "suppressed", "timeout" if isinstance(exc, subprocess.TimeoutExpired) else "stage subprocess failed")
+            result["duration_seconds"] = round(time.monotonic() - stage_started, 3)
+            results.append(result)
+            failed = [r["stage"] for r in results if r["status"] in {"failure", "stale_artifact", "skipped"}]
+            payload = {"workflow": "daily_ops", "started_at": started, "stages": results,
+                       "success": not failed, "failed_stage": failed[0] if failed else None,
+                       "status": "degraded" if failed else ("insufficient_data" if any(r["status"] == "insufficient_data" for r in results) else "success"),
+                       "duration_seconds": round(time.time() - started, 3), "peak_rss_mib": peak_rss_mib()}
+            atomic_write_text(status_path, json.dumps(payload))
+            LOGGER.info("OPS_STAGE %s", json.dumps(result))
+    if not payload["success"]:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

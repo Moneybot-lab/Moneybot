@@ -5,6 +5,8 @@ import logging
 import math
 import os
 import smtplib
+from moneybot.services.ops_execution import execute_ops
+from moneybot.services.ops_runtime import run_bounded
 import subprocess
 import sys
 import time
@@ -2695,88 +2697,43 @@ def explain_recommendation():
     return jsonify({"data": {"explanation": explanation}, "request_id": g.request_id})
 
 
-@api_bp.post("/run-daily-ops")
-def run_daily_ops():
+def _run_protected_ops(*, weekly=False):
     expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
     provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
     if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
         return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
-
-    project_root = Path(__file__).resolve().parents[1]
-    input_log_path = decision_events_log_path()
-    calibration_report = day13_calibration_report_path()
-    recalibration_plan = day13_recalibration_plan_path()
-    command = ["python3", "scripts/run_daily_ops.py", "--input-log", str(input_log_path)]
-    logging.info("Running daily ops command via protected API endpoint.")
+    key = str(request.headers.get("Idempotency-Key") or "").strip()
+    if not key or len(key) > 200:
+        return jsonify({"error": "Idempotency-Key required (maximum 200 characters)", "request_id": g.request_id}), 400
+    command = ["python3", "scripts/run_weekly_model_refresh.py"] if weekly else [
+        "python3", "scripts/run_daily_ops.py", "--input-log", str(decision_events_log_path())]
     try:
-        completed = subprocess.run(
-            command,
-            cwd=str(project_root),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=660,
-        )
-        report_diag = _file_diagnostics(calibration_report)
-        plan_diag = _file_diagnostics(recalibration_plan)
-        if completed.returncode != 0:
-            logging.error(
-                "run-daily-ops child failed returncode=%s stderr=%s",
-                completed.returncode,
-                completed.stderr,
-            )
-        day13_stderr = completed.stderr if (completed.returncode != 0 and "day13_" in completed.stderr) else ""
-        response = jsonify(
-            {
-                "data": {
-                    "success": completed.returncode == 0,
-                    "returncode": completed.returncode,
-                    "stdout": completed.stdout,
-                    "stderr": completed.stderr,
-                    "calibration_report_path": report_diag["path"],
-                    "calibration_report_exists": report_diag["exists"],
-                    "recalibration_plan_path": plan_diag["path"],
-                    "recalibration_plan_exists": plan_diag["exists"],
-                    "day13_stderr": day13_stderr,
-                },
-                "request_id": g.request_id,
-            }
-        )
-        return response, (200 if completed.returncode == 0 else 500)
-    except subprocess.TimeoutExpired as exc:
-        logging.exception("run-daily-ops exceeded the server execution timeout.")
+        data, code = execute_ops(command, workflow="weekly_refresh" if weekly else "daily_ops",
+                                 runtime_dir=resolve_runtime_dir(), cwd=str(Path(__file__).resolve().parents[1]),
+                                 timeout=1020 if weekly else 660, idempotency_key=key, runner=run_bounded)
+    except Exception as exc:  # Storage/lock startup failures must also be structured.
+        logging.error("OPS_EXECUTION startup_failure=%s", type(exc).__name__)
+        data, code = {"success": False, "status": "failure", "failed_stage": "execution_storage", "returncode": -1}, 500
+    data.update(command=command, runtime_dir=str(resolve_runtime_dir()))
+    for label, path in (("calibration_report", day13_calibration_report_path()),
+                        ("recalibration_plan", day13_recalibration_plan_path())):
+        data[label + "_path"] = str(path)
+        data[label + "_exists"] = path.exists()
+        # Existence never asserts this execution refreshed an artifact.
+        stages = data.get("stages") or []
+        if weekly:
+            stages = next((stage.get("daily_stages", []) for stage in stages if stage["stage"] == "run_daily_ops.py"), [])
+        script = "day13_calibration_report.py" if label == "calibration_report" else "day13_recalibrate.py"
+        data[label + "_fresh"] = not data.get("replayed", False) and any(stage["stage"] == script and stage.get("artifact_status") == "fresh" for stage in stages)
+    data["day13_stderr"] = ""
+    logging.log(logging.INFO if code == 200 else logging.ERROR, "OPS_EXECUTION workflow=%s status=%s failed_stage=%s returncode=%s",
+                 "weekly_refresh" if weekly else "daily_ops", data.get("status"), data.get("failed_stage"), data.get("returncode"))
+    return jsonify({"data": data, "request_id": g.request_id}), code
 
-        def _timeout_text(value):
-            if isinstance(value, bytes):
-                return value.decode("utf-8", errors="replace")
-            return str(value or "")
 
-        captured_stderr = _timeout_text(exc.stderr)
-        diagnostic = "daily ops exceeded server execution timeout"
-        return jsonify(
-            {
-                "data": {
-                    "success": False,
-                    "returncode": -1,
-                    "stdout": _timeout_text(exc.stdout),
-                    "stderr": f"{diagnostic}: {captured_stderr}" if captured_stderr else diagnostic,
-                },
-                "request_id": g.request_id,
-            }
-        ), 504
-    except Exception as exc:  # noqa: BLE001
-        logging.exception("run-daily-ops failed to execute.")
-        return jsonify(
-            {
-                "data": {
-                    "success": False,
-                    "returncode": -1,
-                    "stdout": "",
-                    "stderr": str(exc),
-                },
-                "request_id": g.request_id,
-            }
-        ), 500
+@api_bp.post("/run-daily-ops")
+def run_daily_ops():
+    return _run_protected_ops()
 
 
 @api_bp.post("/run-notification-triggers")
@@ -3140,62 +3097,7 @@ def run_notification_triggers():
 
 @api_bp.post("/run-weekly-model-refresh")
 def run_weekly_model_refresh():
-    expected_token = str(current_app.config.get("DAILY_OPS_TOKEN") or "").strip()
-    provided_token = str(request.headers.get("X-Daily-Ops-Token") or "").strip()
-    if not expected_token or not provided_token or not hmac.compare_digest(provided_token, expected_token):
-        return jsonify({"error": "unauthorized", "request_id": g.request_id}), 401
-
-    project_root = Path(__file__).resolve().parents[1]
-    runtime_dir = resolve_runtime_dir()
-    calibration_report = day13_calibration_report_path()
-    recalibration_plan = day13_recalibration_plan_path()
-    command = ["python3", "scripts/run_weekly_model_refresh.py"]
-    logging.info("Running weekly model refresh command via protected API endpoint.")
-    try:
-        completed = subprocess.run(
-            command,
-            cwd=str(project_root),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        report_diag = _file_diagnostics(calibration_report)
-        plan_diag = _file_diagnostics(recalibration_plan)
-        response = jsonify(
-            {
-                "data": {
-                    "success": completed.returncode == 0,
-                    "command": command,
-                    "exit_code": completed.returncode,
-                    "returncode": completed.returncode,
-                    "stdout": completed.stdout,
-                    "stderr": completed.stderr,
-                    "runtime_dir": str(runtime_dir),
-                    "calibration_report_path": report_diag["path"],
-                    "calibration_report_exists": report_diag["exists"],
-                    "recalibration_plan_path": plan_diag["path"],
-                    "recalibration_plan_exists": plan_diag["exists"],
-                },
-                "request_id": g.request_id,
-            }
-        )
-        return response, (200 if completed.returncode == 0 else 500)
-    except Exception as exc:  # noqa: BLE001
-        logging.exception("run-weekly-model-refresh failed to execute.")
-        return jsonify(
-            {
-                "data": {
-                    "success": False,
-                    "command": command,
-                    "exit_code": -1,
-                    "returncode": -1,
-                    "stdout": "",
-                    "stderr": str(exc),
-                    "runtime_dir": str(runtime_dir),
-                },
-                "request_id": g.request_id,
-            }
-        ), 500
+    return _run_protected_ops(weekly=True)
 
 
 @api_bp.get("/market-overview")

@@ -13,6 +13,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from moneybot.services.ops_runtime import atomic_write_text
 from moneybot.services.decision_log import read_decision_events
 from moneybot.services.outcome_history_provider import MassivePreferredHistoryDownload
 from moneybot.services.outcome_tracking import (
@@ -172,9 +173,7 @@ def main() -> None:
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
-    )
+    atomic_write_text(output_path, json.dumps(payload, indent=2, sort_keys=True))
     print(f"Wrote outcomes snapshot -> {output_path}")
 
 
