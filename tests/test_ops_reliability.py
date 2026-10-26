@@ -397,3 +397,343 @@ def test_evicted_preloaded_history_keeps_original_full_range():
     assert cache.future_return("AAPL", later["ts"], 5) == round(5 / 101, 4)
     assert calls[-1] == first_range
     assert cache.cache_size == 1
+
+
+# Real-process fixtures deliberately use isolated sessions. Never signal the
+# pytest process group. PID/start-time identities protect teardown from reuse.
+def _process_identity(pid):
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return fields[19], fields[0]
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+
+
+def _active_identity(pid, start):
+    current = _process_identity(pid)
+    return current is not None and current[0] == start and current[1] != "Z"
+
+
+def _wait_for(predicate, seconds=8):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(.01)
+    assert predicate(), "synchronization deadline expired"
+
+
+@pytest.fixture
+def process_hierarchy(tmp_path):
+    script = tmp_path / "hierarchy.py"
+    script.write_text(r'''import os, signal, subprocess, sys, time
+from pathlib import Path
+root, role, detached = Path(sys.argv[1]), sys.argv[2], sys.argv[3] == "detached"
+def identity():
+    stat = Path(f"/proc/{os.getpid()}/stat").read_text().rsplit(")", 1)[1].split()
+    return f"{os.getpid()} {stat[19]}"
+def term(signum, frame):
+    (root / (role + ".term")).touch()
+    # Deliberately continue: force escalation, with observable cleanup progress.
+signal.signal(signal.SIGTERM, term)
+if role in {"stage", "child"}:
+    subprocess.Popen([sys.executable, __file__, str(root), "child" if role == "stage" else "grandchild", sys.argv[3]], start_new_session=detached)
+(root / (role + ".pid")).write_text(identity())
+while True:
+    if role == "stage" and (root / "exit_wrapper").exists():
+        raise SystemExit(7)
+    if (root / "allow_late_write").exists():
+        (root / (role + ".late_artifact")).touch()
+    time.sleep(.01)
+''')
+    identities = {}
+    def capture():
+        for path in tmp_path.glob("*.pid"):
+            try:
+                pid, start = path.read_text().split()
+            except ValueError:
+                continue
+            identities[path.stem] = (int(pid), start)
+        return identities
+    yield script, capture
+    # Runs even if an assertion fails against the buggy implementation.
+    for pid, start in capture().values():
+        if _active_identity(pid, start):
+            try:
+                import ctypes
+                libc = ctypes.CDLL(None, use_errno=True)
+                fd = libc.pidfd_open(pid, 0)
+                if fd < 0:
+                    continue
+                try:
+                    if _active_identity(pid, start):
+                        libc.pidfd_send_signal(fd, signal.SIGKILL, None, 0)
+                finally:
+                    os.close(fd)
+            except ProcessLookupError:
+                pass
+    _wait_for(lambda: all(not _active_identity(*identity) for identity in capture().values()))
+
+
+@pytest.mark.parametrize("detached", [False, True])
+def test_nested_timeout_cleans_tree_before_independent_stage(tmp_path, process_hierarchy, detached):
+    script, capture = process_hierarchy
+    orchestrator = tmp_path / "orchestrator.py"
+    orchestrator.write_text('''import json, os, subprocess, sys
+from pathlib import Path
+from moneybot.services.ops_runtime import run_bounded
+root = Path(sys.argv[1])
+os.environ["MONEYBOT_OPS_PROCESS_GROUP"] = str(os.getpgrp())
+try:
+    run_bounded([sys.executable, sys.argv[2], str(root), "stage", sys.argv[3]], timeout=1)
+except subprocess.TimeoutExpired:
+    (root / "timeout").touch()
+else:
+    raise AssertionError("stage timeout was hidden")
+pids = [path.read_text().split() for path in root.glob("*.pid")]
+assert len(pids) == 3, "descendants never started"
+for pid, start in pids:
+    path = Path(f"/proc/{pid}/stat")
+    if path.exists():
+        stat = path.read_text().rsplit(")", 1)[1].split()
+        assert stat[19] != start or stat[0] == "Z", "descendant survived stage timeout"
+(root / "allow_late_write").touch()
+result = run_bounded([sys.executable, "-c", "print('next stage completed')"], timeout=2)
+assert result.returncode == 0
+(root / "next_stage").touch()
+''')
+    env = dict(os.environ, PYTHONPATH=str(Path.cwd()))
+    worker = subprocess.Popen([sys.executable, str(orchestrator), str(tmp_path), str(script), "detached" if detached else "shared"], env=env, start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        _wait_for(lambda: len(capture()) == 3)
+        output, error = worker.communicate(timeout=12)
+        assert worker.returncode == 0, error.decode()
+        assert (tmp_path / "timeout").exists()
+        assert (tmp_path / "next_stage").exists()
+        assert all(not _active_identity(*identity) for identity in capture().values())
+        assert not list(tmp_path.glob("*.late_artifact"))
+    finally:
+        if worker.poll() is None:
+            worker.kill()
+        worker.wait(timeout=3)
+
+
+def _nested_job(tmp_path, hierarchy, stage_timeout):
+    job = tmp_path / "nested_job.py"
+    job.write_text('''import json, subprocess, sys, time
+from pathlib import Path
+from moneybot.services.ops_runtime import run_bounded
+root = Path(sys.argv[1])
+started = time.time()
+try:
+    run_bounded([sys.executable, sys.argv[2], str(root), "stage", "detached"], timeout=float(sys.argv[3]))
+except subprocess.TimeoutExpired:
+    (root / "daily_ops_status.json").write_text(json.dumps({"started_at": started, "success": False, "status": "degraded", "failed_stage": "test_stage", "stages": [{"stage": "test_stage", "status": "failure", "reason": "timeout"}]}))
+    raise SystemExit(1)
+raise AssertionError("nested workload unexpectedly completed")
+''')
+    return [sys.executable, str(job), str(tmp_path), str(hierarchy), str(stage_timeout)]
+
+
+def test_execution_lock_covers_nested_descendant_cleanup(tmp_path, process_hierarchy):
+    script, capture = process_hierarchy
+    command = _nested_job(tmp_path, script, 1)
+    entry = '''import json, sys
+from pathlib import Path
+from moneybot.services.ops_execution import execute_ops
+root=Path(sys.argv[1])
+data,code=execute_ops(json.loads(sys.argv[2]), workflow="daily_ops", runtime_dir=root, cwd=None, timeout=8, idempotency_key="cleanup-lock")
+(root/"result.json").write_text(json.dumps({"data":data,"code":code}))
+'''
+    worker = subprocess.Popen([sys.executable, "-c", entry, str(tmp_path), json.dumps(command)], start_new_session=True, env=dict(os.environ, PYTHONPATH=str(Path.cwd())))
+    try:
+        _wait_for(lambda: len(capture()) == 3)
+        _wait_for(lambda: (tmp_path / "grandchild.term").exists())
+        # The SIGTERM-resistant descendant proves this is inside cleanup, not
+        # merely before the timeout. No conflicting workload may begin here.
+        assert _active_identity(*capture()["grandchild"])
+        data, code = run_request(tmp_path, "conflict", lambda *a, **k: pytest.fail("weekly workload started during cleanup"), "weekly_refresh")
+        assert code == 409 and data["status"] == "busy"
+        assert worker.wait(timeout=10) == 0
+        result = json.loads((tmp_path / "result.json").read_text())
+        assert result["code"] == 500
+        assert result["data"]["success"] is False
+        assert result["data"]["failed_stage"] == "test_stage"
+        assert result["data"]["stages"][0]["reason"] == "timeout"
+        assert all(not _active_identity(*identity) for identity in capture().values())
+        # Completed failure is durably replayed; a new intentional key can run.
+        replay, code = run_request(tmp_path, "cleanup-lock", lambda *a, **k: pytest.fail("failure receipt replayed work"))
+        assert code == 500 and replay["replayed"]
+        recovered, code = run_request(tmp_path, "new-after-cleanup", success_runner(tmp_path))
+        assert code == 200 and recovered["success"]
+    finally:
+        if worker.poll() is None:
+            worker.kill()
+        worker.wait(timeout=3)
+
+
+@pytest.mark.parametrize("kill_worker", [False, True])
+def test_outer_deadline_cleans_nested_sessions_even_after_worker_death(tmp_path, process_hierarchy, kill_worker):
+    script, capture = process_hierarchy
+    command = _nested_job(tmp_path, script, 30)
+    entry = '''import json, sys
+from pathlib import Path
+from moneybot.services.ops_execution import execute_ops
+root=Path(sys.argv[1])
+data,code=execute_ops(json.loads(sys.argv[2]), workflow="daily_ops", runtime_dir=root, cwd=None, timeout=1.5, idempotency_key="outer-deadline")
+(root/"result.json").write_text(json.dumps({"data":data,"code":code}))
+'''
+    worker = subprocess.Popen([sys.executable, "-c", entry, str(tmp_path), json.dumps(command)], start_new_session=True, env=dict(os.environ, PYTHONPATH=str(Path.cwd())))
+    unrelated = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
+    try:
+        _wait_for(lambda: len(capture()) == 3)
+        if kill_worker:
+            worker.kill()
+            worker.wait(timeout=3)
+            data, code = run_request(tmp_path, "conflict", lambda *a, **k: pytest.fail("orphaned job fence released"), "weekly_refresh")
+            assert code == 409 and data["status"] == "busy"
+        _wait_for(lambda: all(not _active_identity(*identity) for identity in capture().values()), seconds=8)
+        assert unrelated.poll() is None, "cleanup signaled an unrelated session"
+        if not kill_worker:
+            assert worker.wait(timeout=3) == 0
+            result = json.loads((tmp_path / "result.json").read_text())
+            assert result["code"] == 504 and not result["data"]["success"]
+            assert result["data"]["failed_stage"] == "execution_timeout"
+        # All supervisors, not just workload PIDs, must eventually release flock.
+        def recovered():
+            return run_request(tmp_path, "new-intentional", success_runner(tmp_path))[1] == 200
+        _wait_for(recovered, seconds=4)
+        receipt, code = run_request(tmp_path, "outer-deadline", lambda *a, **k: pytest.fail("duplicate deadline request executed"))
+        assert code == (409 if kill_worker else 504)
+        assert receipt["replayed"]
+        (tmp_path / "allow_late_write").touch()
+        assert not list(tmp_path.glob("*.late_artifact"))
+    finally:
+        for process in (worker, unrelated):
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=3)
+
+
+def test_daily_cleanup_failure_aborts_independent_stages(tmp_path, monkeypatch):
+    from scripts import run_daily_ops as daily
+    from moneybot.services.ops_runtime import ProcessCleanupError
+    commands = [[sys.executable, "first.py"], [sys.executable, "independent.py"]]
+    called = []
+    def fail(command, **kwargs):
+        called.append(command[1])
+        raise ProcessCleanupError(timed_out=True)
+    monkeypatch.setattr(daily, "resolve_runtime_dir", lambda: tmp_path)
+    monkeypatch.setattr(daily, "build_daily_ops_commands", lambda **kwargs: commands)
+    monkeypatch.setattr(daily, "_run_daily_ops_command", fail)
+    monkeypatch.setattr(sys, "argv", ["daily"])
+    with pytest.raises(SystemExit, match="1"):
+        daily.main()
+    assert called == ["first.py"]
+    result = json.loads((tmp_path / "daily_ops_status.json").read_text())
+    assert not result["success"]
+    assert result["stages"][0]["reason"] == "timeout"
+    assert result["stages"][0]["cleanup_status"] == "unconfirmed"
+
+
+def test_api_cleanup_failure_is_explicit_and_not_replayed(tmp_path):
+    from moneybot.services.ops_runtime import ProcessCleanupError
+    def fail(*args, **kwargs):
+        raise ProcessCleanupError(timed_out=True)
+    data, code = run_request(tmp_path, "unconfirmed", fail)
+    assert code == 500 and not data["success"]
+    assert data["failed_stage"] == "execution_cleanup"
+    assert data["cleanup_status"] == "unconfirmed" and data["timed_out"]
+    data, code = run_request(tmp_path, "unconfirmed", lambda *a, **k: pytest.fail("cleanup failure repeated"))
+    assert code == 500 and data["replayed"]
+
+
+def test_early_wrapper_exit_adopts_and_cleans_orphans(tmp_path, process_hierarchy):
+    script, capture = process_hierarchy
+    entry = '''import json, sys
+from pathlib import Path
+from moneybot.services.ops_runtime import run_bounded
+result=run_bounded([sys.executable,sys.argv[2],sys.argv[1],"stage","detached"],timeout=8)
+Path(sys.argv[1],"exit-result.json").write_text(json.dumps({"returncode":result.returncode}))
+'''
+    worker = subprocess.Popen([sys.executable, "-c", entry, str(tmp_path), str(script)], start_new_session=True)
+    try:
+        _wait_for(lambda: len(capture()) == 3)
+        (tmp_path / "exit_wrapper").touch()
+        assert worker.wait(timeout=8) == 0
+        assert json.loads((tmp_path / "exit-result.json").read_text())["returncode"] == 7
+        assert all(not _active_identity(*identity) for identity in capture().values())
+        assert (tmp_path / "grandchild.term").exists()
+    finally:
+        if worker.poll() is None:
+            worker.kill()
+        worker.wait(timeout=3)
+
+
+def test_unconfirmed_cleanup_keeps_fence_until_watchdog_cleans(tmp_path, process_hierarchy, monkeypatch):
+    from moneybot.services import ops_runtime as runtime, ops_supervisor as supervisor
+    script, capture = process_hierarchy
+    shim = tmp_path / "ops_supervisor.py"
+    shim.write_text('''import os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[3])
+from moneybot.services import ops_supervisor as real
+# The extra repo argument is only test wiring, not part of the child command.
+sys.argv.pop(3)
+root=Path(os.environ["TEST_CLEANUP_ROOT"])
+(root/"watchdog").write_text(str(os.getpid()))
+cleanup=real._cleanup
+real._cleanup=lambda child: cleanup(child) if (root/"release_cleanup").exists() else False
+raise SystemExit(real.main())
+''')
+    monkeypatch.setenv("TEST_CLEANUP_ROOT", str(tmp_path))
+    monkeypatch.setattr(runtime, "__file__", str(tmp_path / "ops_runtime.py"))
+    monkeypatch.setattr(supervisor, "CLEANUP_WAIT_SECONDS", .3)
+    # This controlled cleanup failure does not require unsafe uninterruptible-I/O
+    # processes. The actual supervisor, workload, flock, and receipt are real.
+    command = [str(Path.cwd()), sys.executable, str(script), str(tmp_path), "stage", "detached"]
+    watchdog = None
+    try:
+        data, code = execute_ops(command, workflow="daily_ops", runtime_dir=tmp_path,
+                                 cwd=None, timeout=1, idempotency_key="unclean", runner=runtime.run_bounded)
+        watchdog = int((tmp_path / "watchdog").read_text())
+        assert len(capture()) == 3
+        assert code == 500 and data["cleanup_status"] == "unconfirmed"
+        assert any(_active_identity(*identity) for identity in capture().values())
+        conflict, status = run_request(tmp_path, "conflict", lambda *a, **k: pytest.fail("fence released during unconfirmed cleanup"), "weekly_refresh")
+        assert status == 409 and conflict["status"] == "busy"
+    finally:
+        (tmp_path / "release_cleanup").touch()
+        _wait_for(lambda: all(not _active_identity(*identity) for identity in capture().values()), seconds=8)
+        if watchdog:
+            _wait_for(lambda: _process_identity(watchdog) is None or _process_identity(watchdog)[1] == "Z")
+            try:
+                os.waitpid(watchdog, os.WNOHANG)
+            except ChildProcessError:
+                pass
+    recovered, code = run_request(tmp_path, "after-cleanup", success_runner(tmp_path))
+    assert code == 200 and recovered["success"]
+
+
+@pytest.mark.parametrize("state", ["exited", "reused", "same"])
+def test_pidfd_signals_only_matching_process_identity(monkeypatch, state):
+    from moneybot.services import ops_supervisor as supervisor
+    sent = []
+    def open_fd(pid):
+        if state == "exited":
+            raise ProcessLookupError()
+        return os.open(os.devnull, os.O_RDONLY)
+    monkeypatch.setattr(supervisor, "_pidfd_open", open_fd)
+    monkeypatch.setattr(supervisor, "_identity", lambda pid: (1, "different" if state == "reused" else "expected", "S"))
+    monkeypatch.setattr(supervisor, "_pidfd_signal", lambda fd, signum: sent.append(signum))
+    supervisor._signal_identity(123, "expected", signal.SIGTERM)
+    assert sent == ([signal.SIGTERM] if state == "same" else [])
+
+
+def test_cleanup_does_not_trust_empty_proc_snapshot(monkeypatch):
+    from moneybot.services import ops_supervisor as supervisor
+    ticks = iter([0, supervisor.TERM_GRACE_SECONDS + supervisor.KILL_GRACE_SECONDS])
+    monkeypatch.setattr(supervisor.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(supervisor, "_reap", lambda child: False)  # Child still exists.
+    monkeypatch.setattr(supervisor, "_descendants", lambda: {})  # Reparenting race.
+    assert supervisor._cleanup(None) is False

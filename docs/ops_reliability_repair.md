@@ -15,8 +15,8 @@ This public runbook documents implementation and synthetic validation only. Prod
 | `moneybot/services/decision_log.py` | Select newest physical lines using byte offsets, then decode one record at a time. Preserve blank/malformed-line counting, order, and the existing list-returning API for other callers. |
 | `scripts/day13_calibration_report.py` | Discard snapshots immediately after extracting calibration/segmentation fields; release old compact batches; keep one provider and scalar lookup cache across expansion; plan lazy eligible-only history; reject nonfinite probabilities; avoid duplicated fitted-row dictionaries; emit bounded operational metrics and atomically publish completed reports. Provider exceptions produce a separate `.failed.json` diagnostic and nonzero exit, preserving the prior canonical report. |
 | `moneybot/services/outcome_tracking.py` | Bound cached history to 256 entries and 100,000 close points; keep only earliest preload dates; lazily extend ranges for older evidence. Preserve invalid close positions so missing data cannot shift a horizon; reject invalid/nonpositive prices instead of deriving observations from them. |
-| `moneybot/services/ops_runtime.py` | Atomic replacement, peak RSS, bounded subprocess output, deadlines, process-group cleanup, and safe status loading. |
-| `moneybot/services/ops_supervisor.py` | A small standard-library process owns the outer deadline even if the HTTP worker dies. Children retain the execution-lock descriptor. |
+| `moneybot/services/ops_runtime.py` | Atomic replacement, peak RSS, bounded subprocess output, deadlines, confirmed descendant-tree cleanup, and safe status loading. |
+| `moneybot/services/ops_supervisor.py` | A standard-library Linux subreaper owns each stage boundary and the outer deadline, including after HTTP-worker death. Supervisors retain the execution-lock descriptor. |
 | `moneybot/services/ops_execution.py` | Shared cross-worker `flock`, persistent seven-day SQLite idempotency receipts, truthful exit/status handling and stale-status rejection. |
 | `moneybot/api.py` | Keep token authentication; require `Idempotency-Key`; use shared execution service for both endpoints; return structured stage/freshness data and bounded, non-private diagnostics. |
 | `scripts/run_daily_ops.py` | Explicit stage results, dependency-aware skips, continuation of independent stages, atomic status, failure/signal identification, and no report-body logging. |
@@ -77,13 +77,13 @@ Every report is written to a same-directory temporary file, flushed/fsynced, the
 
 Both protected APIs now require an `Idempotency-Key` of 1–200 characters, in addition to `X-Daily-Ops-Token`. Their responses retain `data.success`, exit code fields, command/path metadata, and request ID, and add stage/freshness/status information. Raw child output is deliberately absent. A shared disk-backed advisory lock covers daily and weekly across threads and workers. A different request while busy receives 409. Exact retries return stored terminal results, including failures, for seven days. A worker interrupted after recording a request leaves a 409 interrupted receipt: the same key is not executed again. Use a new, intentional dispatch ID to recover after diagnosis. After seven days keys may execute anew; callers must use unique IDs for intended new runs.
 
-The lock descriptor is inherited by supervisor and children so abrupt HTTP-worker death does not release execution exclusivity prematurely. The independent supervisor still enforces its deadline. Standard output/error are continuously drained with at most 256 KiB retained per stream; only allowlisted numeric stage metrics and structured results enter operational logs/API responses.
+The lock descriptor is inherited by supervisors and wrappers launched through `run_bounded`, so abrupt HTTP-worker death does not release execution exclusivity prematurely. Ordinary subprocess grandchildren may close inherited descriptors; their supervisor retains the lock independently until all children are gone. The independent supervisor still enforces its deadline. Standard output/error are continuously drained with at most 256 KiB retained per stream; only allowlisted numeric stage metrics and structured results enter operational logs/API responses.
 
 | Boundary | Daily | Weekly |
 | --- | ---: | ---: |
 | Stage subprocess | 600 s | Daily wrapper 660 s; other stages 660 s |
 | API subprocess | 660 s | 1,020 s |
-| Independent orphan supervisor | API limit + 1 s | API limit + 1 s |
+| Independent orphan supervisor | API deadline + bounded cleanup | API deadline + bounded cleanup |
 | curl request | 720 s | 1,080 s |
 | GitHub job | 15 min | 20 min |
 
@@ -93,7 +93,7 @@ Schedules are unchanged: daily 13:00 UTC, weekly Sunday 12:00 UTC (7 AM / 6 AM M
 
 The focused regression suites exercise empty/20,000/50,000 logs, newest physical-line semantics, sparse/mixed/probability-null/immature events, original calibration mathematics and segments, horizon isolation, Massive-first/fallback diagnostics, cache bounds/reuse/older-range extension, invalid prices, real SIGKILL, nonzero exits, output bounds, timeout descendant cleanup, HTTP-worker death with retained lock/deadline, cross-workflow concurrency, duplicate/failure receipts, interrupted receipts, recovery under a new ID, stale status, partial stages, atomic artifact preservation, validation gates, API auth, and both shell workflows.
 
-Validation completed with **224 distinct focused tests passing** across the following runs:
+The initial repair validation completed with **224 distinct focused tests passing** across the following runs:
 
 - `pytest -q tests/test_run_daily_ops_script.py`: 15 passed (0.51 s).
 - `pytest -q tests/test_dashboard_api.py`: 100 passed (8.21 s) before the last storage-error regression was added.
@@ -119,3 +119,83 @@ After explicit deployment approval:
 Rollback: with approval, revert this focused code/workflow commit and deploy the prior known code revision. Preserve runtime artifacts, `.failed.json`, receipts, locks, decision logs and active models; do not restore or reset the promoted model. Let any existing supervisor finish or reach its deadline before a replacement run. Reverting removes the new reliability safeguards and can reintroduce the original memory/retry failure, so diagnose before retrying.
 
 Longer term: move execution to a durable queue/worker or dedicated job with job IDs and status polling; use a durable distributed lock/fencing scheme and explicit memory budget. This separates expensive Python work from Gunicorn and HTTP timeouts. It needs its own reviewed deployment and cost/data-access plan. No new service or infrastructure change was made here.
+
+
+## PR #664 P2 follow-up: descendant cleanup before continuation
+
+The original implementation put API-launched jobs and nested stages in one process group. On a nested stage timeout, `proc.kill()` killed only the immediate wrapper. For example, the baseline-refresh wrapper uses ordinary `subprocess.run()` to launch data generation and model training. Those children could survive until the outer job's eventual process-group kill. During that gap, Daily Ops could run independent stages concurrently with failed-stage descendants and their artifact writes.
+
+### Corrected process ownership
+
+Each `run_bounded` call now starts a small supervisor in a fresh session. The supervisor enables Linux `PR_SET_CHILD_SUBREAPER` **before** launching the workload. The stage's subprocess descendants are its termination boundary. Children orphaned by wrapper exit or double-fork are adopted by their nearest surviving supervisor. Each outer supervisor also owns a descendant tree containing nested supervisors, even when those supervisors or workloads call `setsid()`.
+
+```mermaid
+flowchart TD
+    API[HTTP worker: execute_ops / flock / receipt] --> SJ[Outer job supervisor: session + subreaper + lock FD]
+    SJ --> WEEKLY[Weekly wrapper, when applicable]
+    WEEKLY --> SD[Daily bundle supervisor: session + subreaper + lock FD]
+    SD --> DAILY[Daily wrapper]
+    DAILY --> SS[Stage supervisor: session + subreaper + lock FD]
+    SS --> WRAPPER[Stage wrapper]
+    WRAPPER --> CHILD[Training/data subprocess]
+    CHILD --> GRANDCHILD[Grandchild, optionally another session]
+```
+
+For a direct Daily Ops API call, the outer supervisor launches the daily wrapper directly. The extra daily supervisor in the diagram belongs to the weekly path. The HTTP worker, orchestrators, and sibling stages are outside a stage supervisor's descendant boundary. The outer supervisor can still discover the whole job through `/proc` parent relationships; termination never relies on all work sharing a process group.
+
+### Termination and reaping protocol
+
+1. The caller waits for the original execution timeout. On expiry or caller interruption, it requests supervisor cleanup with SIGTERM. The supervisor independently owns the same configured deadline, so loss of the HTTP worker does not remove enforcement.
+2. The supervisor discovers its descendant tree by parent relationships, sends SIGTERM and SIGCONT to allow graceful shutdown, and allows **one second** of grace. It rescans to find processes created or reparented during cleanup.
+3. Remaining descendants receive SIGSTOP and SIGKILL, with up to **three additional seconds** for forced termination/reaping. Signals use Linux pidfds and verify the process's start time after opening its pidfd, guarding against PID-reuse/lookup races. No `killpg` call can accidentally signal an orchestrator or test runner.
+4. The supervisor reaps direct and adopted children with `waitpid`. An empty `/proc` snapshot is insufficient: completion requires `waitpid` to establish **ECHILD**. Live parents' zombies are not misreported as active workloads; adopted zombies are reaped before success is acknowledged.
+5. A separate inherited, private temporary-file descriptor carries the original workload return code, timeout flag and cleanup acknowledgement. It is not passed to workloads. The supervisor exits only after confirmed cleanup; the caller then joins bounded-output drainers and returns the original exit status or raises `TimeoutExpired`. Cleanup success never turns a timeout into success. Early normal/nonzero wrapper exit also cleans any residual descendants before returning.
+6. If cleanup cannot be confirmed, the caller's cleanup wait is bounded to **six seconds** (one-second grace, three-second forced cleanup, two-second supervisor scheduling allowance). It raises `ProcessCleanupError`; Daily Ops records `cleanup_status=unconfirmed` and aborts rather than running independent stages. Weekly skips later work. The API returns an explicit cleanup failure while preserving whether a timeout initiated it.
+7. An unconfirmed supervisor remains alive, retains the inherited `flock`, and retries cleanup. The receipt remains a failure/interrupted result; conflicting executions remain busy. A background waiter reaps the caller's direct supervisor if quarantine later completes. This deliberate fail-closed quarantine can outlive the caller's bounded wait; releasing the fence while work remains alive would be unsafe.
+
+The flock implementation, seven-day SQLite receipt retention, idempotency keys, token authentication, API deadlines, schedules, calibration calculations/eligibility, promoted-model safeguards, report atomicity/freshness, and validation gates are unchanged.
+
+### Follow-up files
+
+- `moneybot/services/ops_runtime.py`: supervise every boundary, retain bounded output, request/await cleanup acknowledgements, preserve timeout/exit classification, and expose `ProcessCleanupError`.
+- `moneybot/services/ops_supervisor.py`: Linux subreaper ownership, pidfd signaling, ancestry discovery across sessions, graceful/forced termination, adopted-child reaping, private result receipt, and fail-closed watchdog retention.
+- `moneybot/services/ops_execution.py`: expose an unconfirmed cleanup as a structured failure without altering locking or replay behavior.
+- `scripts/run_daily_ops.py`: record unconfirmed cleanup and stop the bundle before any independent continuation.
+- `scripts/run_weekly_model_refresh.py`: expose the same cleanup failure and skip remaining work.
+- `tests/test_ops_reliability.py`: real-process regressions plus targeted cleanup-error/PID-race assertions.
+- `docs/ops_reliability_repair.md`: lifecycle, evidence, limits and runbook update.
+
+### Regression evidence and tests
+
+The parameterized `test_nested_timeout_cleans_tree_before_independent_stage` launches an isolated orchestrator, stage wrapper, child and grandchild. PID/start-time files confirm all descendants started. Both shared-session and detached-session variants verify a real `TimeoutExpired`, no active descendants before the next independent stage, successful subsequent execution, and no late artifact writes. Fixtures use bounded readiness polling and identity-checked teardown, not long arbitrary sleeps or signals to pytest's group.
+
+The exact new regression was run against the original PR runtime/supervisor/execution files: **2 failed, 38 deselected**, both with `AssertionError: descendant survived stage timeout` (10.69 s). Teardown completed without errors and killed the original implementation's surviving fixture processes. The repaired files were restored in a `finally` block. Both variants then pass as part of the repaired suite.
+
+Additional real-process coverage establishes:
+
+- A conflicting weekly execution receives busy/409 after a descendant has received SIGTERM but remains active during grace. The original job reports timeout/failure, its failed receipt is replayed without work, and a new key succeeds only after cleanup.
+- Outer deadlines terminate nested supervisors and descendant sessions, both with a living HTTP worker and after killing that worker. A separate unrelated process remains alive.
+- SIGTERM-resistant descendants force escalation to SIGKILL within the cleanup budget.
+- Early wrapper exit adopts and reaps remaining descendants without replacing the original nonzero exit code.
+- A controlled cleanup-failure shim retains a real supervisor, workload and flock after the API returns a failure; only releasing the shim and completing actual cleanup permits another execution.
+- PID disappearance/reuse does not result in signaling a replacement process, and an empty discovery snapshot cannot bypass outstanding children.
+
+Follow-up validation commands (Linux, Python 3.11; no production secrets or market-data requests):
+
+```text
+pytest -q tests/test_ops_reliability.py                               44 passed
+pytest -q tests/test_run_daily_ops_script.py                          15 passed
+pytest -q tests/test_dashboard_api.py                                101 passed
+pytest -q tests/test_run_weekly_model_refresh_script.py \
+          tests/test_day1_refresh_artifact_script.py                   4 passed
+```
+
+**164 tests pass for this follow-up.** The earlier calibration/load tests remain documented above; they were not claimed as newly rerun because this commit changes only process management and its orchestration/error handling. Python syntax and diff checks also pass; the repository still has no configured lint/format/type-check command.
+
+### Platform and failure limits
+
+This implementation requires Linux with accessible `/proc`, subreapers, and pidfd syscalls. Python's pidfd wrappers are preferred; a standard-library `ctypes` fallback uses libc's exported pidfd functions when this Python build omits the wrappers. The regression environment exercised that fallback. Unsupported capability fails before workload launch; no dependency or service is added.
+
+This is supervision for trusted same-user application subprocesses, not containment of hostile privileged code. A process that deliberately changes credentials, hides in an inaccessible PID namespace, or manipulates the supervisor is outside this contract. An uninterruptible kernel task can defer SIGKILL indefinitely; quarantine keeps the fence and reports failure instead of claiming termination. External SIGKILL/OOM of every surviving supervisor or host failure cannot be repaired in userspace; operations must diagnose that condition before running new work. Complete cleanup is asserted only while a capable supervisor remains alive. The independent supervisor specifically covers unexpected HTTP-worker death.
+
+No production execution, deployment, merge, model/data change, or infrastructure change is part of this follow-up.

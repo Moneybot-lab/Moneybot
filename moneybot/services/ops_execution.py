@@ -14,7 +14,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from .ops_runtime import read_status, run_bounded
+from .ops_runtime import read_status, run_bounded, ProcessCleanupError
 
 
 def execute_ops(command, *, workflow, runtime_dir, cwd, timeout, idempotency_key, runner=run_bounded):
@@ -45,6 +45,9 @@ def execute_ops(command, *, workflow, runtime_dir, cwd, timeout, idempotency_key
                         "exit_code": completed.returncode, "stdout": "", "stderr": "",
                         "signal": -completed.returncode if completed.returncode < 0 else None}
                 code = 200 if data["success"] else 500
+            except ProcessCleanupError as exc:
+                data = {"success": False, "returncode": -1, "stdout": "", "stderr": "subprocess tree cleanup unconfirmed", "status": "failure", "failed_stage": "execution_cleanup", "cleanup_status": "unconfirmed", "timed_out": exc.timed_out}
+                code = 500
             except subprocess.TimeoutExpired:
                 data = {"success": False, "returncode": -1, "stdout": "", "stderr": "server execution timeout", "status": "failure", "failed_stage": "execution_timeout"}
                 code = 504

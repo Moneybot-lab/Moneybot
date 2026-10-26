@@ -36,25 +36,30 @@ def peak_rss_mib():
         return None
 
 
+class ProcessCleanupError(RuntimeError):
+    """Cleanup was not confirmed: abort orchestration, retaining the live fence."""
+
+    def __init__(self, *, timed_out=False):
+        super().__init__("subprocess tree cleanup could not be confirmed")
+        self.timed_out = timed_out
+
+
 def run_bounded(command, *, cwd=None, timeout=660, capture_output=True, text=True,
                 check=False, pass_fds=(), log_paths=None):
-    """Drain both pipes continuously, retaining at most 256 KiB per stream.
+    """Bound output and wait for a subreaper to finish whole-tree cleanup.
 
-    Nested ops inherit the top-level process group and lock descriptor. A timeout
-    at the API boundary kills the entire group, including nested weekly stages.
+    Every stage has a supervisor. The outer supervisor discovers all descendants
+    by ancestry, even if a nested stage starts its own session. Only a confirmed
+    clean supervisor exit permits the caller to continue with another stage.
     """
-    nested = os.environ.get("MONEYBOT_OPS_PROCESS_GROUP") == str(os.getpgrp())
+    from .ops_supervisor import CLEANUP_WAIT_SECONDS
+
     env = dict(os.environ)
-    # Top-level deadlines survive abrupt Gunicorn worker death.
-    launcher = [] if nested else [sys.executable, str(Path(__file__).with_name("ops_supervisor.py")), str(timeout + 1)]
     inherited_fd = os.environ.get("MONEYBOT_OPS_LOCK_FD")
     if inherited_fd and not pass_fds:
         pass_fds = (int(inherited_fd),)
     if pass_fds:
         env["MONEYBOT_OPS_LOCK_FD"] = str(pass_fds[0])
-    proc = subprocess.Popen(launcher + list(command), cwd=cwd, env=env,
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            start_new_session=not nested, pass_fds=pass_fds)
     buffers = [deque(maxlen=32), deque(maxlen=32)]
     def drain(pipe, chunks):
         try:
@@ -62,46 +67,58 @@ def run_bounded(command, *, cwd=None, timeout=660, capture_output=True, text=Tru
                 chunks.append(chunk)
         finally:
             pipe.close()
-    threads = [threading.Thread(target=drain, args=(pipe, chunks), daemon=True)
-               for pipe, chunks in zip((proc.stdout, proc.stderr), buffers)]
-    for thread in threads:
-        thread.start()
-    timed_out = False
-    try:
-        proc.wait(timeout=timeout)
-    except BaseException as exc:
-        timed_out = isinstance(exc, subprocess.TimeoutExpired)
-        # Nested wrappers terminate their own child; the outer deadline is the
-        # final group-wide kill. Stage executables do not spawn detached sessions.
-        try:
-            if nested:
-                proc.kill()
-            else:
-                os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        proc.wait()
-        if not timed_out:
-            raise
-    finally:
-        if not nested:
-            # Also reap descendants left behind after an early wrapper exit.
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+    with tempfile.TemporaryFile() as receipt:
+        launcher = [sys.executable, str(Path(__file__).with_name("ops_supervisor.py")),
+                    str(timeout), str(receipt.fileno())]
+        proc = subprocess.Popen(launcher + list(command), cwd=cwd, env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                start_new_session=True,
+                                pass_fds=(*pass_fds, receipt.fileno()))
+        threads = [threading.Thread(target=drain, args=(pipe, chunks), daemon=True)
+                   for pipe, chunks in zip((proc.stdout, proc.stderr), buffers)]
         for thread in threads:
-            thread.join(timeout=2)
+            thread.start()
+        timed_out = False
+        interrupted = None
+        try:
+            proc.wait(timeout=timeout)
+        except BaseException as exc:
+            timed_out = isinstance(exc, subprocess.TimeoutExpired)
+            interrupted = None if timed_out else exc
+            proc.terminate()  # Ask the supervisor; never kill its cleanup owner.
+            try:
+                proc.wait(timeout=CLEANUP_WAIT_SECONDS)
+            except subprocess.TimeoutExpired:
+                raise ProcessCleanupError(timed_out=timed_out) from None
+        finally:
+            # A stuck supervisor retains the lock and keeps draining bounded
+            # output. Normal cleanup closes every descendant's pipe handles.
+            if proc.poll() is not None:
+                for thread in threads:
+                    thread.join(timeout=1)
+            else:
+                # Reap our direct supervisor if quarantine later succeeds,
+                # without extending the caller's bounded cleanup wait.
+                threading.Thread(target=proc.wait, daemon=True).start()
+        receipt.seek(0)
+        try:
+            result = json.loads(receipt.read(4096))
+        except (ValueError, OSError):
+            result = {}
+        if not result.get("cleanup_confirmed") or any(thread.is_alive() for thread in threads):
+            raise ProcessCleanupError(timed_out=timed_out or result.get("timed_out", False))
     output = [b"".join(chunks).decode("utf-8", errors="replace") for chunks in buffers]
     if log_paths:
         for path, value in zip(log_paths, output):
             Path(path).write_text(value, encoding="utf-8")
-    if timed_out:
+    if interrupted is not None:
+        raise interrupted
+    if timed_out or result["timed_out"]:
         raise subprocess.TimeoutExpired(command, timeout, output=output[0], stderr=output[1])
-    result = subprocess.CompletedProcess(command, proc.returncode, *output)
+    completed = subprocess.CompletedProcess(command, result["returncode"], *output)
     if check:
-        result.check_returncode()
-    return result
+        completed.check_returncode()
+    return completed
 
 
 def read_status(path: Path) -> dict:

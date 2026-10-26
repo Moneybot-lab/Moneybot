@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from moneybot.services.runtime_paths import resolve_runtime_dir, historical_validation_report_path
-from moneybot.services.ops_runtime import run_bounded, atomic_write_text, read_status
+from moneybot.services.ops_runtime import run_bounded, atomic_write_text, read_status, ProcessCleanupError
 
 
 def build_weekly_refresh_commands(
@@ -73,8 +73,10 @@ def main() -> None:
                             result.update(status="insufficient_data", reason="insufficient_validation_evidence")
                         elif not result["promotion_ready"]:
                             result.update(status="degraded", reason="model_validation_blocked")
-            except (subprocess.TimeoutExpired, OSError) as exc:
+            except (subprocess.TimeoutExpired, OSError, ProcessCleanupError) as exc:
                 result.update(status="failure", reason="timeout" if isinstance(exc, subprocess.TimeoutExpired) else "execution_error")
+                if isinstance(exc, ProcessCleanupError):
+                    result.update(reason="timeout" if exc.timed_out else "execution_error", cleanup_status="unconfirmed")
         result["duration_seconds"] = round(time.monotonic() - stage_started, 3)
         results.append(result)
         failed = next((r.get("failed_stage") or r["stage"] for r in results if r["status"] in {"failure", "degraded", "insufficient_data"}), None)

@@ -15,7 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from moneybot.services.ops_runtime import atomic_write_text, run_bounded, read_status, peak_rss_mib
+from moneybot.services.ops_runtime import atomic_write_text, run_bounded, read_status, peak_rss_mib, ProcessCleanupError
 from moneybot.services.runtime_paths import (
     day13_calibration_report_path,
     day13_recalibration_plan_path,
@@ -225,9 +225,11 @@ def main() -> None:
                             result["artifact_modified_at"] = output.stat().st_mtime
                             if script_name == "day13_calibration_report.py" and read_status(output).get("rows", 0) < 30:
                                 result["status"] = "insufficient_data"
-                except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ProcessCleanupError) as exc:
                     result.update(status="failure", returncode=getattr(exc, "returncode", None),
                                   reason="timeout" if isinstance(exc, subprocess.TimeoutExpired) else "subprocess_failed")
+                    if isinstance(exc, ProcessCleanupError):
+                        result.update(reason="timeout" if exc.timed_out else "subprocess_failed", cleanup_status="unconfirmed")
                     result["signal"] = -exc.returncode if getattr(exc, "returncode", 0) < 0 else None
                     LOGGER.error("DAILY_OPS_FAILED script=%s returncode=%s", script_name, result["returncode"])
                     LOGGER.error("failed_script=%s failed_command=%s stdout_tail=%s stderr_tail=%s",
@@ -241,6 +243,8 @@ def main() -> None:
                        "duration_seconds": round(time.time() - started, 3), "peak_rss_mib": peak_rss_mib()}
             atomic_write_text(status_path, json.dumps(payload))
             LOGGER.info("OPS_STAGE %s", json.dumps(result))
+            if result.get("cleanup_status") == "unconfirmed":
+                break
     if not payload["success"]:
         raise SystemExit(1)
 
