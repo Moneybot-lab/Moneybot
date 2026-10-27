@@ -1941,12 +1941,14 @@ def user_watchlist():
             }
         )
         if decision_logger is not None:
-            watchlist_source = (deterministic_portfolio or {}).get("decision_source") or (ai_portfolio or {}).get("mode") or "rule_based"
+            watchlist_source = (deterministic_portfolio or {}).get("decision_source") or "rule_based"
             decision_logger.log(
                 endpoint="user_watchlist",
                 symbol=item.get("symbol"),
                 decision_source=watchlist_source,
+                forecast=(deterministic_portfolio or {}).get("forecast"),
                 payload={
+                    "ai_narrative_mode": (ai_portfolio or {}).get("mode"),
                     "base_advice": base_advice,
                     "advice": advice,
                     "model_version": (deterministic_portfolio or {}).get("model_version"),
@@ -2564,12 +2566,14 @@ def quick_ask():
                 shadow = deterministic_svc.predict_shadow_decision(
                     signal_data=signal_data,
                     quote_data=quote_data,
+                    symbol=symbol,
                 )
                 if shadow is not None and decision_logger is not None:
                     decision_logger.log(
                         endpoint="quick_ask_shadow",
                         symbol=symbol,
                         decision_source=shadow.get("decision_source"),
+                        forecast=shadow.get("forecast"),
                         payload={
                             "shadow_only": True,
                             "recommendation": shadow.get("recommendation"),
@@ -2632,6 +2636,7 @@ def quick_ask():
             endpoint="quick_ask",
             symbol=symbol,
             decision_source=decision.get("decision_source"),
+            forecast=decision.get("forecast"),
             payload={
                 "recommendation": decision.get("recommendation"),
                 "model_version": decision.get("model_version"),
@@ -3123,6 +3128,7 @@ def hot_momentum_buys():
                 endpoint="hot_momentum_buys",
                 symbol=item.get("symbol"),
                 decision_source=item.get("decision_source") or "rule_based",
+                forecast=item.get("forecast"),
                 payload={
                     "score": item.get("score"),
                     "model_version": item.get("model_version"),
@@ -3147,6 +3153,7 @@ def breakout_radar():
                 endpoint="breakout_radar",
                 symbol=item.get("symbol"),
                 decision_source=item.get("decision_source") or item.get("candidate_source") or "scanner",
+                forecast=item.get("forecast"),
                 payload={
                     "score": item.get("score"),
                     "score_basis": item.get("score_basis"),

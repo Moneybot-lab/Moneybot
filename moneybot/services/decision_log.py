@@ -10,6 +10,7 @@ from threading import Lock
 from typing import Any, Dict
 
 from .forecast_horizon import resolve_forecast_horizon
+from .prediction_evidence import classify_event
 
 
 def iter_decision_events(path: str, *, limit: int | None = None):
@@ -95,6 +96,7 @@ class DecisionLogger:
         payload: Dict[str, Any],
         snapshot: Dict[str, Any] | None = None,
         experiment: Dict[str, Any] | None = None,
+        forecast: Dict[str, Any] | None = None,
     ) -> None:
         if not self.enabled:
             return
@@ -122,12 +124,16 @@ class DecisionLogger:
                 snapshot_record["forecast_horizon"] = horizon
 
         record = {
+            "schema_version": "decision_event.v2",
+            "event_category": classify_event(ep, source, forecast),
             "ts": int(time.time()),
             "endpoint": ep,
             "symbol": symbol,
             "decision_source": source,
             "payload": payload_record,
         }
+        if isinstance(forecast, dict):
+            record["forecast"] = dict(forecast)
         if snapshot_record is not None:
             record["snapshot"] = snapshot_record
         if isinstance(experiment, dict):

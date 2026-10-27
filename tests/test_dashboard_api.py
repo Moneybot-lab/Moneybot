@@ -452,7 +452,7 @@ def test_quick_ask_logs_shadow_decision_in_rollout_dry_run():
         def predict_quick_decision(self, *, signal_data, quote_data, symbol=None):
             return None
 
-        def predict_shadow_decision(self, *, signal_data, quote_data):
+        def predict_shadow_decision(self, *, signal_data, quote_data, symbol=None):
             return {
                 "recommendation": "BUY",
                 "decision_source": "deterministic_model",
@@ -2532,3 +2532,25 @@ def test_ops_storage_failure_returns_safe_structured_diagnostic(monkeypatch):
         assert response.status_code == 500
         assert response.get_json()["data"]["failed_stage"] == "execution_storage"
         assert "private/path/and-token" not in response.get_data(as_text=True)
+
+
+def test_watchlist_ai_narrative_does_not_claim_model_provenance(tmp_path):
+    from moneybot.services.decision_log import DecisionLogger, read_decision_events
+    client = _client()
+    client.application.extensions["deterministic_quick_advisor"] = None
+    client.application.extensions["ai_advisor_service"] = StubAIAdvisorService()
+    log = tmp_path / "audit.jsonl"
+    client.application.extensions["decision_logger"] = DecisionLogger(output_path=str(log))
+    assert client.post("/api/auth/signup", json=_signup_payload("provenance@b.com")).status_code == 201
+    assert client.post("/api/user-watchlist", json={"symbol": "AAPL", "buy_price": 100, "shares": 1}).status_code == 201
+    response = client.get("/api/user-watchlist")
+    assert response.status_code == 200
+    events = read_decision_events(str(log))
+    event = next(e for e in events if e["endpoint"] == "user_watchlist")
+    assert event["event_category"] == "portfolio_advice"
+    assert event["decision_source"] == "rule_based"
+    assert event["payload"]["ai_narrative_mode"] == "ai_enhanced"
+    assert event["payload"]["model_version"] is None
+    assert event["payload"]["probability_up"] is None
+    assert "forecast" not in event
+    assert event["payload"]["advice"] == response.get_json()["enriched_items"][0]["advice"]

@@ -75,15 +75,9 @@ def _observed_label(action: str, realized_return: float | None) -> int | None:
 
 
 def _probability(row: Mapping[str, Any]) -> float | None:
-    value = _num(row.get("probability_up"))
-    if value is None:
-        payload = row.get("payload") if isinstance(row.get("payload"), Mapping) else {}
-        value = _num(payload.get("probability_up"))
-    if value is None:
-        return None
-    if value > 1:
-        value = value / 100
-    return max(0.0, min(1.0, value))
+    from .prediction_evidence import probability
+    # No percent conversion, clamping, or fallback across prediction contracts.
+    return probability(row.get("probability_up"))
 
 
 def _brier(pairs: Iterable[tuple[float, int]]) -> float | None:
@@ -138,106 +132,105 @@ def build_dataset_manifest(
 
 
 def summarize_validation_rows(rows: Iterable[Mapping[str, Any]], *, horizon: str = "5d") -> dict[str, Any]:
-    materialized = [dict(row) for row in rows]
-    evaluated: list[dict[str, Any]] = []
-    calibration_pairs: list[tuple[float, int]] = []
-    positive_predictions = 0
-    positive_true = 0
-    positive_correct = 0
-    negative_predictions = 0
-    negative_true = 0
-    negative_correct = 0
-    returns: list[float] = []
-    underlying_returns: list[float] = []
-    net_returns: list[float] = []
-    adverse: list[float] = []
-    stale_count = 0
-    fallback_count = 0
-    override_count = 0
-    by_profile: Counter[str] = Counter()
-    by_source: Counter[str] = Counter()
-    symbol_actions: dict[str, list[str]] = defaultdict(list)
+    """Streaming metrics with on-disk per-symbol churn state and fixed ECE bins."""
+    import sqlite3
+    import tempfile
+    from pathlib import Path
 
-    for row in materialized:
-        action = _action(row)
-        realized = _return_for(row, horizon)
-        observed = _observed_label(action, realized)
-        if observed is None:
-            continue
-        evaluated.append(row)
-        underlying_return = float(realized or 0.0)
-        directional_return = -underlying_return if _is_negative_action(action) else underlying_return
-        underlying_returns.append(underlying_return)
-        returns.append(directional_return)
-        cost_bps = _num(row.get("transaction_cost_bps")) or _num(row.get("estimated_friction_bps")) or 0.0
-        net_returns.append(directional_return - (cost_bps / 10_000))
-        mae = _num(row.get("max_adverse_excursion"))
-        if mae is not None:
-            adverse.append(mae)
-        probability = _probability(row)
-        if probability is not None:
-            calibration_pairs.append((probability, 1 if underlying_return > 0 else 0))
-        if _is_positive_action(action):
-            positive_predictions += 1
-            positive_correct += observed
-        if _is_negative_action(action):
-            negative_predictions += 1
-            negative_correct += observed
-        if realized is not None and realized > 0:
-            positive_true += 1
-        if realized is not None and realized <= 0:
-            negative_true += 1
-        market_data = row.get("market_data") if isinstance(row.get("market_data"), Mapping) else {}
-        source_mode = str(row.get("source_mode") or market_data.get("source_mode") or market_data.get("quote_source_mode") or "unknown")
-        by_source[source_mode] += 1
-        if bool(row.get("is_stale") or market_data.get("is_stale") or market_data.get("quote_stale")):
-            stale_count += 1
-        if "fallback" in source_mode.lower() or bool(row.get("is_degraded") or market_data.get("is_degraded")):
-            fallback_count += 1
-        personalization = row.get("personalization") if isinstance(row.get("personalization"), Mapping) else {}
-        base_action = str(row.get("base_action") or personalization.get("base_action") or "").upper()
-        final_action = str(personalization.get("action") or row.get("action") or "").upper()
-        if base_action and final_action and base_action != final_action:
-            override_count += 1
-        profile_bucket = str(row.get("risk_tolerance") or personalization.get("risk_tolerance") or personalization.get("profile_bucket") or "unknown")
-        by_profile[profile_bucket] += 1
-        symbol = str(row.get("symbol") or "").upper()
-        if symbol and action:
-            symbol_actions[symbol].append(action)
-
-    churn_transitions = 0
-    churn_changes = 0
-    for actions in symbol_actions.values():
-        for previous, current in zip(actions, actions[1:]):
-            churn_transitions += 1
-            if previous != current:
-                churn_changes += 1
-
-    evaluated_count = len(evaluated)
+    count = Counter()
+    sums = Counter()
+    bins = [[0, 0.0, 0.0] for _ in range(10)]
+    by_profile, by_source = Counter(), Counter()
+    worst_return = worst_adverse = None
+    with tempfile.TemporaryDirectory(prefix="moneybot-validation-") as directory:
+        db = sqlite3.connect(Path(directory) / "churn.sqlite")
+        db.execute("PRAGMA cache_size=-1024")
+        db.execute("CREATE TABLE last_action (symbol TEXT PRIMARY KEY, action TEXT)")
+        try:
+            for row in rows:
+                count["input"] += 1
+                action, realized = _action(row), _return_for(row, horizon)
+                if realized is None or action not in {"BUY", "STRONG BUY", "SELL", "HOLD OFF FOR NOW", "HOLD"}:
+                    continue
+                if row.get("forecast_horizon", horizon) != horizon:
+                    continue
+                count["evaluated"] += 1
+                exposure = -1 if _is_negative_action(action) else (0 if action == "HOLD" else 1)
+                directional = realized * exposure
+                sums["underlying"] += realized
+                sums["return"] += directional
+                cost = _num(row.get("transaction_cost_bps"))
+                if cost is None:
+                    cost = _num(row.get("estimated_friction_bps")) or 0.0
+                sums["net"] += directional - cost / 10000
+                worst_return = directional if worst_return is None else min(worst_return, directional)
+                mae = _num(row.get("max_adverse_excursion"))
+                if mae is not None:
+                    count["adverse"] += 1
+                    sums["adverse"] += mae
+                    worst_adverse = mae if worst_adverse is None else min(worst_adverse, mae)
+                p = _probability(row)
+                label = int(realized > 0)
+                if p is not None:
+                    count["calibration"] += 1
+                    sums["brier"] += (p - label) ** 2
+                    bucket = bins[min(9, int(p * 10))]
+                    bucket[0] += 1
+                    bucket[1] += p
+                    bucket[2] += label
+                if _is_positive_action(action):
+                    count["positive"] += 1
+                    count["positive_correct"] += label
+                if _is_negative_action(action):
+                    count["negative"] += 1
+                    count["negative_correct"] += 1 - label
+                count["positive_true"] += label
+                count["negative_true"] += 1 - label
+                market = row.get("market_data") if isinstance(row.get("market_data"), Mapping) else {}
+                mode = str(row.get("source_mode") or market.get("source_mode") or market.get("quote_source_mode") or "unknown")
+                by_source[mode if mode in {"rest", "websocket", "streaming", "rest_fallback", "fallback"} else "unknown"] += 1
+                stale = [row.get("is_stale"), market.get("is_stale"), market.get("quote_is_stale"), market.get("quote_stale")]
+                count["stale"] += any(value is True for value in stale)
+                count["unknown_freshness"] += not any(isinstance(value, bool) for value in stale)
+                count["delayed"] += row.get("is_delayed") is True
+                count["fallback"] += "fallback" in mode.lower() or row.get("is_degraded") is True or market.get("is_degraded") is True
+                personalization = row.get("personalization") if isinstance(row.get("personalization"), Mapping) else {}
+                base = str(row.get("base_action") or personalization.get("base_action") or "").upper()
+                final = str(personalization.get("action") or row.get("action") or "").upper()
+                count["override"] += bool(base and final and base != final)
+                profile = str(row.get("risk_tolerance") or personalization.get("risk_tolerance") or personalization.get("profile_bucket") or "unknown")
+                by_profile[profile if profile in {"conservative", "moderate", "aggressive"} else "unknown"] += 1
+                symbol = str(row.get("symbol") or "").upper()
+                if symbol:
+                    previous = db.execute("SELECT action FROM last_action WHERE symbol=?", (symbol,)).fetchone()
+                    if previous:
+                        count["transitions"] += 1
+                        count["changes"] += previous[0] != action
+                    db.execute("INSERT OR REPLACE INTO last_action VALUES (?, ?)", (symbol, action))
+        finally:
+            db.close()
+    def ratio(value, denominator, default=None):
+        return round(value / denominator, 6) if denominator else default
+    n = count["evaluated"]
+    c = count["calibration"]
     return {
-        "schema_version": "historical_validation_metrics.v1",
-        "input_rows": len(materialized),
-        "evaluated_rows": evaluated_count,
-        "horizon": horizon,
-        "brier_score": _brier(calibration_pairs),
-        "calibration_error": _ece(calibration_pairs),
-        "calibration_rows": len(calibration_pairs),
-        "buy_precision": round(positive_correct / positive_predictions, 6) if positive_predictions else None,
-        "buy_recall": round(positive_correct / positive_true, 6) if positive_true else None,
-        "sell_precision": round(negative_correct / negative_predictions, 6) if negative_predictions else None,
-        "sell_recall": round(negative_correct / negative_true, 6) if negative_true else None,
-        "avg_return": round(mean(returns), 6) if returns else None,
-        "avg_underlying_return": round(mean(underlying_returns), 6) if underlying_returns else None,
-        "avg_net_return": round(mean(net_returns), 6) if net_returns else None,
-        "worst_return": round(min(returns), 6) if returns else None,
-        "avg_max_adverse_excursion": round(mean(adverse), 6) if adverse else None,
-        "worst_max_adverse_excursion": round(min(adverse), 6) if adverse else None,
-        "recommendation_churn_rate": round(churn_changes / churn_transitions, 6) if churn_transitions else 0.0,
-        "profile_override_rate": round(override_count / evaluated_count, 6) if evaluated_count else 0.0,
-        "stale_data_rate": round(stale_count / evaluated_count, 6) if evaluated_count else 0.0,
-        "fallback_rate": round(fallback_count / evaluated_count, 6) if evaluated_count else 0.0,
-        "by_profile": dict(by_profile),
-        "by_source_mode": dict(by_source),
+        "schema_version": "historical_validation_metrics.v1", "input_rows": count["input"],
+        "evaluated_rows": n, "horizon": horizon,
+        "brier_score": ratio(sums["brier"], c),
+        "calibration_error": ratio(sum(abs(b[1] - b[2]) for b in bins), c),
+        "calibration_rows": c, "calibration_status": "available" if c else "insufficient_evidence",
+        "buy_precision": ratio(count["positive_correct"], count["positive"]),
+        "buy_recall": ratio(count["positive_correct"], count["positive_true"]),
+        "sell_precision": ratio(count["negative_correct"], count["negative"]),
+        "sell_recall": ratio(count["negative_correct"], count["negative_true"]),
+        "directional_accuracy": ratio(count["positive_correct"] + count["negative_correct"], count["positive"] + count["negative"]),
+        "avg_return": ratio(sums["return"], n), "avg_underlying_return": ratio(sums["underlying"], n),
+        "avg_net_return": ratio(sums["net"], n), "worst_return": round(worst_return, 6) if worst_return is not None else None,
+        "avg_max_adverse_excursion": ratio(sums["adverse"], count["adverse"]), "worst_max_adverse_excursion": worst_adverse,
+        "recommendation_churn_rate": ratio(count["changes"], count["transitions"], 0.0),
+        "profile_override_rate": ratio(count["override"], n, 0.0), "stale_data_rate": ratio(count["stale"], n, 0.0),
+        "unknown_freshness_rows": count["unknown_freshness"], "delayed_rows": count["delayed"],
+        "fallback_rate": ratio(count["fallback"], n, 0.0), "by_profile": dict(by_profile), "by_source_mode": dict(by_source),
     }
 
 

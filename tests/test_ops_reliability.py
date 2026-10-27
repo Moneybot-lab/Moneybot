@@ -350,11 +350,14 @@ def test_weekly_validation_gate_conclusion(tmp_path, monkeypatch, gate_passed, m
         name = Path(command[1]).name
         if name == "run_daily_ops.py":
             atomic_write_text(tmp_path / "daily_ops_status.json", json.dumps({"started_at": time.time(), "success": True, "stages": []}))
+        if name == "materialize_validation_evidence.py":
+            atomic_write_text(tmp_path / "evidence.sqlite", "fixture")
         if name == "page6_historical_validation_report.py":
-            atomic_write_text(output, json.dumps({"promotion_gates": {"promotion_ready": gate_passed, "gates": [{"name": "minimum_evaluated_rows", "passed": minimum_passed}]}}))
+            atomic_write_text(output, json.dumps({"execution_status": "success", "validation_status": "passed" if gate_passed else ("blocked" if minimum_passed else "insufficient_evidence"), "promotion_gates": {"promotion_ready": gate_passed, "gates": [{"name": "minimum_evaluated_rows", "passed": minimum_passed}]}}))
         return subprocess.CompletedProcess(command, 0)
     monkeypatch.setattr(weekly, "resolve_runtime_dir", lambda: tmp_path)
     monkeypatch.setattr(weekly, "historical_validation_report_path", lambda: output)
+    monkeypatch.setattr(weekly, "historical_validation_evidence_path", lambda: tmp_path / "evidence.sqlite")
     monkeypatch.setattr(weekly, "run_bounded", run)
     monkeypatch.setattr(sys, "argv", ["weekly"])
     if gate_passed:
@@ -379,6 +382,9 @@ def test_abrupt_exit_after_partial_success_status_is_not_success(tmp_path):
     assert payload["status"] == "degraded"
     assert payload["failed_stage"] == "execution"
     assert payload["signal"] == 9
+    assert payload["execution_status"] == "failed"
+    assert payload["validation_status"] == "unavailable"
+    assert payload["promotion_ready"] is False
 
 
 def test_evicted_preloaded_history_keeps_original_full_range():
@@ -737,3 +743,50 @@ def test_cleanup_does_not_trust_empty_proc_snapshot(monkeypatch):
     monkeypatch.setattr(supervisor, "_reap", lambda child: False)  # Child still exists.
     monkeypatch.setattr(supervisor, "_descendants", lambda: {})  # Reparenting race.
     assert supervisor._cleanup(None) is False
+
+
+@pytest.mark.parametrize("failure", ["nonzero", "missing", "stale", "corrupt"])
+def test_weekly_report_operational_failure_never_becomes_gate_success(tmp_path, monkeypatch, failure):
+    from scripts import run_weekly_model_refresh as weekly
+    output = tmp_path / "validation.json"
+    def run(command, **kwargs):
+        name = Path(command[1]).name
+        if name == "run_daily_ops.py":
+            atomic_write_text(tmp_path / "daily_ops_status.json", json.dumps({"started_at": time.time(), "success": True}))
+        elif name == "materialize_validation_evidence.py":
+            atomic_write_text(tmp_path / "evidence.sqlite", "fixture")
+        elif name == "page6_historical_validation_report.py":
+            if failure != "missing":
+                atomic_write_text(output, "{}" if failure == "corrupt" else json.dumps({
+                    "execution_status": "success", "validation_status": "passed",
+                    "promotion_gates": {"promotion_ready": True, "gates": [{"name": "minimum_evaluated_rows", "passed": True}]}}))
+                if failure == "stale":
+                    os.utime(output, (1, 1))
+            if failure == "nonzero":
+                return subprocess.CompletedProcess(command, 9)
+        return subprocess.CompletedProcess(command, 0)
+    monkeypatch.setattr(weekly, "resolve_runtime_dir", lambda: tmp_path)
+    monkeypatch.setattr(weekly, "historical_validation_report_path", lambda: output)
+    monkeypatch.setattr(weekly, "historical_validation_evidence_path", lambda: tmp_path / "evidence.sqlite")
+    monkeypatch.setattr(weekly, "run_bounded", run)
+    monkeypatch.setattr(sys, "argv", ["weekly"])
+    with pytest.raises(SystemExit, match="1"):
+        weekly.main()
+    status = json.loads((tmp_path / "weekly_refresh_status.json").read_text())
+    assert status["execution_status"] == "failed"
+    assert status["validation_status"] == "unavailable"
+    assert status["promotion_ready"] is False
+
+
+def test_weekly_blocked_report_status_survives_idempotency_replay(tmp_path):
+    def run(*args, **kwargs):
+        atomic_write_text(tmp_path / "weekly_refresh_status.json", json.dumps({
+            "started_at": time.time(), "success": False, "status": "degraded",
+            "execution_status": "success", "validation_status": "blocked", "promotion_ready": False,
+            "failed_stage": "page6_historical_validation_report.py", "stages": []}))
+        return subprocess.CompletedProcess([], 1)
+    first, code = run_request(tmp_path, "blocked", run, "weekly_refresh")
+    assert code == 500 and first["execution_status"] == "success"
+    replay, code = run_request(tmp_path, "blocked", lambda *a, **k: pytest.fail("replayed workload"), "weekly_refresh")
+    assert code == 500 and replay["replayed"] is True
+    assert replay["validation_status"] == "blocked" and replay["promotion_ready"] is False

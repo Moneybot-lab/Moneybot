@@ -8,7 +8,8 @@ from typing import Any, Dict
 import numpy as np
 
 from .deterministic_model import BaselineModelArtifact, default_baseline_artifact, load_artifact, predict_proba
-from .forecast_horizon import resolve_forecast_horizon
+from .forecast_horizon import resolve_forecast_horizon, LEGACY_MODEL_FORECAST_HORIZONS
+from .prediction_evidence import make_forecast, OUTCOME_CONTRACT
 from .model_metadata import load_artifact_metadata
 from .alpha_atlas_feature_contract import (
     ALPHA_ATLAS_V2_FEATURES,
@@ -358,7 +359,7 @@ class DeterministicQuickAdvisor:
         if imputed:
             rationale += " Some live inputs were unavailable, so the model used safe defaults."
 
-        return {
+        result = {
             "recommendation": recommendation,
             "rationale": rationale,
             "current_price": quote_data.get("price"),
@@ -393,6 +394,23 @@ class DeterministicQuickAdvisor:
             ],
         }
 
+        try:
+            result["forecast"] = make_forecast(
+                symbol=symbol, artifact=self.artifact.to_dict(), features=row.tolist(),
+                quote=quote_data, recommendation=recommendation,
+                probability_up=result["probability_up"], raw_probability_up=result["raw_probability_up"],
+                horizon=result["forecast_horizon"],
+                outcome_contract=(self.artifact_metadata or {}).get("outcome_contract") or (OUTCOME_CONTRACT if self.artifact.version in LEGACY_MODEL_FORECAST_HORIZONS and result["forecast_horizon"] == "5d" else "unknown"),
+                input_kind="quote_only" if (signal_data.get("diagnostics") or {}).get("provider") == "portfolio_quote_only" else "model_features",
+                calibration={"applied": calibration_applied, "slope": self.calibration_slope,
+                             "intercept": self.calibration_intercept},
+            )
+        except (TypeError, ValueError, OverflowError):
+            # Evidence instrumentation must not change the user's recommendation.
+            result["forecast"] = None
+            result["forecast_metadata_status"] = "unavailable"
+        return result
+
     def predict_quick_decision(
         self,
         *,
@@ -413,9 +431,12 @@ class DeterministicQuickAdvisor:
         quote_data: Dict[str, Any],
         symbol: str | None = None,
     ) -> Dict[str, Any] | None:
-        return self._predict_quick_decision_internal(
+        result = self._predict_quick_decision_internal(
             signal_data=signal_data, quote_data=quote_data, symbol=symbol
         )
+        if result is not None and isinstance(result.get("forecast"), dict):
+            result["forecast"]["shadow_only"] = True
+        return result
 
     def predict_portfolio_position(
         self,
@@ -460,6 +481,7 @@ class DeterministicQuickAdvisor:
 
         return {
             "mode": "deterministic_model",
+            "forecast": quick.get("forecast"),
             "symbol": symbol,
             "advice": advice,
             "advice_reason": reason,
