@@ -308,3 +308,52 @@ def test_prediction_includes_embedded_forecast_horizon_without_changing_probabil
     assert first["probability_up"] == second["probability_up"]
     assert first["recommendation"] == second["recommendation"]
     assert first["decision_threshold"] == second["decision_threshold"]
+
+
+def test_forecast_identity_comes_from_inference_and_survives_portfolio_adjustment(tmp_path):
+    from datetime import datetime, timezone
+    svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(_write_artifact(tmp_path)))
+    quote = {"price": 101.2, "event_timestamp": datetime.now(timezone.utc).isoformat(),
+             "quote_source": "fixture", "is_stale": False, "source_mode": "rest"}
+    signal = {"technical": {"rsi": 45.0, "macd_histogram": .2}, "volume_ratio": 1.4}
+    one = svc.predict_quick_decision(symbol="ABC", signal_data=signal, quote_data=quote)
+    two = svc.predict_quick_decision(symbol="ABC", signal_data=signal, quote_data=quote)
+    portfolio = svc.predict_portfolio_position(symbol="ABC", entry_price=100, current_price=101.2,
+                                              shares=2, signal_data=signal, quote_data=quote)
+    assert one["forecast"]["prediction_id"] == two["forecast"]["prediction_id"] == portfolio["forecast"]["prediction_id"]
+    assert portfolio["forecast"]["probability_up"] == one["probability_up"]
+    assert portfolio["forecast"]["recommendation"] == one["recommendation"]
+    shadow = svc.predict_shadow_decision(symbol="ABC", signal_data=signal, quote_data=quote)
+    assert shadow["forecast"]["shadow_only"] is True
+    assert one["forecast"]["shadow_only"] is False
+
+
+def test_quote_only_inference_is_explicitly_ineligible(tmp_path):
+    from datetime import datetime, timezone
+    from moneybot.services.historical_evidence import project_prediction
+    svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(_write_artifact(tmp_path)))
+    result = svc.predict_quick_decision(symbol="ABC", signal_data={"diagnostics": {"provider": "portfolio_quote_only"}},
+                                       quote_data={"price": 100, "event_timestamp": datetime.now(timezone.utc).isoformat()})
+    assert result["forecast"]["input_kind"] == "quote_only"
+    row, reasons = project_prediction({"ts": int(datetime.now(timezone.utc).timestamp()), "symbol": "ABC", "decision_source": "deterministic_model", "forecast": result["forecast"]})
+    assert row is None
+    assert "quote_only_or_unknown_inputs" in reasons
+
+
+def test_evidence_serialization_failure_preserves_user_recommendation(tmp_path, monkeypatch):
+    svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(_write_artifact(tmp_path)))
+    kwargs = {"symbol": "ABC", "signal_data": {}, "quote_data": {"price": 100}}
+    expected = svc.predict_quick_decision(**kwargs)
+    def broken(**kwargs):
+        raise ValueError("invalid telemetry")
+    monkeypatch.setattr("moneybot.services.deterministic_advisor.make_forecast", broken)
+    actual = svc.predict_quick_decision(**kwargs)
+    assert actual["recommendation"] == expected["recommendation"]
+    assert actual["probability_up"] == expected["probability_up"]
+    assert actual["forecast"] is None
+
+
+def test_unknown_model_label_contract_is_not_assumed_from_horizon(tmp_path):
+    svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(_write_artifact(tmp_path, version="unreviewed-other-model")))
+    result = svc.predict_quick_decision(symbol="ABC", signal_data={}, quote_data={"price": 100})
+    assert result["forecast"]["outcome_contract"] == "unknown"

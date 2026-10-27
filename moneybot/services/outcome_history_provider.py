@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from typing import Any
+from collections import OrderedDict
 
 import pandas as pd
 import yfinance as yf
 
 from .market_data import MarketDataService
+from .outcome_tracking import normalize_unix_ts
 
 
 class MassivePreferredHistoryDownload:
@@ -18,8 +20,9 @@ class MassivePreferredHistoryDownload:
         self.yfinance_fallbacks = 0
         self.massive_last_error: str | None = None
         self.massive_parse_failures = 0
+        self.massive_download_errors = 0
         self.massive_empty_responses = 0
-        self._provider_by_symbol: dict[str, str] = {}
+        self._provider_by_symbol: dict[str, str] = OrderedDict()
 
     def __call__(self, symbol: str, *, start: str, end: str, **kwargs: Any):
         symbol_key = str(symbol).upper()
@@ -50,12 +53,19 @@ class MassivePreferredHistoryDownload:
                 )
                 if date_value is not None and close is not None:
                     try:
-                        rows.append((pd.Timestamp(date_value).date(), float(close)))
+                        if isinstance(date_value, (int, float)):
+                            normalized = normalize_unix_ts(date_value)
+                            if normalized is None:
+                                raise ValueError("invalid_bar_timestamp")
+                            stamp = pd.Timestamp(normalized, unit="s", tz="UTC")
+                        else:
+                            stamp = pd.Timestamp(date_value)
+                        rows.append((stamp.date(), float(close)))
                     except (TypeError, ValueError, OverflowError):
                         continue
             if rows:
                 self.massive_successes += 1
-                self._provider_by_symbol[symbol_key] = "massive"
+                self._remember_provider(symbol_key, "massive")
                 return pd.DataFrame(
                     {"Close": [row[1] for row in rows]},
                     index=pd.to_datetime([row[0] for row in rows]),
@@ -66,9 +76,16 @@ class MassivePreferredHistoryDownload:
                 self.massive_empty_responses += 1
         except Exception as exc:  # noqa: BLE001
             self.massive_last_error = str(exc)
+            self.massive_download_errors += 1
         self.yfinance_fallbacks += 1
-        self._provider_by_symbol[symbol_key] = "yfinance"
+        self._remember_provider(symbol_key, "yfinance")
         return yf.download(symbol_key, start=start, end=end, **kwargs)
+
+    def _remember_provider(self, symbol: str, provider: str) -> None:
+        self._provider_by_symbol.pop(symbol, None)
+        self._provider_by_symbol[symbol] = provider
+        while len(self._provider_by_symbol) > 256:
+            self._provider_by_symbol.pop(next(iter(self._provider_by_symbol)))
 
     def provider_for_symbol(self, symbol: str) -> str:
         return self._provider_by_symbol.get(str(symbol).upper(), "unknown")
@@ -82,5 +99,6 @@ class MassivePreferredHistoryDownload:
             "yfinance_history_fallbacks": self.yfinance_fallbacks,
             "massive_last_error": self.massive_last_error,
             "massive_parse_failures": self.massive_parse_failures,
+            "massive_download_errors": self.massive_download_errors,
             "massive_empty_responses": self.massive_empty_responses,
         }

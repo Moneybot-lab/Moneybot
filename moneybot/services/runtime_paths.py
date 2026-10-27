@@ -89,3 +89,7 @@ def bad_symbol_cache_path() -> Path:
 
 def historical_validation_report_path() -> Path:
     return resolve_runtime_dir() / "historical_validation_report.json"
+
+
+def historical_validation_evidence_path() -> Path:
+    return resolve_runtime_dir() / "historical_validation_evidence.v1.sqlite"

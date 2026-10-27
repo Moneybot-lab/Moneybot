@@ -81,3 +81,9 @@ def test_historical_report_promotes_only_when_all_blocking_gates_pass():
     assert report["rollout_recommendation"] == "promote"
     assert report["required_next_steps"] == []
     assert report["dataset_manifest"]["dataset_id"] == "candidate-v2"
+
+
+def test_invalid_probability_cannot_be_reinterpreted_as_percentage_or_clipped():
+    for value in (-.1, 80, 1.001, "0.8"):
+        metrics = summarize_validation_rows([{"action": "BUY", "return_5d": .1, "probability_up": value}])
+        assert metrics["brier_score"] is None, f"invalid probability {value} was scored"

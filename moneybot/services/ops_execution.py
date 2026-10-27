@@ -58,7 +58,7 @@ def execute_ops(command, *, workflow, runtime_dir, cwd, timeout, idempotency_key
             execution_failure_stage = data.get("failed_stage")
             status = read_status(runtime_dir / f"{workflow}_status.json")
             if status.get("started_at", 0) >= started:
-                data.update({name: status.get(name) for name in ("stages", "failed_stage", "status")})
+                data.update({name: status.get(name) for name in ("stages", "failed_stage", "status", "execution_status", "validation_status", "promotion_ready")})
                 if execution_failed and status.get("success"):
                     data.update(status="degraded", failed_stage=execution_failure_stage or "execution")
                 if not status.get("success"):
@@ -67,6 +67,16 @@ def execute_ops(command, *, workflow, runtime_dir, cwd, timeout, idempotency_key
             else:
                 data.update(status="failure", failed_stage=data.get("failed_stage") or "missing_fresh_stage_status", success=False)
                 code = 500 if code == 200 else code
+            policy_blocked = (
+                workflow == "weekly_refresh" and data.get("returncode") == 1
+                and status.get("started_at", 0) >= started
+                and status.get("execution_status") == "success"
+                and status.get("validation_status") in {"blocked", "insufficient_evidence"}
+                and status.get("promotion_ready") is False and status.get("success") is False
+                and execution_failure_stage is None
+            )
+            if execution_failed and not policy_blocked:
+                data.update(execution_status="failed", validation_status="unavailable", promotion_ready=False)
             data["executed_at"] = started
             data["duration_seconds"] = round(time.time() - started, 3)
             # Keep terminal results, including failures: same key must never rerun.

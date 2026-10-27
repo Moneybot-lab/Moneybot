@@ -100,7 +100,7 @@ def _probability_up(payload: dict, snapshot: dict):
     )
     return (
         value
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and 0 <= value <= 1
         else None
     )
 
@@ -188,7 +188,19 @@ def compact_calibration_event(event: dict) -> dict:
     """Project exact diagnostic/eligibility values before discarding snapshots."""
     payload, snapshot = _event_payload(event), _event_snapshot(event)
     provider = _event_provider(event, payload, snapshot)
+    signal_completeness = _signal_completeness(payload, snapshot, provider)
+    forecast = event.get("forecast") if isinstance(event.get("forecast"), dict) else {}
+    if event.get("schema_version") == "decision_event.v2":
+        from moneybot.services.historical_evidence import project_prediction
+        prediction, _ = project_prediction(event)
+        if prediction is None or prediction["shadow_only"]:
+            payload, snapshot = {}, {}
+        else:
+            payload = {**payload, **prediction}
+            snapshot = {}
+            event = {**event, "ts": int(prediction["ts"])}
     return {
+        **({"prediction_id": forecast["prediction_id"]} if forecast.get("prediction_id") else {}),
         "symbol": event.get("symbol"), "ts": event.get("ts"),
         "endpoint": event.get("endpoint"),
         "decision_source": event.get("decision_source") or payload.get("decision_source"),
@@ -197,7 +209,7 @@ def compact_calibration_event(event: dict) -> dict:
             "forecast_horizon": _event_forecast_horizon(payload, snapshot),
             "model_version": payload.get("model_version") or snapshot.get("model_version"),
             "provider": provider,
-            "_signal_completeness": _signal_completeness(payload, snapshot, provider),
+            "_signal_completeness": signal_completeness,
         },
     }
 
@@ -627,8 +639,18 @@ def main() -> None:
     while True:
         # Release the previous compact batch before decoding the next one.
         events.clear()
-        events = [compact_calibration_event(event) for event in
-                  iter_decision_events(args.input, limit=read_limit)]
+        events = []
+        seen_predictions = {}
+        for event in iter_decision_events(args.input, limit=read_limit):
+            compact = compact_calibration_event(event)
+            identity = compact.get("prediction_id")
+            if identity and identity in seen_predictions:
+                if compact["payload"]["probability_up"] is None:
+                    events[seen_predictions[identity]]["payload"]["probability_up"] = None
+                compact["payload"]["probability_up"] = None
+            elif identity:
+                seen_predictions[identity] = len(events)
+            events.append(compact)
         _outcome_history_cache.plan_events(
             history_eligible_events(events, horizon_days=max(1, args.horizon_days)))
         eligibility_diagnostics = {

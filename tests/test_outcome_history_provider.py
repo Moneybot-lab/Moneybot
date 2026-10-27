@@ -123,3 +123,17 @@ def test_massive_exception_is_visible_and_nonfatal(monkeypatch):
     assert "temporarily unavailable" in diagnostics["massive_last_error"]
     assert diagnostics["yfinance_history_fallbacks"] == 1
     assert download.provider_for_symbol("ERROR") == "yfinance"
+
+
+@pytest.mark.parametrize("multiplier", [1, 1000, 1000000, 1000000000])
+def test_numeric_history_timestamp_units_preserve_session(multiplier):
+    download = MassivePreferredHistoryDownload(service=_MassiveService({"bars": [{"t": 1782864000 * multiplier, "c": 42.0}]}))
+    frame = download("ABC", start="2026-07-01", end="2026-07-02")
+    assert str(frame.index[0].date()) == "2026-07-01"
+
+
+def test_provider_diagnostics_do_not_grow_with_symbol_universe():
+    download = MassivePreferredHistoryDownload(service=_MassiveService({"bars": [{"date": "2026-07-01", "close": 42}]}))
+    for i in range(300):
+        download(f"SYM{i}", start="2026-07-01", end="2026-07-02")
+    assert len(download._provider_by_symbol) == 256

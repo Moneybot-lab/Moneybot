@@ -48,7 +48,7 @@ jobs:
               with open(os.environ["response_file"], "rb") as fh:
                   body = json.loads(fh.read(65537))
               data = body.get("data", {})
-              safe = {k: data[k] for k in ("success", "status", "returncode", "failed_stage", "replayed") if k in data}
+              safe = {k: data[k] for k in ("success", "status", "returncode", "failed_stage", "replayed", "execution_status", "validation_status", "promotion_ready") if k in data}
               safe["request_id"] = body.get("request_id")
               rendered = json.dumps(safe, separators=(",", ":"))
               for key in ("DAILY_OPS_TOKEN", "MONEYBOT_BASE_URL"):
