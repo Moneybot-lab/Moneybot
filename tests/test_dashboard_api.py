@@ -490,33 +490,44 @@ def test_run_weekly_model_refresh_requires_token():
     assert res.get_json()["error"] == "unauthorized"
 
 
+def _write_ops_status(tmp_path, command, returncode):
+    import time
+    weekly = "weekly" in command[1]
+    stage = {"stage": "day13_calibration_report.py", "status": "success" if returncode == 0 else "failure", "artifact_status": "stale_artifact"}
+    payload = {"started_at": time.time(), "success": returncode == 0,
+               "status": "success" if returncode == 0 else "degraded",
+               "failed_stage": None if returncode == 0 else stage["stage"],
+               "stages": [{"stage": "run_daily_ops.py", "daily_stages": [stage]}] if weekly else [stage]}
+    (tmp_path / ("weekly_refresh_status.json" if weekly else "daily_ops_status.json")).write_text(json.dumps(payload))
+
+
 def test_run_daily_ops_executes_and_returns_output(monkeypatch, tmp_path):
     class Completed:
         returncode = 0
         stdout = "ok"
         stderr = ""
 
-    def fake_run(command, cwd, capture_output, text, check, timeout):
+    def fake_run(command, cwd, timeout, pass_fds):
         assert command[:3] == ["python3", "scripts/run_daily_ops.py", "--input-log"]
-        assert capture_output is True
-        assert text is True
-        assert check is False
+        assert pass_fds and isinstance(pass_fds[0], int)
         assert timeout == 660
         assert cwd.endswith("/Moneybot")
+        _write_ops_status(tmp_path, command, Completed.returncode)
         return Completed()
 
-    monkeypatch.setattr(api_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(api_module, "run_bounded", fake_run)
     monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
 
     client = _client()
     client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
-    res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token"})
+    res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token", "Idempotency-Key": "test-run"})
 
     assert res.status_code == 200
     payload = res.get_json()["data"]
     assert payload["success"] is True
     assert payload["returncode"] == 0
-    assert payload["stdout"] == "ok"
+    assert payload["stdout"] == ""
+    assert payload["status"] == "success"
     assert payload["stderr"] == ""
     assert payload["calibration_report_path"] == str(tmp_path / "day13_calibration_report.json")
     assert payload["calibration_report_exists"] is False
@@ -531,20 +542,19 @@ def test_run_weekly_model_refresh_executes_and_returns_output(monkeypatch, tmp_p
         stdout = "weekly ok"
         stderr = ""
 
-    def fake_run(command, cwd, capture_output, text, check):
+    def fake_run(command, cwd, timeout, pass_fds):
         assert command == ["python3", "scripts/run_weekly_model_refresh.py"]
-        assert capture_output is True
-        assert text is True
-        assert check is False
+        assert pass_fds and isinstance(pass_fds[0], int)
         assert cwd.endswith("/Moneybot")
+        _write_ops_status(tmp_path, command, Completed.returncode)
         return Completed()
 
-    monkeypatch.setattr(api_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(api_module, "run_bounded", fake_run)
     monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
 
     client = _client()
     client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
-    res = client.post("/api/run-weekly-model-refresh", headers={"X-Daily-Ops-Token": "secret-token"})
+    res = client.post("/api/run-weekly-model-refresh", headers={"X-Daily-Ops-Token": "secret-token", "Idempotency-Key": "test-run"})
 
     assert res.status_code == 200
     payload = res.get_json()["data"]
@@ -552,7 +562,8 @@ def test_run_weekly_model_refresh_executes_and_returns_output(monkeypatch, tmp_p
     assert payload["command"] == ["python3", "scripts/run_weekly_model_refresh.py"]
     assert payload["exit_code"] == 0
     assert payload["returncode"] == 0
-    assert payload["stdout"] == "weekly ok"
+    assert payload["stdout"] == ""
+    assert payload["status"] == "success"
     assert payload["stderr"] == ""
     assert payload["runtime_dir"] == str(tmp_path)
     assert payload["calibration_report_path"] == str(tmp_path / "day13_calibration_report.json")
@@ -572,17 +583,18 @@ def test_run_daily_ops_reports_day13_paths_in_runtime_dir_when_files_exist(monke
         stdout = ""
         stderr = "Script stderr (day13_calibration_report.py): boom"
 
-    def fake_run(command, cwd, capture_output, text, check, timeout):
+    def fake_run(command, cwd, timeout, pass_fds):
         assert command[-1] == str(tmp_path / "decision_events.jsonl")
         assert timeout == 660
+        _write_ops_status(tmp_path, command, Completed.returncode)
         return Completed()
 
-    monkeypatch.setattr(api_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(api_module, "run_bounded", fake_run)
     monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
 
     client = _client()
     client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
-    res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token"})
+    res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token", "Idempotency-Key": "test-run"})
 
     assert res.status_code == 500
     payload = res.get_json()["data"]
@@ -591,13 +603,14 @@ def test_run_daily_ops_reports_day13_paths_in_runtime_dir_when_files_exist(monke
     assert payload["calibration_report_exists"] is True
     assert payload["recalibration_plan_path"] == str(plan_path)
     assert payload["recalibration_plan_exists"] is True
-    assert "day13_calibration_report.py" in payload["day13_stderr"]
-    assert "run-daily-ops child failed returncode=1" in caplog.text
-    assert "Script stderr (day13_calibration_report.py): boom" in caplog.text
+    assert payload["failed_stage"] == "day13_calibration_report.py"
+    assert payload["calibration_report_fresh"] is False
+    assert "returncode=1" in caplog.text
+    assert "boom" not in caplog.text
 
 
-def test_run_daily_ops_reports_child_timeout(monkeypatch, tmp_path):
-    def fake_run(command, cwd, capture_output, text, check, timeout):
+def test_run_daily_ops_reports_child_timeout_1(monkeypatch, tmp_path):
+    def fake_run(command, cwd, timeout, pass_fds):
         assert timeout == 660
         raise api_module.subprocess.TimeoutExpired(
             command,
@@ -606,24 +619,25 @@ def test_run_daily_ops_reports_child_timeout(monkeypatch, tmp_path):
             stderr="partial stderr",
         )
 
-    monkeypatch.setattr(api_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(api_module, "run_bounded", fake_run)
     monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
 
     client = _client()
     client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
-    res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token"})
+    res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token", "Idempotency-Key": "test-run"})
 
     assert res.status_code == 504
     payload = res.get_json()["data"]
     assert payload["success"] is False
     assert payload["returncode"] == -1
-    assert payload["stdout"] == "partial stdout"
-    assert "daily ops exceeded server execution timeout" in payload["stderr"]
-    assert "partial stderr" in payload["stderr"]
+    assert payload["stdout"] == ""
+    assert "server execution timeout" in payload["stderr"]
+    assert "partial stderr" not in payload["stderr"]
+    assert payload["failed_stage"] == "execution_timeout"
 
 
-def test_run_daily_ops_reports_child_timeout(monkeypatch, tmp_path):
-    def fake_run(command, cwd, capture_output, text, check, timeout):
+def test_run_daily_ops_reports_child_timeout_2(monkeypatch, tmp_path):
+    def fake_run(command, cwd, timeout, pass_fds):
         assert timeout == 660
         raise api_module.subprocess.TimeoutExpired(
             command,
@@ -632,24 +646,25 @@ def test_run_daily_ops_reports_child_timeout(monkeypatch, tmp_path):
             stderr="partial stderr",
         )
 
-    monkeypatch.setattr(api_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(api_module, "run_bounded", fake_run)
     monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
 
     client = _client()
     client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
-    res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token"})
+    res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token", "Idempotency-Key": "test-run"})
 
     assert res.status_code == 504
     payload = res.get_json()["data"]
     assert payload["success"] is False
     assert payload["returncode"] == -1
-    assert payload["stdout"] == "partial stdout"
-    assert "daily ops exceeded server execution timeout" in payload["stderr"]
-    assert "partial stderr" in payload["stderr"]
+    assert payload["stdout"] == ""
+    assert "server execution timeout" in payload["stderr"]
+    assert "partial stderr" not in payload["stderr"]
+    assert payload["failed_stage"] == "execution_timeout"
 
 
-def test_run_daily_ops_reports_child_timeout(monkeypatch, tmp_path):
-    def fake_run(command, cwd, capture_output, text, check, timeout):
+def test_run_daily_ops_reports_child_timeout_3(monkeypatch, tmp_path):
+    def fake_run(command, cwd, timeout, pass_fds):
         assert timeout == 660
         raise api_module.subprocess.TimeoutExpired(
             command,
@@ -658,24 +673,25 @@ def test_run_daily_ops_reports_child_timeout(monkeypatch, tmp_path):
             stderr="partial stderr",
         )
 
-    monkeypatch.setattr(api_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(api_module, "run_bounded", fake_run)
     monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
 
     client = _client()
     client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
-    res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token"})
+    res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token", "Idempotency-Key": "test-run"})
 
     assert res.status_code == 504
     payload = res.get_json()["data"]
     assert payload["success"] is False
     assert payload["returncode"] == -1
-    assert payload["stdout"] == "partial stdout"
-    assert "daily ops exceeded server execution timeout" in payload["stderr"]
-    assert "partial stderr" in payload["stderr"]
+    assert payload["stdout"] == ""
+    assert "server execution timeout" in payload["stderr"]
+    assert "partial stderr" not in payload["stderr"]
+    assert payload["failed_stage"] == "execution_timeout"
 
 
-def test_run_daily_ops_reports_child_timeout(monkeypatch, tmp_path):
-    def fake_run(command, cwd, capture_output, text, check, timeout):
+def test_run_daily_ops_reports_child_timeout_4(monkeypatch, tmp_path):
+    def fake_run(command, cwd, timeout, pass_fds):
         assert timeout == 660
         raise api_module.subprocess.TimeoutExpired(
             command,
@@ -684,20 +700,21 @@ def test_run_daily_ops_reports_child_timeout(monkeypatch, tmp_path):
             stderr="partial stderr",
         )
 
-    monkeypatch.setattr(api_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(api_module, "run_bounded", fake_run)
     monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
 
     client = _client()
     client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
-    res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token"})
+    res = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token", "Idempotency-Key": "test-run"})
 
     assert res.status_code == 504
     payload = res.get_json()["data"]
     assert payload["success"] is False
     assert payload["returncode"] == -1
-    assert payload["stdout"] == "partial stdout"
-    assert "daily ops exceeded server execution timeout" in payload["stderr"]
-    assert "partial stderr" in payload["stderr"]
+    assert payload["stdout"] == ""
+    assert "server execution timeout" in payload["stderr"]
+    assert "partial stderr" not in payload["stderr"]
+    assert payload["failed_stage"] == "execution_timeout"
 
 
 def test_run_weekly_model_refresh_reports_diagnostics_when_files_exist(monkeypatch, tmp_path):
@@ -711,15 +728,16 @@ def test_run_weekly_model_refresh_reports_diagnostics_when_files_exist(monkeypat
         stdout = ""
         stderr = "weekly failed"
 
-    def fake_run(command, cwd, capture_output, text, check):
+    def fake_run(command, cwd, timeout, pass_fds):
+        _write_ops_status(tmp_path, command, Completed.returncode)
         return Completed()
 
-    monkeypatch.setattr(api_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(api_module, "run_bounded", fake_run)
     monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
 
     client = _client()
     client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
-    res = client.post("/api/run-weekly-model-refresh", headers={"X-Daily-Ops-Token": "secret-token"})
+    res = client.post("/api/run-weekly-model-refresh", headers={"X-Daily-Ops-Token": "secret-token", "Idempotency-Key": "test-run"})
 
     assert res.status_code == 500
     payload = res.get_json()["data"]
@@ -2479,3 +2497,38 @@ def test_promote_track_b_candidate_uploads_and_runs_promotion(monkeypatch, tmp_p
         "--servability-certification",
         str(tmp_path / "track_b" / "production_servability_certification.json"),
     ]
+
+
+def test_ops_endpoints_require_idempotency_key_after_authentication():
+    client = _client()
+    client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
+    for endpoint in ("run-daily-ops", "run-weekly-model-refresh"):
+        response = client.post("/api/" + endpoint, headers={"X-Daily-Ops-Token": "secret-token"})
+        assert response.status_code == 400
+        assert "Idempotency-Key" in response.get_json()["error"]
+
+
+def test_replayed_ops_receipt_does_not_claim_new_artifact_freshness(monkeypatch, tmp_path):
+    def execute(*args, **kwargs):
+        return {"success": True, "replayed": True, "stages": [{"stage": "day13_calibration_report.py", "artifact_status": "fresh"}]}, 200
+    monkeypatch.setattr(api_module, "execute_ops", execute)
+    monkeypatch.setenv("MONEYBOT_PERSISTENT_DATA_DIR", str(tmp_path))
+    client = _client()
+    client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
+    response = client.post("/api/run-daily-ops", headers={"X-Daily-Ops-Token": "secret-token", "Idempotency-Key": "original"})
+    assert response.status_code == 200
+    assert response.get_json()["data"]["replayed"] is True
+    assert response.get_json()["data"]["calibration_report_fresh"] is False
+
+
+def test_ops_storage_failure_returns_safe_structured_diagnostic(monkeypatch):
+    def broken(*args, **kwargs):
+        raise OSError("private/path/and-token")
+    monkeypatch.setattr(api_module, "execute_ops", broken)
+    client = _client()
+    client.application.config["DAILY_OPS_TOKEN"] = "secret-token"
+    for endpoint in ("run-daily-ops", "run-weekly-model-refresh"):
+        response = client.post("/api/" + endpoint, headers={"X-Daily-Ops-Token": "secret-token", "Idempotency-Key": "failure"})
+        assert response.status_code == 500
+        assert response.get_json()["data"]["failed_stage"] == "execution_storage"
+        assert "private/path/and-token" not in response.get_data(as_text=True)

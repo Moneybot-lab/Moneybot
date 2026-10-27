@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import math
@@ -69,14 +70,19 @@ def dated_close_values(history) -> list[tuple[datetime.date, float]]:
     if not hasattr(close_data, "dropna"):
         return []
 
-    close_data = close_data.dropna()
+    # Keep invalid prices in their trading-session positions; dropping a NaN
+    # would silently shift a 5-session outcome to a later session.
     dated: list[tuple[datetime.date, float]] = []
     for idx, value in close_data.items():
         try:
             date_value = pd.Timestamp(idx).date()
         except Exception:  # noqa: BLE001
             continue
-        dated.append((date_value, float(value)))
+        try:
+            close = float(value)
+        except (TypeError, ValueError):
+            close = float("nan")
+        dated.append((date_value, close))
     return dated
 
 
@@ -86,8 +92,11 @@ class OutcomeHistoryCache:
     now: datetime | None = None
     calendar_window_days: int = DEFAULT_HISTORY_CALENDAR_WINDOW_DAYS
     diagnostics: OutcomeHistoryDiagnostics = field(default_factory=OutcomeHistoryDiagnostics)
-    _cache: dict[tuple[str, str], list[tuple[datetime.date, float]]] = field(default_factory=dict)
-    _symbol_cache: dict[str, list[tuple[datetime.date, float]]] = field(default_factory=dict)
+    max_cache_entries: int = 256
+    max_cache_points: int = 100000
+    cache_evictions: int = 0
+    _cache: dict[tuple[str, str], list[tuple[datetime.date, float]]] = field(default_factory=OrderedDict)
+    _symbol_cache: dict[str, list[tuple[datetime.date, float]]] = field(default_factory=OrderedDict)
 
     def __post_init__(self) -> None:
         if self.now is None:
@@ -100,6 +109,17 @@ class OutcomeHistoryCache:
     @property
     def cache_size(self) -> int:
         return len(self._cache) + len(self._symbol_cache)
+
+    def _store(self, cache, key, values):
+        cache[key] = values
+        while self.cache_size > self.max_cache_entries or self.cache_points > self.max_cache_points:
+            target = self._cache if self._cache else self._symbol_cache
+            target.pop(next(iter(target)))
+            self.cache_evictions += 1
+
+    @property
+    def cache_points(self) -> int:
+        return sum(map(len, self._cache.values())) + sum(map(len, self._symbol_cache.values()))
 
     def _download_symbol_range(self, symbol: str, start_date: datetime.date) -> list[tuple[datetime.date, float]]:
         assert self.now is not None
@@ -121,8 +141,22 @@ class OutcomeHistoryCache:
             return []
         return [(date_value, close) for date_value, close in dated_close_values(history) if date_value >= start_date]
 
+    def plan_events(self, events, *, benchmark_symbol=None) -> None:
+        """Plan lazy full-range fetches; retain dates only and extend older ranges."""
+        dates = getattr(self, "_planned_dates", {})
+        for event in events:
+            symbol = str(event.get("symbol") or "").strip().upper()
+            ts = event.get("ts")
+            if not symbol or not isinstance(ts, int):
+                continue
+            date = event_market_date(ts)
+            if symbol not in dates or date < dates[symbol]:
+                dates[symbol] = date
+                self._symbol_cache.pop(symbol, None)
+        self._planned_dates = dates
+
     def preload_events(self, events: list[Dict[str, Any]], *, benchmark_symbol: str = "SPY") -> None:
-        symbol_dates: dict[str, list[datetime.date]] = {}
+        symbol_dates: dict[str, datetime.date] = {}
         assert self.now is not None
         for event in events:
             if not isinstance(event, dict):
@@ -134,20 +168,30 @@ class OutcomeHistoryCache:
             event_date = event_market_date(ts)
             if event_date >= self.now.date():
                 continue
-            symbol_dates.setdefault(symbol, []).append(event_date)
+            symbol_dates[symbol] = min(symbol_dates.get(symbol, event_date), event_date)
         if symbol_dates:
-            earliest = min(min(dates) for dates in symbol_dates.values())
-            symbol_dates.setdefault(benchmark_symbol.upper(), []).append(earliest)
+            earliest = min(symbol_dates.values())
+            symbol_dates[benchmark_symbol.upper()] = min(symbol_dates.get(benchmark_symbol.upper(), earliest), earliest)
+        # Eviction must not change full-range preload semantics into the shorter
+        # on-demand calendar window used by callers without a preload plan.
+        planned = getattr(self, "_planned_dates", {})
+        for symbol, date in symbol_dates.items():
+            if symbol not in planned or date < planned[symbol]:
+                planned[symbol] = date
+                self._symbol_cache.pop(symbol, None)
+        self._planned_dates = planned
         for symbol, dates in symbol_dates.items():
             if symbol in self._symbol_cache:
                 self.diagnostics.history_cache_hits += 1
                 continue
             self.diagnostics.history_cache_misses += 1
-            self._symbol_cache[symbol] = self._download_symbol_range(symbol, min(dates))
+            self._store(self._symbol_cache, symbol, self._download_symbol_range(symbol, dates))
 
     def diagnostics_payload(self) -> dict[str, int]:
         payload = self.diagnostics.as_dict()
         payload["history_cache_size"] = self.cache_size
+        payload["history_cache_points"] = self.cache_points
+        payload["history_cache_evictions"] = self.cache_evictions
         return payload
 
     def closes_for_event(self, symbol: str, ts: int) -> list[float]:
@@ -158,6 +202,12 @@ class OutcomeHistoryCache:
         if symbol_key in self._symbol_cache:
             self.diagnostics.history_cache_hits += 1
             return [close for date_value, close in self._symbol_cache[symbol_key] if date_value >= event_date]
+        planned = getattr(self, "_planned_dates", {})
+        if symbol_key in planned:
+            self.diagnostics.history_cache_misses += 1
+            dated = self._download_symbol_range(symbol_key, planned[symbol_key])
+            self._store(self._symbol_cache, symbol_key, dated)
+            return [close for date, close in dated if date >= event_date]
         key = (symbol_key, event_date.isoformat())
         if key in self._cache:
             self.diagnostics.history_cache_hits += 1
@@ -169,7 +219,7 @@ class OutcomeHistoryCache:
         assert self.now is not None
         safe_end_date = min(end_date, self.now.date() + timedelta(days=1))
         if safe_end_date <= start_date:
-            self._cache[key] = []
+            self._store(self._cache, key, [])
             return []
         try:
             history = self.download(
@@ -183,11 +233,11 @@ class OutcomeHistoryCache:
             )
         except Exception:  # noqa: BLE001
             self.diagnostics.history_download_errors += 1
-            self._cache[key] = []
+            self._store(self._cache, key, [])
             return []
 
         dated = [(date_value, close) for date_value, close in dated_close_values(history) if date_value >= event_date]
-        self._cache[key] = dated
+        self._store(self._cache, key, dated)
         return [close for _, close in dated]
 
     def future_return(self, symbol: str, ts: int, days: int) -> float | None:
@@ -196,13 +246,14 @@ class OutcomeHistoryCache:
             self.diagnostics.increment_insufficient(days)
             return None
         start_price = float(closes[0])
-        if start_price == 0.0:
+        if not all(math.isfinite(p) and p > 0 for p in closes[:days + 1]):
             return None
         return round((float(closes[days]) - start_price) / start_price, 4)
 
     def price_path(self, symbol: str, ts: int, days: int) -> list[float]:
         closes = self.closes_for_event(symbol, ts)
-        return closes[: max(0, int(days)) + 1]
+        path = closes[: max(0, int(days)) + 1]
+        return path if all(math.isfinite(price) and price > 0 for price in path) else []
 
     def benchmark_return(self, ts: int, days: int) -> float | None:
         return self.future_return("SPY", ts, days)

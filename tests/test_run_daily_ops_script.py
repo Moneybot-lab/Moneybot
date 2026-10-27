@@ -1,4 +1,5 @@
 import os
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -19,9 +20,11 @@ def test_daily_ops_workflow_has_layered_bounded_timeouts():
     assert '[[ ! "$http_code" =~ ^2[0-9][0-9]$ ]]' in workflow
 
 
-def _daily_ops_workflow_script() -> str:
-    workflow = Path(".github/workflows/moneybot-daily-ops.yml").read_text(encoding="utf-8")
-    step = workflow.split("- name: Trigger /api/run-daily-ops", 1)[1]
+def _daily_ops_workflow_script(*, weekly=False) -> str:
+    name = "moneybot-weekly-refresh.yml" if weekly else "moneybot-daily-ops.yml"
+    workflow = (Path(".github/workflows") / name).read_text(encoding="utf-8")
+    endpoint = "run-weekly-model-refresh" if weekly else "run-daily-ops"
+    step = workflow.split("- name: Trigger /api/" + endpoint, 1)[1]
     block = step.split("        run: |\n", 1)[1]
     lines = []
     for line in block.splitlines():
@@ -31,7 +34,7 @@ def _daily_ops_workflow_script() -> str:
     return "\n".join(lines)
 
 
-def _run_workflow_script(tmp_path: Path, *, mode: str) -> subprocess.CompletedProcess[str]:
+def _run_workflow_script(tmp_path: Path, *, mode: str, weekly=False) -> subprocess.CompletedProcess[str]:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake_curl = fake_bin / "curl"
@@ -54,10 +57,10 @@ def _run_workflow_script(tmp_path: Path, *, mode: str) -> subprocess.CompletedPr
         MONEYBOT_BASE_URL="https://example.invalid",
         DAILY_OPS_TOKEN="never-print-this-secret",
         FAKE_MODE=mode,
-        FAKE_BODY='{"data":{"success":false,"returncode":1,"stderr":"child failed"},"request_id":"req-1"}',
+        FAKE_BODY=json.dumps({"data": {"success": mode == "success", "returncode": 0 if mode == "success" else 1, "failed_stage": "calibration", "stderr": "private payload never-print-this-secret"}, "request_id": "req-1"}),
     )
     return subprocess.run(
-        ["bash", "-c", _daily_ops_workflow_script()],
+        ["bash", "-c", _daily_ops_workflow_script(weekly=weekly)],
         capture_output=True,
         text=True,
         check=False,
@@ -79,7 +82,8 @@ def test_daily_ops_workflow_prints_500_body_and_fails(tmp_path):
 
     assert completed.returncode != 0
     assert "Daily Ops HTTP status: 500" in completed.stdout
-    assert '"stderr":"child failed"' in completed.stdout
+    assert '"failed_stage":"calibration"' in completed.stdout
+    assert "private payload" not in completed.stdout
     assert "non-success HTTP status: 500" in completed.stdout
 
 
@@ -166,8 +170,10 @@ def test_run_daily_ops_main_reports_failed_command_diagnostics(monkeypatch, tmp_
     assert "DAILY_OPS_FAILED script=day12_materialize_outcomes.py returncode=1" in diagnostics
     assert "failed_script=day12_materialize_outcomes.py" in diagnostics
     assert f"failed_command={sys.executable} /tmp/day12_materialize_outcomes.py" in diagnostics
-    assert "stdout_tail=stdout tail" in diagnostics
-    assert "stderr_tail=stderr tail" in diagnostics
+    assert "stdout_tail=suppressed" in diagnostics
+    assert "stderr_tail=stage subprocess failed" in diagnostics
+    assert "stdout tail" not in diagnostics
+    assert "stderr tail" not in diagnostics
 
 
 def test_day13_scripts_bootstrap_project_root_for_imports(tmp_path):
@@ -189,3 +195,22 @@ def test_day13_scripts_bootstrap_project_root_for_imports(tmp_path):
             env=env,
         )
         assert completed.returncode == 0, f"{script} failed to import with stderr={completed.stderr}"
+
+
+@pytest.mark.parametrize("weekly", [False, True])
+@pytest.mark.parametrize("mode", ["success", "failure", "transport"])
+def test_both_workflows_have_truthful_diagnostics_without_post_retries(tmp_path, weekly, mode):
+    completed = _run_workflow_script(tmp_path, mode=mode, weekly=weekly)
+    assert (completed.returncode == 0) == (mode == "success")
+    assert '"request_id":"req-1"' in completed.stdout
+    assert "never-print-this-secret" not in completed.stdout + completed.stderr
+    assert "private payload" not in completed.stdout + completed.stderr
+    script = _daily_ops_workflow_script(weekly=weekly)
+    assert "--retry" not in script
+    assert "Idempotency-Key:" in script
+    assert "--max-time " in script
+    if mode == "failure":
+        assert "HTTP status: 500" in completed.stdout
+        assert '"failed_stage":"calibration"' in completed.stdout
+    if mode == "transport":
+        assert "transport layer" in completed.stdout

@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
-      group: moneybot-daily-ops
+      group: moneybot-production-ops
       cancel-in-progress: false
 
     steps:
@@ -32,29 +32,50 @@ jobs:
           set -euo pipefail
           response_file="$(mktemp)"
           trap 'rm -f "$response_file"' EXIT
-
-          http_code="$(curl -sS --retry 3 --retry-delay 3 --retry-all-errors \
-            --connect-timeout 15 --max-time 720 --show-error \
+          # No automatic POST retries: a lost response does not prove the job stopped.
+          # Re-running this Actions run reuses its durable backend receipt for seven days.
+          http_code="$(curl -sS --connect-timeout 15 --max-time 720 --max-filesize 65536 \
             --output "$response_file" --write-out "%{http_code}" \
             -X POST "$MONEYBOT_BASE_URL/api/run-daily-ops" \
             -H "X-Daily-Ops-Token: $DAILY_OPS_TOKEN" \
-            -H "Content-Type: application/json")" || {
-              curl_status=$?
-              echo "Daily Ops request failed at transport layer; curl exit=$curl_status"
-              if [ -s "$response_file" ]; then
-                echo "Daily Ops API response:"
-                cat "$response_file"
-              fi
-              exit "$curl_status"
-            }
-
-          echo "Daily Ops HTTP status: $http_code"
-          if [ -s "$response_file" ]; then
-            echo "Daily Ops API response:"
-            cat "$response_file"
+            -H "Idempotency-Key: run-daily-ops-${GITHUB_RUN_ID:-local}" \
+            -H "Content-Type: application/json")" || curl_status=$?
+          export response_file
+          # Parse a bounded body and print only operational fields; never raw HTML/payloads.
+          python3 - <<'PYCODE'
+          import json, os, re
+          try:
+              with open(os.environ["response_file"], "rb") as fh:
+                  body = json.loads(fh.read(65537))
+              data = body.get("data", {})
+              safe = {k: data[k] for k in ("success", "status", "returncode", "failed_stage", "replayed") if k in data}
+              safe["request_id"] = body.get("request_id")
+              rendered = json.dumps(safe, separators=(",", ":"))
+              for key in ("DAILY_OPS_TOKEN", "MONEYBOT_BASE_URL"):
+                  value = os.environ.get(key)
+                  if value:
+                      rendered = rendered.replace(value, "[REDACTED]")
+              print(re.sub(r"[\x00-\x1f\x7f]", "", rendered)[:4096])
+          except (ValueError, OSError, AttributeError, TypeError):
+              print("Backend response unavailable or invalid JSON (body suppressed)")
+          PYCODE
+          if [ "${curl_status:-0}" -ne 0 ]; then
+            echo "Daily Ops request failed at transport layer; curl exit=$curl_status"
+            exit "$curl_status"
           fi
-
+          echo "Daily Ops HTTP status: $http_code"
           if [[ ! "$http_code" =~ ^2[0-9][0-9]$ ]]; then
             echo "Daily Ops returned non-success HTTP status: $http_code"
             exit 1
           fi
+          python3 - <<'PYCODE'
+          import json, os, sys
+          try:
+              with open(os.environ["response_file"], "rb") as fh:
+                  success = json.loads(fh.read(65537)).get("data", {}).get("success") is True
+          except (ValueError, OSError, AttributeError):
+              success = False
+          if not success:
+              print("Backend did not confirm successful execution")
+          sys.exit(0 if success else 1)
+          PYCODE

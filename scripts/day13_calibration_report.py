@@ -5,6 +5,9 @@ import argparse
 import json
 import math
 import sys
+import time
+from functools import lru_cache
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,9 +15,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from moneybot.services.decision_log import read_decision_events
+from moneybot.services.decision_log import iter_decision_events
 from moneybot.services.outcome_history_provider import MassivePreferredHistoryDownload
 from moneybot.services.outcome_tracking import OutcomeHistoryCache
+from moneybot.services.ops_runtime import atomic_write_text, peak_rss_mib
 from moneybot.services.runtime_paths import (
     day13_calibration_report_path,
     decision_events_log_path,
@@ -22,13 +26,16 @@ from moneybot.services.runtime_paths import (
 
 _outcome_history_download: MassivePreferredHistoryDownload | None = None
 _outcome_history_cache: OutcomeHistoryCache | None = None
+_outcome_providers: OrderedDict = OrderedDict()
 
 
 def _configure_outcome_history(events: list[dict]) -> None:
     global _outcome_history_download, _outcome_history_cache
     _outcome_history_download = MassivePreferredHistoryDownload()
     _outcome_history_cache = OutcomeHistoryCache(download=_outcome_history_download)
-    _outcome_history_cache.preload_events(events, benchmark_symbol="SPY")
+    _future_return.cache_clear()
+    _outcome_providers.clear()
+    # Download lazily, only after eligibility checks. Never preload unused SPY history.
 
 
 def history_eligible_events(
@@ -58,11 +65,16 @@ def history_eligible_events(
     return eligible
 
 
+@lru_cache(maxsize=50000)
 def _future_return(symbol: str, start_ts: int, days: int) -> float | None:
     """Compatibility seam used by tests; production is configured Massive-first."""
     if _outcome_history_cache is None:
         return None
-    return _outcome_history_cache.future_return(symbol, start_ts, days)
+    value = _outcome_history_cache.future_return(symbol, start_ts, days)
+    _outcome_providers[(symbol, start_ts, days)] = _outcome_history_download.provider_for_symbol(symbol) if _outcome_history_download else "unknown"
+    if len(_outcome_providers) > 50000:
+        _outcome_providers.popitem(last=False)
+    return value
 
 
 def _text_or_unknown(value) -> str:
@@ -88,7 +100,7 @@ def _probability_up(payload: dict, snapshot: dict):
     )
     return (
         value
-        if isinstance(value, (int, float)) and not isinstance(value, bool)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
         else None
     )
 
@@ -128,6 +140,8 @@ def _event_provider(event: dict, payload: dict, snapshot: dict) -> str:
 
 
 def _signal_completeness(payload: dict, snapshot: dict, provider: str) -> str:
+    if "_signal_completeness" in payload:
+        return payload["_signal_completeness"]
     features = (
         payload.get("features")
         if isinstance(payload.get("features"), dict)
@@ -168,6 +182,24 @@ def _signal_completeness(payload: dict, snapshot: dict, provider: str) -> str:
     if groups_present > 0:
         return "partial_signal"
     return "quote_only"
+
+
+def compact_calibration_event(event: dict) -> dict:
+    """Project exact diagnostic/eligibility values before discarding snapshots."""
+    payload, snapshot = _event_payload(event), _event_snapshot(event)
+    provider = _event_provider(event, payload, snapshot)
+    return {
+        "symbol": event.get("symbol"), "ts": event.get("ts"),
+        "endpoint": event.get("endpoint"),
+        "decision_source": event.get("decision_source") or payload.get("decision_source"),
+        "payload": {
+            "probability_up": _probability_up(payload, snapshot),
+            "forecast_horizon": _event_forecast_horizon(payload, snapshot),
+            "model_version": payload.get("model_version") or snapshot.get("model_version"),
+            "provider": provider,
+            "_signal_completeness": _signal_completeness(payload, snapshot, provider),
+        },
+    }
 
 
 def _segment_key(row: dict, segment: str):
@@ -363,7 +395,7 @@ def calibration_rows_from_events(
         if eligibility_diagnostics is not None:
             eligibility_diagnostics["mature_fitted_rows"] += 1
         outcome_provider = (
-            _outcome_history_download.provider_for_symbol(symbol)
+            _outcome_providers.get(cache_key, _outcome_history_download.provider_for_symbol(symbol))
             if _outcome_history_download is not None
             else "test_or_custom"
         )
@@ -546,20 +578,11 @@ def calibration_summary(rows: list[dict], *, bins: int = 10) -> dict:
     if not math.isfinite(slope_delta):
         slope_delta = 0.0
 
-    calibrated_rows = [
-        {
-            **row,
-            "calibrated_predicted": _apply_platt_calibration(
-                float(row["predicted"]),
-                intercept=intercept_delta,
-                slope_delta=slope_delta,
-            ),
-        }
+    calibrated_brier = float(sum(
+        (_apply_platt_calibration(float(row["predicted"]), intercept=intercept_delta,
+                                  slope_delta=slope_delta) - float(row["observed"])) ** 2
         for row in rows
-    ]
-    calibrated_brier = float(
-        _brier_score(calibrated_rows, prediction_key="calibrated_predicted") or brier
-    )
+    ) / len(rows) or brier)
     effective_brier = min(float(brier), calibrated_brier)
 
     return {
@@ -596,14 +619,18 @@ def main() -> None:
 
     read_cap = max(1, int(args.read_cap))
     read_limit = min(max(1, int(args.limit)), read_cap)
+    started = time.monotonic()
+    _configure_outcome_history([])
     events = []
     rows: list[dict] = []
     eligibility_diagnostics: dict[str, int] = {}
     while True:
-        events = read_decision_events(args.input, limit=read_limit)
-        _configure_outcome_history(
-            history_eligible_events(events, horizon_days=max(1, args.horizon_days))
-        )
+        # Release the previous compact batch before decoding the next one.
+        events.clear()
+        events = [compact_calibration_event(event) for event in
+                  iter_decision_events(args.input, limit=read_limit)]
+        _outcome_history_cache.plan_events(
+            history_eligible_events(events, horizon_days=max(1, args.horizon_days)))
         eligibility_diagnostics = {
             "rows_matching_horizon": 0,
             "rows_excluded_horizon_mismatch": 0,
@@ -634,6 +661,7 @@ def main() -> None:
     warnings = _mixed_decision_warnings(rows, input_profile, input_segments)
     payload = {
         "schema_version": "calibration_report.v1",
+        "status": "success" if len(rows) >= 30 else "insufficient_data",
         "computed_at_utc": datetime.now(timezone.utc).isoformat(),
         "input_path": args.input,
         "rows_scanned": len(events),
@@ -661,11 +689,22 @@ def main() -> None:
             for provider in sorted({str(row.get("outcome_provider")) for row in rows})
         },
     }
+    history_failed = bool(_outcome_history_cache and _outcome_history_cache.diagnostics.history_download_errors)
+    if history_failed:
+        payload["status"] = "degraded"
     serialized = json.dumps(payload, indent=2, sort_keys=True)
-    print(serialized)
+    print(json.dumps({"stage": "calibration", "status": payload["status"],
+                      "rows_scanned": len(events), **eligibility_diagnostics,
+                      **(_outcome_history_cache.diagnostics_payload() if _outcome_history_cache else {}),
+                      "history_requests": _outcome_history_download.massive_requests,
+                      "duration_seconds": round(time.monotonic() - started, 3),
+                      "peak_rss_mib": peak_rss_mib()}))
     if args.output:
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.output).write_text(serialized, encoding="utf-8")
+        output = Path(args.output)
+        atomic_write_text(output.with_suffix(".failed.json") if history_failed else output, serialized)
+    if history_failed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
