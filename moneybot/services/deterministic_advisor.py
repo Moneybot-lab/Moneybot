@@ -11,13 +11,13 @@ from .deterministic_model import BaselineModelArtifact, default_baseline_artifac
 from .forecast_horizon import resolve_forecast_horizon, LEGACY_MODEL_FORECAST_HORIZONS
 from .prediction_evidence import make_forecast, OUTCOME_CONTRACT
 from .model_metadata import load_artifact_metadata
+from .serving_feature_contract import resolve_serving_feature_contract
 from .alpha_atlas_feature_contract import (
     ALPHA_ATLAS_V2_FEATURES,
     NON_SERVABLE_V2_FEATURES,
     build_alpha_atlas_event_features,
 )
 from .alpha_atlas_v3_features import (
-    ALPHA_ATLAS_V3_FEATURES,
     FEATURE_ENGINE_VERSION,
     build_alpha_atlas_v3_features,
 )
@@ -106,6 +106,8 @@ class DeterministicQuickAdvisor:
         self.market_history_service = service
 
     def _load_artifact(self) -> None:
+        self._logged_block_reasons: set[str] = set()
+        self.last_feature_contract_diagnostics = None
         try:
             self.artifact = load_artifact(self.artifact_path)
             self.artifact_metadata = load_artifact_metadata(self.artifact_path)
@@ -149,6 +151,20 @@ class DeterministicQuickAdvisor:
         symbol: str | None = None,
     ) -> tuple[np.ndarray, list[str], Dict[str, Any]]:
         assert self.artifact is not None
+        contract = resolve_serving_feature_contract(self.artifact)
+        if not contract.supported and contract.classification != "BLOCKED_V2_LEAKAGE":
+            diagnostics = {
+                "model_version": self.artifact.version,
+                "feature_contract_classification": contract.classification,
+                "feature_contract_servable": False,
+                "feature_contract_reason": contract.reason,
+                "feature_contract_source": contract.builder,
+                "feature_contract_expected_count": contract.expected_count,
+                "feature_contract_available_count": 0,
+                "feature_contract_imputed_count": 0,
+                "feature_contract_missing_features": list(self.artifact.feature_columns),
+            }
+            return np.empty(0), [], diagnostics
 
         technical = signal_data.get("technical") or {}
 
@@ -186,9 +202,7 @@ class DeterministicQuickAdvisor:
                 )
             )
 
-        is_v3_contract = set(self.artifact.feature_columns) == set(
-            ALPHA_ATLAS_V3_FEATURES
-        )
+        is_v3_contract = contract.classification == "SUPPORTED_V3"
         history_diagnostics: Dict[str, Any] = {}
         if is_v3_contract:
             symbol_history: Dict[str, Any] = {}
@@ -226,6 +240,8 @@ class DeterministicQuickAdvisor:
                 row[idx] = float(val)
 
         diagnostics = {
+            "model_version": self.artifact.version,
+            "feature_contract_classification": contract.classification,
             "feature_contract_expected_count": len(self.artifact.feature_columns),
             "feature_contract_available_count": len(self.artifact.feature_columns) - len(imputed),
             "feature_contract_imputed_count": len(imputed),
@@ -247,7 +263,7 @@ class DeterministicQuickAdvisor:
             "feature_contract_servable": (
                 len(imputed) <= 2 and len(imputed) < len(self.artifact.feature_columns)
                 if is_v3_contract
-                else not is_v2_contract
+                else contract.supported and len(imputed) < len(self.artifact.feature_columns)
             ),
             "feature_contract_blocking_features": sorted(
                 set(self.artifact.feature_columns).intersection(NON_SERVABLE_V2_FEATURES)
@@ -261,6 +277,11 @@ class DeterministicQuickAdvisor:
             ),
             **history_diagnostics,
         }
+        if row.shape != (contract.expected_count,) or not np.isfinite(row).all():
+            diagnostics["feature_contract_servable"] = False
+            diagnostics["feature_contract_reason"] = "invalid_feature_vector"
+        elif contract.supported and not diagnostics["feature_contract_servable"]:
+            diagnostics["feature_contract_reason"] = "insufficient_feature_inputs"
         return row, imputed, diagnostics
 
     def _is_in_rollout(self, symbol: str | None) -> bool:
@@ -317,6 +338,11 @@ class DeterministicQuickAdvisor:
         if not self.enabled:
             return None
         if self.artifact is None:
+            self.last_feature_contract_diagnostics = {
+                "feature_contract_classification": "INVALID_ARTIFACT",
+                "feature_contract_servable": False,
+                "feature_contract_reason": "invalid_model_artifact",
+            }
             return None
 
         row, imputed, contract = self._build_feature_row_with_diagnostics(
@@ -324,11 +350,10 @@ class DeterministicQuickAdvisor:
         )
         self.last_feature_contract_diagnostics = contract
         if not contract["feature_contract_servable"]:
-            logging.error(
-                "Deterministic prediction blocked for %s: %s",
-                self.artifact.version,
-                contract["feature_contract_reason"],
-            )
+            reason = contract["feature_contract_reason"]
+            if reason not in self._logged_block_reasons:
+                logging.warning("Deterministic inference blocked: %s", reason)
+                self._logged_block_reasons.add(reason)
             return None
         raw_prob_up = float(predict_proba(self.artifact, row)[0])
         calibration_applied = bool(

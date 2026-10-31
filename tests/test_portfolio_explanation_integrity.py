@@ -215,3 +215,36 @@ def test_suitability_without_enforcement_keeps_the_selected_reason(portfolio, mo
     assert row["advice"] == "BUY"
     assert row["suitability"]["changed"] is False
     assert row["advice_reason"] == "BUY: authoritative synthetic reason."
+
+
+def test_unsupported_actual_schema_uses_rule_fallback_without_model_evidence(portfolio, tmp_path, monkeypatch):
+    from unittest.mock import Mock
+    from moneybot.services.alpha_atlas_v3_features import ALPHA_ATLAS_V3_FEATURES
+    from moneybot.services.deterministic_advisor import DeterministicQuickAdvisor
+    from moneybot.services.deterministic_model import BaselineModelArtifact, save_artifact
+    from moneybot.services.historical_evidence import project_prediction
+
+    columns = list(ALPHA_ATLAS_V3_FEATURES[:-1])
+    path = tmp_path / 'unsupported.json'
+    save_artifact(BaselineModelArtifact('candidate-alpha-atlas-v31-clean-v1', columns,
+                  [0.]*10, [1.]*10, [.1]*10, .1, .55), path)
+    advisor = DeterministicQuickAdvisor(enabled=True, artifact_path=str(path))
+    app = portfolio.client.application
+    app.extensions['deterministic_quick_advisor'] = advisor
+    app.extensions['ai_advisor_service'] = AIAdvisorService(enabled=False)
+    logger = Mock()
+    app.extensions['decision_logger'] = logger
+    scorer = Mock(side_effect=AssertionError('unsupported scoring'))
+    monkeypatch.setattr('moneybot.services.deterministic_advisor.predict_proba', scorer)
+    response = portfolio.client.get('/api/user-watchlist')
+    assert response.status_code == 200
+    row = response.get_json()['enriched_items'][0]
+    assert row['deterministic_portfolio'] is None
+    assert row['advice'] == 'SELL'  # same existing rule as disabled model
+    event = logger.log.call_args.kwargs
+    assert event['decision_source'] == 'rule_based'
+    assert event['forecast'] is None
+    assert event['payload']['probability_up'] is None
+    projected, _ = project_prediction(event)
+    assert projected is None
+    scorer.assert_not_called()
