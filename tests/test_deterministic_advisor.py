@@ -53,7 +53,7 @@ def test_predict_quick_decision_returns_structured_payload(tmp_path: Path):
 
 
 def test_predict_quick_decision_rationale_uses_loaded_alpha_atlas_version(tmp_path: Path):
-    artifact_path = _write_artifact(tmp_path, version="alpha-atlas-v2")
+    artifact_path = _write_artifact(tmp_path, version="alpha-atlas-v1-fallback")
     svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(artifact_path))
 
     out = svc.predict_quick_decision(
@@ -62,10 +62,10 @@ def test_predict_quick_decision_rationale_uses_loaded_alpha_atlas_version(tmp_pa
     )
 
     assert out is not None
-    assert out["model_version"] == "alpha-atlas-v2"
-    assert out["rationale"].startswith("Alpha Atlas v2 probability-up=")
+    assert out["model_version"] == "alpha-atlas-v1-fallback"
+    assert out["rationale"].startswith("Alpha Atlas v1-fallback probability-up=")
 
-def test_predict_quick_decision_imputes_missing_features(tmp_path: Path):
+def test_predict_quick_decision_rejects_fully_unavailable_features(tmp_path: Path):
     artifact_path = _write_artifact(tmp_path)
     svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(artifact_path))
 
@@ -74,9 +74,8 @@ def test_predict_quick_decision_imputes_missing_features(tmp_path: Path):
         quote_data={"price": 99.0, "change_percent": None, "quote_source": "yfinance", "diagnostics": {}},
     )
 
-    assert out is not None
-    assert "return_1d" in out["imputed_features"]
-    assert "rsi_14" in out["imputed_features"]
+    assert out is None
+    assert svc.last_feature_contract_diagnostics["feature_contract_reason"] == "insufficient_feature_inputs"
 
 
 def test_predict_portfolio_position_returns_hold_when_context_missing(tmp_path: Path):
@@ -291,7 +290,7 @@ def test_predict_portfolio_position_supports_separate_rollout_percentage(tmp_pat
 
 
 def test_prediction_includes_embedded_forecast_horizon_without_changing_probability(tmp_path: Path):
-    artifact_path = _write_artifact(tmp_path, version="custom-1d-model")
+    artifact_path = _write_artifact(tmp_path, version="alpha-atlas-v1")
     from moneybot.services.deterministic_model import load_artifact
     artifact = load_artifact(artifact_path)
     artifact.forecast_horizon = "1d"
@@ -333,7 +332,7 @@ def test_quote_only_inference_is_explicitly_ineligible(tmp_path):
     from moneybot.services.historical_evidence import project_prediction
     svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(_write_artifact(tmp_path)))
     result = svc.predict_quick_decision(symbol="ABC", signal_data={"diagnostics": {"provider": "portfolio_quote_only"}},
-                                       quote_data={"price": 100, "event_timestamp": datetime.now(timezone.utc).isoformat()})
+                                       quote_data={"price": 100, "change_percent": 1, "event_timestamp": datetime.now(timezone.utc).isoformat()})
     assert result["forecast"]["input_kind"] == "quote_only"
     row, reasons = project_prediction({"ts": int(datetime.now(timezone.utc).timestamp()), "symbol": "ABC", "decision_source": "deterministic_model", "forecast": result["forecast"]})
     assert row is None
@@ -342,7 +341,7 @@ def test_quote_only_inference_is_explicitly_ineligible(tmp_path):
 
 def test_evidence_serialization_failure_preserves_user_recommendation(tmp_path, monkeypatch):
     svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(_write_artifact(tmp_path)))
-    kwargs = {"symbol": "ABC", "signal_data": {}, "quote_data": {"price": 100}}
+    kwargs = {"symbol": "ABC", "signal_data": {"volume_ratio": 1}, "quote_data": {"price": 100}}
     expected = svc.predict_quick_decision(**kwargs)
     def broken(**kwargs):
         raise ValueError("invalid telemetry")
@@ -353,7 +352,8 @@ def test_evidence_serialization_failure_preserves_user_recommendation(tmp_path, 
     assert actual["forecast"] is None
 
 
-def test_unknown_model_label_contract_is_not_assumed_from_horizon(tmp_path):
+def test_unknown_model_version_cannot_qualify_from_day1_schema(tmp_path):
     svc = DeterministicQuickAdvisor(enabled=True, artifact_path=str(_write_artifact(tmp_path, version="unreviewed-other-model")))
     result = svc.predict_quick_decision(symbol="ABC", signal_data={}, quote_data={"price": 100})
-    assert result["forecast"]["outcome_contract"] == "unknown"
+    assert result is None
+    assert svc.last_feature_contract_diagnostics["feature_contract_classification"] == "UNSUPPORTED_SCHEMA"
