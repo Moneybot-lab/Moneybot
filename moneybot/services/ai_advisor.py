@@ -103,6 +103,15 @@ class AIAdvisorService:
         self._cache[key] = dict(payload)
         self._cache_ts[key] = time.time()
 
+    def _portfolio_provider_cooldown(self, failure: str) -> None:
+        # Start after the exhausted retry, not before its network wait. Reuse
+        # the existing service cooldown; never cache a user's position/advice.
+        self._disabled_until = time.time() + float(self.failure_cooldown_s)
+        logging.warning(
+            "AI portfolio provider cooldown: failure=%s cooldown_seconds=%s",
+            failure, self.failure_cooldown_s,
+        )
+
     def _fallback(self, recommendation: str, rationale: str, reason: str = "disabled_or_unavailable") -> Dict[str, Any]:
         return {
             "mode": "rule_based",
@@ -514,6 +523,7 @@ class AIAdvisorService:
                 }
             except requests.Timeout:
                 if idx == len(payloads) - 1:
+                    self._portfolio_provider_cooldown("timeout")
                     return self._portfolio_fallback(
                         entry_price=entry_price,
                         current_price=current_price,
@@ -525,6 +535,7 @@ class AIAdvisorService:
                 status_code = getattr(getattr(exc, "response", None), "status_code", None)
                 if isinstance(status_code, int) and status_code >= 500:
                     if idx == len(payloads) - 1:
+                        self._portfolio_provider_cooldown("http_5xx")
                         return self._portfolio_fallback(
                             entry_price=entry_price,
                             current_price=current_price,
