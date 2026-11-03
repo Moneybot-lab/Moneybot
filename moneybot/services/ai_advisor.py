@@ -7,6 +7,8 @@ from typing import Any, Dict, Optional
 
 import requests
 
+from .request_timing import call as timing_call, timed, count
+
 
 
 
@@ -345,6 +347,7 @@ class AIAdvisorService:
 
         return normalized
 
+    @timed("advice.ai")
     def enhance_portfolio_position(
         self,
         *,
@@ -359,6 +362,7 @@ class AIAdvisorService:
             score = signal_data.get("hybrid_score")
 
         if not self.enabled:
+            count("ai.disabled")
             return self._portfolio_fallback(
                 entry_price=entry_price,
                 current_price=current_price,
@@ -367,6 +371,7 @@ class AIAdvisorService:
             )
 
         if self.provider != "openai":
+            count("ai.unsupported")
             return self._portfolio_fallback(
                 entry_price=entry_price,
                 current_price=current_price,
@@ -376,6 +381,7 @@ class AIAdvisorService:
 
         now = time.time()
         if now < self._disabled_until:
+            count("ai.cooldown_skip")
             return self._portfolio_fallback(
                 entry_price=entry_price,
                 current_price=current_price,
@@ -471,10 +477,11 @@ class AIAdvisorService:
 
         for idx, payload in enumerate(payloads):
             try:
-                resp = requests.post(url, headers=headers, json=payload, timeout=self.timeout_s)
+                resp = timing_call("provider.openai", requests.post, url, headers=headers, json=payload, timeout=self.timeout_s)
                 resp.raise_for_status()
                 raw = self._extract_response_text(resp.json())
                 if not raw or not _is_valid_json_object_text(raw):
+                    count("ai.malformed")
                     if idx < len(payloads) - 1:
                         continue
                     return self._portfolio_fallback(
@@ -484,6 +491,8 @@ class AIAdvisorService:
                         reason="empty_or_unparseable_provider_response",
                     )
                 parsed = json.loads(raw)
+                if not {"advice", "advice_reason", "risk_notes", "next_checks"}.issubset(parsed):
+                    count("ai.missing_fields")
                 model_advice = str(parsed.get("advice") or "HOLD").strip().upper()
                 advice = self._post_process_portfolio_advice(
                     advice=model_advice,
@@ -512,6 +521,7 @@ class AIAdvisorService:
                     advice_reason = f"{advice}: Portfolio advice selected {advice}; no supporting provider explanation was available."
                 risk_notes = parsed.get("risk_notes") if isinstance(parsed.get("risk_notes"), list) else []
                 next_checks = parsed.get("next_checks") if isinstance(parsed.get("next_checks"), list) else []
+                count("ai.enhanced")
                 return {
                     "mode": "ai_enhanced",
                     "advice": advice,
@@ -524,6 +534,7 @@ class AIAdvisorService:
             except requests.Timeout:
                 if idx == len(payloads) - 1:
                     self._portfolio_provider_cooldown("timeout")
+                    count("ai.cooldown_timeout")
                     return self._portfolio_fallback(
                         entry_price=entry_price,
                         current_price=current_price,
@@ -536,6 +547,7 @@ class AIAdvisorService:
                 if isinstance(status_code, int) and status_code >= 500:
                     if idx == len(payloads) - 1:
                         self._portfolio_provider_cooldown("http_5xx")
+                        count("ai.cooldown_5xx")
                         return self._portfolio_fallback(
                             entry_price=entry_price,
                             current_price=current_price,
@@ -551,6 +563,7 @@ class AIAdvisorService:
                     reason="provider_error",
                 )
             except Exception:  # noqa: BLE001
+                count("ai.parse_or_other_error")
                 return self._portfolio_fallback(
                     entry_price=entry_price,
                     current_price=current_price,

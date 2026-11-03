@@ -15,6 +15,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import requests
+from moneybot.services.request_timing import call as timing_call
 import yfinance as yf
 from bs4 import BeautifulSoup
 
@@ -167,7 +168,7 @@ def fetch_price_data(ticker: str) -> Tuple[pd.DataFrame, float]:
         history = cached["df"]
     else:
         try:
-            history = tk.history(period="6mo", interval="1d", auto_adjust=False)
+            history = timing_call("provider.yahoo.history", tk.history, period="6mo", interval="1d", auto_adjust=False)
             if history.empty:
                 raise RuntimeError("Empty history")
             HISTORY_CACHE[ticker] = {"df": history, "ts": now}
@@ -202,7 +203,7 @@ def fetch_fundamentals(ticker: str) -> Dict:
         info_rate_limited = True
     else:
         try:
-            info = tk.info or {}
+            info = timing_call("provider.yahoo.info", lambda: tk.info) or {}
             INFO_CACHE[ticker] = {"data": info, "ts": now}
         except Exception as exc:
             info = {}
@@ -219,7 +220,7 @@ def fetch_fundamentals(ticker: str) -> Dict:
     if revenue_growth is None:
         try:
             if ticker in HISTORY_CACHE:  # reuse cached history if possible
-                qf = tk.quarterly_financials
+                qf = timing_call("provider.yahoo.financials", lambda: tk.quarterly_financials)
                 # ... same logic as before ...
             else:
                 # fallback skip if no history
@@ -232,7 +233,7 @@ def fetch_fundamentals(ticker: str) -> Dict:
     subs_yoy = None
     if not info_rate_limited:
         try:
-            res = requests.get(f"https://finance.yahoo.com/quote/{ticker}", headers=HEADERS, timeout=2)
+            res = timing_call("provider.yahoo.http", requests.get, f"https://finance.yahoo.com/quote/{ticker}", headers=HEADERS, timeout=2)
             res.raise_for_status()
             html = res.text
             active_users_qoq = _find_pct_metric(html, ["daily active users", "monthly active users", "active users", "DAU", "MAU"])
@@ -257,7 +258,7 @@ def fetch_sentiment_score(ticker: str) -> float:
 
     tk = get_ticker(ticker)
     try:
-        news_items = tk.news or []
+        news_items = timing_call("provider.yahoo.news", lambda: tk.news) or []
     except Exception as exc:
         logging.warning(f"News unavailable for {ticker}: {exc}")
         news_items = []
