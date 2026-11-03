@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .request_timing import call as timing_call
+
 import math
 import time
 from abc import ABC, abstractmethod
@@ -517,7 +519,7 @@ class MassiveRestClient(MarketDataProvider):
         last_error: ProviderError | None = None
         for attempt in range(self.retries + 1):
             try:
-                response = self.http_get(url, params=query, timeout=self.timeout_seconds)
+                response = timing_call("provider.massive", self.http_get, url, params=query, timeout=self.timeout_seconds)
             except Exception as exc:  # noqa: BLE001
                 last_error = ProviderUnavailableError(f"Massive {endpoint} transport failed: {exc}")
             else:

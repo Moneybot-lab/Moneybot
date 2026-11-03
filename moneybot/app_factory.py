@@ -484,6 +484,9 @@ def create_app() -> Flask:
         AI_MODEL=os.environ.get("AI_MODEL", "gpt-5-mini"),
         AI_API_KEY=os.environ.get("AI_API_KEY", ""),
         AI_TIMEOUT_SECONDS=float(os.environ.get("AI_TIMEOUT_SECONDS", "6.0")),
+        PORTFOLIO_TIMING_SAMPLE_RATE=os.environ.get("PORTFOLIO_TIMING_SAMPLE_RATE", "0"),
+        PORTFOLIO_TIMING_MAX_PER_MINUTE=os.environ.get("PORTFOLIO_TIMING_MAX_PER_MINUTE", "2"),
+        PORTFOLIO_TIMING_DURATION_SECONDS=os.environ.get("PORTFOLIO_TIMING_DURATION_SECONDS", "900"),
         AI_FAILURE_COOLDOWN_SECONDS=int(os.environ.get("AI_FAILURE_COOLDOWN_SECONDS", "120")),
         AI_RESPONSE_CACHE_TTL_SECONDS=int(os.environ.get("AI_RESPONSE_CACHE_TTL_SECONDS", "300")),
         API_RATE_LIMIT_WINDOW_SECONDS=_parse_int_env("API_RATE_LIMIT_WINDOW_SECONDS", 60),
@@ -653,6 +656,8 @@ def create_app() -> Flask:
 
     from . import models  # noqa: F401
 
+    from .services.request_timing import install_request_timing
+    install_request_timing(app, db)
     app.register_blueprint(api_bp)
     app.extensions["market_data_service"] = MarketDataService(
         deterministic_quick_advisor=app.extensions["deterministic_quick_advisor"],

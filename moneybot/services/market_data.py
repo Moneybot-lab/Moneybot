@@ -13,6 +13,8 @@ from typing import Any, Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 import requests
+
+from .request_timing import call as timing_call, timed, count
 import yfinance as yf
 
 from trade_signal import analyze_ticker
@@ -34,10 +36,13 @@ class TTLCache:
     def get(self, key: str) -> Optional[Dict[str, Any]]:
         entry = self._store.get(key)
         if not entry:
+            count("cache.miss")
             return None
         if time.time() - entry.ts > self.ttl:
             self._store.pop(key, None)
+            count("cache.miss")
             return None
+        count("cache.hit")
         return entry.value
 
     def set(self, key: str, value: Dict[str, Any]) -> None:
@@ -114,7 +119,7 @@ class MarketDataService:
         query = quote_plus(f"{symbol} {company_name} stock")
         url = f"https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
         try:
-            response = requests.get(url, timeout=self.timeout_s)
+            response = timing_call("provider.google_news", requests.get, url, timeout=self.timeout_s)
             response.raise_for_status()
             root = ET.fromstring(response.text)
             items = root.findall(".//channel/item")
@@ -314,7 +319,7 @@ class MarketDataService:
             try:
                 quote = self.get_quote(item["quote_symbol"])
                 ticker = yf.Ticker(item["symbol"])
-                hist = ticker.history(period="1mo", interval="1d")
+                hist = timing_call("provider.yahoo.history", ticker.history, period="1mo", interval="1d")
                 if hist is None or hist.empty:
                     raise ValueError("history unavailable")
                 closes = [round(float(v), 2) for v in hist["Close"].tail(15)]
@@ -383,7 +388,7 @@ class MarketDataService:
             return cached
 
         try:
-            hist = yf.Ticker(symbol_key).history(period="1d", interval="5m")
+            hist = timing_call("provider.yahoo.history", yf.Ticker(symbol_key).history, period="1d", interval="5m")
             if hist is None or getattr(hist, "empty", False):
                 raise ValueError("empty intraday history")
             closes = self._series_values(hist, "Close")
@@ -430,6 +435,7 @@ class MarketDataService:
             {"investor": "Ray Dalio", "stocks": [{"ticker": "JNJ", "price": 154.6, "performance": 0.28}, {"ticker": "PG", "price": 168.4, "performance": 0.21}, {"ticker": "PEP", "price": 173.8, "performance": 0.36}, {"ticker": "XOM", "price": 113.4, "performance": -0.14}, {"ticker": "PFE", "price": 28.8, "performance": 0.42}]},
         ]
 
+    @timed("market.company")
     def get_company_snapshot(self, symbol: str) -> Dict[str, Any]:
         ticker_symbol = symbol.upper()
         cache_key = f"company:{ticker_symbol}"
@@ -469,14 +475,14 @@ class MarketDataService:
 
         try:
             ticker = yf.Ticker(ticker_symbol)
-            info = ticker.info or {}
+            info = timing_call("provider.yahoo.info", lambda: ticker.info) or {}
             company_name = str(info.get("longName") or info.get("shortName") or default_name)
             summary = str(info.get("longBusinessSummary") or info.get("description") or "").strip()
             if not summary:
                 summary = self._build_fallback_company_summary(ticker_symbol, info)
             summary = summary[:320].strip() + ("..." if len(summary) > 320 else "")
 
-            news_items = ticker.news or []
+            news_items = timing_call("provider.yahoo.news", lambda: ticker.news) or []
             for item in news_items:
                 if not isinstance(item, dict):
                     continue
@@ -573,6 +579,7 @@ class MarketDataService:
             self.company_snapshot_cache.set(cache_key, payload)
             return payload
 
+    @timed("market.history")
     def get_price_history_data(self, symbol: str, days: int = 30) -> Dict[str, Any]:
         symbol_key = symbol.upper()
         requested_days = max(1, int(days))
@@ -624,9 +631,9 @@ class MarketDataService:
         try:
             ticker = yf.Ticker(symbol_key)
             try:
-                hist = ticker.history(period="3mo", interval="1d", auto_adjust=True)
+                hist = timing_call("provider.yahoo.history", ticker.history, period="3mo", interval="1d", auto_adjust=True)
             except TypeError:
-                hist = ticker.history(period="3mo", interval="1d")
+                hist = timing_call("provider.yahoo.history", ticker.history, period="3mo", interval="1d")
             if hist is None or hist.empty:
                 raise ValueError("empty yfinance history")
             closes = [round(float(value), 4) for value in hist["Close"].tail(requested_days)]
@@ -691,6 +698,7 @@ class MarketDataService:
             "history_by_symbol": dict(self._history_diagnostics_by_symbol),
         }
 
+    @timed("market.sector")
     def get_sector(self, symbol: str) -> str:
         cache_key = f"sector:{symbol.upper()}"
         cached = self.sector_cache.get(cache_key)
@@ -700,7 +708,7 @@ class MarketDataService:
         sector = "Unknown"
         try:
             ticker = yf.Ticker(symbol.upper())
-            info = ticker.info or {}
+            info = timing_call("provider.yahoo.info", lambda: ticker.info) or {}
             sector = str(info.get("sector") or info.get("industry") or "Unknown")
         except Exception as exc:  # noqa: BLE001
             logging.warning("Sector fetch failed for %s: %s", symbol, exc)
@@ -742,7 +750,7 @@ class MarketDataService:
         for item in symbols:
             try:
                 ticker = yf.Ticker(item["symbol"])
-                hist = ticker.history(period="1mo", interval="1d")
+                hist = timing_call("provider.yahoo.history", ticker.history, period="1mo", interval="1d")
                 if hist is None or hist.empty:
                     raise ValueError("history unavailable")
                 closes = [round(float(v), 2) for v in hist["Close"].tail(15)]
@@ -786,6 +794,7 @@ class MarketDataService:
             {"investor": "Ray Dalio", "stocks": [{"ticker": "JNJ", "price": 154.6, "performance": 0.28}, {"ticker": "PG", "price": 168.4, "performance": 0.21}, {"ticker": "PEP", "price": 173.8, "performance": 0.36}, {"ticker": "XOM", "price": 113.4, "performance": -0.14}, {"ticker": "PFE", "price": 28.8, "performance": 0.42}]},
         ]
 
+    @timed("market.sector")
     def get_sector(self, symbol: str) -> str:
         cache_key = f"sector:{symbol.upper()}"
         cached = self.sector_cache.get(cache_key)
@@ -795,7 +804,7 @@ class MarketDataService:
         sector = "Unknown"
         try:
             ticker = yf.Ticker(symbol.upper())
-            info = ticker.info or {}
+            info = timing_call("provider.yahoo.info", lambda: ticker.info) or {}
             sector = str(info.get("sector") or info.get("industry") or "Unknown")
         except Exception as exc:  # noqa: BLE001
             logging.warning("Sector fetch failed for %s: %s", symbol, exc)
@@ -865,7 +874,7 @@ class MarketDataService:
 
             try:
                 ticker = yf.Ticker(item["symbol"])
-                hist = ticker.history(period="1mo", interval="1d")
+                hist = timing_call("provider.yahoo.history", ticker.history, period="1mo", interval="1d")
                 if hist is not None and not hist.empty:
                     closes = [round(float(v), 2) for v in hist["Close"].tail(15)]
             except Exception as exc:  # noqa: BLE001
@@ -1541,6 +1550,7 @@ class MarketDataService:
         })
         return payload
 
+    @timed("market.quote")
     def get_quote(self, symbol: str) -> Dict[str, Any]:
         cache_key = symbol.upper()
         cached = self.quote_cache.get(cache_key)
@@ -1558,7 +1568,7 @@ class MarketDataService:
             for _ in range(self.retries + 1):
                 try:
                     ticker = yf.Ticker(cache_key)
-                    info = ticker.info or {}
+                    info = timing_call("provider.yahoo.info", lambda: ticker.info) or {}
                     price = info.get("regularMarketPrice") or info.get("currentPrice")
                     used_daily_history = False
                     prev = info.get("regularMarketPreviousClose") or info.get("previousClose")
@@ -1568,7 +1578,7 @@ class MarketDataService:
                         change = ((price - prev) / prev) * 100 if price is not None else None
 
                     if price is None:
-                        hist = ticker.history(period="5d", interval="1d")
+                        hist = timing_call("provider.yahoo.history", ticker.history, period="5d", interval="1d")
                         if hist is not None and not hist.empty:
                             price = float(hist["Close"].iloc[-1])
                             used_daily_history = True
@@ -1647,7 +1657,7 @@ class MarketDataService:
                 if block_until:
                     self._finnhub_forbidden_symbols.pop(cache_key, None)
                 try:
-                    resp = requests.get(
+                    resp = timing_call("provider.finnhub", requests.get,
                         "https://finnhub.io/api/v1/quote",
                         params={"symbol": cache_key, "token": finnhub_key},
                         headers={"X-Finnhub-Token": finnhub_key},
@@ -1701,7 +1711,7 @@ class MarketDataService:
                 twelve_data_error = "rate_limited_backoff_active"
             else:
                 try:
-                    resp = requests.get(
+                    resp = timing_call("provider.twelve_data", requests.get,
                         "https://api.twelvedata.com/quote",
                         params={"symbol": cache_key, "apikey": twelve_data_key},
                         timeout=self.timeout_s,
@@ -1882,6 +1892,7 @@ class MarketDataService:
             },
         }
 
+    @timed("market.signal")
     def get_signal(self, symbol: str, include_company_snapshot: bool = True) -> Dict[str, Any]:
         symbol_key = symbol.upper()
         cache_key = f"{symbol_key}:company" if include_company_snapshot else f"{symbol_key}:lite"
@@ -1923,7 +1934,7 @@ class MarketDataService:
             return payload
 
         try:
-            result = analyze_ticker(symbol_key)
+            result = timing_call("market.analysis", analyze_ticker, symbol_key)
             if include_company_snapshot:
                 company_snapshot = self.get_company_snapshot(symbol_key)
                 ranked_news = company_snapshot.get("latest_news") if isinstance(company_snapshot.get("latest_news"), list) else []

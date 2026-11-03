@@ -30,6 +30,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from advice_engine import compute_user_advice
 
+from .services.request_timing import call as timing_call, timed, mark
 from .extensions import db
 from sqlalchemy import or_, text
 from sqlalchemy import inspect
@@ -335,6 +336,7 @@ INACTIVITY_TIMEOUT = timedelta(minutes=15)
 TRUSTED_DEVICE_TIMEOUT = timedelta(days=30)
 
 
+@timed("authentication")
 def _session_expired() -> bool:
     now = datetime.utcnow()
     last_seen = session.get("last_activity_at")
@@ -426,6 +428,7 @@ def _user_payload(user: User) -> Dict[str, Any]:
     }
 
 
+@timed("profile")
 def _ensure_investor_profile(user_id: int) -> InvestorProfile:
     profile = InvestorProfile.query.filter_by(user_id=user_id).first()
     if profile is None:
@@ -443,6 +446,7 @@ def _decision_context_for_user(user_id: int) -> UserDecisionContext:
     return UserDecisionContext.from_profile(_ensure_investor_profile(user_id))
 
 
+@timed("suitability")
 def _personalize_action(
     *,
     user_id: int | None,
@@ -692,6 +696,7 @@ def _symbols_for_live_user(user_id: int) -> set[str]:
     return portfolio | clearview
 
 
+@timed("stream_demand")
 def _register_stream_demand(source: str, symbols) -> bool:
     config = current_app.config.get("MASSIVE_STREAM_CONFIG")
     ttl_seconds = int(getattr(config, "demand_ttl_seconds", 90))
@@ -1003,6 +1008,7 @@ def _send_firebase_push_to_token(*, token: str, title: str, body: str, data: dic
     return messaging.send(message, app=firebase_app)
 
 
+@timed("advice.alignment")
 def _quick_decision(signal_data: Dict[str, Any], quote_data: Dict[str, Any]) -> Dict[str, Any]:
     action = (signal_data.get("action") or "HOLD").upper()
     technical = signal_data.get("technical") or {}
@@ -1658,6 +1664,7 @@ def send_test_push_notification():
 
 @api_bp.get("/user-watchlist")
 @login_required
+@timed("view.watchlist")
 def user_watchlist():
     items = (
         WatchlistItem.query.filter(WatchlistItem.user_id == session["user_id"], WatchlistItem.shares > 0)
@@ -1667,7 +1674,7 @@ def user_watchlist():
     base_items = [_watchlist_item_payload(i) for i in items]
     skip_market_data = str(request.args.get("skip_market_data") or "").strip().lower() in {"1", "true", "yes", "on"}
     if skip_market_data:
-        return jsonify({"items": base_items, "enriched_items": [], "request_id": g.request_id})
+        return timing_call("serialization", jsonify, {"items": base_items, "enriched_items": [], "request_id": g.request_id})
 
     _register_stream_demand(f"portfolio:{session['user_id']}", {str(item.get("symbol") or "") for item in base_items})
 
@@ -1760,6 +1767,7 @@ def user_watchlist():
                 sector_market_values[sector.lower()] += position_value
         sector_by_id[item["id"]] = sector
 
+    mark("market_inputs_complete")
     for item in base_items:
         signal, quote, history_payload = market_inputs_by_id[item["id"]]
         history30 = list(history_payload.get("closes") or [])
@@ -1820,7 +1828,7 @@ def user_watchlist():
         deterministic_locked = False
         if deterministic_svc is not None:
             try:
-                deterministic_portfolio = deterministic_svc.predict_portfolio_position(
+                deterministic_portfolio = timing_call("advice.deterministic", deterministic_svc.predict_portfolio_position,
                     symbol=item["symbol"],
                     entry_price=entry_price if isinstance(entry_price, (int, float)) else None,
                     current_price=current_price if isinstance(current_price, (int, float)) else None,
@@ -1987,7 +1995,8 @@ def user_watchlist():
                 experiment=_experiment_metadata(cohort_id="treatment" if str(watchlist_source) == "deterministic_model" else "control"),
             )
 
-    return jsonify({"items": base_items, "enriched_items": enriched_items, "request_id": g.request_id})
+    mark("advice_complete")
+    return timing_call("serialization", jsonify, {"items": base_items, "enriched_items": enriched_items, "request_id": g.request_id})
 
 
 @api_bp.post("/user-watchlist")
@@ -2280,6 +2289,7 @@ def update_sold_trade(trade_id: int):
 
 @api_bp.get("/portfolio-summary")
 @login_required
+@timed("view.summary")
 def portfolio_summary():
     items = (
         WatchlistItem.query.filter(WatchlistItem.user_id == session["user_id"], WatchlistItem.shares > 0)
@@ -2374,7 +2384,7 @@ def portfolio_summary():
             "active": current["shares"] > 0,
         })
 
-    return jsonify(
+    return timing_call("serialization", jsonify,
         {
             "total_value": round(total_value, 2),
             "current_market_value": round(total_value, 2),
@@ -3112,9 +3122,10 @@ def market_overview():
 
 
 @api_bp.get("/stable-watchlist")
+@timed("view.stable")
 def stable_watchlist():
     svc = current_app.extensions["market_data_service"]
-    return jsonify({"items": svc.get_stable_watchlist(), "request_id": g.request_id})
+    return timing_call("serialization", jsonify, {"items": svc.get_stable_watchlist(), "request_id": g.request_id})
 
 
 @api_bp.get("/hot-momentum-buys")

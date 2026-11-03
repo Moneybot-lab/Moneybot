@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .request_timing import timed, count
+
 import json
 import math
 import os
@@ -87,6 +89,7 @@ class DecisionLogger:
         self._source_counts: dict[str, int] = {}
         self._endpoint_counts: dict[str, int] = {}
 
+    @timed("decision.logging")
     def log(
         self,
         *,
@@ -143,7 +146,9 @@ class DecisionLogger:
             path.parent.mkdir(parents=True, exist_ok=True)
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, default=str) + "\n")
+            count("decision.write")
         except Exception:
+            count("decision.write_error")
             # Logging should never break API behavior.
             return
 
