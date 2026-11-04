@@ -5,6 +5,8 @@ from pathlib import Path
 import re
 import subprocess
 
+import pytest
+
 
 def source():
     tree = ast.parse(Path("moneybot/app_factory.py").read_text())
@@ -21,6 +23,7 @@ def run_js(scenario):
     text = source()
     functions = text[text.index("              async function load({"):text.index("              async function addItem(event)")]
     functions += text[text.index("              function selectPortfolioRows"):text.index("              function renderRows")]
+    functions += text[text.index("              async function markSold"):text.index("              document.getElementById('tickerModal').addEventListener")]
     functions += "\n" + "\n".join(line for line in text.splitlines() if "window.addEventListener('pagehide'" in line or "window.addEventListener('pageshow'" in line)
     setup = r"""
 const assert = require('assert');
@@ -36,8 +39,10 @@ const setLoading=value=>{loading=value;};
 const startPortfolioLive=()=>{liveStarts++;};
 const renderRows=rows=>{snapshots++; currentPortfolioItems=rows;};
 const closeAdviceModal=()=>{modalCloses++;};
-const adviceButton=(row)=>{patches++; return row.advice;};
+const adviceButton=(row)=>{patches++; return `${row.advice} · ${portfolioAdviceStatus(row)}`;};
 const amountColor=()=>'', formatMoney=amount=>`$${amount}`, location={href:''};
+const displayValue=String, formatDate=String;
+let prompt=()=>null, confirm=()=>false;
 const initial={id:1,symbol:'SYNTH',shares:2,entry_price:100,current_price:120,history30:[100,120],advice:'HOLD',advice_reason:'HOLD initially',enrichment_state:'pending',portfolio_view_id:'view'};
 const second={...initial,id:2,shares:3};
 const snapshot={type:'snapshot',view_id:'view',enriched_items:[initial,second]};
@@ -142,11 +147,109 @@ def test_old_summary_is_ignored_and_failed_summary_is_explicit():
 
 def test_navigation_aborts_ai_closes_feed_and_cancels_pending_refresh():
     run_js(r"""
+      currentPortfolioItems=selectPortfolioRows(snapshot);portfolioViewId='view';
       portfolioLoadController=new AbortController();const controller=portfolioLoadController;
       let closed=false;portfolioEventSource={close(){closed=true;}};
       portfolioReconnectTimer=42;
       window.events.pagehide();
       assert(controller.signal.aborted);assert(closed);assert.equal(clearedTimer,42);assert.equal(portfolioReconnectTimer,null);
+      assert.equal(currentPortfolioItems[0].enrichment_state,'failed');
+      assert(currentPortfolioItems[0].lots.every(lot=>lot.enrichment_state==='failed'));
       let refresh=null;load=options=>{refresh=options;};
       window.events.pageshow({persisted:true});assert.deepEqual(refresh,{enrich:false});
+    """)
+
+
+@pytest.mark.parametrize("handler,answers", [
+    ("markBought", [None]),
+    ("markBought", ["110", None]),
+    ("markSold", [None]),
+    ("markSold", ["1", None]),
+    ("markSold", ["1", "110", None]),
+    ("markSold", ["1", "110", "1", None]),
+    ("markSold", ["1", "110", "1", "2026-11-03"]),  # confirmation declined
+    ("editRow", [None]),
+    ("editRow", ["DELETE"]),  # confirmation declined
+    ("editRow", ["UPDATE", None]),
+])
+@pytest.mark.parametrize("completed_first", [False, True])
+def test_cancelled_mutation_finalizes_only_pending_advice(handler, answers, completed_first):
+    run_js("const answers=" + json.dumps(answers) + "; const completedFirst=" + json.dumps(completed_first) + r""";
+      const first={...initial,live_market:{source:'massive',is_stale:true},suitability:{changed:true,action:'HOLD'}};
+      if(completedFirst){first.enrichment_state='completed';first.ai_portfolio={mode:'ai_enhanced'};}
+      currentPortfolioItems=selectPortfolioRows({...snapshot,enriched_items:[first,second]});portfolioViewId='view';
+      portfolioLoadController=new AbortController();const controller=portfolioLoadController;
+      const expected=JSON.parse(JSON.stringify(currentPortfolioItems));
+      expected.forEach(row=>{
+        if(row.enrichment_state==='pending') row.enrichment_state='failed';
+        row.lots.forEach(lot=>{if(lot.enrichment_state==='pending') lot.enrichment_state='failed';});
+      });
+      prompt=()=>{assert(answers.length);return answers.shift();};
+      apiFetch=()=>{throw new Error('Cancelled dialog must not submit a mutation or reload');};
+    """ + f"await {handler}(1);" + r"""
+      assert.equal(answers.length,0);assert(controller.signal.aborted);
+      assert.equal(portfolioLoadGeneration,1);assert.equal(portfolioViewId,null);
+      assert.deepEqual(currentPortfolioItems,expected);
+      assert(!portfolioAdviceStatus(currentPortfolioItems[0]).includes('AI pending'));
+      assert(elements.get('portfolio-advice-0').innerHTML.includes('0 of 2 lots pending'));
+      if(!completedFirst) assert(elements.get('portfolio-advice-0').innerHTML.includes('AI interrupted'));
+      applyPortfolioAdvice(update,0); // A late result from the cancelled generation cannot restore advice.
+      assert.deepEqual(currentPortfolioItems,expected);
+    """)
+
+
+@pytest.mark.parametrize("handler,answers,path,method", [
+    ("markBought", ["110", "1"], "/api/user-watchlist/1/buy", "POST"),
+    ("markSold", ["1", "110", "1", "2026-11-03"], "/api/user-watchlist/1/sell", "POST"),
+    ("editRow", ["UPDATE", "SYNTH", "105", "2"], "/api/user-watchlist/1", "PATCH"),
+    ("editRow", ["DELETE"], "/api/user-watchlist/1", "DELETE"),
+])
+def test_completed_mutation_still_submits_once_and_reloads(handler, answers, path, method):
+    run_js("const answers=" + json.dumps(answers) + r""";
+      currentPortfolioItems=selectPortfolioRows(snapshot);portfolioViewId='view';
+      portfolioLoadController=new AbortController();const controller=portfolioLoadController;
+      prompt=()=>answers.shift();confirm=()=>true;
+      const calls=[];let reloads=0;
+      apiFetch=async(url,options)=>{
+        assert(controller.signal.aborted);
+        assert(currentPortfolioItems[0].lots.every(lot=>lot.enrichment_state==='failed'));
+        calls.push({url,method:options.method});
+        return {ok:true,json:async()=>({})};
+      };
+      load=async()=>{reloads++;assert(!outEl.textContent.includes('AI enrichment stopped'));};
+    """ + f"await {handler}(1);" + r"""
+      assert.equal(reloads,1);assert.equal(answers.length,0);
+    """ + "assert.deepEqual(calls," + json.dumps([{"url": path, "method": method}]) + ");")
+
+
+def test_refresh_finalizes_old_pending_without_old_abort_overwriting_new_advice():
+    run_js(r"""
+      let streams=0,oldSignal;
+      const encoder=new TextEncoder();
+      apiFetch=async(url,options)=>{
+        if(url.includes('summary')) return new Promise(()=>{});
+        const isOld=streams++===0;
+        let index=0;
+        const freshSnapshot={...snapshot,view_id:'fresh',enriched_items:[{...initial,current_price:130,portfolio_view_id:'fresh'}]};
+        const freshUpdate={...update,view_id:'fresh',item:{...update.item,portfolio_view_id:'fresh'}};
+        const chunks=isOld ? [snapshot] : [freshSnapshot,freshUpdate,{type:'complete'}];
+        if(isOld) oldSignal=options.signal;
+        return {ok:true,status:200,headers:{get:()=> 'application/x-ndjson'},body:{getReader:()=>({
+          async read(){
+            if(index<chunks.length) return {done:false,value:encoder.encode(JSON.stringify(chunks[index++])+'\n')};
+            if(!isOld) return {done:true};
+            return new Promise((resolve,reject)=>options.signal.addEventListener('abort',()=>reject(Object.assign(new Error('cancelled'),{name:'AbortError'})),{once:true}));
+          },async cancel(){},releaseLock(){}
+        })}};
+      };
+      const oldLoad=load();
+      await new Promise(done=>setImmediate(done));
+      const oldRows=currentPortfolioItems;
+      outEl.textContent='Refreshing portfolio';
+      await load();await oldLoad;
+      assert(oldSignal.aborted);assert(oldRows[0].lots.every(lot=>lot.enrichment_state==='failed'));
+      assert.equal(streams,2);assert.equal(portfolioViewId,'fresh');assert.equal(loading,false);
+      assert.equal(currentPortfolioItems[0].current_price,130);
+      assert.equal(currentPortfolioItems[0].enrichment_state,'completed');assert.equal(currentPortfolioItems[0].advice,'SELL');
+      assert.equal(outEl.textContent,'Refreshing portfolio');
     """)

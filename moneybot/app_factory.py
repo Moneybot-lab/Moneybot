@@ -2095,6 +2095,11 @@ def create_app() -> Flask:
               }
 
               function stopPortfolioEnrichment(){
+                // The aborted load cannot finalize its old generation. Settle
+                // displayed pending advice even if a mutation dialog is cancelled.
+                if(currentPortfolioItems.some(row => row.enrichment_state === 'pending' || (row.lots || []).some(lot => lot.enrichment_state === 'pending'))){
+                  finishPortfolioEnrichment('failed', portfolioLoadGeneration, false);
+                }
                 portfolioLoadGeneration += 1;
                 if(portfolioLoadController) portfolioLoadController.abort();
                 portfolioLoadController = null;
@@ -2127,7 +2132,7 @@ def create_app() -> Flask:
                 // must not continue to describe its superseded action.
                 if(currentAdviceContext && currentAdviceContext.symbol === update.symbol) closeAdviceModal();
               }
-              function finishPortfolioEnrichment(state, generation){
+              function finishPortfolioEnrichment(state, generation, notify=true){
                 if(generation !== portfolioLoadGeneration) return;
                 currentPortfolioItems.forEach((row, idx) => {
                   (row.lots || [row]).forEach(lot => { if(lot.enrichment_state === 'pending') lot.enrichment_state = state === 'expired' ? 'expired' : 'failed'; });
@@ -2135,7 +2140,7 @@ def create_app() -> Flask:
                   const cell = document.getElementById(`portfolio-advice-${idx}`);
                   if(cell) cell.innerHTML = adviceButton(row, idx);
                 });
-                if(state !== 'complete') outEl.textContent = 'AI enrichment stopped. Current prices and charts remain available. Refresh Portfolio to retry.';
+                if(notify && state !== 'complete') outEl.textContent = 'AI enrichment stopped. Current prices and charts remain available. Refresh Portfolio to retry.';
               }
               function updateInitialPortfolioTotals(){
                 const value = currentPortfolioItems.reduce((sum,row)=>sum+Number(row.current_price || 0)*Number(row.shares || 0),0);
