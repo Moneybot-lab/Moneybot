@@ -59,8 +59,8 @@ def test_sampled_full_route_is_equivalent_and_reports_exact_stages(tmp_path, cap
         assert len(records(caplog)) == 1
 
 
-@pytest.mark.parametrize("mode,expected", [("malformed", "ai.malformed"), ("missing", "ai.missing_fields"), ("bad_json", "ai.parse_or_other_error")])
-def test_malformed_and_incomplete_responses_do_not_change_cooldown(tmp_path, caplog, mode, expected):
+@pytest.mark.parametrize("mode,expected", [("malformed", "ai.malformed"), ("missing", "ai.missing_fields"), ("bad_json", "ai.invalid_envelope")])
+def test_exhausted_invalid_responses_enter_portfolio_only_cooldown(tmp_path, caplog, mode, expected):
     caplog.set_level(logging.INFO, logger="moneybot.portfolio_timing")
     with scenario(tmp_path, 5, 5, "success", market_delay=0, ai_delay=0) as s:
         enable(s.app)
@@ -74,8 +74,10 @@ def test_malformed_and_incomplete_responses_do_not_change_cooldown(tmp_path, cap
                 status_code=200, raise_for_status=lambda: None, json=response_json)):
             assert s.client.get("/api/user-watchlist").status_code == 200
         sample, = records(caplog)
-        assert sample["counters"][expected] == (10 if mode == "malformed" else 5)
-        assert s.ai._disabled_until == 0  # PR #667 intentionally does not cool these paths
+        assert sample["counters"][expected] == 2
+        assert s.ai._disabled_until == 0  # General provider/Quick Ask availability unchanged
+        assert s.ai._portfolio_invalid_until > 0
+        assert sample["counters"]["ai.cooldown_skip"] == 4
         assert "sensitive provider payload" not in json.dumps(sample)
 
 

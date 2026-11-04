@@ -1,0 +1,276 @@
+{
+  "schema": "portfolio-ai-validation.v1",
+  "baseline": "42031dab4730d754b764f33c58ba7bb55bce262e",
+  "tests": {
+    "passed": 514,
+    "failed": 0,
+    "skipped": 0,
+    "seconds": 19.23,
+    "scope": "30 selected regression modules including local Gunicorn, not the full repository",
+    "output": "........................................................................ [ 14%]\n........................................................................ [ 28%]\n........................................................................ [ 42%]\n........................................................................ [ 56%]\n........................................................................ [ 70%]\n........................................................................ [ 84%]\n........................................................................ [ 98%]\n..........                                                               [100%]\n514 passed in 19.23s"
+  },
+  "gunicorn_smoke": {
+    "initial_seconds": 0.05714832100784406,
+    "complete_seconds": 1.3444485259824432,
+    "disconnect_additional_attempts": 1,
+    "worker_count": 2,
+    "threads_per_worker": 4
+  },
+  "comparisons": [
+    {
+      "kind": "baseline",
+      "positions": 5,
+      "unique_symbols": 5,
+      "failure": "success",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 10,
+      "unique_symbols": 10,
+      "failure": "success",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 20,
+      "unique_symbols": 20,
+      "failure": "success",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 28,
+      "unique_symbols": 28,
+      "failure": "success",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 28,
+      "unique_symbols": 10,
+      "failure": "success",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 5,
+      "unique_symbols": 5,
+      "failure": "profile_sensitive",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 10,
+      "unique_symbols": 10,
+      "failure": "profile_sensitive",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 20,
+      "unique_symbols": 20,
+      "failure": "profile_sensitive",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 28,
+      "unique_symbols": 28,
+      "failure": "profile_sensitive",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 28,
+      "unique_symbols": 10,
+      "failure": "profile_sensitive",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 5,
+      "unique_symbols": 5,
+      "failure": "first_malformed",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 10,
+      "unique_symbols": 10,
+      "failure": "first_malformed",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 20,
+      "unique_symbols": 20,
+      "failure": "first_malformed",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 28,
+      "unique_symbols": 28,
+      "failure": "first_malformed",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 28,
+      "unique_symbols": 10,
+      "failure": "first_malformed",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 5,
+      "unique_symbols": 5,
+      "failure": "timeout",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 10,
+      "unique_symbols": 10,
+      "failure": "timeout",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 20,
+      "unique_symbols": 20,
+      "failure": "timeout",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 28,
+      "unique_symbols": 28,
+      "failure": "timeout",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 28,
+      "unique_symbols": 10,
+      "failure": "timeout",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 5,
+      "unique_symbols": 5,
+      "failure": "server_error",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 10,
+      "unique_symbols": 10,
+      "failure": "server_error",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 20,
+      "unique_symbols": 20,
+      "failure": "server_error",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 28,
+      "unique_symbols": 28,
+      "failure": "server_error",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 28,
+      "unique_symbols": 10,
+      "failure": "server_error",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 5,
+      "unique_symbols": 5,
+      "failure": "unavailable",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 10,
+      "unique_symbols": 10,
+      "failure": "unavailable",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 20,
+      "unique_symbols": 20,
+      "failure": "unavailable",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 28,
+      "unique_symbols": 28,
+      "failure": "unavailable",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 28,
+      "unique_symbols": 10,
+      "failure": "unavailable",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 5,
+      "unique_symbols": 5,
+      "failure": "always_malformed",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 10,
+      "unique_symbols": 10,
+      "failure": "always_malformed",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 20,
+      "unique_symbols": 20,
+      "failure": "always_malformed",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 28,
+      "unique_symbols": 28,
+      "failure": "always_malformed",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "baseline",
+      "positions": 28,
+      "unique_symbols": 10,
+      "failure": "always_malformed",
+      "financial_and_advice_hashes_match": true
+    },
+    {
+      "kind": "realistic_baseline",
+      "positions": 28,
+      "unique_symbols": 10,
+      "failure": "profile_sensitive",
+      "financial_and_advice_hashes_match": true
+    }
+  ],
+  "source_hashes_verified": true,
+  "provider_network": "blocked synthetic transports; Unix-domain socket allowed for local Gunicorn smoke",
+  "production_tested": false
+}

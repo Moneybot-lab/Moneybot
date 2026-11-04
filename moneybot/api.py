@@ -31,6 +31,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from advice_engine import compute_user_advice
 
 from .services.request_timing import call as timing_call, timed, mark
+from .services.portfolio_enrichment import admit, ObsoletePortfolio, MAX_ENRICHMENT_SECONDS
 from .extensions import db
 from sqlalchemy import or_, text
 from sqlalchemy import inspect
@@ -1666,15 +1667,72 @@ def send_test_push_notification():
 @login_required
 @timed("view.watchlist")
 def user_watchlist():
+    deferred = request.args.get("defer_ai") == "1"
+    events = _watchlist_events(progressive=deferred)
+    try:
+        payload = next(events)
+    finally:
+        events.close()
+    if deferred:
+        for row in payload.get("enriched_items", []):
+            if row.get("enrichment_state") == "pending":
+                row["enrichment_state"] = "fallback"
+    return timing_call("serialization", jsonify, payload)
+
+
+def _portfolio_revision():
+    """Private equality check of all lots/profile; never log/return its contents."""
+    user_id = session["user_id"]
+    lots = WatchlistItem.query.filter(WatchlistItem.user_id == user_id, WatchlistItem.shares > 0).order_by(WatchlistItem.id).all()
+    profile = InvestorProfile.query.filter_by(user_id=user_id).one_or_none()
+    return (
+        tuple(tuple(getattr(lot, col.name) for col in WatchlistItem.__table__.columns) for lot in lots),
+        tuple(getattr(profile, col.name) for col in InvestorProfile.__table__.columns) if profile else None,
+    )
+
+
+@api_bp.get("/user-watchlist/stream")
+@login_required
+def user_watchlist_stream():
+    release = admit(session["user_id"])
+    if release is None:
+        return jsonify({"error": "Portfolio enrichment is busy. Please retry shortly."}), 429, {"Retry-After": "5"}
+
+    @stream_with_context
+    def generate():
+        try:
+            for event in _watchlist_events(progressive=True):
+                yield timing_call("serialization", json.dumps, event, separators=(",", ":")) + "\n"
+        except ObsoletePortfolio:
+            yield '{"type":"expired"}\n'
+        except Exception:
+            # No exception text: it can contain holdings or provider payloads.
+            yield '{"type":"failed"}\n'
+        finally:
+            try:
+                db.session.rollback()
+            finally:
+                release()
+
+    response = Response(generate(), mimetype="application/x-ndjson",
+                        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+    response.call_on_close(release)
+    return response
+
+
+def _watchlist_events(*, progressive=False):
     items = (
         WatchlistItem.query.filter(WatchlistItem.user_id == session["user_id"], WatchlistItem.shares > 0)
         .order_by(WatchlistItem.created_at.desc())
         .all()
     )
     base_items = [_watchlist_item_payload(i) for i in items]
+    lot_revision = tuple(tuple(getattr(lot, col.name) for col in WatchlistItem.__table__.columns)
+                         for lot in sorted(items, key=lambda lot: lot.id)) if progressive else None
     skip_market_data = str(request.args.get("skip_market_data") or "").strip().lower() in {"1", "true", "yes", "on"}
     if skip_market_data:
-        return timing_call("serialization", jsonify, {"items": base_items, "enriched_items": [], "request_id": g.request_id})
+        yield {"items": base_items, "enriched_items": [], "request_id": g.request_id}
+        return
 
     _register_stream_demand(f"portfolio:{session['user_id']}", {str(item.get("symbol") or "") for item in base_items})
 
@@ -1685,6 +1743,21 @@ def user_watchlist():
     investor_profile = _ensure_investor_profile(session["user_id"])
     decision_context = _decision_context_for_user(session["user_id"])
     enriched_items: list[Dict[str, Any]] = []
+    revision = (lot_revision, tuple(getattr(investor_profile, col.name) for col in InvestorProfile.__table__.columns)) if progressive else None
+    view_id = uuid.uuid4().hex if progressive else None
+    observation_indices = {item["id"]: index for index, item in enumerate(base_items)}
+    advice_as_of = datetime.now(timezone.utc).isoformat()
+    enrichment_started = None
+
+    def check_current():
+        # End the previous read transaction so changes made by other requests
+        # are visible and no DB connection stays checked out during inference.
+        db.session.rollback()
+        current = _portfolio_revision()
+        db.session.rollback()
+        if current != revision or (enrichment_started is not None and time.monotonic() - enrichment_started > MAX_ENRICHMENT_SECONDS):
+            raise ObsoletePortfolio()
+
 
     def _safe_market_call(fn, fallback):
         try:
@@ -1768,7 +1841,8 @@ def user_watchlist():
         sector_by_id[item["id"]] = sector
 
     mark("market_inputs_complete")
-    for item in base_items:
+
+    def build_row(item, *, run_ai=True, cached_deterministic=None, initial=True):
         signal, quote, history_payload = market_inputs_by_id[item["id"]]
         history30 = list(history_payload.get("closes") or [])
         history30_bars = list(history_payload.get("bars") or [])
@@ -1824,9 +1898,9 @@ def user_watchlist():
         elif isinstance(rationale, str) and rationale.strip():
             advice_reason = rationale.strip()
 
-        deterministic_portfolio = None
+        deterministic_portfolio = cached_deterministic
         deterministic_locked = False
-        if deterministic_svc is not None:
+        if initial and deterministic_svc is not None:
             try:
                 deterministic_portfolio = timing_call("advice.deterministic", deterministic_svc.predict_portfolio_position,
                     symbol=item["symbol"],
@@ -1846,8 +1920,15 @@ def user_watchlist():
             except Exception:  # noqa: BLE001
                 deterministic_portfolio = None
 
+        if not initial:
+            deterministic_advice = str((deterministic_portfolio or {}).get("advice") or "").upper()
+            if deterministic_advice in {"BUY", "HOLD", "SELL"}:
+                advice = deterministic_advice
+                deterministic_locked = True
+                advice_reason = str((deterministic_portfolio or {}).get("advice_reason") or "").strip() or f"{advice}: Selected by the existing deterministic portfolio rules."
+
         ai_portfolio = None
-        if ai_svc is not None:
+        if run_ai and ai_svc is not None:
             try:
                 ai_portfolio = ai_svc.enhance_portfolio_position(
                     symbol=item["symbol"],
@@ -1865,6 +1946,9 @@ def user_watchlist():
                     advice_reason = ai_reason or f"{advice}: Portfolio advice selected {advice}; no supporting explanation was available."
             except Exception:  # noqa: BLE001
                 ai_portfolio = None
+
+        if progressive and not initial:
+            check_current()
 
         quick_alignment_recommendation = None
         quick_alignment_source = "rule_based_quick_scale"
@@ -1916,8 +2000,7 @@ def user_watchlist():
             # The final policy outcome supersedes the earlier action's reason.
             advice_reason = f"{advice}. Profile adjustment: {policy_messages}"
 
-        enriched_items.append(
-            {
+        row = {
                 **item,
                 "score": signal.get("score") if signal.get("score") is not None else signal.get("hybrid_score"),
                 "sentiment": sentiment,
@@ -1947,7 +2030,10 @@ def user_watchlist():
                 "quick_alignment_recommendation": quick_alignment_recommendation,
                 "quick_alignment_source": quick_alignment_source,
             }
-        )
+        if progressive:
+            row.update(enrichment_state=("pending" if not run_ai else
+                       "completed" if (ai_portfolio or {}).get("mode") == "ai_enhanced" else "fallback"),
+                       advice_as_of=advice_as_of, portfolio_view_id=view_id)
         if decision_logger is not None:
             watchlist_source = (deterministic_portfolio or {}).get("decision_source") or "rule_based"
             decision_logger.log(
@@ -1956,6 +2042,8 @@ def user_watchlist():
                 decision_source=watchlist_source,
                 forecast=(deterministic_portfolio or {}).get("forecast"),
                 payload={
+                    **({"portfolio_view_id": view_id, "portfolio_observation_index": observation_indices[item["id"]],
+                        "advice_phase": "initial" if initial else "enriched"} if progressive else {}),
                     "ai_narrative_mode": (ai_portfolio or {}).get("mode"),
                     "base_advice": base_advice,
                     "advice": advice,
@@ -1995,8 +2083,39 @@ def user_watchlist():
                 experiment=_experiment_metadata(cohort_id="treatment" if str(watchlist_source) == "deterministic_model" else "control"),
             )
 
+        return row
+
+    pending = progressive and ai_svc is not None and bool(getattr(ai_svc, "enabled", False))
+    if progressive:
+        check_current()
+    for item in base_items:
+        enriched_items.append(build_row(item, run_ai=not pending))
+    snapshot = {"items": base_items, "enriched_items": enriched_items, "request_id": g.request_id}
+    if not progressive:
+        mark("advice_complete")
+        yield snapshot
+        return
+    check_current()
+    enrichment_started = time.monotonic()
+    mark("initial_portfolio_ready")
+    yield {"type": "snapshot", "view_id": view_id, **snapshot}
+    if pending:
+        for item, initial_row in zip(base_items, enriched_items):
+            try:
+                check_current()
+                row = build_row(item, initial=False, cached_deterministic=initial_row["deterministic_portfolio"])
+            except ObsoletePortfolio:
+                yield {"type": "expired", "view_id": view_id}
+                return
+            db.session.rollback()
+            # Only advice may update after first paint. Never overwrite a newer
+            # live quote, quantities, prices, charts or valuation with this snapshot.
+            fields = ("id", "symbol", "advice", "base_advice", "advice_reason", "suitability",
+                      "profile_version", "profile_complete", "ai_portfolio", "enrichment_state",
+                      "advice_as_of", "portfolio_view_id")
+            yield {"type": "advice", "view_id": view_id, "item": {key: row[key] for key in fields}}
     mark("advice_complete")
-    return timing_call("serialization", jsonify, {"items": base_items, "enriched_items": enriched_items, "request_id": g.request_id})
+    yield {"type": "complete", "view_id": view_id}
 
 
 @api_bp.post("/user-watchlist")
