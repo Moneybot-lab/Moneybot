@@ -93,7 +93,7 @@ def _ui(items, scenario, *, actual_render=False):
     )[1].split("              function renderRows(items){", 1)[0]
     render_source = "function renderRows(items){" + source.split(
         "              function renderRows(items){", 1
-    )[1].split("              async function load(){", 1)[0]
+    )[1].split("              async function load({", 1)[0]
     harness = r"""
 const fs = require('fs');
 const vm = require('vm');

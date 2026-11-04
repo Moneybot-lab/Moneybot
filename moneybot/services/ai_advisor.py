@@ -53,6 +53,51 @@ def _is_valid_json_object_text(text: str) -> bool:
     return isinstance(parsed, dict)
 
 
+def _portfolio_response_metadata(data):
+    """Allowlisted aggregates only, collected by the existing bounded sampler."""
+    if not isinstance(data, dict):
+        return
+    usage = data.get("usage")
+    if isinstance(usage, dict):
+        details = usage.get("output_tokens_details")
+        for name, value in (
+            ("ai.input_tokens", usage.get("input_tokens")),
+            ("ai.output_tokens", usage.get("output_tokens")),
+            ("ai.reasoning_tokens", details.get("reasoning_tokens") if isinstance(details, dict) else None),
+        ):
+            if type(value) is int and 0 <= value <= 1_000_000:
+                count(name, value)
+    incomplete = data.get("incomplete_details")
+    if isinstance(incomplete, dict) and incomplete.get("reason") == "max_output_tokens":
+        count("ai.output_budget_exhausted")
+
+
+def _portfolio_response_error(data, parsed):
+    if not isinstance(data, dict):
+        return "ai.invalid_envelope"
+    # Missing status is accepted for compatible legacy Responses envelopes.
+    # An explicitly unfinished response must never be labelled completed AI.
+    if data.get("status") not in (None, "completed"):
+        return "ai.incomplete" if data.get("status") == "incomplete" else "ai.unsuccessful_status"
+    if not isinstance(parsed, dict):
+        return "ai.invalid_json"
+    required = {"advice", "advice_reason", "risk_notes", "next_checks"}
+    if not required.issubset(parsed):
+        return "ai.missing_fields"
+    # Preserve the existing harmless action normalization; do not retry a
+    # usable response merely because its enum has whitespace or lower case.
+    if (set(parsed) != required or not isinstance(parsed["advice"], str)
+            or parsed["advice"].strip().upper() not in ("BUY", "HOLD", "SELL")):
+        return "ai.invalid_fields"
+    if not isinstance(parsed["advice_reason"], str) or not parsed["advice_reason"].strip():
+        return "ai.invalid_fields"
+    for name in ("risk_notes", "next_checks"):
+        values = parsed[name]
+        if not isinstance(values, list) or len(values) != 2 or any(not isinstance(v, str) or not v.strip() for v in values):
+            return "ai.invalid_fields"
+    return None
+
+
 class AIAdvisorService:
     """Optional LLM enhancer for quick buy/sell suggestions.
 
@@ -380,7 +425,7 @@ class AIAdvisorService:
             )
 
         now = time.time()
-        if now < self._disabled_until:
+        if now < max(self._disabled_until, getattr(self, "_portfolio_invalid_until", 0)):
             count("ai.cooldown_skip")
             return self._portfolio_fallback(
                 entry_price=entry_price,
@@ -443,8 +488,8 @@ class AIAdvisorService:
             {
                 "model": self.model,
                 "input": prompt,
-                "max_output_tokens": 220,
-                "reasoning": {"effort": "low"},
+                "max_output_tokens": 420,
+                "reasoning": {"effort": "minimal"},
                 "text": {
                     "format": {
                         "type": "json_schema",
@@ -479,20 +524,30 @@ class AIAdvisorService:
             try:
                 resp = timing_call("provider.openai", requests.post, url, headers=headers, json=payload, timeout=self.timeout_s)
                 resp.raise_for_status()
-                raw = self._extract_response_text(resp.json())
-                if not raw or not _is_valid_json_object_text(raw):
+                try:
+                    data = resp.json()
+                except (ValueError, TypeError):
+                    data = None
+                _portfolio_response_metadata(data)
+                raw = self._extract_response_text(data) if isinstance(data, dict) else None
+                parsed = json.loads(raw) if raw and _is_valid_json_object_text(raw) else None
+                invalid = _portfolio_response_error(data, parsed)
+                if invalid:
+                    count(invalid)
                     count("ai.malformed")
                     if idx < len(payloads) - 1:
                         continue
+                    # Two unusable attempts justify a portfolio-only pause.
+                    # A corrected first failure/successful retry never trips it.
+                    self._portfolio_invalid_until = time.time() + float(self.failure_cooldown_s)
+                    count("ai.cooldown_invalid")
                     return self._portfolio_fallback(
                         entry_price=entry_price,
                         current_price=current_price,
                         signal_score=score,
                         reason="empty_or_unparseable_provider_response",
                     )
-                parsed = json.loads(raw)
-                if not {"advice", "advice_reason", "risk_notes", "next_checks"}.issubset(parsed):
-                    count("ai.missing_fields")
+                count("ai.first_valid" if idx == 0 else "ai.retry_valid")
                 model_advice = str(parsed.get("advice") or "HOLD").strip().upper()
                 advice = self._post_process_portfolio_advice(
                     advice=model_advice,

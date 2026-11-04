@@ -6,7 +6,7 @@ import pytest
 from moneybot.services.ai_advisor import AIAdvisorService
 
 
-def _portfolio_advice(monkeypatch, provider_advice, *, signal=None, entry_price=100.0, current_price=100.0):
+def _portfolio_advice(monkeypatch, provider_advice, *, signal=None, entry_price=100.0, current_price=100.0, valid=True):
     """Exercise the real Portfolio response path with one synthetic provider response."""
     service = AIAdvisorService(enabled=True, provider="openai", api_key="synthetic-test-key")
     signal = signal or {"score": 5.0, "technical": {"rsi": 50}, "sentiment": {"score": 0.0}}
@@ -34,11 +34,11 @@ def _portfolio_advice(monkeypatch, provider_advice, *, signal=None, entry_price=
         signal_data=signal,
     )
 
-    assert len(calls) == 1
+    assert len(calls) == (1 if valid else 2)
     assert calls[0][0] == "https://api.openai.com/v1/responses"
     assert calls[0][1]["model"] == "gpt-5-mini"
-    assert calls[0][1]["reasoning"] == {"effort": "low"}
-    assert calls[0][1]["max_output_tokens"] == 220
+    assert calls[0][1]["reasoning"] == {"effort": "minimal"}
+    assert calls[0][1]["max_output_tokens"] == 420
     context = json.loads(calls[0][1]["input"].split("Context: ", 1)[1])
     assert context["entry_price"] == entry_price
     assert context["current_price"] == current_price
@@ -48,7 +48,7 @@ def _portfolio_advice(monkeypatch, provider_advice, *, signal=None, entry_price=
     assert context["technical"] == signal["technical"]
     assert context["sentiment"] == signal["sentiment"]
     assert signal == original_signal
-    assert result["mode"] == "ai_enhanced"
+    assert result["mode"] == ("ai_enhanced" if valid else "rule_based")
     return result
 
 
@@ -91,7 +91,7 @@ def test_postprocessed_portfolio_action_replaces_obsolete_model_explanation(
 @pytest.mark.parametrize("model_action", [None, "WAIT", 7, ["BUY"]], ids=["null", "invalid-enum", "numeric", "list"])
 def test_invalid_model_action_preserves_hold_selection_without_unattributed_buy_reason(monkeypatch, model_action):
     reason = "Buy this dip now."
-    result = _portfolio_advice(monkeypatch, _provider_advice(model_action, reason))
+    result = _portfolio_advice(monkeypatch, _provider_advice(model_action, reason), valid=False)
 
     assert result["advice"] == "HOLD"
     assert reason not in result["advice_reason"]
@@ -101,7 +101,7 @@ def test_invalid_model_action_preserves_hold_selection_without_unattributed_buy_
 def test_missing_model_action_preserves_hold_selection_without_unattributed_buy_reason(monkeypatch):
     payload = _provider_advice("BUY", "Buy this dip now.")
     payload.pop("advice")
-    result = _portfolio_advice(monkeypatch, payload)
+    result = _portfolio_advice(monkeypatch, payload, valid=False)
 
     assert result["advice"] == "HOLD"
     assert payload["advice_reason"] not in result["advice_reason"]
@@ -110,23 +110,23 @@ def test_missing_model_action_preserves_hold_selection_without_unattributed_buy_
 
 @pytest.mark.parametrize("model_action", ["BUY", "HOLD", "SELL"])
 @pytest.mark.parametrize("model_reason", [None, "", "   ", 42, ["Buy now"], {"instruction": "Buy now"}])
-def test_invalid_model_reason_uses_selected_action_without_changing_decision(monkeypatch, model_action, model_reason):
-    result = _portfolio_advice(monkeypatch, _provider_advice(model_action, model_reason))
+def test_invalid_model_reason_uses_explicit_rule_fallback(monkeypatch, model_action, model_reason):
+    result = _portfolio_advice(monkeypatch, _provider_advice(model_action, model_reason), valid=False)
 
-    assert result["advice"] == model_action
-    assert model_action in result["advice_reason"].upper()
+    assert result["advice"] == "HOLD"
+    assert "HOLD" in result["advice_reason"].upper()
     assert "Buy now" not in result["advice_reason"]
     assert "42" not in result["advice_reason"]
 
 
 @pytest.mark.parametrize("model_action", ["BUY", "HOLD", "SELL"])
-def test_missing_model_reason_uses_selected_action_without_changing_decision(monkeypatch, model_action):
+def test_missing_model_reason_uses_explicit_rule_fallback(monkeypatch, model_action):
     payload = _provider_advice(model_action, "unused")
     payload.pop("advice_reason")
-    result = _portfolio_advice(monkeypatch, payload)
+    result = _portfolio_advice(monkeypatch, payload, valid=False)
 
-    assert result["advice"] == model_action
-    assert model_action in result["advice_reason"].upper()
+    assert result["advice"] == "HOLD"
+    assert "HOLD" in result["advice_reason"].upper()
 
 
 @pytest.mark.parametrize(
@@ -146,7 +146,7 @@ def test_unchanged_valid_model_advice_preserves_matching_commentary(monkeypatch,
 
 
 def test_empty_provider_object_keeps_existing_hold_default_with_matching_explanation(monkeypatch):
-    result = _portfolio_advice(monkeypatch, {})
+    result = _portfolio_advice(monkeypatch, {}, valid=False)
 
     assert result["advice"] == "HOLD"
     assert "HOLD" in result["advice_reason"].upper()

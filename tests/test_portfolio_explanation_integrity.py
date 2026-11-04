@@ -148,7 +148,7 @@ def test_locked_reason_survives_provider_failure_modes(portfolio, monkeypatch, f
     row = portfolio("HOLD", svc)
     assert row["advice"] == "HOLD"
     assert row["advice_reason"] == "HOLD: authoritative synthetic reason."
-    assert len(calls) == (0 if failure in {"disabled", "cooldown"} else 2 if failure in {"timeout", "invalid"} else 1)
+    assert len(calls) == (0 if failure in {"disabled", "cooldown"} else 2 if failure in {"timeout", "invalid", "incomplete"} else 1)
 
 
 @pytest.mark.parametrize("action", ["BUY", "HOLD", "SELL"])

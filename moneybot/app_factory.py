@@ -1564,6 +1564,9 @@ def create_app() -> Flask:
               const sharesEl = document.getElementById('shares');
               symbolEl.addEventListener('input', (event) => normalizeTickerInputValue(event.target));
               let currentPortfolioItems = [];
+              let portfolioLoadGeneration = 0;
+              let portfolioLoadController = null;
+              let portfolioViewId = null;
               let currentAdviceContext = null;
               let portfolioEventSource = null;
               let portfolioReconnectTimer = null;
@@ -1736,7 +1739,7 @@ def create_app() -> Flask:
                 });
                 portfolioEventSource.addEventListener('recommendation_refresh', () => {
                   setPortfolioLiveStatus('Market boundary changed. Refreshing recommendation without generating a new AI narrative…', 'idle');
-                  if(!portfolioReconnectTimer) portfolioReconnectTimer = setTimeout(() => { portfolioReconnectTimer = null; load(); }, 1200);
+                  if(!portfolioReconnectTimer) portfolioReconnectTimer = setTimeout(() => { portfolioReconnectTimer = null; load({enrich:false}); }, 1200);
                 });
                 portfolioEventSource.onerror = () => {
                   portfolioBrowserState = 'reconnecting';
@@ -1752,13 +1755,16 @@ def create_app() -> Flask:
               }
               window.addEventListener('beforeunload', () => { if(portfolioEventSource) portfolioEventSource.close(); });
 
+              window.addEventListener('pagehide', () => { stopPortfolioEnrichment(); if(portfolioEventSource) portfolioEventSource.close(); if(portfolioReconnectTimer){ clearTimeout(portfolioReconnectTimer); portfolioReconnectTimer = null; } });
+              window.addEventListener('pageshow', (event) => { if(event.persisted) load({enrich:false}); });
+
               function adviceBadge(value){
                 const advice = String(value || 'HOLD').toUpperCase();
                 const color = advice === 'BUY' ? '#166534' : (advice === 'SELL' ? '#4d7c0f' : '#3f3f46');
                 return `<span style="display:inline-block;padding:4px 8px;border-radius:999px;background:${color};color:#f0fdf4;font-weight:700;font-size:12px">${advice}</span>`;
               }
               function adviceButton(item, idx){
-                return `<button onclick="showAdvice(${idx})" title="Click to see why this advice was generated" style="border:none;background:none;padding:0;cursor:pointer">${adviceBadge(item.advice)}</button>`;
+                return `<button onclick="showAdvice(${idx})" title="Click to see why this advice was generated" style="border:none;background:none;padding:0;cursor:pointer">${adviceBadge(item.advice)}</button><small style="display:block">${escapeHtml(portfolioAdviceStatus(item))}</small>`;
               }
               function escapeHtml(value){
                 return String(value || '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] || ch));
@@ -1773,7 +1779,7 @@ def create_app() -> Flask:
                 const aiPortfolio = (item && typeof item.ai_portfolio === 'object' && item.ai_portfolio) ? item.ai_portfolio : {};
                 const suitability = (item && typeof item.suitability === 'object' && item.suitability) ? item.suitability : {};
                 const profileRules = Array.isArray(suitability.applied_rules) ? suitability.applied_rules : [];
-                const mode = String(aiPortfolio.mode || 'rule_based').replaceAll('_', ' ');
+                const mode = portfolioAdviceStatus(item);
                 const riskNotes = Array.isArray(aiPortfolio.risk_notes) ? aiPortfolio.risk_notes : [];
                 const nextChecks = Array.isArray(aiPortfolio.next_checks) ? aiPortfolio.next_checks : [];
                 // Independent model text has no verified association with the final
@@ -1787,11 +1793,13 @@ def create_app() -> Flask:
                 document.getElementById('adviceTitle').textContent = `${symbol} · ${advice} rationale`;
                 document.getElementById('adviceReason').innerHTML = `
                   <strong style="display:block;color:#bbf7d0;margin-bottom:6px">${escapeHtml(symbol)} · ${escapeHtml(mode)}</strong>
+                  ${item.advice_as_of ? `<div>Advice uses the portfolio snapshot at ${escapeHtml(new Date(item.advice_as_of).toLocaleTimeString())}; live prices may have changed.</div>` : ''}
                   <ul style="margin:0;padding-left:18px;display:grid;gap:4px;color:#dcfce7">
                     <li>${escapeHtml(reason)}</li>
                     ${item.base_advice && item.base_advice !== item.advice ? `<li><strong>Base market action:</strong> ${escapeHtml(item.base_advice)} → <strong>Profile-aware action:</strong> ${escapeHtml(item.advice)}</li>` : ''}
                     ${profileRules.map((rule) => `<li><strong>Profile rule:</strong> ${escapeHtml(rule.message || rule.code)}</li>`).join('')}
                     ${profileRules.length ? '<li><a href="/settings" style="color:#bbf7d0;font-weight:800">Review investor profile settings</a></li>' : ''}
+                    ${(item.lots || []).length > 1 ? item.lots.map(lot=>`<li><strong>Lot ${escapeHtml(lot.created_at)} (${escapeHtml(lot.shares)} shares): ${escapeHtml(lot.advice)}</strong> · ${escapeHtml(portfolioAdviceStatus(lot))}<br>${escapeHtml(lot.advice_reason)}</li>`).join('') : ''}
                     <li><strong>Risk:</strong> ${escapeHtml(topRisk)}</li>
                     <li><strong>Next:</strong> ${escapeHtml(topCheck)}</li>
                   </ul>`;
@@ -2004,42 +2012,154 @@ def create_app() -> Flask:
                 const totalTodayChange = items.reduce((sum, item) => sum + (typeof item.today_change_amount === 'number' ? item.today_change_amount : 0), 0);
                 const totalPerformance = items.reduce((sum, item) => sum + (typeof item.performance_amount === 'number' ? item.performance_amount : 0), 0);
 
-                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}<small style="display:block;color:#4d7c0f">${(i.lots || [i]).length} acquisition lot${(i.lots || [i]).length === 1 ? '' : 's'}</small></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${livePriceCell(i)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:6px;background:#000;min-width:172px"><div id="trend-${idx}" style="width:160px;height:44px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="editRow(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Edit</button></div></td></tr>`).join('')
+                rowsEl.innerHTML = items.map((i,idx)=>`<tr><td style="border:1px solid #e5e7eb;padding:8px;font-size:15px">${tickerButton(i.symbol)}<small style="display:block;color:#4d7c0f">${(i.lots || [i]).length} acquisition lot${(i.lots || [i]).length === 1 ? '' : 's'}</small></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(i.entry_price)}</td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.shares)}</td><td style="border:1px solid #e5e7eb;padding:8px">${livePriceCell(i)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.today_change_amount, i.today_change_percent)}</td><td style="border:1px solid #e5e7eb;padding:8px">${performanceCell(i.performance_amount, i.performance_percent)}</td><td style="border:1px solid #e5e7eb;padding:6px;background:#000;min-width:172px"><div id="trend-${idx}" style="width:160px;height:44px"></div></td><td style="border:1px solid #e5e7eb;padding:8px">${displayValue(i.score)}</td><td id="portfolio-advice-${idx}" style="border:1px solid #e5e7eb;padding:8px">${adviceButton(i, idx)}</td><td style="border:1px solid #e5e7eb;padding:8px"><div style="display:flex;gap:6px;flex-wrap:wrap"><button onclick="markBought(${i.id})" style="border:none;background:#16a34a;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Buy</button><button onclick="markSold(${i.id})" style="border:none;background:#15803d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Sold</button><button onclick="editRow(${i.id})" style="border:none;background:#65a30d;color:#f0fdf4;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer">Edit</button></div></td></tr>`).join('')
                 + `<tr style="background:#f7fee7;font-weight:700"><td style="border:1px solid #e5e7eb;padding:8px">Totals</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${formatMoney(totalValue)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalTodayChange)}</td><td style="border:1px solid #e5e7eb;padding:8px">${amountCell(totalPerformance)}</td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px"></td><td style="border:1px solid #e5e7eb;padding:8px;color:#3f3f46;font-size:12px">Click advice badges to see why.</td><td style="border:1px solid #e5e7eb;padding:8px"></td></tr>`;
                 items.forEach((item, idx)=> renderTrend(`trend-${idx}`, item.history30 || [], item.current_price, item.history30_bars || []));
               }
 
-              async function load(){
+              async function load({enrich=true}={}){
+                stopPortfolioEnrichment();
+                const generation = portfolioLoadGeneration;
+                const controller = new AbortController();
+                portfolioLoadController = controller;
+                let initialReceived = false;
+                let terminalReceived = false;
                 setLoading(true);
+                const accept = (event) => {
+                  if(generation !== portfolioLoadGeneration) return;
+                  if(event.type === 'snapshot'){
+                    if(initialReceived) return;
+                    initialReceived = true;
+                    portfolioViewId = event.view_id;
+                    renderRows(selectPortfolioRows(event));
+                    updateInitialPortfolioTotals();
+                    setLoading(false);
+                    startPortfolioLive();
+                    // Summary is secondary and must not hold the initial rows or
+                    // the enrichment reader hostage. Same generation/abort fence.
+                    loadPortfolioSummary(generation, controller.signal);
+                    if(lifetimePanelEl.style.display !== 'none') loadSoldTrades();
+                  } else if(event.type === 'advice'){
+                    applyPortfolioAdvice(event, generation);
+                  } else if(['complete','expired','failed'].includes(event.type)){
+                    terminalReceived = true;
+                    finishPortfolioEnrichment(event.type, generation);
+                  }
+                };
                 try {
-                  const res = await apiFetch('/api/user-watchlist');
-                  let data = {};
-                  try {
-                    data = await res.json();
-                  } catch (jsonErr) {
-                    data = {};
+                  let res = await apiFetch(enrich ? '/api/user-watchlist/stream' : '/api/user-watchlist?defer_ai=1', {signal:controller.signal});
+                  // Admission is nonblocking: still show full market data when
+                  // another view owns enrichment. No automatic AI retry loop.
+                  if(res.status === 429 && enrich){
+                    res = await apiFetch('/api/user-watchlist?defer_ai=1', {signal:controller.signal});
                   }
                   if(!res.ok){
-                    if (res.status === 401) { location.href='/login'; return; }
-                    rowsEl.innerHTML = '<tr><td colspan="10" style="padding:8px;color:#4d7c0f">Unable to load watchlist right now.</td></tr>';
-                    outEl.textContent = data.error || 'Please try again in a moment.';
-                    return;
+                    if(res.status === 401){ location.href='/login'; return; }
+                    throw new Error('Portfolio unavailable');
                   }
-                  renderRows(selectPortfolioRows(data));
-                  const summaryRes = await apiFetch('/api/portfolio-summary');
-                  if(summaryRes.ok){ const summary = await summaryRes.json(); [['currentMarketValue','current_market_value'],['remainingCostBasis','remaining_cost_basis'],['unrealizedPnl','unrealized_gain_loss'],['realizedPnl','realized_gain_loss'],['lifetimePnl','lifetime_gain_loss']].forEach(([id,key])=>{ const el=document.getElementById(id); el.textContent=formatMoney(summary[key]||0); el.style.color=amountColor(summary[key]); }); }
-                  startPortfolioLive();
-                  if (lifetimePanelEl.style.display !== 'none') {
-                    await loadSoldTrades();
+                  if(!(res.headers.get('content-type') || '').includes('application/x-ndjson')){
+                    const data = await res.json();
+                    accept({...data,type:'snapshot'});
+                    accept({type:'complete'});
+                  } else if(!res.body || !res.body.getReader){
+                    // Older browsers retain compatibility, but buffer until EOF.
+                    (await res.text()).split('\\n').filter(Boolean).forEach(line => accept(JSON.parse(line)));
+                  } else {
+                    const reader = res.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+                    try {
+                      while(true){
+                        const {done,value} = await reader.read();
+                        if(generation !== portfolioLoadGeneration) break;
+                        buffer += decoder.decode(value, {stream:!done});
+                        if(buffer.length > 8 * 1024 * 1024) throw new Error('Portfolio response too large');
+                        let boundary;
+                        while((boundary = buffer.indexOf('\\n')) >= 0){
+                          const line = buffer.slice(0,boundary); buffer = buffer.slice(boundary+1);
+                          if(line.trim()) accept(JSON.parse(line));
+                        }
+                        if(done){ if(buffer.trim()) accept(JSON.parse(buffer)); break; }
+                      }
+                    } finally { await reader.cancel().catch(()=>{}); reader.releaseLock(); }
                   }
-                } catch (err) {
-                  rowsEl.innerHTML = '<tr><td colspan="10" style="padding:8px;color:#4d7c0f">Unable to load portfolio rows right now. Please refresh.</td></tr>';
-                  outEl.textContent = 'Portfolio data did not load completely. Please refresh in a moment.';
+                  if(!initialReceived) throw new Error('Portfolio snapshot unavailable');
+                  if(!terminalReceived) finishPortfolioEnrichment('failed', generation);
+                } catch(err){
+                  if(generation !== portfolioLoadGeneration || err.name === 'AbortError') return;
+                  if(initialReceived) finishPortfolioEnrichment('failed', generation);
+                  else outEl.textContent = 'Portfolio could not load. Please use Refresh Portfolio.';
                 } finally {
-                  setLoading(false);
+                  if(generation === portfolioLoadGeneration) setLoading(false);
+                }
+              }
+
+              function stopPortfolioEnrichment(){
+                portfolioLoadGeneration += 1;
+                if(portfolioLoadController) portfolioLoadController.abort();
+                portfolioLoadController = null;
+                portfolioViewId = null;
+              }
+              function portfolioAdviceStatus(item){
+                const source = (item.deterministic_portfolio || {}).decision_source === 'deterministic_model' ? 'Model decision' : 'Rule-based decision';
+                const policy = (item.suitability || {}).changed ? ' · suitability adjusted' : '';
+                const state = item.enrichment_state;
+                const ai = state === 'pending' ? 'AI pending' : state === 'expired' ? 'AI expired — refresh to retry' : state === 'failed' ? 'AI interrupted — refresh to retry' : (item.ai_portfolio || {}).mode === 'ai_enhanced' ? 'AI enhanced' : 'AI fallback';
+                const lots = item.lots || [item];
+                const pending = lots.filter(lot=>lot.enrichment_state === 'pending').length;
+                return `${source}${policy} · ${ai}${lots.length > 1 ? ` · ${pending} of ${lots.length} lots pending; open for lot details` : ''}`;
+              }
+              function applyPortfolioAdvice(event, generation){
+                if(generation !== portfolioLoadGeneration || event.view_id !== portfolioViewId) return;
+                const update = event.item || {};
+                const idx = currentPortfolioItems.findIndex(row => (row.lots || [row]).some(lot => lot.id === update.id && lot.symbol === update.symbol));
+                if(idx < 0) return;
+                const row = currentPortfolioItems[idx];
+                const lot = (row.lots || [row]).find(lot => lot.id === update.id);
+                if(lot.enrichment_state !== 'pending' || update.portfolio_view_id !== portfolioViewId) return;
+                // Explicit advice fields only: never regress live quotes/charts or
+                // replace a grouped position's shares with one acquisition lot.
+                const fields = ['advice','base_advice','advice_reason','suitability','profile_version','profile_complete','ai_portfolio','enrichment_state','advice_as_of'];
+                fields.forEach(key => { lot[key] = update[key]; if(row.id === lot.id) row[key] = update[key]; });
+                const cell = document.getElementById(`portfolio-advice-${idx}`);
+                if(cell) cell.innerHTML = adviceButton(row, idx);
+                // Keep unrelated explanations open; a changed lot's explanation
+                // must not continue to describe its superseded action.
+                if(currentAdviceContext && currentAdviceContext.symbol === update.symbol) closeAdviceModal();
+              }
+              function finishPortfolioEnrichment(state, generation){
+                if(generation !== portfolioLoadGeneration) return;
+                currentPortfolioItems.forEach((row, idx) => {
+                  (row.lots || [row]).forEach(lot => { if(lot.enrichment_state === 'pending') lot.enrichment_state = state === 'expired' ? 'expired' : 'failed'; });
+                  if(row.enrichment_state === 'pending') row.enrichment_state = state === 'expired' ? 'expired' : 'failed';
+                  const cell = document.getElementById(`portfolio-advice-${idx}`);
+                  if(cell) cell.innerHTML = adviceButton(row, idx);
+                });
+                if(state !== 'complete') outEl.textContent = 'AI enrichment stopped. Current prices and charts remain available. Refresh Portfolio to retry.';
+              }
+              function updateInitialPortfolioTotals(){
+                const value = currentPortfolioItems.reduce((sum,row)=>sum+Number(row.current_price || 0)*Number(row.shares || 0),0);
+                const basis = currentPortfolioItems.reduce((sum,row)=>sum+Number(row.entry_price || 0)*Number(row.shares || 0),0);
+                [['currentMarketValue',value],['remainingCostBasis',basis],['unrealizedPnl',value-basis]].forEach(([id,amount])=>{
+                  const el = document.getElementById(id); if(el){ el.textContent=formatMoney(amount); el.style.color=amountColor(amount); }
+                });
+                ['realizedPnl','lifetimePnl'].forEach(id=>{ const el=document.getElementById(id); if(el) el.textContent='Loading…'; });
+              }
+              async function loadPortfolioSummary(generation, signal){
+                try {
+                  const res = await apiFetch('/api/portfolio-summary', {signal});
+                  const data = await res.json();
+                  if(generation !== portfolioLoadGeneration) return;
+                  if(!res.ok) throw new Error('Summary unavailable');
+                  [['realizedPnl','realized_gain_loss'],['lifetimePnl','lifetime_gain_loss']].forEach(([id,key])=>{ const el=document.getElementById(id); el.textContent=formatMoney(data[key]||0); el.style.color=amountColor(data[key]); });
+                } catch(_err){
+                  if(generation === portfolioLoadGeneration){
+                    ['realizedPnl','lifetimePnl'].forEach(id=>{ const el=document.getElementById(id); if(el) el.textContent='Unavailable — refresh to retry'; });
+                  }
                 }
               }
               async function addItem(event){
+                stopPortfolioEnrichment();
                 if (event) event.preventDefault();
                 outEl.textContent = 'Adding purchase lot…';
                 try {
@@ -2083,6 +2203,7 @@ def create_app() -> Flask:
               }
 
               async function editSoldTrade(id){
+                stopPortfolioEnrichment();
                 const res = await apiFetch('/api/sold-trades');
                 const soldData = await res.json();
                 if(!res.ok){
@@ -2149,6 +2270,7 @@ def create_app() -> Flask:
               }
 
               async function markSold(id){
+                stopPortfolioEnrichment();
                 const position = currentPortfolioItems.find((entry)=> entry.id === id);
                 if(!position){
                   outEl.textContent = 'Unable to find portfolio item.';
@@ -2206,6 +2328,7 @@ def create_app() -> Flask:
               }
 
               async function markBought(id){
+                stopPortfolioEnrichment();
                 const item = currentPortfolioItems.find((entry)=> entry.id === id);
                 if(!item){
                   outEl.textContent = 'Unable to find portfolio item.';
@@ -2260,6 +2383,7 @@ def create_app() -> Flask:
                 await load();
               }
               async function editRow(id){
+                stopPortfolioEnrichment();
                 const item = currentPortfolioItems.find((entry)=> entry.id === id);
                 if(!item){
                   outEl.textContent = 'Unable to find portfolio item.';

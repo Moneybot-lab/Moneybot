@@ -27,10 +27,13 @@ COUNTERS = frozenset({
     "cache.hit", "cache.miss", "ai.disabled", "ai.unsupported", "ai.cooldown_skip",
     "ai.malformed", "ai.missing_fields", "ai.parse_or_other_error", "ai.enhanced", "ai.cooldown_timeout", "ai.cooldown_5xx",
     "decision.write", "decision.write_error",
+    "ai.first_valid", "ai.retry_valid", "ai.incomplete", "ai.unsuccessful_status", "ai.invalid_json",
+    "ai.invalid_envelope", "ai.invalid_fields", "ai.cooldown_invalid", "ai.output_budget_exhausted",
+    "ai.input_tokens", "ai.output_tokens", "ai.reasoning_tokens",
 })
-MILESTONES = frozenset({"market_inputs_complete", "advice_complete"})
+MILESTONES = frozenset({"market_inputs_complete", "advice_complete", "initial_portfolio_ready"})
 OUTCOMES = ("ok", "connect_timeout", "read_timeout", "timeout", "http_4xx", "http_5xx", "error")
-ENDPOINTS = {"api.user_watchlist", "api.portfolio_summary", "api.stable_watchlist"}
+ENDPOINTS = {"api.user_watchlist", "api.user_watchlist_stream", "api.portfolio_summary", "api.stable_watchlist"}
 _active: ContextVar[Trace | None] = ContextVar("portfolio_timing", default=None)
 _logger = logging.getLogger("moneybot.portfolio_timing")
 
@@ -74,10 +77,10 @@ class Trace:
         stats["outcomes"][outcome] = stats["outcomes"].get(outcome, 0) + 1
 
 
-def count(name):
+def count(name, amount=1):
     trace = _active.get()
     if trace is not None and name in COUNTERS:
-        trace.counters[name] = trace.counters.get(name, 0) + 1
+        trace.counters[name] = trace.counters.get(name, 0) + amount
 
 
 def mark(name):
@@ -217,7 +220,34 @@ def install_request_timing(app, db):
         trace = getattr(g, "portfolio_timing_trace", None)
         if trace is not None:
             # Do not consume a response iterator or perform a second serialization.
-            emit(trace, response.status_code, response.content_length)
+            if response.is_streamed:
+                original = response.response
+                trace.streaming = True
+
+                def measured_stream():
+                    token = _active.set(trace)
+                    size = 0
+                    try:
+                        for chunk in original:
+                            size += len(chunk.encode() if isinstance(chunk, str) else chunk)
+                            yield chunk
+                    finally:
+                        try:
+                            if hasattr(original, "close"):
+                                original.close()
+                        finally:
+                            emit(trace, response.status_code, size)
+                            _active.reset(token)
+
+                response.response = measured_stream()
+                # A WSGI server may close the response without advancing our
+                # wrapper. Closing an unstarted generator does not enter its
+                # finally block, so retain cleanup callbacks for that path too.
+                if hasattr(original, "close"):
+                    response.call_on_close(original.close)
+                response.call_on_close(lambda: emit(trace, response.status_code, None))
+            else:
+                emit(trace, response.status_code, response.content_length)
             response.headers["X-Portfolio-Timing-ID"] = trace.trace_id
         return response
 
@@ -226,7 +256,7 @@ def install_request_timing(app, db):
         trace = getattr(g, "portfolio_timing_trace", None)
         token = g.pop("portfolio_timing_token", None)
         try:
-            if trace is not None and not trace.emitted:
+            if trace is not None and not trace.emitted and not getattr(trace, "streaming", False):
                 emit(trace, 500 if error is not None else None, None)
         finally:
             if token is not None:

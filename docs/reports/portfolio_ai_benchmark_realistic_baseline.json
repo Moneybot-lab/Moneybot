@@ -1,0 +1,75 @@
+{
+  "schema": "portfolio-ai-benchmark.v1",
+  "mode": "baseline",
+  "parent_commit": "42031dab4730d754b764f33c58ba7bb55bce262e",
+  "source_sha256": {
+    "moneybot/api.py": "87c62be7fb52b1277e6a8ef52c09919510c252212171b98ba400c85e757cda9c",
+    "moneybot/app_factory.py": "8ff0983553dbecdc8710eb9fd1ea52ec34b9e2c26a7bfc17e76ceb390edd6a3e",
+    "moneybot/services/ai_advisor.py": "b1ee23d8dacbd30e8b7a2e7280478e45c81f0bc1a6f9d768c917be7674ad39b0",
+    "moneybot/services/request_timing.py": "5df7d7ba8c8d61c618cd323605d64385142c769b82fd04c1ea6f4a019d7ad876"
+  },
+  "peak_process_rss_mib": 134.8203125,
+  "fixture": {
+    "samples": 1,
+    "market_delay_seconds": 0.209,
+    "ai_delay_seconds": 2.627,
+    "network": "blocked; synthetic sleeps only",
+    "p95": "nearest rank, minimum 20 observations",
+    "token_usage": "Synthetic reported usage, NOT measured billable usage. Reasoning tokens are a subset of output tokens.",
+    "profile_sensitive": "Conditional reproduction: 220/low is incomplete, 420/minimal is valid. This does not prove why production failed."
+  },
+  "cases": [
+    {
+      "positions": 28,
+      "unique_symbols": 10,
+      "failure": "profile_sensitive",
+      "summary": {
+        "usable_seconds": {
+          "median": 153.47744056698866,
+          "p95": null,
+          "maximum": 153.47744056698866
+        },
+        "complete_seconds": {
+          "median": 153.47744178795256,
+          "p95": null,
+          "maximum": 153.47744178795256
+        },
+        "cpu_seconds": {
+          "median": 0.07723107800000006,
+          "p95": null,
+          "maximum": 0.07723107800000006
+        }
+      },
+      "observations": [
+        {
+          "usable_seconds": 153.47744056698866,
+          "complete_seconds": 153.47744178795256,
+          "cpu_seconds": 0.07723107800000006,
+          "ai": {
+            "attempts": 56,
+            "allocated_output_tokens": 17920,
+            "invalid": 28,
+            "reported_input_tokens": 22400,
+            "reported_output_tokens": 11200,
+            "reported_reasoning_tokens": 6160,
+            "valid": 28
+          },
+          "first_valid_percent": 0.0,
+          "invalid_percent": 50.0,
+          "timeout_percent": 0.0,
+          "providers": {
+            "provider.quote.synthetic_massive": 10,
+            "provider.history.synthetic_massive": 10,
+            "provider.sector.synthetic_yfinance": 10,
+            "provider.ai.synthetic_openai": 56
+          },
+          "peak_provider_concurrency": 1,
+          "decision_events": 28,
+          "completed_ai": 28,
+          "financial_sha256": "8b3f35f77c049cfb446874d43e007d6e41a40e63dbffbbf21f367b8b8df927b2",
+          "final_advice_sha256": "76aeb7d2e7af740dd5a059be2bc2ce758d5616f71b39096fd357de76db3b975e"
+        }
+      ]
+    }
+  ]
+}
