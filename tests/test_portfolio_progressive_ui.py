@@ -28,7 +28,7 @@ const assert = require('assert');
   assert(!html.includes('AI enhanced'));
 });
 """
-    subprocess.run(["node","-e",functions+"\\n"+code],text=True,capture_output=True,check=True,timeout=10)
+    subprocess.run(["node","-e",functions+"\n"+code],text=True,capture_output=True,check=True,timeout=10)
     # Detailed source, per-lot progress and advice reasons remain in the modal.
     assert "const mode = portfolioAdviceStatus(item);" in page
     assert "lot.advice_reason" in page
