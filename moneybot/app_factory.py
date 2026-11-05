@@ -1614,6 +1614,7 @@ def create_app() -> Flask:
                 if(live.price === null && flags.includes('price_unavailable') && !live.event_timestamp){
                   return {key:'unavailable', label:'Price unavailable', color:'#b45309'};
                 }
+                if(live.admission_status === 'UNKNOWN' && flags.includes('price_authority_unverified')) return {key:'unknown', label:'Last known · Status unknown', color:'#71717a'};
                 if(source === 'last_known') return {key:'stale', label:'Last known · Stale', color:'#b45309'};
                 if(typeof live.is_stale !== 'boolean'){
                   return {key:'unknown', label:'Last known · Status unknown', color:'#71717a'};
@@ -1626,6 +1627,8 @@ def create_app() -> Flask:
                 const timed = Number.isFinite(eventTime) && typeof age === 'number' && Number.isFinite(age) && age >= 0 && typeof limit === 'number';
                 const dailyClose = flags.includes('daily_close_not_realtime') || ['day_close', 'daily_close', 'previous_close'].includes(live.price_source);
                 const stale = live.is_stale || dailyClose || (timed && age + elapsed > limit);
+                if(live.admission_status === 'UNKNOWN') return {key:'unknown', label:'Last known · Status unknown', color:'#71717a'};
+                if(live.admission_status === 'DEGRADED') return {key:stale ? 'stale' : 'degraded', label:stale ? 'Last known · Stale' : 'Last known · Admission degraded', color:'#b45309'};
                 if(!stale && !timed){
                   return {key:'unknown', label:rest ? 'REST · Status unknown' : 'Last known · Status unknown', color:'#71717a'};
                 }

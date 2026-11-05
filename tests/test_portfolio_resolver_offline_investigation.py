@@ -105,7 +105,9 @@ def test_event_time_wins_over_newer_receipt_and_price_channel_priority():
 def test_newest_marked_stale_candidate_masks_older_healthy_candidate():
     saved = state()
     saved.set_latest(event("T", at=NOW, price=100), ttl_seconds=120, stale=True)
-    saved.set_latest(event("Q", at=NOW - timedelta(seconds=1), price=101), ttl_seconds=120)
+    from tests.offline_redis_integrity import confirmed_frame
+    confirmed_frame(saved, {"ev":"Q", "sym":"THIN", "t":int((NOW-timedelta(seconds=1)).timestamp()*1000),
+                            "q":1, "bp":100.5, "ap":101.5, "bs":1, "as":1}, NOW)
     resolver = LiveQuoteResolver(state=saved, rest_quote=lambda _: rest(price=98), clock=lambda: NOW)
     quote = resolver.resolve("THIN")
     assert quote.price == 101 and quote.source_mode == "websocket"

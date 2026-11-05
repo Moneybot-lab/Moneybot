@@ -37,7 +37,8 @@ def main() -> int:
         list(config.server_symbols),
         config.symbol_cap,
     )
-    state = create_stream_state(redis_url)
+    state = create_stream_state(redis_url, writer=True)
+    state.integrity_preflight()  # validate selection/root before provider or app startup
     rest_client = MassiveRestClient(
         api_key=api_key,
         key_source="MASSIVE_API_KEY" if os.environ.get("MASSIVE_API_KEY") else "POLYGON_API_KEY",

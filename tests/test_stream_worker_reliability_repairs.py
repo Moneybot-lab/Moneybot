@@ -239,6 +239,7 @@ def test_recovery_cannot_replace_newer_stream_event_and_retains_actual_source():
         worker = make_worker(state=state, rest=rest)
         worker._queue_recovery("AAA", reason="stream_reconnect")
         await entered.wait()
+        worker.clock = lambda: NOW + timedelta(seconds=1)
         await worker.process_raw_message(frame(sequence=1, price=105, timestamp=NOW + timedelta(seconds=1)))
         release.set()
         await worker.drain_recoveries()
@@ -406,16 +407,16 @@ def test_shadow_deadline_cancels_wait_but_keeps_provider_slot_until_completion(m
     asyncio.run(scenario())
 
 
-def test_higher_sequence_with_older_time_keeps_c6_classification_and_recovery_trigger():
+def test_higher_sequence_with_older_time_preserves_stale_guard_without_gap_recovery():
     async def scenario():
         worker = make_worker()
         await worker.process_raw_message(frame(sequence=1, price=105))
         calls = []
         worker._queue_recovery = lambda symbol, reason: calls.append((symbol, reason))
         await worker.process_raw_message(frame(sequence=3, price=99, timestamp=NOW - timedelta(seconds=1)))
-        assert worker.metrics.sequence_gaps == 1 and worker.metrics.out_of_order == 0
-        assert calls == [("AAA", "sequence_gap")]
-        assert worker._last_event[("T", "AAA")][1] == 3
+        assert worker.metrics.sequence_gaps == 0 and worker.metrics.out_of_order == 0
+        assert calls == []
+        assert worker._last_event[("T", "AAA")][1] == 1
         assert worker.state.get_latest("AAA", "T")["payload"]["price"] == 105
         assert worker.metrics.stale_state_writes_rejected == 1
         await worker.aclose()

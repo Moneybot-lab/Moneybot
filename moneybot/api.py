@@ -24,7 +24,7 @@ from functools import wraps
 from typing import Any, Dict, Tuple
 
 import yfinance as yf
-from flask import Blueprint, Response, current_app, g, jsonify, request, session, stream_with_context, url_for
+from flask import Blueprint, Response, current_app, g, has_app_context, jsonify, request, session, stream_with_context, url_for
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -68,7 +68,7 @@ from .services.model_metadata import load_artifact_history, load_artifact_metada
 from .services.production_servability import validate_certification
 from .services.decision_snapshot import build_decision_snapshot
 from .services.suitability_policy import UserDecisionContext
-from .services.market_stream import STREAM_SCHEMA_VERSION, register_demand_safely
+from .services.market_stream import STREAM_SCHEMA_VERSION, register_demand_safely, stream_commit_version
 from .services.live_market import LiveQuoteResolver, sse_encode
 from .services.market_data_providers import ExchangeCalendar, quote_freshness
 from .services.outcome_tracking import (
@@ -509,7 +509,7 @@ def _quote_delivery_fingerprint(quote: dict[str, Any]) -> str:
     serialized = json.dumps({
         key: quote.get(key)
         for key in (
-            "price", "source", "source_mode", "is_stale", "is_degraded", "event_type",
+            "price", "source", "source_mode", "is_stale", "is_degraded", "admission_status", "event_type",
             "market_session", "market_session_context", "price_source", "event_timestamp", "bid", "ask", "midpoint",
             "observed_source", "observed_source_mode", "observed_price", "observed_event_type",
         )
@@ -523,8 +523,8 @@ def _quote_delivery_fingerprint(quote: dict[str, Any]) -> str:
 class _SSEQuoteDelivery:
     """Price ordering is private to one SSE connection, never a pricing cache.
 
-    Equal-time changed prices have no trustworthy correction marker in the
-    current contract. They remain last-known/stale until a newer observation.
+    Equal-time changed prices require a later successful store revision from
+    the same worker. Legacy/REST/cross-worker ambiguity remains last-known/stale.
     A current market-session boundary invalidates the comparison watermark,
     while preserving a numeric last-known value until a fresh replacement.
     """
@@ -554,9 +554,11 @@ class _SSEQuoteDelivery:
             "source": previous.get("source"),
             "source_mode": "last_known",
             "price_source": previous.get("price_source"),
+            "stream_commit": previous.get("stream_commit"),
             "bid": previous.get("bid"), "ask": previous.get("ask"),
             "midpoint": previous.get("midpoint"),
             "is_stale": True, "is_degraded": True,
+            "admission_status": "STALE" if incoming.get("admission_status") == "LIVE" else incoming.get("admission_status"),
             "quality_flags": list(dict.fromkeys([
                 *(incoming.get("quality_flags") or []), "last_known_price", reason,
             ])),
@@ -604,8 +606,16 @@ class _SSEQuoteDelivery:
         prior_stamp = _trusted_quote_timestamp(previous.get("event_timestamp")) if previous else None
         if prior_stamp is not None and stamp < prior_stamp:
             return self._retained(previous, quote, "older_observation_retained", now=now), False
-        if prior_stamp is not None and stamp == prior_stamp and quote["price"] != previous["price"]:
-            return self._retained(previous, quote, "unresolved_equal_timestamp_correction", now=now), False
+        if prior_stamp is not None and stamp == prior_stamp:
+            before = stream_commit_version(previous.get("stream_commit"))
+            after = stream_commit_version(quote.get("stream_commit"))
+            comparable = (before is not None and after is not None and before[0] == after[0]
+                          and previous.get("source_mode") == quote.get("source_mode") == "websocket")
+            if comparable and after[1] < before[1]:
+                return self._retained(previous, quote, "older_stream_commit_retained", now=now), False
+            if quote["price"] != previous["price"] and not (
+                    comparable and after[1] > before[1] and not quote.get("is_stale")):
+                return self._retained(previous, quote, "unresolved_equal_timestamp_correction", now=now), False
         market_change = previous is None or stamp != prior_stamp or quote["price"] != previous["price"]
         self.previous[symbol] = dict(quote)
         self.contexts[symbol] = context
@@ -664,6 +674,13 @@ def _initial_live_quote_metadata(symbol: str, quote: dict[str, Any], *, displaye
         "is_degraded": stale or bool(quote.get("is_degraded")),
         "price_source": quote.get("price_source"), "quality_flags": quality_flags,
     }
+    if has_app_context() and getattr(current_app.extensions.get('market_stream_state'), 'requires_authority', False):
+        # Initial portfolio enrichment is an independent REST observation, not
+        # a PostgreSQL-confirmed stream revision. Preserve accounting values,
+        # but let the validated API/SSE path establish subsequent LIVE quality.
+        metadata['admission_status'] = 'UNKNOWN'
+        metadata['is_degraded'] = True
+        metadata['quality_flags'] = list(dict.fromkeys([*quality_flags, 'admission_status_unknown', 'price_authority_unverified']))
     if price is None and _valid_quote_price(displayed_price):
         # Existing accounting uses entry basis when no quote is available.
         # That bookkeeping amount must never inherit provider provenance.

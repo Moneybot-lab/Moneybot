@@ -191,7 +191,9 @@ def test_stale_stream_with_fresh_rest_has_rest_fallback_label():
 def test_fresh_aggregate_survives_old_trade_and_requires_no_rest():
     state = InMemoryMarketStreamState(clock=lambda: 0.0)
     _event(state, age_seconds=90)
-    _event(state, event_type="A", age_seconds=1, price=103.0, sequence=8)
+    from tests.offline_redis_integrity import confirmed_frame
+    confirmed_frame(state, {"ev":"A", "sym":"AAPL", "e":int((NOW-timedelta(seconds=1)).timestamp()*1000),
+                            "q":8, "c":103.0, "o":103.0, "h":103.0, "l":103.0, "v":1}, NOW)
 
     def forbidden_rest(_):
         raise AssertionError("Fresh aggregate must not require REST")

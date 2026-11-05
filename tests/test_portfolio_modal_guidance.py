@@ -25,6 +25,9 @@ def _render_modal(portfolio, row):
     source = page[page.index("function escapeHtml(value)"):page.index("function performanceCell(amount, pct)")]
     start = page.index("function humanizeReason(reason)")
     source += page[start:page.index("async function", start)]
+    # PR #669's showAdvice uses the real status helper outside this slice.
+    start = page.index("function portfolioAdviceStatus(item)")
+    source += page[start:page.index("function applyPortfolioAdvice", start)]
     harness = r"""
 const vm = require('node:vm');
 const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
@@ -100,8 +103,8 @@ def test_postprocessed_ai_action_modal_rejects_original_guidance(
 ):
     service = AIAdvisorService(enabled=True, api_key="synthetic-key")
     payload = {"advice": raw_action, "advice_reason": f"{raw_action}: synthetic provider reason.",
-               "risk_notes": [f"{raw_action} more immediately to avoid losses."],
-               "next_checks": [f"{raw_action} the position now before reviewing data."]}
+               "risk_notes": [f"{raw_action} more immediately to avoid losses.", "Synthetic second risk."],
+               "next_checks": [f"{raw_action} the position now before reviewing data.", "Synthetic second check."]}
     monkeypatch.setattr("requests.post", lambda *args, **kwargs: SimpleNamespace(
         raise_for_status=lambda: None, json=lambda: {"output_text": json.dumps(payload)}))
     result = service.enhance_portfolio_position(symbol="AAPL", entry_price=100.0,

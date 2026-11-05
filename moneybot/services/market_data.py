@@ -1552,6 +1552,16 @@ class MarketDataService:
 
     @timed("market.quote")
     def get_quote(self, symbol: str) -> Dict[str, Any]:
+        quote = dict(self._get_provider_quote(symbol))
+        # This provider/cache path never performs PostgreSQL confirmation.
+        # live_data_available remains the existing provider-availability signal
+        # for analysis; authoritative LIVE must use LiveQuoteResolver.
+        quote.update(admission_status='UNKNOWN', is_degraded=True)
+        quote['quality_flags'] = list(dict.fromkeys([
+            *(quote.get('quality_flags') or []), 'price_authority_unverified']))
+        return quote
+
+    def _get_provider_quote(self, symbol: str) -> Dict[str, Any]:
         cache_key = symbol.upper()
         cached = self.quote_cache.get(cache_key)
         if cached:
