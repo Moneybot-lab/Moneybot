@@ -1614,6 +1614,7 @@ def create_app() -> Flask:
                 if(live.price === null && flags.includes('price_unavailable') && !live.event_timestamp){
                   return {key:'unavailable', label:'Price unavailable', color:'#b45309'};
                 }
+                if(live.admission_status === 'UNKNOWN' && flags.includes('price_authority_unverified')) return {key:'unknown', label:'Last known · Status unknown', color:'#71717a'};
                 if(source === 'last_known') return {key:'stale', label:'Last known · Stale', color:'#b45309'};
                 if(typeof live.is_stale !== 'boolean'){
                   return {key:'unknown', label:'Last known · Status unknown', color:'#71717a'};
@@ -1626,8 +1627,13 @@ def create_app() -> Flask:
                 const timed = Number.isFinite(eventTime) && typeof age === 'number' && Number.isFinite(age) && age >= 0 && typeof limit === 'number';
                 const dailyClose = flags.includes('daily_close_not_realtime') || ['day_close', 'daily_close', 'previous_close'].includes(live.price_source);
                 const stale = live.is_stale || dailyClose || (timed && age + elapsed > limit);
+                if(live.admission_status === 'UNKNOWN') return {key:'unknown', label:'Last known · Status unknown', color:'#71717a'};
+                if(live.admission_status === 'DEGRADED') return {key:stale ? 'stale' : 'degraded', label:stale ? 'Last known · Stale' : 'Last known · Admission degraded', color:'#b45309'};
                 if(!stale && !timed){
                   return {key:'unknown', label:rest ? 'REST · Status unknown' : 'Last known · Status unknown', color:'#71717a'};
+                }
+                if(live.is_degraded === true && !stale){
+                  return {key:'degraded', label:rest ? 'REST · Degraded fallback' : 'Last known · Degraded', color:'#b45309'};
                 }
                 if(rest) return {key:stale ? 'stale' : 'fresh', label:stale ? 'REST · Stale' : 'REST · Fresh', color:stale ? '#b45309' : '#15803d'};
                 if(source === 'websocket') return {key:stale ? 'stale' : 'fresh', label:stale ? 'Last known · Stale' : 'WebSocket · Live', color:stale ? '#b45309' : '#15803d'};
@@ -1673,18 +1679,17 @@ def create_app() -> Flask:
                 return ({connected:'Provider stream connected', reconnecting:'Provider stream reconnecting', disconnected:'Provider stream disconnected'})[health.connection_state] || 'Provider status unknown';
               }
               function updatePortfolioLiveStatus(){
-                const counts = {fresh:0, stale:0, unavailable:0, unknown:0};
-                let degraded = 0;
+                const counts = {fresh:0, stale:0, degraded:0, unavailable:0, unknown:0};
                 currentPortfolioItems.forEach((item) => {
                   const quality = portfolioPriceQuality(item);
-                  counts[quality.key] += 1;
-                  if(quality.key === 'stale' || quality.key === 'unavailable' || (item.live_market && item.live_market.is_degraded)) degraded += 1;
+                  const key = Object.prototype.hasOwnProperty.call(counts, quality.key) ? quality.key : 'unknown';
+                  counts[key] += 1;
                 });
                 const qualityParts = Object.entries(counts).filter(([, count]) => count).map(([key, count]) => `${count} ${key === 'unknown' ? 'status unknown' : key}`);
-                const quality = qualityParts.length ? `Prices: ${qualityParts.join(', ')}${degraded ? `; ${degraded} degraded` : ''}` : 'No portfolio prices';
+                const quality = qualityParts.length ? `Prices: ${qualityParts.join(', ')}` : 'No portfolio prices';
                 const browser = ({idle:'Browser price feed: waiting for positions', connecting:'Browser price feed: connecting', connected:'Browser price feed connected', reconnecting:'Browser price feed reconnecting; keeping last known values. Manual Refresh Portfolio remains available'})[portfolioBrowserState];
                 const mixed = Object.values(counts).filter((count) => count).length > 1;
-                setPortfolioLiveStatus(`${browser} · ${portfolioProviderStatus()} · ${mixed ? 'Mixed quality · ' : ''}${quality}`, counts.stale || counts.unavailable ? 'stale' : (counts.unknown || degraded || portfolioBrowserState !== 'connected' ? 'idle' : 'live'));
+                setPortfolioLiveStatus(`${browser} · ${portfolioProviderStatus()} · ${mixed ? 'Mixed quality · ' : ''}${quality}`, counts.stale || counts.unavailable || counts.degraded ? 'stale' : (counts.unknown || !counts.fresh || portfolioBrowserState !== 'connected' ? 'idle' : 'live'));
               }
               function applyPortfolioLiveQuotes(quotes){
                 let changed = false;

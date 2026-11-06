@@ -105,8 +105,10 @@ def test_frame_processing_and_health_redis_commands_run_off_loop_with_yield(monk
 
     # Invoke the real Redis repository methods with a non-network client.
     state = stream.RedisMarketStreamState.__new__(stream.RedisMarketStreamState)
-    state.client = RedisStub()
     state.namespace = "synthetic:market:v1"
+    from tests.offline_redis_integrity import RedisLuaAdapter
+    state.client = RedisLuaAdapter(RedisStub(), namespace=state.namespace)
+    state._expected_integrity_control = state.client.get(state.namespace+':integrity-control')
 
     async def scenario():
         instance = make_worker(
@@ -314,16 +316,22 @@ def test_installed_websockets_keepalive_timeout_branch_with_synthetic_unread_pon
 
 def test_sequence_gap_counter_is_per_event_type_and_not_missing_event_count():
     instance = make_worker()
-    assert instance._accept_event(trade(sequence=10)) == (True, False)
+    def accepted(event):
+        result = instance._accept_event(event)
+        if result[0]:
+            instance.state.set_latest(event, ttl_seconds=instance.config.state_ttl_seconds)
+            instance._commit_ordering(event)
+        return result
+    assert accepted(trade(sequence=10)) == (True, False)
     quote = stream.StreamEvent(
         event_type="Q", symbol="AAA", event_timestamp=NOW,
         received_timestamp=NOW, sequence_number=11, provider_event_id=None,
         payload={"bid": 99.9, "ask": 100.1},
     )
-    assert instance._accept_event(quote) == (True, False)
+    assert accepted(quote) == (True, False)
     # A combined q=10,11,12 stream is contiguous, but T alone isn't.
-    assert instance._accept_event(trade(sequence=12)) == (True, True)
-    assert instance._accept_event(trade(sequence=100)) == (True, True)
+    assert accepted(trade(sequence=12)) == (True, False)
+    assert accepted(trade(sequence=100)) == (True, False)
     assert instance.metrics.sequence_gaps == 2  # Two transitions, not 87 missing IDs.
     assert instance.metrics.rest_recovery_count == 0
 

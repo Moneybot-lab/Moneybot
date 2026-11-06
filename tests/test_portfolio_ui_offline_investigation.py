@@ -184,14 +184,16 @@ def test_stale_stream_with_fresh_rest_has_rest_fallback_label():
     assert quote["is_degraded"] and not quote["is_stale"]
     assert "stream_stale_rest_fallback" in quote["quality_flags"]
     result = _ui([_item()], "applyPortfolioLiveQuotes(" + json.dumps([quote]) + "); capture();")
-    assert "REST · Fresh · Degraded fallback · regular" in result["cells"][0]
-    assert "1 fresh; 1 degraded" in result["status"]
+    assert "REST · Degraded fallback · regular" in result["cells"][0]
+    assert "Prices: 1 degraded" in result["status"]
 
 
 def test_fresh_aggregate_survives_old_trade_and_requires_no_rest():
     state = InMemoryMarketStreamState(clock=lambda: 0.0)
     _event(state, age_seconds=90)
-    _event(state, event_type="A", age_seconds=1, price=103.0, sequence=8)
+    from tests.offline_redis_integrity import confirmed_frame
+    confirmed_frame(state, {"ev":"A", "sym":"AAPL", "e":int((NOW-timedelta(seconds=1)).timestamp()*1000),
+                            "q":8, "c":103.0, "o":103.0, "h":103.0, "l":103.0, "v":1}, NOW)
 
     def forbidden_rest(_):
         raise AssertionError("Fresh aggregate must not require REST")
@@ -211,7 +213,7 @@ def test_thin_symbol_old_trade_is_not_proof_of_provider_disconnect():
     assert state.get_health()["connection_state"] == "connected"
     assert quote["is_degraded"] and quote["source_mode"] == "rest"
     result = _ui([_item("THIN")], "applyPortfolioLiveQuotes(" + json.dumps([quote]) + "); capture();")
-    assert "Prices: 1 fresh; 1 degraded" in result["status"]
+    assert "Prices: 1 degraded" in result["status"]
     assert "Provider status unknown" in result["status"]
 
 
@@ -314,7 +316,7 @@ def test_heartbeat_overwrites_stale_quote_banner_without_revalidating_rows():
     assert "REST · Stale · regular" in result["cells"][0]
     assert "Browser price feed connected" in result["status"]
     assert "Provider status unknown" in result["status"]
-    assert "Prices: 1 stale; 1 degraded" in result["status"]
+    assert "Prices: 1 stale" in result["status"]
     assert result["background"] == "#fef3c7"
 
 
@@ -324,7 +326,7 @@ def test_mixed_portfolio_partial_update_hides_other_rows_staleness():
     result = _ui([_item("AAPL"), _item("THIN", stale)], "applyPortfolioLiveQuotes(" + json.dumps([fresh]) + "); capture();")
     assert result["items"][1]["live_market"]["is_stale"] is True
     assert "REST · Stale · regular" in result["cells"][1]
-    assert "Mixed quality · Prices: 1 fresh, 1 stale; 1 degraded" in result["status"]
+    assert "Mixed quality · Prices: 1 fresh, 1 stale" in result["status"]
 
 
 def test_mixed_portfolio_full_batch_marks_banner_degraded():
@@ -478,7 +480,8 @@ def test_missing_price_and_absent_last_known_value_render_unavailable():
     result = _ui([item], "applyPortfolioLiveQuotes(" + json.dumps([missing]) + "); capture();")
     assert result["items"][0]["current_price"] is None
     assert "Price unavailable" in result["cells"][0]
-    assert "Prices: 1 unavailable; 1 degraded" in result["status"]
+    assert "Prices: 1 unavailable" in result["status"]
+    assert "degraded" not in result["status"]
     assert result["loadCount"] == 0
 
 
@@ -607,7 +610,7 @@ def test_heartbeat_ages_fresh_price_when_quote_delivery_stalls(source_mode, expe
     result = _ui([_item()], scenario)
     assert "Prices: 1 fresh" in result["fresh"]["status"]
     assert expected in result["aged"]["cells"][0]
-    assert "Prices: 1 stale; 1 degraded" in result["aged"]["status"]
+    assert "Prices: 1 stale" in result["aged"]["status"]
     assert "Provider stream connected" in result["aged"]["status"]
     assert result["aged"]["items"][0]["current_price"] == 102
     assert result["aged"]["loadCount"] == 0 and result["aged"]["timerCount"] == 0

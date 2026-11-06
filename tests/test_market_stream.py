@@ -4,7 +4,7 @@ import asyncio
 import json
 import time
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -213,7 +213,7 @@ def test_reconcile_subscribes_unsubscribes_and_restores_actual_after_reconnect()
 
     asyncio.run(scenario())
 
-def test_duplicate_out_of_order_gap_coalescing_and_rest_recovery():
+def test_duplicate_out_of_order_legal_skip_coalescing_and_independent_recovery():
     async def scenario():
         state = InMemoryMarketStreamState()
         rest = FakeRestClient()
@@ -224,24 +224,27 @@ def test_duplicate_out_of_order_gap_coalescing_and_rest_recovery():
         await instance.process_raw_message(json.dumps([base]))
         await instance.process_raw_message(json.dumps([{**base, "q": 9, "i": "old"}]))
         await instance.process_raw_message(json.dumps([{**base, "q": 12, "i": "gap", "t": 1780929001000000000}]))
-        assert instance.metrics.rest_recovery_queued == 1
+        assert instance.metrics.rest_recovery_queued == 0
+        assert rest.calls == []
+        instance._queue_recovery("AAPL", reason="stream_reconnect")
         await instance.drain_recoveries()
         await instance.flush_updates_if_due(force=True)
 
         assert instance.metrics.duplicates == 1
-        assert instance.metrics.out_of_order == 1
+        assert instance.metrics.out_of_order == 0
+        assert instance.metrics.ambiguous_sequence_regressions == 1
         assert instance.metrics.sequence_gaps == 1
         assert instance.metrics.coalesced_events == 1
         assert instance.metrics.rest_recovery_count == 1
         assert rest.calls == ["AAPL"]
         assert len(state.published) == 1
-        assert state.get_latest("AAPL", "Q")["quality_flags"] == ["rest_recovery", "sequence_gap"]
+        assert state.get_latest("AAPL", "Q")["quality_flags"] == ["rest_recovery", "stream_reconnect"]
 
 
     asyncio.run(scenario())
 
 
-def test_sequence_gap_recovery_is_queued_deduped_and_does_not_block_processing():
+def test_independent_recovery_is_queued_deduped_and_does_not_block_processing():
     async def scenario():
         release = threading.Event()
         entered = asyncio.Event()
@@ -263,10 +266,15 @@ def test_sequence_gap_recovery_is_queued_deduped_and_does_not_block_processing()
             {**first, "q": 14, "i": "gap-2", "t": 1780929002000000000},
             {**first, "q": 16, "i": "gap-3", "t": 1780929003000000000},
         ]
+        instance.clock = lambda: NOW + timedelta(seconds=3)
         await instance.process_raw_message(json.dumps([first]))
         await instance.process_raw_message(json.dumps(gaps[:1]))
+        assert instance.metrics.rest_recovery_queued == 0
+        instance._queue_recovery("AAPL", reason="stream_reconnect")
         await entered.wait()
         await instance.process_raw_message(json.dumps(gaps[1:]))
+        instance._queue_recovery("AAPL", reason="stream_reconnect")
+        instance._queue_recovery("AAPL", reason="stream_reconnect")
         assert instance.metrics.sequence_gaps == 3
         assert instance.metrics.rest_recovery_queued == 1
         assert instance.metrics.rest_recovery_deduped == 2

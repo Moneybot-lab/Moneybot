@@ -5,28 +5,77 @@ import importlib
 import json
 import logging
 import math
+import os
 import random
 import re
 import uuid
 import time
-from collections import Counter, defaultdict, deque
+from collections import Counter, OrderedDict, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from threading import RLock
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from .market_data_providers import ExchangeCalendar, MassiveRestClient, NormalizedQuote, ProviderError
+from .stream_integrity import (COMMIT_LUA, STALE_LUA, MAX_WATERMARKS, IntegrityRejection, MemoryWatermarks,
+                               QUALITY_LUA, VERIFY_LUA, Watermark, timestamp_from_us, timestamp_us)
+from . import stream_initialization
 
 STREAM_SCHEMA_VERSION = "market-stream.v1"
 REDIS_KEY_VERSION = "v1"
 ALLOWED_EVENT_TYPES = frozenset({"A", "AM", "Q", "T"})
 EVENT_PREFIXES = {"A": "A", "AM": "AM", "Q": "Q", "T": "T"}
+_SIP_CALENDAR = ExchangeCalendar()
+
+
+class _BoundedCooldown(OrderedDict):
+    """Eviction never gives back an unexpired request budget.
+
+    Unknown symbols conservatively inherit the most recent retired timestamp.
+    Recovery and shadow have separate instances and never share that barrier.
+    """
+    def __init__(self, capacity: int = 1024):
+        super().__init__()
+        self.capacity = capacity
+        self.retired_at: float | None = None
+
+    def get(self, key, default=None):
+        return super().get(key, self.retired_at if self.retired_at is not None else default)
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self.move_to_end(key)
+        if len(self) > self.capacity:
+            _, retired = self.popitem(last=False)
+            self.retired_at = max(retired, self.retired_at if self.retired_at is not None else retired)
 
 
 def normalize_source_revision(value: Any) -> str | None:
     """Deployment metadata is a claim, not attestation; invalid input stays absent."""
     return value.lower() if isinstance(value, str) and re.fullmatch(r'[0-9a-fA-F]{40}', value) else None
+
+
+def stream_commit_version(value: Any) -> tuple[str, int] | None:
+    """Internal store revision, scoped to a worker and ticker; never SIP q."""
+    if not isinstance(value, Mapping):
+        return None
+    epoch, revision = value.get("worker_instance_id"), value.get("revision")
+    if not isinstance(epoch, str) or type(revision) is not int or revision <= 0:
+        return None
+    try:
+        if str(uuid.UUID(epoch)) != epoch:
+            return None
+    except ValueError:
+        return None
+    return epoch, revision
+
+
+def _trusted_utc(value: Any) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("an aware clock/timestamp is required")
+    return value.astimezone(timezone.utc)
 
 
 def _utc_now() -> datetime:
@@ -89,6 +138,21 @@ class StreamEvent:
     schema_version: str = STREAM_SCHEMA_VERSION
     source: str = "massive"
     source_mode: str = "websocket"
+    stream_commit: Mapping[str, Any] | None = None
+
+    @property
+    def trade_identity(self) -> tuple[str, int, int, str] | None:
+        """Only reported integer venues establish a complete trade-ID scope.
+
+        Absent TRF is unknown here; the saved contract defines no not-applicable
+        sentinel. Do not coerce missing, boolean or string venues into an ID.
+        """
+        exchange, trf = self.payload.get("exchange"), self.payload.get("trf_id")
+        if (self.event_type != "T" or not isinstance(self.provider_event_id, str) or not self.provider_event_id or
+                type(exchange) is not int or exchange < 0 or
+                type(trf) is not int or trf < 0):
+            return None
+        return self.symbol, exchange, trf, self.provider_event_id
 
     @property
     def lag_ms(self) -> int:
@@ -142,7 +206,9 @@ class MassiveStreamParser:
             raise StreamParseError("event is missing a valid timestamp")
         flags: list[str] = []
         sequence = _integer(item.get("q"))
-        provider_event_id = str(item.get("i")) if item.get("i") is not None else None
+        # Q.i carries indicators, not a unique quote identity. Keep the
+        # existing trade-ID behavior without inventing an aggregate contract.
+        provider_event_id = str(item.get("i")) if event_type != "Q" and item.get("i") is not None else None
 
         if event_type in {"A", "AM"}:
             normalized = {
@@ -160,14 +226,20 @@ class MassiveStreamParser:
                 "bid": bid, "ask": ask, "bid_size": _number(item.get("bs")), "ask_size": _number(item.get("as")),
                 "midpoint": (bid + ask) / 2 if bid and ask and ask >= bid else None,
                 "bid_exchange": item.get("bx"), "ask_exchange": item.get("ax"), "conditions": _condition_values(item.get("c")),
+                "indicators": _condition_values(item.get("i")),
             }
             if bid is not None and ask is not None and ask < bid:
                 flags.append("crossed_market")
             if bid is None or ask is None:
                 flags.append("incomplete_nbbo")
         else:
+            # The trade contract supplies a string ID. Coercing malformed IDs
+            # would invent equality before applying the ordering safeguards.
+            if not isinstance(item.get("i"), str):
+                provider_event_id = None
             normalized = {
                 "price": _number(item.get("p")), "size": _number(item.get("s")), "exchange": item.get("x"),
+                "trf_id": item.get("trfi"),
                 "conditions": _condition_values(item.get("c")), "tape": item.get("z"),
             }
             if normalized["price"] is None:
@@ -182,6 +254,10 @@ class MassiveStreamParser:
 
 class MarketStreamStateRepository(Protocol):
     def set_latest(self, event: StreamEvent, *, ttl_seconds: int, stale: bool = False) -> float: ...
+    def integrity_floor(self, symbol: str, event_type: str) -> tuple[datetime | None, bool]: ...
+    def integrity_verified(self, symbol: str, event_type: str, stamp: datetime, version: tuple[str, int]) -> bool: ...
+    def integrity_quality(self, symbol: str, event_type: str, stamp: datetime, version: tuple[str, int]) -> str: ...
+    def hold_quality(self, symbol: str, event_type: str, owner: str, serial: int, reason: str) -> None: ...
     def get_latest(self, symbol: str, event_type: str) -> dict[str, Any] | None: ...
     def mark_symbols_stale(self, symbols: Iterable[str], *, reason: str, ttl_seconds: int) -> None: ...
     def publish_updates(self, updates: list[dict[str, Any]]) -> int: ...
@@ -196,29 +272,90 @@ class MarketStreamStateRepository(Protocol):
 class InMemoryMarketStreamState:
     def __init__(self, *, clock: Callable[[], float] = time.time) -> None:
         self.clock = clock
-        self.latest: dict[str, tuple[dict[str, Any], float]] = {}
+        self.latest: OrderedDict[str, tuple[dict[str, Any], float]] = OrderedDict()
         self.health: tuple[dict[str, Any], float] | None = None
         self.demands: dict[str, tuple[set[str], float]] = {}
         self.published: list[list[dict[str, Any]]] = []
+        self.integrity = MemoryWatermarks()
+        self.quality: dict[str, tuple[str, int, str]] = {}
+        self._commit_lock = RLock()
 
     @staticmethod
     def _key(symbol: str, event_type: str) -> str:
         return f"moneybot:market:{REDIS_KEY_VERSION}:latest:{event_type}:{symbol.upper()}"
 
     def set_latest(self, event: StreamEvent, *, ttl_seconds: int, stale: bool = False) -> float:
+        with self._commit_lock:
+            return self._set_latest(event, ttl_seconds=ttl_seconds, stale=stale)
+
+    def _set_latest(self, event: StreamEvent, *, ttl_seconds: int, stale: bool = False) -> float:
         started = time.perf_counter()
         payload = event.serialized()
         payload["is_stale"] = bool(stale)
+        version = stream_commit_version(getattr(event, "stream_commit", None))
+        if version is not None:
+            field = f"{event.event_type}:{event.symbol}"
+            stamp, token = timestamp_us(event.event_timestamp), f"{version[0]}:{version[1]}"
+            if event.source_mode == "rest":
+                for channel in ALLOWED_EVENT_TYPES:
+                    floor, _ = self.integrity.floor(f"{channel}:{event.symbol}")
+                    if floor > stamp or (channel == event.event_type and floor == stamp):
+                        raise IntegrityRejection("recovery_integrity_hold")
+            self.integrity.reserve(field, stamp, token, recovery=event.source_mode == "rest")
         self.latest[self._key(event.symbol, event.event_type)] = (payload, self.clock() + ttl_seconds)
+        self.latest.move_to_end(self._key(event.symbol, event.event_type))
+        if len(self.latest) > MAX_WATERMARKS:
+            self.latest.popitem(last=False)
+        if version is not None:
+            self.integrity.commit(field, stamp, token)
+            self.quality = {key: value for key, value in self.quality.items() if key in self.integrity.records}
+            self.quality[field] = (token, 0, 'LIVE')
         return (time.perf_counter() - started) * 1000
 
+    def integrity_floor(self, symbol: str, event_type: str) -> tuple[datetime | None, bool]:
+        with self._commit_lock:
+            floor, uncertain = self.integrity.floor(f"{event_type}:{symbol}")
+        return (timestamp_from_us(floor) if floor else None), uncertain
+
+    def integrity_verified(self, symbol: str, event_type: str, stamp: datetime, version: tuple[str, int]) -> bool:
+        with self._commit_lock:
+            record = self.integrity.records.get(f"{event_type}:{symbol}")
+            return (record is not None and record.status == 'c' and record.committed_us == timestamp_us(stamp)
+                    and record.token == f"{version[0]}:{version[1]}")
+
+    def integrity_quality(self, symbol: str, event_type: str, stamp: datetime, version: tuple[str, int]) -> str:
+        with self._commit_lock:
+            if not self.integrity_verified(symbol, event_type, stamp, version):
+                return 'UNKNOWN'
+            token, _, quality = self.quality.get(f'{event_type}:{symbol}', ('', 0, 'UNKNOWN'))
+            return quality if token == f'{version[0]}:{version[1]}' else 'UNKNOWN'
+
+    def hold_quality(self, symbol: str, event_type: str, owner: str, serial: int, reason: str) -> None:
+        with self._commit_lock:
+            field = f'{event_type}:{symbol}'
+            current = self.quality.get(field)
+            if current and current[0].startswith(owner + ':') and serial > current[1]:
+                self.quality[field] = (current[0], serial, 'DEGRADED')
+
+    def integrity_preflight(self, *, required=None, known_contexts=()) -> dict[str, str]:
+        return {'status': 'COMPATIBLE_VERIFIED_STATE', 'scope': 'process_local_only'}
+
+    def aggregate_context(self, symbol: str, event_type: str):
+        return None
+
     def get_latest(self, symbol: str, event_type: str) -> dict[str, Any] | None:
-        entry = self.latest.get(self._key(symbol, event_type))
-        if not entry or entry[1] <= self.clock():
-            return None
-        return dict(entry[0])
+        with self._commit_lock:
+            entry = self.latest.get(self._key(symbol, event_type))
+            if not entry or entry[1] <= self.clock():
+                self.latest.pop(self._key(symbol, event_type), None)
+                return None
+            return dict(entry[0])
 
     def mark_symbols_stale(self, symbols: Iterable[str], *, reason: str, ttl_seconds: int) -> None:
+        with self._commit_lock:
+            self._mark_symbols_stale(symbols, reason=reason, ttl_seconds=ttl_seconds)
+
+    def _mark_symbols_stale(self, symbols: Iterable[str], *, reason: str, ttl_seconds: int) -> None:
         wanted = {str(symbol).upper() for symbol in symbols}
         for key, (payload, _expires) in list(self.latest.items()):
             if payload.get("symbol") in wanted:
@@ -229,6 +366,8 @@ class InMemoryMarketStreamState:
 
     def publish_updates(self, updates: list[dict[str, Any]]) -> int:
         self.published.append([dict(item) for item in updates])
+        if len(self.published) > MAX_WATERMARKS:
+            del self.published[0]
         return len(updates)
 
     def set_health(self, payload: Mapping[str, Any], *, ttl_seconds: int) -> None:
@@ -254,7 +393,8 @@ class InMemoryMarketStreamState:
         return {source: set(symbols) for source, (symbols, _expiry) in self.demands.items()}
 
     def memory_usage_bytes(self) -> int | None:
-        return len(json.dumps({key: value[0] for key, value in self.latest.items()}))
+        with self._commit_lock:
+            return len(json.dumps({key: value[0] for key, value in self.latest.items()}))
 
 
 class RedisMarketStreamState:
@@ -262,6 +402,26 @@ class RedisMarketStreamState:
         redis_module = importlib.import_module("redis")
         self.client = redis_module.Redis.from_url(redis_url, decode_responses=True, socket_timeout=2, socket_connect_timeout=2)
         self.namespace = namespace.rstrip(":")
+        self.integrity_authorization = None
+        self._expected_integrity_control = ''
+        authorization_path = os.environ.get('MASSIVE_STREAM_INTEGRITY_AUTHORIZATION_FILE')
+        if authorization_path:
+            with open(authorization_path, encoding='utf-8') as handle:
+                self.integrity_authorization = json.load(handle)
+            self._expected_integrity_control = stream_initialization.validate_authorization(self.integrity_authorization, self.namespace, _utc_now())
+
+    def integrity_preflight(self, *, required=None, known_contexts=()) -> dict[str, str]:
+        result = stream_initialization.preflight(self.client, self.namespace, getattr(self, 'integrity_authorization', None),
+            required=required, known_contexts=known_contexts)
+        if result.get('status') == 'COMPATIBLE_VERIFIED_STATE':
+            self._expected_integrity_control = stream_initialization.validate_authorization(self.integrity_authorization, self.namespace, _utc_now())
+        return result
+
+    def reconcile_integrity(self, authorization, *, now=None):
+        result = stream_initialization.reconcile(self.client, self.namespace, authorization, now=now)
+        self.integrity_authorization = dict(authorization)
+        self._expected_integrity_control = result['completion_record']
+        return result
 
     def _latest_key(self, symbol: str, event_type: str) -> str:
         return f"{self.namespace}:latest:{event_type}:{symbol.upper()}"
@@ -269,8 +429,91 @@ class RedisMarketStreamState:
     def set_latest(self, event: StreamEvent, *, ttl_seconds: int, stale: bool = False) -> float:
         started = time.perf_counter()
         payload = event.serialized(); payload["is_stale"] = bool(stale)
-        self.client.set(self._latest_key(event.symbol, event.event_type), json.dumps(payload, separators=(",", ":")), ex=ttl_seconds)
+        encoded = json.dumps(payload, separators=(",", ":"))
+        version = stream_commit_version(getattr(event, "stream_commit", None))
+        if version is None:
+            # Existing direct fixture/legacy repository writes retain their API.
+            # Every worker price write carries a local commit identity.
+            if self.client.get(f'{self.namespace}:integrity-control'):
+                raise IntegrityRejection('legacy_writer_fenced')
+            self.client.set(self._latest_key(event.symbol, event.event_type), encoded, ex=ttl_seconds)
+        else:
+            floor = 0
+            channels = ALLOWED_EVENT_TYPES if event.source_mode == "rest" else (event.event_type,)
+            for channel in channels:
+                current = self.get_latest(event.symbol, channel)
+                current_time = _stored_event_time(current.get("event_timestamp")) if current else None
+                if current_time is not None:
+                    floor = max(floor, timestamp_us(current_time))
+            result = self.client.eval(COMMIT_LUA, 6, self._latest_key(event.symbol, event.event_type),
+                f"{self.namespace}:integrity", f"{self.namespace}:integrity-lru",
+                f"{self.namespace}:integrity-quality", f"{self.namespace}:integrity-control", f"{self.namespace}:integrity-context",
+                f"{event.event_type}:{event.symbol}", timestamp_us(event.event_timestamp), f"{version[0]}:{version[1]}",
+                encoded, ttl_seconds, MAX_WATERMARKS, int(event.source_mode == "rest"), floor,
+                *(f"{channel}:{event.symbol}" for channel in ("Q", "T", "A", "AM")),
+                json.dumps({'timestamp_us': timestamp_us(event.event_timestamp), 'sequence_number': event.sequence_number,
+                            'provider_event_id': event.provider_event_id, 'token': f'{version[0]}:{version[1]}'}, separators=(',', ':')),
+                getattr(self, '_expected_integrity_control', ''))
+            if result not in ("committed", b"committed"):
+                raise IntegrityRejection(result.decode() if isinstance(result, bytes) else str(result))
+            # Issued only after the price-commit response arrived. A lost price
+            # reply leaves pending quality even when the first script reached c.
+            confirmation = self.publish_quality(event.symbol, event.event_type, version, 0, 'confirmed', 'write_acknowledged')
+            if confirmation not in {'updated', 'superseded'}:
+                raise IntegrityRejection('confirmation_not_published')
         return (time.perf_counter() - started) * 1000
+
+    def integrity_floor(self, symbol: str, event_type: str) -> tuple[datetime | None, bool]:
+        key = f"{self.namespace}:integrity"
+        schema = self.client.hget(key, "__schema__")
+        if schema is None:
+            # Absence cannot distinguish a new datastore from lost history.
+            # A separately reviewed migration must seed this non-expiring
+            # metadata; a worker must never invent a fresh epoch on restart.
+            raise IntegrityRejection("integrity_state_missing")
+        control = self.client.get(f'{self.namespace}:integrity-control')
+        if not control or not control.startswith('ready|2|') or schema != control or control != getattr(self, '_expected_integrity_control', ''):
+            raise IntegrityRejection("invalid_integrity_schema")
+        value = self.client.hget(key, f"{event_type}:{symbol}")
+        if value is not None:
+            record = Watermark.decode(value.decode() if isinstance(value, bytes) else value)
+            return timestamp_from_us(record.reserved_us), record.status == 'u'
+        retired = int(self.client.hget(key, "__retired__") or 0)
+        return (timestamp_from_us(retired) if retired else None), bool(retired)
+
+    def integrity_verified(self, symbol: str, event_type: str, stamp: datetime, version: tuple[str, int]) -> bool:
+        return self.integrity_quality(symbol, event_type, stamp, version) in {'LIVE', 'DEGRADED'}
+
+    def integrity_quality(self, symbol: str, event_type: str, stamp: datetime, version: tuple[str, int]) -> str:
+        result = self.client.eval(VERIFY_LUA, 4, f'{self.namespace}:integrity', f'{self.namespace}:integrity-lru',
+            f'{self.namespace}:integrity-quality', f'{self.namespace}:integrity-control',
+            f'{event_type}:{symbol}', timestamp_us(stamp), f'{version[0]}:{version[1]}', getattr(self, '_expected_integrity_control', ''))
+        return result if result in {'LIVE', 'DEGRADED', 'UNACKNOWLEDGED'} else 'UNKNOWN'
+
+    def publish_quality(self, symbol, event_type, version, serial, status, reason):
+        if status not in {'confirmed', 'held'} or type(serial) is not int or serial < 0 or '|' in reason:
+            raise ValueError('invalid_quality_publication')
+        return self.client.eval(QUALITY_LUA, 3, f'{self.namespace}:integrity', f'{self.namespace}:integrity-quality',
+            f'{self.namespace}:integrity-control', f'{event_type}:{symbol}', f'{version[0]}:{version[1]}', serial, status, reason,
+            getattr(self, '_expected_integrity_control', ''))
+
+    def hold_quality(self, symbol: str, event_type: str, owner: str, serial: int, reason: str) -> None:
+        current = self.get_latest(symbol, event_type)
+        version = stream_commit_version(current.get('stream_commit')) if current else None
+        if version is not None and version[0] == owner:
+            self.publish_quality(symbol, event_type, version, serial, 'held', reason)
+
+    def aggregate_context(self, symbol, event_type):
+        raw = self.client.hget(f'{self.namespace}:integrity-context', f'{event_type}:{symbol}')
+        if raw is None:
+            return None
+        value = json.loads(raw)
+        record_raw = self.client.hget(f'{self.namespace}:integrity', f'{event_type}:{symbol}')
+        record = Watermark.decode(record_raw) if record_raw else None
+        if (record is None or record.status != 'c' or record.committed_us != value.get('timestamp_us')
+                or value.get('token') != record.token or type(value.get('sequence_number')) is not int):
+            raise IntegrityRejection('aggregate_context_unconfirmed')
+        return (timestamp_from_us(value['timestamp_us']), value['sequence_number'], value['provider_event_id'], None)
 
     def get_latest(self, symbol: str, event_type: str) -> dict[str, Any] | None:
         raw = self.client.get(self._latest_key(symbol, event_type))
@@ -285,7 +528,8 @@ class RedisMarketStreamState:
                     continue
                 payload = json.loads(raw); payload["is_stale"] = True
                 payload["quality_flags"] = list(dict.fromkeys([*payload.get("quality_flags", []), reason]))
-                self.client.set(key, json.dumps(payload, separators=(",", ":")), ex=ttl_seconds)
+                self.client.eval(STALE_LUA, 2, key, f'{self.namespace}:integrity-control', raw, json.dumps(payload, separators=(",", ":")), ttl_seconds,
+                    getattr(self, '_expected_integrity_control', ''))
 
     def publish_updates(self, updates: list[dict[str, Any]]) -> int:
         if not updates:
@@ -408,6 +652,10 @@ class StreamMetrics:
     duplicates: int = 0
     out_of_order: int = 0
     sequence_gaps: int = 0
+    ambiguous_sequence_regressions: int = 0
+    freshness_holds: int = 0
+    timestamp_rejections: int = 0
+    invalid_clock_frames: int = 0
     dropped_events: int = 0
     coalesced_events: int = 0
     rest_recovery_count: int = 0
@@ -417,7 +665,10 @@ class StreamMetrics:
     rest_recovery_deduped: int = 0
     rest_recovery_queue_drops: int = 0
     redis_write_latency_ms: deque[float] = field(default_factory=lambda: deque(maxlen=10000))
+    # Preserve legacy age-plus-own-write samples; they are not local elapsed time.
     event_lag_ms: deque[float] = field(default_factory=lambda: deque(maxlen=10000))
+    provider_event_age_ms: deque[float] = field(default_factory=lambda: deque(maxlen=1000))
+    local_ingest_to_store_ms: deque[float] = field(default_factory=lambda: deque(maxlen=1000))
     shadow_comparisons: int = 0
     shadow_discrepancies: int = 0
     shadow_skipped: int = 0
@@ -443,6 +694,9 @@ class StreamMetrics:
             "messages_received": dict(self.messages_received),
             "parse_failures": self.parse_failures, "duplicates": self.duplicates,
             "out_of_order": self.out_of_order, "sequence_gaps": self.sequence_gaps,
+            "ambiguous_sequence_regressions": self.ambiguous_sequence_regressions,
+            "freshness_holds": self.freshness_holds, "timestamp_rejections": self.timestamp_rejections,
+            "invalid_clock_frames": self.invalid_clock_frames,
             "dropped_events": self.dropped_events, "coalesced_events": self.coalesced_events,
             "rest_recovery_count": self.rest_recovery_count, "rest_recovery_failures": self.rest_recovery_failures,
             "rest_recovery_duration_ms": round(self.rest_recovery_duration_ms, 2),
@@ -451,6 +705,8 @@ class StreamMetrics:
             "rest_recovery_queue_drops": self.rest_recovery_queue_drops,
             "event_to_redis_lag_ms": {"p50": self._percentile(self.event_lag_ms, .50), "p95": self._percentile(self.event_lag_ms, .95), "p99": self._percentile(self.event_lag_ms, .99)},
             "redis_write_latency_ms": {"p50": self._percentile(self.redis_write_latency_ms, .50), "p95": self._percentile(self.redis_write_latency_ms, .95), "p99": self._percentile(self.redis_write_latency_ms, .99)},
+            "provider_event_age_ms": {"p50": self._percentile(self.provider_event_age_ms, .50), "p95": self._percentile(self.provider_event_age_ms, .95), "p99": self._percentile(self.provider_event_age_ms, .99)},
+            "local_ingest_to_store_ms": {"p50": self._percentile(self.local_ingest_to_store_ms, .50), "p95": self._percentile(self.local_ingest_to_store_ms, .95), "p99": self._percentile(self.local_ingest_to_store_ms, .99)},
             "shadow_comparisons": self.shadow_comparisons, "shadow_discrepancies": self.shadow_discrepancies,
             "shadow_skipped": self.shadow_skipped, "shadow_budget_exhausted": self.shadow_budget_exhausted,
             "rest_recovery_rejected": self.rest_recovery_rejected,
@@ -512,8 +768,9 @@ class MassiveWebSocketWorker:
         self.connect_factory = connect_factory
         self.clock = clock
         self.worker_instance_id = str(uuid.uuid4())
+        self._quality_revision = 0
         started = clock()
-        self.worker_started_at = (started if started.tzinfo is not None else _utc_now()).astimezone(timezone.utc)
+        self.worker_started_at = _trusted_utc(started)
         self.source_revision = normalize_source_revision(source_revision)
         self.sleep = sleep
         self.rng = rng or random.Random()
@@ -522,7 +779,11 @@ class MassiveWebSocketWorker:
         self.subscriptions = SubscriptionManager(global_symbol_cap=config.symbol_cap, quote_cap=config.quote_cap, trade_cap=config.trade_cap, server_symbols=config.server_symbols)
         self.metrics = StreamMetrics()
         self.actual: dict[str, set[str]] = {event: set() for event in ALLOWED_EVENT_TYPES}
-        self._last_event: dict[tuple[str, str], tuple[datetime, int | None, str | None]] = {}
+        # One observation per existing event/symbol key, never an ID history.
+        self._last_event: dict[tuple[str, str], tuple[
+            datetime, int | None, Any,
+            date | None,
+        ]] = {}
         self._pending_updates: dict[tuple[str, str], dict[str, Any]] = {}
         self._last_publish_monotonic = time.monotonic()
         self._connection_state = "disabled" if not config.enabled else "starting"
@@ -533,9 +794,9 @@ class MassiveWebSocketWorker:
         self._recovery_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue(maxsize=max(1, config.recovery_queue_max))
         self._recovery_tasks: set[asyncio.Task[None]] = set()
         self._recovery_inflight: set[str] = set()
-        self._last_recovery_monotonic: dict[str, float] = {}
+        self._last_recovery_monotonic = _BoundedCooldown()
         self._shadow_inflight: dict[str, asyncio.Future[None]] = {}
-        self._last_shadow_monotonic: dict[str, float] = {}
+        self._last_shadow_monotonic = _BoundedCooldown()
         # One admitted operation at a time: neither Redis ordering nor the
         # executor queue depends on the number of callers waiting for admission.
         self._state_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="market-stream-state")
@@ -551,7 +812,13 @@ class MassiveWebSocketWorker:
         self._shadow_task: asyncio.Task[None] | None = None
         self._symbol_generation: Counter[str] = Counter()
         self._stored_timestamps: dict[tuple[str, str], datetime | None] = {}
+        self._history_keys: set[tuple[str, str]] = set()
         self._shadow_offset = 0
+        # Bounded diagnostics, not ordering history or a new recovery queue.
+        self._freshness_degraded: dict[tuple[str, str], str] = {}
+        self._freshness_degraded_overflow = False
+        self._clock_trusted = True
+        self._stream_revision = 0  # Worker-scoped allocation, not a price/q watermark.
 
     async def _state_call(self, function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         async with self._state_lock:
@@ -579,19 +846,25 @@ class MassiveWebSocketWorker:
         # INFO/SET run off-loop without iterating concurrently-mutated samples.
         metrics = replace(self.metrics, messages_received=Counter(self.metrics.messages_received),
                           redis_write_latency_ms=tuple(self.metrics.redis_write_latency_ms),
-                          event_lag_ms=tuple(self.metrics.event_lag_ms))
+                          event_lag_ms=tuple(self.metrics.event_lag_ms),
+                          provider_event_age_ms=tuple(self.metrics.provider_event_age_ms),
+                          local_ingest_to_store_ms=tuple(self.metrics.local_ingest_to_store_ms))
         def publish() -> None:
             self.state.set_health(self.health_payload(plan, metrics=metrics), ttl_seconds=self.config.health_ttl_seconds)
         await self._state_call(publish)
         self._last_health_monotonic = time.monotonic()
 
     async def _flush_pending_stale(self) -> None:
-        pending, self._pending_stale = self._pending_stale, {}
+        pending = dict(self._pending_stale)
         for symbol, (reason, generation) in pending.items():
             def mark_if_unchanged() -> None:
                 if self._symbol_generation[symbol] == generation:
                     self.state.mark_symbols_stale([symbol], reason=reason, ttl_seconds=self.config.stale_ttl_seconds)
-            await self._state_call(mark_if_unchanged)
+            try:
+                await self._state_call(mark_if_unchanged)
+            finally:
+                if self._pending_stale.get(symbol) == (reason, generation):
+                    self._pending_stale.pop(symbol, None)
 
     async def aclose(self) -> None:
         """Join owned tasks and admitted state work before releasing resources."""
@@ -619,8 +892,19 @@ class MassiveWebSocketWorker:
             self._state_executor.shutdown(wait=False, cancel_futures=True)
         self._closed = True
 
+    def _trusted_clock(self) -> datetime | None:
+        try:
+            now = _trusted_utc(self.clock())
+        except Exception:  # A failed clock must not admit data or invent current time.
+            self._clock_trusted = False
+            return None
+        self._clock_trusted = True
+        return now
+
     def _record_websocket_frame(self) -> None:
-        self._last_message_at = self.clock()
+        now = self._trusted_clock()
+        if now is not None:
+            self._last_message_at = now
 
     async def _send_action(self, websocket: Any, action: str, channels: list[str], *, check_ack: bool = False) -> None:
         if not channels:
@@ -634,6 +918,7 @@ class MassiveWebSocketWorker:
             if remaining <= 0:
                 raise RuntimeError(f"Massive WebSocket {action} acknowledgement timed out")
             raw = await asyncio.wait_for(websocket.recv(), timeout=remaining)
+            ingest_started = time.monotonic()
             self._record_websocket_frame()
             responses = await self._state_call(self.parser.parse_message, raw, received_at=self.clock())
             statuses = [item for item in responses if isinstance(item, dict) and item.get("event_type") == "status"]
@@ -641,7 +926,7 @@ class MassiveWebSocketWorker:
                 return
             if statuses:
                 raise RuntimeError(f"Massive WebSocket {action} acknowledgement failed: {statuses}")
-            await self.process_raw_message(raw)
+            await self.process_raw_message(raw, ingest_started_monotonic=ingest_started)
 
     async def authenticate(self, websocket: Any) -> None:
         await websocket.send(json.dumps({"action": "auth", "params": self.api_key}))
@@ -671,6 +956,10 @@ class MassiveWebSocketWorker:
     async def reconcile(self, websocket: Any, *, check_ack: bool = False) -> SubscriptionPlan:
         await self._refresh_external_demand()
         plan = self.subscriptions.plan(await self._state_call(self.state.desired_demand))
+        readiness = await self._state_call(self.state.integrity_preflight, required=plan.desired_by_event,
+                                          known_contexts=set(self._last_event))
+        if readiness.get('status') != 'COMPATIBLE_VERIFIED_STATE':
+            raise IntegrityRejection(str(readiness))
         subscribe, unsubscribe = self.subscriptions.commands(self.actual, plan)
         await self._send_action(websocket, "unsubscribe", unsubscribe, check_ack=check_ack)
         await self._send_action(websocket, "subscribe", subscribe, check_ack=check_ack)
@@ -678,29 +967,144 @@ class MassiveWebSocketWorker:
             event_type, symbol = channel.split(".", 1); self.actual[event_type].discard(symbol)
         for channel in subscribe:
             event_type, symbol = channel.split(".", 1); self.actual[event_type].add(symbol)
+        await self._state_call(self._retire_inactive_history)
         return plan
 
-    def _accept_event(self, event: StreamEvent) -> tuple[bool, bool]:
+    def _retire_inactive_history(self) -> None:
+        # Roster changes, not every market message, scan the bounded histories.
+        # An owned async request pins its generation until completion/cleanup.
+        pinned = (set().union(*self.actual.values()) | set(self._recovery_inflight)
+                  | set(self._recovery_generation) | set(self._rest_futures)
+                  | set(self._shadow_inflight) | set(self._pending_stale)
+                  | {key[1] for key in self._pending_updates})
+        for key in tuple(self._history_keys):
+            if key[1] not in pinned:
+                self._last_event.pop(key, None)
+                self._stored_timestamps.pop(key, None)
+                self._history_keys.discard(key)
+        retained = {key[1] for key in self._history_keys} | pinned
+        for symbol in tuple(self._symbol_generation):
+            if symbol not in retained:
+                self._symbol_generation.pop(symbol, None)
+
+    def _reserve_history(self, event: StreamEvent) -> bool:
         key = (event.event_type, event.symbol)
-        previous = self._last_event.get(key)
+        if key not in self._history_keys:
+            if len(self._history_keys) >= max(1, self.config.symbol_cap) * len(ALLOWED_EVENT_TYPES):
+                self._hold_freshness(event, "history_capacity_hold")
+                return False
+            self._history_keys.add(key)
+        return True
+
+    def _ordering_context(self, event: StreamEvent) -> tuple[Any, Any]:
+        """Pure tentative context. Only a successful store may commit it."""
+        previous = self._last_event.get((event.event_type, event.symbol))
+        session_date = previous[3] if previous else None
+        if event.event_type in {"Q", "T"}:
+            event_date = _SIP_CALENDAR.local_date(event.event_timestamp)
+            if (session_date is None or event_date > session_date) and _SIP_CALENDAR.is_trading_day(event_date):
+                session_date, previous = event_date, None
+            scope = event.trade_identity if event.event_type == "T" else None
+            # A full normalized observation is required, never a bare trade ID.
+            identity = (scope or event.provider_event_id, dict(event.payload))
+        else:
+            if previous is None:
+                previous = self.state.aggregate_context(event.symbol, event.event_type)
+            identity = event.provider_event_id
+        return previous, (event.event_timestamp, event.sequence_number, identity, session_date)
+
+    def _hold_freshness(self, event: StreamEvent, reason: str) -> None:
+        key = (event.event_type, event.symbol)
+        limit = max(1, self.config.symbol_cap) * len(ALLOWED_EVENT_TYPES)
+        if key in self._freshness_degraded or len(self._freshness_degraded) < limit:
+            self._freshness_degraded[key] = reason
+        else:
+            # No silent eviction or unbounded symbol list; unknown remainder
+            # stays explicit until this worker is replaced.
+            self._freshness_degraded_overflow = True
+        self._quality_revision += 1
+        try:
+            self.state.hold_quality(event.symbol, event.event_type, self.worker_instance_id, self._quality_revision, reason)
+        except Exception as exc:
+            # Stop admission if quality cannot be published. Never continue a
+            # healthy loop that silently lost a known hold. Last published
+            # health still has its explicit TTL; no instantaneous failure
+            # detector is claimed across an unavailable datastore.
+            raise IntegrityRejection('quality_publication_unknown_operator_required') from exc
+
+    def _accept_event(self, event: StreamEvent, *, stored_time: datetime | None = None) -> tuple[bool, bool]:
+        """Tentative admission; mutates diagnostics but no price/order watermark."""
+        previous, proposed = self._ordering_context(event)
+        sip_event = event.event_type in {"Q", "T"}
+        if not sip_event and previous is None and stored_time is not None:
+            # Timestamp-only retirement metadata cannot reconstruct aggregate
+            # sequence ordering. Do not turn eviction/restart into a reset.
+            self.metrics.freshness_holds += 1
+            self._hold_freshness(event, "aggregate_ordering_context_unavailable")
+            return False, False
+        if sip_event and stored_time == event.event_timestamp and (not previous or previous[0] != stored_time):
+            self.metrics.freshness_holds += 1
+            self._hold_freshness(event, "equal_time_unbound_ordering")
+            return False, False
         gap = False
         if previous:
-            previous_time, previous_sequence, previous_id = previous
-            if event.provider_event_id and previous_id == event.provider_event_id:
-                self.metrics.duplicates += 1; return False, False
+            previous_time, previous_sequence, previous_id, _ = previous
+            if sip_event:
+                if proposed[:3] == previous[:3]:
+                    self.metrics.duplicates += 1
+                    return False, False
+            elif event.provider_event_id and previous_id == event.provider_event_id:
+                self.metrics.duplicates += 1
+                return False, False
             if event.sequence_number is not None and previous_sequence is not None:
-                if event.sequence_number == previous_sequence:
-                    self.metrics.duplicates += 1; return False, False
                 if event.sequence_number < previous_sequence:
-                    self.metrics.out_of_order += 1; return False, False
+                    if sip_event:
+                        self.metrics.ambiguous_sequence_regressions += 1
+                        # Newer trusted price time suffices for latest-state
+                        # causality; it does NOT establish that a SIP reset occurred.
+                        if event.event_timestamp > previous_time:
+                            return True, False
+                        self.metrics.freshness_holds += 1
+                        self._hold_freshness(event, "equal_time_sequence_ambiguity")
+                        return False, False
+                    self.metrics.out_of_order += 1
+                    return False, False
+                if event.sequence_number == previous_sequence:
+                    if sip_event:
+                        if event.event_timestamp > previous_time:
+                            return True, False
+                        self.metrics.freshness_holds += 1
+                        self._hold_freshness(event, "equal_time_sequence_ambiguity")
+                        return False, False
+                    self.metrics.duplicates += 1
+                    return False, False
                 if event.sequence_number > previous_sequence + 1:
-                    self.metrics.sequence_gaps += 1; gap = True
-            elif event.event_timestamp < previous_time:
-                self.metrics.out_of_order += 1; return False, False
-            elif event.event_timestamp == previous_time and event.payload == self.state.get_latest(event.symbol, event.event_type):
-                self.metrics.duplicates += 1; return False, False
-        self._last_event[key] = (event.event_timestamp, event.sequence_number, event.provider_event_id)
+                    self.metrics.sequence_gaps += 1
+                    gap = not sip_event
+            elif event.event_timestamp == previous_time and sip_event:
+                self.metrics.freshness_holds += 1
+                self._hold_freshness(event, "equal_time_missing_sequence")
+                return False, False
+            elif event.event_timestamp < previous_time and not sip_event:
+                self.metrics.out_of_order += 1
+                return False, False
         return True, gap
+
+    def _commit_ordering(self, event: StreamEvent) -> None:
+        _, proposed = self._ordering_context(event)
+        key = (event.event_type, event.symbol)
+        self._last_event[key] = proposed
+        self._stored_timestamps[key] = event.event_timestamp
+        self._symbol_generation[event.symbol] += 1
+        self._freshness_degraded.pop(key, None)
+
+    def _committed_time_floor(self, symbol: str, event_type: str, stored_time: datetime | None = None) -> datetime | None:
+        """A missing/reloadable cache cannot erase an acknowledged commit."""
+        key = (event_type, symbol)
+        previous = self._last_event.get(key)
+        durable_time, _ = self.state.integrity_floor(symbol, event_type)
+        values = [stored_time, self._stored_timestamps.get(key), previous[0] if previous else None, durable_time]
+        return max((value for value in values if value is not None), default=None)
 
     async def _rest_call(self, symbol: str, *, reserved: bool = False, recovery: bool = False) -> Any:
         """Shared bounded admission for every comparison and recovery request."""
@@ -814,15 +1218,32 @@ class MassiveWebSocketWorker:
                 # the request, or a newer stored observation on any channel.
                 if event_time is None or generation != self._symbol_generation[symbol]:
                     return False
+                if not self._reserve_history(event):
+                    return False
                 for event_type in ALLOWED_EVENT_TYPES:
                     existing = self.state.get_latest(symbol, event_type)
                     existing_time = _stored_event_time(existing.get("event_timestamp")) if existing else None
+                    try:
+                        existing_time = self._committed_time_floor(symbol, event_type, existing_time)
+                    except IntegrityRejection as exc:
+                        self._hold_freshness(event, str(exc))
+                        return False
                     if existing_time is not None and (existing_time > event_time or (event_type == "Q" and existing_time == event_time)):
                         # An equal-time replacement of the same Q channel has
                         # no verified correction semantics; preserve its value.
                         return False
-                self.state.set_latest(event, ttl_seconds=self.config.state_ttl_seconds, stale=quote.is_stale)
+                self._stream_revision += 1
+                protected = replace(event, stream_commit={"worker_instance_id": self.worker_instance_id, "revision": self._stream_revision})
+                try:
+                    self.state.set_latest(protected, ttl_seconds=self.config.state_ttl_seconds, stale=quote.is_stale)
+                except IntegrityRejection:
+                    self._hold_freshness(event, "recovery_integrity_hold")
+                    return False
+                except Exception:
+                    self._hold_freshness(event, "state_write_outcome_unknown")
+                    raise
                 self._stored_timestamps[("Q", symbol)] = event_time
+                self._freshness_degraded.pop(("Q", symbol), None)
                 return True
             if not await self._state_call(store_if_current):
                 self.metrics.rest_recovery_rejected += 1
@@ -876,7 +1297,10 @@ class MassiveWebSocketWorker:
             self._recovery_queue.put_nowait((normalized, reason))
         except asyncio.QueueFull:
             self.metrics.rest_recovery_queue_drops += 1
-            self._pending_stale[normalized] = (reason, self._symbol_generation[normalized])
+            if len(self._pending_stale) < max(1, self.config.symbol_cap) or normalized in self._pending_stale:
+                self._pending_stale[normalized] = (reason, self._symbol_generation[normalized])
+            else:
+                self._freshness_degraded_overflow = True
             return
         self._recovery_inflight.add(normalized)
         self._recovery_generation[normalized] = self._symbol_generation[normalized]
@@ -890,12 +1314,22 @@ class MassiveWebSocketWorker:
         for task in list(self._recovery_tasks):
             task.cancel()
 
-    async def process_raw_message(self, raw: str | bytes) -> None:
+    async def process_raw_message(self, raw: str | bytes, *, ingest_started_monotonic: float | None = None) -> None:
+        # Runtime callers start immediately after application recv returns;
+        # direct callers start here, before lock/executor admission and parsing.
+        # End at successful store completion delivered back to the loop. This
+        # includes prior events in this frame, not later coalesced publication,
+        # protocol buffering or unmeasurable provider/network transit time.
+        ingest_started = time.monotonic() if ingest_started_monotonic is None else ingest_started_monotonic
         # Parsing large frames and the unchanged sequence policy share the
         # ordered state executor. Each event awaits admission, yielding the loop.
         async with self._processing_lock:
+            now = self._trusted_clock()
+            if now is None:
+                self.metrics.invalid_clock_frames += 1
+                return
             try:
-                items = await self._state_call(self.parser.parse_message, raw, received_at=self.clock())
+                items = await self._state_call(self.parser.parse_message, raw, received_at=now)
             except StreamParseError:
                 self.metrics.parse_failures += 1
                 return
@@ -904,35 +1338,74 @@ class MassiveWebSocketWorker:
                     continue
                 self.metrics.messages_received[item.event_type] += 1
                 def accept_and_store() -> tuple[bool, bool, float, bool]:
-                    accepted, gap = self._accept_event(item)
-                    if not accepted:
-                        return accepted, gap, 0.0, False
+                    # No skew allowance is established by the repository. Use
+                    # the aware frame-admission clock, never monotonic market time.
+                    try:
+                        timestamp = _trusted_utc(item.event_timestamp)
+                    except (TypeError, ValueError, OverflowError):
+                        timestamp = None
+                    if timestamp is None or timestamp > now:
+                        self.metrics.timestamp_rejections += 1
+                        self._hold_freshness(item, "invalid_or_future_timestamp")
+                        return False, False, 0.0, False
                     key = (item.event_type, item.symbol)
+                    if not self._reserve_history(item):
+                        self.metrics.freshness_holds += 1
+                        return False, False, 0.0, False
+                    existing_time = self._stored_timestamps.get(key)
                     if key not in self._stored_timestamps:
                         existing = self.state.get_latest(item.symbol, item.event_type)
-                        self._stored_timestamps[key] = _stored_event_time(existing.get("event_timestamp")) if existing else None
-                    existing_time = self._stored_timestamps[key]
-                    if existing_time is not None and item.event_timestamp < existing_time:
+                        existing_time = _stored_event_time(existing.get("event_timestamp")) if existing else None
+                    try:
+                        existing_time = self._committed_time_floor(item.symbol, item.event_type, existing_time)
+                    except IntegrityRejection as exc:
+                        self.metrics.freshness_holds += 1
+                        self._hold_freshness(item, str(exc))
+                        return False, False, 0.0, False
+                    if existing_time is not None and timestamp < existing_time:
                         self.metrics.stale_state_writes_rejected += 1
+                        return False, False, 0.0, False
+                    accepted, gap = self._accept_event(item, stored_time=existing_time)
+                    if not accepted:
                         return accepted, gap, 0.0, False
-                    latency = self.state.set_latest(item, ttl_seconds=self.config.state_ttl_seconds)
-                    self._symbol_generation[item.symbol] += 1
-                    self._stored_timestamps[key] = item.event_timestamp
+                    self._stream_revision += 1
+                    committed = replace(item, stream_commit={"worker_instance_id": self.worker_instance_id, "revision": self._stream_revision})
+                    try:
+                        latency = self.state.set_latest(committed, ttl_seconds=self.config.state_ttl_seconds)
+                    except IntegrityRejection as exc:
+                        self.metrics.freshness_holds += 1
+                        self._hold_freshness(item, str(exc))
+                        return False, False, 0.0, False
+                    except Exception:
+                        # A failed reply may follow a successful Redis SET.
+                        # Reload persisted time next admission; never reuse the
+                        # allocated revision or assume a cached older price won.
+                        self._stored_timestamps.pop(key, None)
+                        self._hold_freshness(item, "state_write_outcome_unknown")
+                        raise
+                    # No ordering/session/timestamp/generation mutation before
+                    # successful persistence. A failed write is safely retryable.
+                    self._commit_ordering(item)
                     return accepted, gap, latency, True
                 accepted, gap, write_latency, stored = await self._state_call(accept_and_store)
+                local_elapsed_ms = max(0.0, (time.monotonic() - ingest_started) * 1000) if stored else None
                 if accepted and gap:
                     self._queue_recovery(item.symbol, reason="sequence_gap")
                 if not stored:
                     continue
                 self.metrics.redis_write_latency_ms.append(write_latency)
-                total_lag = item.lag_ms + write_latency
+                provider_age_ms = item.lag_ms
+                self.metrics.provider_event_age_ms.append(provider_age_ms)
+                self.metrics.local_ingest_to_store_ms.append(local_elapsed_ms)
+                total_lag = provider_age_ms + write_latency
                 self.metrics.event_lag_ms.append(total_lag)
                 if total_lag > self.config.slow_consumer_lag_ms:
                     self.metrics.slow_consumer_events += 1
                 key = (item.event_type, item.symbol)
                 if key in self._pending_updates:
                     self.metrics.coalesced_events += 1
-                self._pending_updates[key] = {"event_type": item.event_type, "symbol": item.symbol, "event_timestamp": item.event_timestamp.isoformat()}
+                self._pending_updates[key] = {"event_type": item.event_type, "symbol": item.symbol, "event_timestamp": item.event_timestamp.isoformat(),
+                                              "stream_commit": {"worker_instance_id": self.worker_instance_id, "revision": self._stream_revision}}
             await self._flush_pending_stale()
             await self.flush_updates_if_due()
 
@@ -1036,6 +1509,16 @@ class MassiveWebSocketWorker:
         metrics["rest_recovery_inflight"] = len(self._recovery_inflight)
         metrics["rest_request_active"] = len(self._rest_futures)
         metrics["shadow_batch_active"] = bool(self._shadow_task is not None and not self._shadow_task.done())
+        now = self._trusted_clock()
+        freshness = {
+            "state": "degraded" if self._freshness_degraded or self._freshness_degraded_overflow or now is None else "no_known_hold",
+            "clock_trusted": now is not None,
+            "held_channels": [{"event_type": key[0], "symbol": key[1], "reason": reason}
+                              for key, reason in sorted(self._freshness_degraded.items())],
+            "overflow": self._freshness_degraded_overflow,
+            "stream_revision": self._stream_revision,
+            "ttl_seconds": self.config.health_ttl_seconds,
+        }
         return {
             "worker_instance_id": self.worker_instance_id,
             "worker_started_at": self.worker_started_at.isoformat(),
@@ -1049,7 +1532,7 @@ class MassiveWebSocketWorker:
             "desired_symbols": sorted(plan.symbols) if plan else [],
             "desired_subscription_counts": desired_counts, "actual_subscription_counts": actual_counts,
             "symbol_budget": self.config.symbol_cap, "redis_memory_bytes": self.state.memory_usage_bytes(),
-            "metrics": metrics, "updated_at": self.clock().isoformat(),
+            "metrics": metrics, "freshness": freshness, "updated_at": now.isoformat() if now is not None else None,
         }
 
     async def run_connection(self, websocket: Any) -> None:
@@ -1079,8 +1562,9 @@ class MassiveWebSocketWorker:
                 if heartbeat_timeout > 0 and self._last_message_at and (self.clock() - self._last_message_at).total_seconds() >= heartbeat_timeout:
                     raise RuntimeError("Massive WebSocket heartbeat timeout")
             else:
+                ingest_started = time.monotonic()
                 self._record_websocket_frame()
-                await self.process_raw_message(raw)
+                await self.process_raw_message(raw, ingest_started_monotonic=ingest_started)
 
             if time.monotonic() >= next_reconcile:
                 plan = await self.reconcile(websocket, check_ack=True)
@@ -1102,10 +1586,23 @@ class MassiveWebSocketWorker:
             self._connection_state = "disabled"
             await self._publish_health(force=True)
             return
+        readiness = await self._state_call(self.state.integrity_preflight)
+        if readiness.get('status') != 'COMPATIBLE_VERIFIED_STATE':
+            self._connection_state = 'integrity_blocked'
+            self._last_error = str(readiness)
+            await self._publish_health(force=True)
+            return
         attempt = 0
         while not self._stop:
             await self._refresh_external_demand()
             plan = self.subscriptions.plan(await self._state_call(self.state.desired_demand))
+            readiness = await self._state_call(self.state.integrity_preflight, required=plan.desired_by_event,
+                                              known_contexts=set(self._last_event))
+            if readiness.get('status') != 'COMPATIBLE_VERIFIED_STATE':
+                self._connection_state = 'integrity_blocked'
+                self._last_error = str(readiness)
+                await self._publish_health(plan, force=True)
+                return
             if not plan.symbols:
                 self._connection_state = "idle_no_demand"
                 await self._publish_health(plan)
@@ -1123,6 +1620,11 @@ class MassiveWebSocketWorker:
                     attempt = 0
             except asyncio.CancelledError:
                 raise
+            except IntegrityRejection as exc:
+                self._connection_state = 'integrity_blocked'
+                self._last_error = str(exc)
+                await self._publish_health(plan, force=True)
+                return
             except Exception as exc:  # noqa: BLE001
                 self._connection_state = "reconnecting"
                 self._last_error = f"{type(exc).__name__}: {exc}"
@@ -1181,8 +1683,25 @@ def worker_config_from_env(env: Mapping[str, str]) -> WorkerConfig:
     )
 
 
-def create_stream_state(redis_url: str | None) -> MarketStreamStateRepository:
-    return RedisMarketStreamState(redis_url) if redis_url else InMemoryMarketStreamState()
+def create_stream_state(redis_url: str | None, *, writer: bool = False) -> MarketStreamStateRepository:
+    from .stream_activation import InactiveAuthorityState, ReaderAuthorityState
+    authority = os.environ.get('MASSIVE_STREAM_AUTHORITY', 'disabled')
+    role = os.environ.get('MASSIVE_STREAM_PROCESS_ROLE', 'reader')
+    if role not in {'reader', 'writer'}:
+        raise IntegrityRejection('invalid_authority_process_role')
+    if authority == 'disabled' and not writer:
+        return InactiveAuthorityState()
+    if authority not in {'disabled', 'legacy', 'postgres_option_a'}:
+        raise IntegrityRejection('unsupported_stream_authority')
+    if authority != 'postgres_option_a':
+        raise IntegrityRejection('postgres_authority_activation_required')
+    if writer and role != 'writer':
+        raise IntegrityRejection('explicit_writer_role_required')
+    if not redis_url:
+        raise IntegrityRejection('postgres_authority_requires_cache_configuration')
+    from .stream_postgres_state import from_environment
+    state = from_environment(redis_url)
+    return state if writer else ReaderAuthorityState(state)
 
 
 def register_demand_safely(state: MarketStreamStateRepository | None, source: str, symbols: Iterable[str], *, ttl_seconds: int) -> bool:

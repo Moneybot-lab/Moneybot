@@ -5,7 +5,7 @@ from .request_timing import call as timing_call
 import math
 import time
 from abc import ABC, abstractmethod
-from collections import Counter
+from collections import Counter, OrderedDict
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, time as dt_time, timedelta, timezone
@@ -363,6 +363,7 @@ class MassiveRestClient(MarketDataProvider):
         reference_cache_seconds: float = 86400.0,
         negative_cache_seconds: float = 30.0,
         unusable_snapshot_cache_seconds: float = 5.0,
+        cache_max_entries: int = 1024,
         regular_stale_seconds: float = 15.0,
         extended_stale_seconds: float = 60.0,
         closed_stale_seconds: float = 86400.0,
@@ -392,7 +393,9 @@ class MassiveRestClient(MarketDataProvider):
         self.sleep = sleep
         self.calendar = calendar or ExchangeCalendar()
         self.metrics = ProviderMetrics()
-        self._cache: dict[str, _CacheEntry] = {}
+        self.cache_max_entries = max(1, int(cache_max_entries))
+        self._cache: OrderedDict[str, _CacheEntry] = OrderedDict()
+        self._cache_lock = Lock()
         self._backoff_until = 0.0
 
     @staticmethod
@@ -442,11 +445,15 @@ class MassiveRestClient(MarketDataProvider):
             return None
 
     def _cache_get(self, key: str) -> ProviderResult | None:
-        entry = self._cache.get(key)
+        with self._cache_lock:
+            entry = self._cache.get(key)
+            if entry is not None:
+                if time.monotonic() >= entry.expires_at:
+                    self._cache.pop(key, None)
+                    entry = None
+                else:
+                    self._cache.move_to_end(key)
         if entry is None:
-            return None
-        if time.monotonic() >= entry.expires_at:
-            self._cache.pop(key, None)
             return None
         if isinstance(entry.value, ProviderError):
             raise entry.value
@@ -464,7 +471,11 @@ class MassiveRestClient(MarketDataProvider):
 
     def _cache_set(self, key: str, value: ProviderResult | ProviderError, ttl: float) -> None:
         if ttl > 0:
-            self._cache[key] = _CacheEntry(value=value, expires_at=time.monotonic() + ttl)
+            with self._cache_lock:
+                self._cache[key] = _CacheEntry(value=value, expires_at=time.monotonic() + ttl)
+                self._cache.move_to_end(key)
+                if len(self._cache) > self.cache_max_entries:
+                    self._cache.popitem(last=False)
 
     @staticmethod
     def _retry_after(response: Any) -> float | None:

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from threading import Lock
 from typing import Any, Callable, Iterable
 
-from .market_stream import MarketStreamStateRepository
+from .market_stream import STREAM_SCHEMA_VERSION, MarketStreamStateRepository, stream_commit_version
 from .market_data_providers import ExchangeCalendar, quote_freshness
 
 LIVE_SCHEMA_VERSION = "live-market.v1"
@@ -70,6 +70,8 @@ class LiveQuote:
     schema_version: str = LIVE_SCHEMA_VERSION
     price_source: str | None = None
     market_session_context: str | None = None
+    stream_commit: dict[str, Any] | None = None
+    admission_status: str | None = None
 
     def payload(self) -> dict[str, Any]:
         data = asdict(self)
@@ -109,6 +111,7 @@ class LiveQuoteResolver:
     def _freshest_stream(self, symbol: str) -> LiveQuote | None:
         candidates: list[tuple[datetime | None, LiveQuote]] = []
         now = self.clock()
+        worker_health = None
         for event_type in ("T", "Q", "A", "AM"):
             event = self.state.get_latest(symbol, event_type)
             if not event:
@@ -127,6 +130,53 @@ class LiveQuoteResolver:
             )
             daily_close = price_source in {"day_close", "daily_close", "previous_close"} or "daily_close_not_realtime" in flags
             stale = bool(event.get("is_stale")) or aged_stale or daily_close or price is None
+            version = stream_commit_version(event.get("stream_commit"))
+            # An unversioned retained Redis value is legacy/unknown provenance,
+            # not affirmative evidence of this worker's completed admission.
+            admission = "UNKNOWN"
+            if version is not None:
+                try:
+                    stored_quality = (self.state.event_quality(event) if getattr(self.state, 'requires_authority', False)
+                        else self.state.integrity_quality(symbol, event_type, event_time, version) if event_time is not None else 'UNKNOWN')
+                    if stored_quality == 'STALE':
+                        stale = True
+                    verified_commit = stored_quality in {'LIVE', 'STALE', 'DEGRADED', 'UNACKNOWLEDGED'}
+                except Exception:
+                    verified_commit = False
+                if worker_health is None:
+                    try:
+                        worker_health = self.state.get_health() or {}
+                    except Exception:
+                        worker_health = {}
+                admission = "UNKNOWN"
+                freshness = worker_health.get("freshness")
+                if isinstance(freshness, dict):
+                    try:
+                        stamp = datetime.fromisoformat(str(worker_health.get("updated_at")).replace("Z", "+00:00"))
+                        ttl = freshness.get("ttl_seconds", 30)
+                        valid = (stamp.tzinfo is not None and stamp.utcoffset() is not None
+                                 and type(ttl) in (int, float) and 0 < ttl <= 300
+                                 and 0 <= (now - stamp).total_seconds() < ttl
+                                 and worker_health.get("schema_version") == STREAM_SCHEMA_VERSION
+                                 and worker_health.get("worker_instance_id") == version[0])
+                    except (ValueError, TypeError, OverflowError):
+                        valid = False
+                    if valid and verified_commit and freshness.get("clock_trusted") is True:
+                        held = freshness.get("held_channels")
+                        if (isinstance(held, list) and freshness.get("overflow") is False
+                                and freshness.get("state") == ("degraded" if held else "no_known_hold")
+                                and all(isinstance(row, dict) and row.get("event_type") in {"Q", "T", "A", "AM"}
+                                        and isinstance(row.get("symbol"), str) and isinstance(row.get("reason"), str) for row in held)):
+                            admission = stored_quality if stored_quality != 'UNACKNOWLEDGED' else 'UNKNOWN'
+                            published_hold = any(row.get('symbol') == symbol and row.get('event_type') == event_type for row in held)
+                            if stored_quality == 'UNACKNOWLEDGED' and published_hold:
+                                admission = 'DEGRADED'
+                            elif stored_quality != 'UNACKNOWLEDGED' and worker_health.get("connection_state") != "connected":
+                                admission = "DEGRADED"
+            if admission != "LIVE":
+                flags.append("admission_hold" if admission == "DEGRADED" else "admission_status_unknown")
+            if admission == 'UNKNOWN' and getattr(self.state, 'requires_authority', False):
+                flags.append('price_authority_unverified')
             if daily_close:
                 flags.append("daily_close_not_realtime")
             if price is None:
@@ -140,11 +190,13 @@ class LiveQuoteResolver:
                 received_timestamp=received.isoformat() if received else None,
                 age_ms=age_ms, market_session=session, source=str(event.get("source") or "massive"),
                 source_mode=str(event.get("source_mode") or "websocket"), is_stale=stale,
-                is_degraded=stale, quality_flags=tuple(dict.fromkeys(flags)), event_type=event_type,
+                is_degraded=stale or admission in {"DEGRADED", "UNKNOWN"}, quality_flags=tuple(dict.fromkeys(flags)), event_type=event_type,
                 event_id=f"{symbol}:{event_type}:{sequence}",
                 price_source=price_source, market_session_context=self._session_context(now, session),
+                stream_commit=dict(event["stream_commit"]) if event.get("source_mode") == "websocket" and stream_commit_version(event.get("stream_commit")) is not None else None,
+                admission_status="STALE" if stale and admission == "LIVE" else admission,
             )
-            if price is not None:
+            if price is not None or getattr(self.state, 'requires_authority', False):
                 candidates.append((event_time, live))
         if not candidates:
             return None
@@ -157,6 +209,9 @@ class LiveQuoteResolver:
     def resolve(self, symbol: str) -> LiveQuote:
         symbol = str(symbol).strip().upper()
         stream = self._freshest_stream(symbol)
+        if stream is not None and getattr(self.state, 'requires_authority', False):
+            # An unconfirmed REST fallback cannot cure lost authority history.
+            return stream
         if stream is not None and not stream.is_stale:
             return stream
 
@@ -176,6 +231,9 @@ class LiveQuoteResolver:
             rest_flags.append("data_missing")
         if rest_stale:
             rest_flags.append("stale")
+        authority_required = getattr(self.state, 'requires_authority', False)
+        if authority_required:
+            rest_flags.extend(['price_authority_unverified', 'admission_status_unknown'])
         if stream is not None:
             rest_flags.append("stream_stale_rest_fallback")
         event_id_value = int(rest_event_time.timestamp() * 1000) if rest_event_time else int(now.timestamp() * 1000)
@@ -185,10 +243,11 @@ class LiveQuoteResolver:
             received_timestamp=rest.get("received_timestamp"), age_ms=age_ms,
             market_session=session, source=str(rest.get("source") or rest.get("quote_source") or "none"),
             source_mode=str(rest.get("source_mode") or (rest.get("diagnostics") or {}).get("source_mode") or "fallback"),
-            is_stale=rest_stale, is_degraded=stream is not None or rest_stale,
+            is_stale=rest_stale or authority_required, is_degraded=authority_required or stream is not None or rest_stale,
             quality_flags=tuple(dict.fromkeys(rest_flags)), event_type=None,
             event_id=f"{symbol}:REST:{event_id_value}",
             price_source=price_source, market_session_context=self._session_context(now, session),
+            admission_status="UNKNOWN" if authority_required else None,
         )
 
 
