@@ -14,6 +14,26 @@ def source():
                 and isinstance(node.value, str) and "function selectPortfolioRows" in node.value)
 
 
+def test_compact_advice_badge_remains_clickable_and_details_stay_in_modal():
+    page = source()
+    functions = page[page.index("function adviceBadge"):page.index("function openAdviceModal")]
+    code = r"""
+const assert = require('assert');
+['BUY','HOLD','SELL'].forEach((action, idx) => {
+  const html = adviceButton({advice:action,enrichment_state:'pending',ai_portfolio:{mode:'ai_enhanced'}},idx);
+  assert(html.includes(`onclick="showAdvice(${idx})"`));
+  assert.equal(html.replace(/<[^>]*>/g,'').trim(),action);
+  assert(!html.includes('<small'));
+  assert(!html.includes('AI pending'));
+  assert(!html.includes('AI enhanced'));
+});
+"""
+    subprocess.run(["node","-e",functions+"\n"+code],text=True,capture_output=True,check=True,timeout=10)
+    # Detailed source, per-lot progress and advice reasons remain in the modal.
+    assert "const mode = portfolioAdviceStatus(item);" in page
+    assert "lot.advice_reason" in page
+
+
 def test_rendered_inline_javascript_syntax():
     for script in re.findall(r"<script[^>]*>(.*?)</script>", source(), flags=re.S):
         subprocess.run(["node", "--check"], input=script, text=True, capture_output=True, check=True, timeout=10)
@@ -39,7 +59,7 @@ const setLoading=value=>{loading=value;};
 const startPortfolioLive=()=>{liveStarts++;};
 const renderRows=rows=>{snapshots++; currentPortfolioItems=rows;};
 const closeAdviceModal=()=>{modalCloses++;};
-const adviceButton=(row)=>{patches++; return `${row.advice} · ${portfolioAdviceStatus(row)}`;};
+const adviceButton=(row,idx)=>{patches++; return `<button onclick="showAdvice(${idx})">${row.advice}</button>`;};
 const amountColor=()=>'', formatMoney=amount=>`$${amount}`, location={href:''};
 const displayValue=String, formatDate=String;
 let prompt=()=>null, confirm=()=>false;
@@ -191,8 +211,8 @@ def test_cancelled_mutation_finalizes_only_pending_advice(handler, answers, comp
       assert.equal(portfolioLoadGeneration,1);assert.equal(portfolioViewId,null);
       assert.deepEqual(currentPortfolioItems,expected);
       assert(!portfolioAdviceStatus(currentPortfolioItems[0]).includes('AI pending'));
-      assert(elements.get('portfolio-advice-0').innerHTML.includes('0 of 2 lots pending'));
-      if(!completedFirst) assert(elements.get('portfolio-advice-0').innerHTML.includes('AI interrupted'));
+      assert.equal(elements.get('portfolio-advice-0').innerHTML,'<button onclick="showAdvice(0)">HOLD</button>');
+      if(!completedFirst) assert.equal(currentPortfolioItems[0].enrichment_state,'failed');
       applyPortfolioAdvice(update,0); // A late result from the cancelled generation cannot restore advice.
       assert.deepEqual(currentPortfolioItems,expected);
     """)
