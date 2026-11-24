@@ -1,0 +1,243 @@
+{
+  "audit": "MoneyBot Labs OpenAI API dependency audit",
+  "audit_date": "2026-11-24",
+  "date_timezone": "America/Denver",
+  "audit_status": "COMPLETE_WITH_LIMITATIONS",
+  "migration_readiness": "ADDITIONAL_EVIDENCE_REQUIRED",
+  "repository": "https://github.com/Moneybot-lab/Moneybot",
+  "base_branch": "main",
+  "audited_commit_sha": "a4ea0941f78e57fe27e91e28327a9433eb6ef941",
+  "audited_tree_id": "7a76eaac39dad116b1d3e653b9e3d138c4c020fe",
+  "audit_branch": "audit/openai-api-migration-2026",
+  "repository_evidence": {
+    "base_tracked_entries": 616,
+    "python_sources_parsed": 313,
+    "tracked_workflows_reviewed": 30,
+    "checked_in_db_inspection": "Immutable read-only schema only. Zero customer rows selected.",
+    "base_tree_listing_sha256": "600451231bc1421713b3aaeac61818e12031df9d61f0df777e1ef1ad1815bc37",
+    "base_tree_listing_command": "git ls-tree -r -z --full-tree a4ea0941f78e57fe27e91e28327a9433eb6ef941 | sha256sum",
+    "integrity_check": "Base tracked files compare unchanged. Only new files under docs/reports/openai-api-migration-2026 may differ."
+  },
+  "counts": {
+    "direct_workloads": 2,
+    "transport_call_sites": 2,
+    "provider_integrations": 1,
+    "distinct_retiring_defaults": 1,
+    "workloads_with_retiring_default": 2,
+    "historically_confirmed_active": 1,
+    "currently_verified_active": 0,
+    "actual_currently_active": null,
+    "currently_verified_deprecated_bindings": 0,
+    "actual_deployed_deprecated_bindings": null
+  },
+  "official_documentation": [
+    {
+      "url": "https://developers.openai.com/api/docs/deprecations",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/deprecations.md",
+      "retrieved_markdown_sha256": "947f740cdc922910da6ffed196ace5ba88befeae4889acf3e37e92fac112850e"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/models",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/models.md",
+      "retrieved_markdown_sha256": "17ccdfe4098e838f457e2b6b104dd7ba934382220db78f7e11946d90b1af0687"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/pricing",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/pricing.md",
+      "retrieved_markdown_sha256": "6ebbb366b72d25dbe6e77bd24ad09e5063f4872589b81b5a77b1b172d68da8d7"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/guides/latest-model",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/guides/latest-model.md",
+      "retrieved_markdown_sha256": "d51a271ccee79b94428bc1d1a1591f9f98c424f2d9d084a37ccc4358dada40c0"
+    },
+    {
+      "url": "https://developers.openai.com/api/reference/resources/responses/methods/create",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/reference/resources/responses/methods/create.md",
+      "retrieved_markdown_sha256": "3fe3aa7a82345983e04c3384c53bd004a5b187b777fa5fd511ad951a87509a6e"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/libraries",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/libraries.md",
+      "retrieved_markdown_sha256": "75e06b2cd0f87cc2da36861db0453099aa99f8fbaf59c93e300b9ebb0cc73675"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/models/gpt-5-mini",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/models/gpt-5-mini.md",
+      "retrieved_markdown_sha256": "39231d4b441d7cc000ccb11e1c18baa41e41418f0cc31870cf74f85ef8c55152"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/models/gpt-6.2-astra.md",
+      "retrieved_markdown_sha256": "b12e61471fed60c843626fdee3dea09c86babae84ea779a5f5eb9193cb62720f"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/models/gpt-6.2-sol.md",
+      "retrieved_markdown_sha256": "551d09dbb7e6f64a1af314446b8d5a72ab9bf66daa4407060007d11ce54acf43"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/models/gpt-6.1-sol.md",
+      "retrieved_markdown_sha256": "02dff9ef937bbc97fb24ba7c936269a549563cfb8a49b91a6ba1c1575d2b77c0"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/models/gpt-6.1-terra.md",
+      "retrieved_markdown_sha256": "b7db94c4ba947e82ef8cf72df3e4fec7212f085bce310557085f048b7314bce6"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/models/gpt-6-luna.md",
+      "retrieved_markdown_sha256": "dacc9870e67c0d68e4272f8394d4296ffe7cf70f18d3f4675ee6bd4c666966b7"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/guides/structured-outputs",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/guides/structured-outputs.md",
+      "retrieved_markdown_sha256": "fbabb4598029cba47f3b19e173371da9950e6c9050b5380460b0256b8a08d9fe"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/guides/reasoning",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/guides/reasoning.md",
+      "retrieved_markdown_sha256": "f0c480788b035a289f34aef88a58cb48abead8abd82194ae8f68b110d5971bfa"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/guides/rate-limits",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/guides/rate-limits.md",
+      "retrieved_markdown_sha256": "3e6596b2a417357af5c183481e2e151dee9bcfedb39cf33582343fdec81488bd"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/guides/prompt-caching",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/guides/prompt-caching.md",
+      "retrieved_markdown_sha256": "41fd5ad72dc74045ffb0fbe33e8213a879cc018a473b1e022b7be8fa04057625"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/guides/batch",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/guides/batch.md",
+      "retrieved_markdown_sha256": "9d5e9b8c60907f59ee4c564ccec71620586919c748ac47a25e680b0817d17086"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/guides/migrate-to-responses",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/guides/migrate-to-responses.md",
+      "retrieved_markdown_sha256": "b5ae12a995b30042a7dd9160c900f2887a48777836bbc6f189872270d9e7602d"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/guides/error-codes",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/guides/error-codes.md",
+      "retrieved_markdown_sha256": "fc3d5d6b510b18041af0481055766a5b3e55c16c6dd72439ffe54246e4ec54f7"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/guides/streaming-responses",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/guides/streaming-responses.md",
+      "retrieved_markdown_sha256": "b1bdd7632bc6f0b72820bd96e178183080e6dc404ad2f28f97fa492ac928aee1"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/guides/background",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/guides/background.md",
+      "retrieved_markdown_sha256": "e505f6409f2f56a4b6183f646d19adaa8d07fca929accb9ffa44f5d2c94a72f8"
+    },
+    {
+      "url": "https://developers.openai.com/api/docs/guides/prompting/migrate-from-prompt-object",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://developers.openai.com/api/docs/guides/prompting/migrate-from-prompt-object.md",
+      "retrieved_markdown_sha256": "1066ab424ee1aa37b0fd3a16d5011e73976866ddbc1448c2209c42af50da57ce"
+    },
+    {
+      "url": "https://render.com/docs/configure-environment-variables",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://render.com/docs/configure-environment-variables.md",
+      "retrieved_markdown_sha256": "35de535f8a2ffff8dab4e9fc692013f9dbd0fc8e20443dec33fed4f4446f878b"
+    },
+    {
+      "url": "https://render.com/docs/mcp-server",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://render.com/docs/mcp-server.md",
+      "retrieved_markdown_sha256": "89041fc25398237e9456861687a65ddc115274b86f12ccf060db84b42cb2dfd4"
+    },
+    {
+      "url": "https://render.com/docs/deploys",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://render.com/docs/deploys.md",
+      "retrieved_markdown_sha256": "d521b577f6f35c80d592bd4a89db8286aa2ff6394a5b80bee969ea3498d35075"
+    },
+    {
+      "url": "https://render.com/docs/preview-environments",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://render.com/docs/preview-environments.md",
+      "retrieved_markdown_sha256": "257a1947053a8c97d0e8581d1fea7f3f24e380dbc4eef2391f3a181642fb6dfe"
+    },
+    {
+      "url": "https://render.com/docs/service-previews",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://render.com/docs/service-previews.md",
+      "retrieved_markdown_sha256": "11fa4a121fd0321c873a70fb86b4e2622af4216d5da3a9fd3a62c1c0b018b747"
+    },
+    {
+      "url": "https://render.com/docs/blueprint-spec",
+      "checked": "2026-11-24",
+      "public_markdown_url": "https://render.com/docs/blueprint-spec.md",
+      "retrieved_markdown_sha256": "a82accf4ce52af02d06c7a8ec72f5c1c1b5740296c55e9341e50b3517c620274"
+    },
+    {
+      "url": "https://openai.com/api/pricing/",
+      "checked": "2026-11-24",
+      "resolved_url": "https://openai.com/business/pricing/",
+      "note": "Public pricing entry point. Standard, cached and Batch rates cross-checked against the detailed token tables and official model cards."
+    }
+  ],
+  "openai_docs_skill": "Not installed in this session. Direct official documentation retrieved instead.",
+  "limitations": [
+    "Current live Render service/group overrides, deployed SHA, API-key presence, per-lane enablement, active model, external cron and current traffic are unverified. Render required explicit workspace selection.",
+    "One historical November 3 trace proves prior Portfolio use, without a model or token breakdown. Billing totals, cache/retry distribution, unlock rate and target-project entitlements unknown.",
+    "GitHub Actions secret-name metadata access denied (HTTP 403). Tracked workflows contain no OpenAI selection bindings.",
+    "No paid or live validation, statistical performance claims, historical retraining or production database inspection."
+  ],
+  "authorization": {
+    "allowed": "Repository/configuration inspection, public documentation, static analysis, audit artifacts, audit-only branch and PR.",
+    "implementation": false,
+    "deployments": false,
+    "paid_openai_calls": 0,
+    "live_financial_provider_calls": 0,
+    "live_aws_calls": 0,
+    "production_db_writes": 0,
+    "protected_certification_evidence_changes": 0,
+    "merge": false,
+    "quantitative_scoring_executions": 0,
+    "next_gate": "Explicit owner authorization naming the finalized proposal SHA-256 and approved phase/environment. Quantitative sign-off separately required for unlocked Portfolio."
+  },
+  "proposal_sha256": "0a6dde0fa17910739d1e9b55d5cf8428511b5c95940304a50949a73ca72aa901",
+  "artifact_hash_algorithm": "SHA-256 over exact file bytes. Checksum file uses repository SHA256SUMS relative-filename format.",
+  "artifact_sha256": {
+    "OPENAI_API_DEPENDENCY_AUDIT.md": "3a45dc143c22da49f91228fd0e7d0cd170fcf2c050558d9d508a9c8854b607e0",
+    "alpha_atlas_integrity_assessment.md": "30aff2691392fbc78bb15950a58e8b40aa4897e67c79a44eece3605544e9aeb4",
+    "implementation_proposal.sha256": "ae3ec274925952ff7d4fdfffe80844cd48c5ae983e7982f05d7d266170a25779",
+    "openai_cost_analysis.md": "de7cc02d4a7b40b0ae953eb0bef1eebbe6e7996297932045a5d4847ebfa4f01c",
+    "openai_dependency_inventory.json": "0a80558dba8fe7302cada3dc24d0eb2640190299eaba1bfd3d8ec894081cd3d7",
+    "openai_migration_checklist.md": "85cf37bebfd28170805479d92ada479fd7e9de7b3735f290da0a2cce23feae31",
+    "openai_migration_implementation_proposal.md": "0a6dde0fa17910739d1e9b55d5cf8428511b5c95940304a50949a73ca72aa901",
+    "openai_migration_validation_plan.md": "479626b72a20ed76b610dae637ff2ba313fa2c8ad3592a0c2657e1ea4af511a2",
+    "openai_model_replacement_matrix.md": "5e50365c8bc9cf53a37d888499f4291c3f10f25f1ce4d79a6dbf9ba62caf315a"
+  },
+  "manifest_self_hash": "Excluded to avoid circularity. The Git audit commit binds audit_manifest.json and all other files."
+}
